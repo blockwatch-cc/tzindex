@@ -1,0 +1,101 @@
+{
+	"server": {
+		"addr": "0.0.0.0",
+		"port": 8000,
+		"scheme": "http",
+		"host": "127.0.0.1",
+		"workers": 50,
+		"read_timeout": "2s",
+		"header_timeout": "5s",
+		"write_timeout": "900s",
+		"keepalive": "90s",
+		"shutdown_timeout": "15s",
+		"max_list_count": 50000,
+		"default_explore_count": 20,
+		"max_explore_count": 100,
+		"cors_enable": false,
+		"cors_origin": "*",
+		"cors_allow_headers": "Authorization, Accept, Content-Type, X-Api-Key, X-Requested-With",
+		"cors_expose_headers": "Date, X-Runtime, X-Request-Id, X-Api-Version",
+		"cors_methods": "GET, OPTIONS",
+		"cors_maxage": "86400",
+		"cors_credentials": "true",
+		"cache_enable": false,
+		"cache_control": "public"
+	},
+	"crawler": {
+		"queue": 100,
+		"snapshot_path": "./db/xtz/snapshots",
+		"snapshot_blocks": [],
+		"snapshot_interval": 0
+	},
+	"database": {
+		"path": "./db/xtz",
+		"engine": "bolt",
+		"gc_interval": 50000000,
+		"gc_ratio": 1.0,
+		"log_slow_queries": "2s",
+		"account": {
+			"cache_size": 4
+		},
+		"account_index":{
+			"cache_size": 8
+		},
+		"contract": {
+			"cache_size": 2
+		},
+		"contract_index":{
+			"cache_size": 2
+		},
+		"op": {
+			"cache_size": 4
+		},
+		"op_index":{
+			"cache_size": 128
+		},
+		"block": {
+			"cache_size": 8
+		},
+		"block_index":{
+			"cache_size": 64
+		},
+		"flow": {
+			"cache_size": 4
+		},
+		"supply": {
+			"cache_size": 2
+		},
+		"chain": {
+			"cache_size": 2
+		},
+		"right": {
+			"cache_size": 2
+		},
+		"income": {
+			"cache_size": 2
+		}
+	},
+	"rpc": {
+		"host": "127.0.0.1",
+		"port": 8732,
+		"threads": 2,
+		"disable_tls": true,
+		"dial_timeout": "10s",
+		"keepalive": "30m",
+		"idle_timeout": "30m",
+		"response_timeout": "60s",
+		"continue_timeout": "60s",
+		"idle_conns": 2
+	},
+	"logging": {
+		"backend": "stdout",
+		"flags": "date,time,micro,utc",
+		"level": "info",
+		"blockchain": "info",
+		"database": "info",
+		"rpc": "info",
+		"server": "debug",
+		"report": "info",
+		"micheline": "info"
+	}
+}
