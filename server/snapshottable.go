@@ -392,6 +392,80 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			default:
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
+		case "since_time":
+			// translate time into height, use val[0] only
+			bestTime := ctx.Crawler.Time()
+			bestHeight := ctx.Crawler.Height()
+			cond, err := pack.ParseCondition(key, val[0], pack.FieldList{
+				pack.Field{
+					Name: "since_time",
+					Type: pack.FieldTypeDatetime,
+				},
+			})
+			if err != nil {
+				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, val[0]), err))
+			}
+			// re-use the block height -> time slice because it's already loaded
+			// into memory, the binary search should be faster than a block query
+			switch cond.Mode {
+			case pack.FilterModeRange:
+				// use cond.From and con.To
+				from, to := cond.From.(time.Time), cond.To.(time.Time)
+				var fromBlock, toBlock int64
+				if !from.After(bestTime) {
+					fromBlock = ctx.Indexer.BlockHeightFromTime(ctx.Context, from)
+				} else {
+					nDiff := int64(from.Sub(bestTime) / params.TimeBetweenBlocks[0])
+					fromBlock = bestHeight + nDiff
+				}
+				if !to.After(bestTime) {
+					toBlock = ctx.Indexer.BlockHeightFromTime(ctx.Context, to)
+				} else {
+					nDiff := int64(to.Sub(bestTime) / params.TimeBetweenBlocks[0])
+					toBlock = bestHeight + nDiff
+				}
+				q.Conditions = append(q.Conditions, pack.Condition{
+					Field: table.Fields().Find("S"), // since
+					Mode:  cond.Mode,
+					From:  fromBlock,
+					To:    toBlock,
+					Raw:   val[0], // debugging aid
+				})
+			case pack.FilterModeIn, pack.FilterModeNotIn:
+				// cond.Value is slice
+				valueBlocks := make([]int64, 0)
+				for _, v := range cond.Value.([]time.Time) {
+					if !v.After(bestTime) {
+						valueBlocks = append(valueBlocks, ctx.Indexer.BlockHeightFromTime(ctx.Context, v))
+					} else {
+						nDiff := int64(v.Sub(bestTime) / params.TimeBetweenBlocks[0])
+						valueBlocks = append(valueBlocks, bestHeight+nDiff)
+					}
+				}
+				q.Conditions = append(q.Conditions, pack.Condition{
+					Field: table.Fields().Find("S"), // since
+					Mode:  cond.Mode,
+					Value: valueBlocks,
+					Raw:   val[0], // debugging aid
+				})
+			default:
+				// cond.Value is time.Time
+				valueTime := cond.Value.(time.Time)
+				var valueBlock int64
+				if !valueTime.After(bestTime) {
+					valueBlock = ctx.Indexer.BlockHeightFromTime(ctx.Context, valueTime)
+				} else {
+					nDiff := int64(valueTime.Sub(bestTime) / params.TimeBetweenBlocks[0])
+					valueBlock = bestHeight + nDiff
+				}
+				q.Conditions = append(q.Conditions, pack.Condition{
+					Field: table.Fields().Find("S"), // since
+					Mode:  cond.Mode,
+					Value: valueBlock,
+					Raw:   val[0], // debugging aid
+				})
+			}
+
 		default:
 			// translate long column name used in query to short column name used in packs
 			if short, ok := snapSourceNames[prefix]; !ok {

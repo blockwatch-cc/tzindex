@@ -260,13 +260,20 @@ func (m *Indexer) BlockHeightFromTime(ctx context.Context, tm time.Time) int64 {
 			av = times
 		}
 	}
-	tmu := tm.Unix()
-	for h, t := range av.(map[int64]int64) {
-		if t == tmu {
-			return h
-		}
+	times := av.([]uint32)
+	if len(times) == 0 || !tm.After(time.Unix(int64(times[0]), 0)) {
+		return 0
 	}
-	return 0
+	tsdiff := uint32(tm.Unix() - int64(times[0]))
+	l := len(times)
+	i := sort.Search(l, func(i int) bool { return times[i] >= tsdiff })
+	if i == l {
+		return int64(l - 1)
+	}
+	if times[i] == tsdiff {
+		return int64(i)
+	}
+	return int64(i - 1)
 }
 
 func (m *Indexer) BlockByID(ctx context.Context, id uint64) (*model.Block, error) {

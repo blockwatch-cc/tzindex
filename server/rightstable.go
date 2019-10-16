@@ -279,16 +279,15 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			bestHeight := ctx.Crawler.Height()
 			cond, err := pack.ParseCondition(key, val[0], pack.FieldList{
 				pack.Field{
-					Name:  "t",
-					Alias: "time",
-					Type:  pack.FieldTypeDatetime,
+					Name: "time",
+					Type: pack.FieldTypeDatetime,
 				},
 			})
 			if err != nil {
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, val[0]), err))
 			}
-			// re-use the block height -> time map because it's already loaded
-			// into memory, the random map walk should be faster than a block query
+			// re-use the block height -> time slice because it's already loaded
+			// into memory, the binary search should be faster than a block query
 			switch cond.Mode {
 			case pack.FilterModeRange:
 				// use cond.From and con.To
@@ -333,7 +332,6 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 
 			default:
 				// cond.Value is time.Time
-				// use cond.From and con.To
 				valueTime := cond.Value.(time.Time)
 				var valueBlock int64
 				if !valueTime.After(bestTime) {
