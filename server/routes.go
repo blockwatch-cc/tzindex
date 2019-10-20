@@ -5,7 +5,6 @@ package server
 
 import (
 	"expvar"
-	logpkg "github.com/echa/log"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/schema"
 	"net/http/pprof"
@@ -50,24 +49,22 @@ func NewRouter() *mux.Router {
 	}
 
 	// register debug routes directly (i.e. without going through dispatcher)
-	if log.Level() == logpkg.LevelDebug {
-		log.Debugf("Registering debug routes")
-		router.HandleFunc("/debug/pprof/", pprof.Index)
-		router.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-		router.HandleFunc("/debug/pprof/profile", pprof.Profile)
-		router.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-		router.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	log.Debugf("Registering debug routes")
+	router.HandleFunc("/debug/pprof/", pprof.Index)
+	router.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	router.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	router.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	router.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
-		// Manually add support for paths linked to by index page at /debug/pprof/
-		router.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
-		router.Handle("/debug/pprof/heap", pprof.Handler("heap"))
-		router.Handle("/debug/pprof/allocs", pprof.Handler("allocs"))
-		router.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
-		router.Handle("/debug/pprof/block", pprof.Handler("block"))
-		router.Handle("/debug/pprof/mutex", pprof.Handler("mutex"))
+	// Manually add support for paths linked to by index page at /debug/pprof/
+	router.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
+	router.Handle("/debug/pprof/heap", pprof.Handler("heap"))
+	router.Handle("/debug/pprof/allocs", pprof.Handler("allocs"))
+	router.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
+	router.Handle("/debug/pprof/block", pprof.Handler("block"))
+	router.Handle("/debug/pprof/mutex", pprof.Handler("mutex"))
 
-		router.PathPrefix("/debug/vars").Handler(expvar.Handler())
-	}
+	router.PathPrefix("/debug/vars").Handler(expvar.Handler())
 
 	router.PathPrefix("/").HandlerFunc(C(NotFound))
 
