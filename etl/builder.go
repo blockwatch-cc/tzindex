@@ -1383,6 +1383,13 @@ func (b *Builder) FixUpgradeBugs(ctx context.Context, prevparams, nextparams *ch
 		}
 	}
 
+	// babylon airdrop
+	if nextparams.Protocol.IsEqual(chain.ProtoV005_2) && nextparams.ChainId.IsEqual(chain.Mainnet) {
+		if err := b.RunBabylonAirdrop(ctx, nextparams); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -1428,5 +1435,62 @@ func (b *Builder) FixOriginationBug(ctx context.Context, params *chain.Params) e
 		b.UnregisterDelegate(v)
 	}
 	log.Infof("Upgrade to v%03d: dropped %d empty delegates", params.Version, len(drop))
+	return nil
+}
+
+// v005 airdrops 1 mutez to unfunded manager accounts to avoid origination burn
+func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *chain.Params) error {
+	// collect all eligible addresses and inject airdrop flows
+	table, err := b.idx.Table(index.AccountTableKey)
+	if err != nil {
+		return err
+	}
+
+	q := pack.Query{
+		Name: "etl.addr.babylon_airdrop",
+		Conditions: pack.ConditionList{
+			pack.Condition{
+				Field: table.Fields().Find("f"), // is_funded
+				Mode:  pack.FilterModeEqual,
+				Value: false,
+			},
+			pack.Condition{
+				Field: table.Fields().Find("5"), // n_origination
+				Mode:  pack.FilterModeGt,
+				Value: int64(0),
+			},
+			pack.Condition{
+				Field: table.Fields().Find("t"), // address_type
+				Mode:  pack.FilterModeNotEqual,
+				Value: int64(chain.AddressTypeContract),
+			},
+		},
+	}
+	var count int
+	err = table.Stream(ctx, q, func(r pack.Row) error {
+		acc := AllocAccount()
+		if err := r.Decode(acc); err != nil {
+			acc.Free()
+			return err
+		}
+		flow := NewFlow(b.block, acc, nil)
+		flow.Category = FlowCategoryBalance
+		flow.Operation = FlowTypeAirdrop
+		flow.AmountIn = 1
+		b.block.Flows = append(b.block.Flows, flow)
+		count++
+		log.Debugf("airdrop: %s %f", acc, params.ConvertValue(flow.AmountIn))
+		// add account to builder map if not exist
+		if _, ok := b.accMap[acc.RowId]; !ok {
+			b.accMap[acc.RowId] = acc
+		} else {
+			acc.Free()
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	log.Infof("Upgrade to v%03d: executed %d airdrops", params.Version, count)
 	return nil
 }

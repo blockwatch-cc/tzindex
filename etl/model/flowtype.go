@@ -68,6 +68,7 @@ const (
 	FlowTypeVest                            // 10 - vests amount into same account (ready to spend)
 	FlowTypePour                            // 11 - pours vested amount into other account
 	FlowTypeInvoice                         // 12 - invoice feature
+	FlowTypeAirdrop                         // 13 - Babylon Airdrop
 	FlowTypeInvalid
 )
 
@@ -99,6 +100,8 @@ func ParseFlowType(s string) FlowType {
 		return FlowTypePour
 	case "invoice":
 		return FlowTypeInvoice
+	case "airdrop":
+		return FlowTypeAirdrop
 	default:
 		return FlowTypeInvalid
 	}
@@ -136,6 +139,8 @@ func (t FlowType) String() string {
 		return "pour"
 	case FlowTypeInvoice:
 		return "invoice"
+	case FlowTypeAirdrop:
+		return "airdrop"
 	default:
 		return "invalid"
 	}

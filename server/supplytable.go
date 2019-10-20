@@ -71,10 +71,11 @@ func (s *Supply) MarshalJSONVerbose() ([]byte, error) {
 		ActiveStaking       float64   `json:"active_staking"`
 		InactiveDelegated   float64   `json:"inactive_delegated"`
 		InactiveStaking     float64   `json:"inactive_staking"`
-		Mined               float64   `json:"mined"`
-		MinedBaking         float64   `json:"mined_baking"`
-		MinedEndorsing      float64   `json:"mined_endorsing"`
-		MinedSeeding        float64   `json:"mined_seeding"`
+		Minted              float64   `json:"minted"`
+		MintedBaking        float64   `json:"minted_baking"`
+		MintedEndorsing     float64   `json:"minted_endorsing"`
+		MintedSeeding       float64   `json:"minted_seeding"`
+		MintedAirdrop       float64   `json:"minted_airdrop"`
 		Burned              float64   `json:"burned"`
 		BurnedDoubleBaking  float64   `json:"burned_double_baking"`
 		BurnedDoubleEndorse float64   `json:"burned_double_endorse"`
@@ -101,10 +102,11 @@ func (s *Supply) MarshalJSONVerbose() ([]byte, error) {
 		ActiveStaking:       s.params.ConvertValue(s.ActiveStaking),
 		InactiveDelegated:   s.params.ConvertValue(s.InactiveDelegated),
 		InactiveStaking:     s.params.ConvertValue(s.InactiveStaking),
-		Mined:               s.params.ConvertValue(s.Mined),
-		MinedBaking:         s.params.ConvertValue(s.MinedBaking),
-		MinedEndorsing:      s.params.ConvertValue(s.MinedEndorsing),
-		MinedSeeding:        s.params.ConvertValue(s.MinedSeeding),
+		Minted:              s.params.ConvertValue(s.Minted),
+		MintedBaking:        s.params.ConvertValue(s.MintedBaking),
+		MintedEndorsing:     s.params.ConvertValue(s.MintedEndorsing),
+		MintedSeeding:       s.params.ConvertValue(s.MintedSeeding),
+		MintedAirdrop:       s.params.ConvertValue(s.MintedAirdrop),
 		Burned:              s.params.ConvertValue(s.Burned),
 		BurnedDoubleBaking:  s.params.ConvertValue(s.BurnedDoubleBaking),
 		BurnedDoubleEndorse: s.params.ConvertValue(s.BurnedDoubleEndorse),
@@ -156,14 +158,16 @@ func (s *Supply) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.InactiveDelegated), 'f', dec, 64)
 		case "inactive_staking":
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.InactiveStaking), 'f', dec, 64)
-		case "mined":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Mined), 'f', dec, 64)
-		case "mined_baking":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.MinedBaking), 'f', dec, 64)
-		case "mined_endorsing":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.MinedEndorsing), 'f', dec, 64)
-		case "mined_seeding":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.MinedSeeding), 'f', dec, 64)
+		case "minted":
+			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Minted), 'f', dec, 64)
+		case "minted_baking":
+			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.MintedBaking), 'f', dec, 64)
+		case "minted_endorsing":
+			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.MintedEndorsing), 'f', dec, 64)
+		case "minted_seeding":
+			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.MintedSeeding), 'f', dec, 64)
+		case "minted_airdrop":
+			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.MintedAirdrop), 'f', dec, 64)
 		case "burned":
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Burned), 'f', dec, 64)
 		case "burned_double_baking":
@@ -230,14 +234,16 @@ func (s *Supply) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.InactiveDelegated), 'f', dec, 64)
 		case "inactive_staking":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.InactiveStaking), 'f', dec, 64)
-		case "mined":
-			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Mined), 'f', dec, 64)
-		case "mined_baking":
-			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.MinedBaking), 'f', dec, 64)
-		case "mined_endorsing":
-			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.MinedEndorsing), 'f', dec, 64)
-		case "mined_seeding":
-			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.MinedSeeding), 'f', dec, 64)
+		case "minted":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Minted), 'f', dec, 64)
+		case "minted_baking":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.MintedBaking), 'f', dec, 64)
+		case "minted_endorsing":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.MintedEndorsing), 'f', dec, 64)
+		case "minted_seeding":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.MintedSeeding), 'f', dec, 64)
+		case "minted_airdrop":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.MintedAirdrop), 'f', dec, 64)
 		case "burned":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Burned), 'f', dec, 64)
 		case "burned_double_baking":

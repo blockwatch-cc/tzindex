@@ -432,7 +432,7 @@ func (b *Block) Update(accounts, delegates map[AccountID]*Account) {
 		b.GasPrice = float64(b.Fees) / float64(b.GasUsed)
 	}
 
-	// some updates are not reflected in operations (e.g. baking) so we
+	// some updates are not reflected in operations (e.g. baking, airdrops) so we
 	// have to look at flows too
 	for _, f := range b.Flows {
 		switch f.Operation {
@@ -456,8 +456,6 @@ func (b *Block) Update(accounts, delegates map[AccountID]*Account) {
 			}
 		case FlowTypeVest:
 			b.ActivatedSupply += f.AmountIn
-		case FlowTypeInvoice:
-			b.Rewards += f.AmountIn
 		}
 	}
 

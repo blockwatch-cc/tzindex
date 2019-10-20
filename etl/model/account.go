@@ -276,7 +276,7 @@ func (a *Account) UpdateBalance(f *Flow) error {
 			a.TotalBurned += f.AmountOut
 		}
 		switch f.Operation {
-		case FlowTypeTransaction, FlowTypeOrigination:
+		case FlowTypeTransaction, FlowTypeOrigination, FlowTypeAirdrop:
 			// both transactions and originations can send funds
 			// count send/received only for non-fee and non-burn flows
 			if !f.IsBurned && !f.IsFee {
@@ -394,7 +394,8 @@ func (a *Account) RollbackBalance(f *Flow) error {
 		if f.IsBurned {
 			a.TotalBurned -= f.AmountOut
 		}
-		if f.Operation == FlowTypeTransaction {
+		switch f.Operation {
+		case FlowTypeTransaction, FlowTypeOrigination, FlowTypeAirdrop:
 			a.TotalReceived -= f.AmountIn
 			a.TotalSent -= f.AmountOut
 			// FIXME: reverse generation update for in-flows lacks previous info
@@ -402,8 +403,7 @@ func (a *Account) RollbackBalance(f *Flow) error {
 			// 	a.TokenGenMax = util.Max64(a.TokenGenMax, f.TokenGenMax+1)
 			// 	a.TokenGenMin = util.NonZeroMin64(a.TokenGenMin, f.TokenGenMin+1)
 			// }
-		}
-		if f.Operation == FlowTypeVest || f.Operation == FlowTypeActivation {
+		case FlowTypeVest, FlowTypeActivation:
 			a.UnclaimedBalance += f.AmountIn
 		}
 		a.SpendableBalance -= f.AmountIn - f.AmountOut

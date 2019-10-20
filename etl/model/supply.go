@@ -27,10 +27,11 @@ type Supply struct {
 	ActiveStaking       int64     `pack:"J,snappy"    json:"active_staking"`     // delegated + delegate's own balances for active delegates
 	InactiveDelegated   int64     `pack:"g,snappy"    json:"inactive_delegated"` // delegated  balances to inactive delegates
 	InactiveStaking     int64     `pack:"j,snappy"    json:"inactive_staking"`   // delegated + delegate's own balances for inactive delegates
-	Mined               int64     `pack:"M,snappy"    json:"mined"`
-	MinedBaking         int64     `pack:"b,snappy"    json:"mined_baking"`
-	MinedEndorsing      int64     `pack:"e,snappy"    json:"mined_endorsing"`
-	MinedSeeding        int64     `pack:"s,snappy"    json:"mined_seeding"`
+	Minted              int64     `pack:"M,snappy"    json:"minted"`
+	MintedBaking        int64     `pack:"b,snappy"    json:"minted_baking"`
+	MintedEndorsing     int64     `pack:"e,snappy"    json:"minted_endorsing"`
+	MintedSeeding       int64     `pack:"s,snappy"    json:"minted_seeding"`
+	MintedAirdrop       int64     `pack:"a,snappy"    json:"minted_airdrop"`
 	Burned              int64     `pack:"B,snappy"    json:"burned"`
 	BurnedDoubleBaking  int64     `pack:"1,snappy"    json:"burned_double_baking"`
 	BurnedDoubleEndorse int64     `pack:"2,snappy"    json:"burned_double_endorse"`
@@ -60,14 +61,14 @@ func (s *Supply) Update(b *Block, delegates map[AccountID]*Account) {
 	s.Timestamp = b.Timestamp
 	s.Total += b.Rewards - b.BurnedSupply
 	s.Circulating += b.ActivatedSupply + b.UnfrozenFees + b.UnfrozenRewards + b.UnfrozenDeposits - b.Fees - b.Deposits - b.BurnedSupply
-	s.Mined += b.Rewards
+	s.Minted += b.Rewards
 	s.Burned += b.BurnedSupply
 	s.FrozenDeposits += b.Deposits - b.UnfrozenDeposits
 	s.FrozenRewards += b.Rewards - b.UnfrozenRewards
 	s.FrozenFees += b.Fees - b.UnfrozenFees
 	s.Frozen = s.FrozenDeposits + s.FrozenFees + s.FrozenRewards
 
-	// activated/unclaimed & vested/unvested from flows
+	// activated/unclaimed, vested/unvested, invoice/airdrop from flows
 	for _, f := range b.Flows {
 		switch f.Operation {
 		case FlowTypeActivation:
@@ -76,16 +77,21 @@ func (s *Supply) Update(b *Block, delegates map[AccountID]*Account) {
 		case FlowTypeVest:
 			s.Vested += f.AmountIn
 			s.Unvested -= f.AmountIn
+		case FlowTypeInvoice, FlowTypeAirdrop:
+			s.Total += f.AmountIn
+			s.Circulating += f.AmountIn
+			s.MintedAirdrop += f.AmountIn
+			s.Minted += f.AmountIn
 		}
 	}
 
-	// use ops to update bake and burn details (note: invoice rewards are not counted)
+	// use ops to update bake and burn details
 	for _, op := range b.Ops {
 		switch op.Type {
 		case chain.OpTypeSeedNonceRevelation:
-			s.MinedSeeding += op.Reward
+			s.MintedSeeding += op.Reward
 		case chain.OpTypeEndorsement:
-			s.MinedEndorsing += op.Reward
+			s.MintedEndorsing += op.Reward
 		case chain.OpTypeDoubleBakingEvidence:
 			s.BurnedDoubleBaking += op.Burned
 		case chain.OpTypeDoubleEndorsementEvidence:
@@ -118,7 +124,7 @@ func (s *Supply) Update(b *Block, delegates map[AccountID]*Account) {
 
 	// we don't explicitly count baking and there's also no explicit op, but
 	// we can calculate total baking rewards as difference to total rewards
-	s.MinedBaking = s.Mined - s.MinedSeeding - s.MinedEndorsing
+	s.MintedBaking = s.Minted - s.MintedSeeding - s.MintedEndorsing - s.MintedAirdrop
 }
 
 func (s *Supply) Rollback(b *Block) {
