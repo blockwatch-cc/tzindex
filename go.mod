@@ -3,13 +3,12 @@ module blockwatch.cc/tzindex
 go 1.13
 
 require (
-	blockwatch.cc/packdb v0.0.0-20191010220416-1df84c629c3a
+	blockwatch.cc/packdb v0.0.0-20191020185501-297e12b9df13
 	github.com/cespare/xxhash v1.1.0
 	github.com/echa/config v1.0.0
 	github.com/echa/log v1.0.0
 	github.com/ericlagergren/decimal v0.0.0-20190912144844-2c3e3e1ef942
 	github.com/go-bson/bson v0.0.0-20171017145622-6d291e839eca
-	github.com/golang/snappy v0.0.1
 	github.com/gorilla/mux v1.7.3
 	github.com/gorilla/schema v1.1.0
 	github.com/spf13/cobra v0.0.5
