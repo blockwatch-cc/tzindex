@@ -47,9 +47,9 @@ func (t SystemRequest) RegisterDirectRoutes(r *mux.Router) error {
 
 func (t SystemRequest) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/tables", C(GetTableStats)).Methods("GET")
-	// r.HandleFunc("/caches", C(GetCacheStats)).Methods("GET")
 	r.HandleFunc("/mem", C(GetMemStats)).Methods("GET")
 	r.HandleFunc("/config", C(GetConfig)).Methods("GET")
+	r.HandleFunc("/snapshot", C(SnapshotDatabases)).Methods("PUT")
 	r.HandleFunc("/flush", C(FlushDatabases)).Methods("PUT")
 	r.HandleFunc("/flush_journal", C(FlushJournals)).Methods("PUT")
 	r.HandleFunc("/gc", C(GcDatabases)).Methods("PUT")
@@ -62,16 +62,19 @@ func GetTableStats(ctx *ApiContext) (interface{}, int) {
 	return ctx.Indexer.TableStats(), http.StatusOK
 }
 
-// func GetCacheStats(ctx *ApiContext) (interface{}, int) {
-// 	return ctx.Crawler.CacheStats(), http.StatusOK
-// }
-
 func GetMemStats(ctx *ApiContext) (interface{}, int) {
 	return ctx.Indexer.MemStats(), http.StatusOK
 }
 
 func GetConfig(ctx *ApiContext) (interface{}, int) {
 	return config.AllSettings(), http.StatusOK
+}
+
+func SnapshotDatabases(ctx *ApiContext) (interface{}, int) {
+	if err := ctx.Crawler.Snapshot(ctx.Context); err != nil {
+		panic(EInternal(EC_DATABASE, "snapshot failed", err))
+	}
+	return nil, http.StatusNoContent
 }
 
 func FlushDatabases(ctx *ApiContext) (interface{}, int) {
