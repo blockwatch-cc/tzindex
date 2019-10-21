@@ -164,6 +164,8 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *Block, builde
 		ActiveDelegations int64     `pack:"a"`
 		DelegatedSince    int64     `pack:"+"`
 		DelegateSince     int64     `pack:"*"`
+		UnclaimedBalance  int64     `pack:"U"`
+		IsVesting         bool      `pack:"V"`
 	}
 	a := &XAccount{}
 	rollOwners := make([]uint64, 0, block.Chain.RollOwners)
@@ -214,7 +216,7 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *Block, builde
 	q = pack.Query{
 		Name:    "snapshot.accounts",
 		NoCache: true,
-		Fields:  table.Fields().Select("I", "D", "s", "+"),
+		Fields:  table.Fields().Select("I", "D", "s", "+", "U", "V"),
 		Conditions: pack.ConditionList{
 			pack.Condition{
 				Field: table.Fields().Find("f"), // is funded
@@ -247,6 +249,9 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *Block, builde
 		snap.IsDelegate = false
 		snap.IsActive = false
 		snap.Balance = a.SpendableBalance
+		if a.IsVesting {
+			snap.Balance += a.UnclaimedBalance
+		}
 		snap.Delegated = 0
 		snap.NDelegations = 0
 		snap.Since = a.DelegatedSince
