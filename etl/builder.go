@@ -1445,8 +1445,49 @@ func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *chain.Params) e
 	if err != nil {
 		return err
 	}
+	// The rules are:
+	// - process all originated accounts (KT1)
+	// - if it has code and is spendable allocate the manager contract (implicit account)
+	// - if it has code and is delegatble allocate the manager contract (implicit account)
+	// - if it has no code (delegation KT1) allocate the manager contract (implicit account)
+	//
+	// The above three cases are the cases where the manager contract (implicit account) is
+	// able to interact through the KT1 that it manages. For example, if the originated
+	// account has code but is neither spendable nor delegatable then the manager contract
+	// cannot act on behalf of the originated contract.
 
+	// find eligible KT1 contracts where we need to check the manager
 	q := pack.Query{
+		Name: "etl.addr.babylon_airdrop_eligible",
+		Conditions: pack.ConditionList{
+			pack.Condition{
+				Field: table.Fields().Find("t"), // type
+				Mode:  pack.FilterModeEqual,
+				Value: int64(chain.AddressTypeContract),
+			},
+		},
+	}
+	managers := make([]uint64, 0)
+	contract := &Account{}
+	err = table.Stream(ctx, q, func(r pack.Row) error {
+		if err := r.Decode(contract); err != nil {
+			return err
+		}
+		// skip all excluded contracts that do not match the rules above
+		if contract.IsContract {
+			if !contract.IsSpendable && !contract.IsDelegatable {
+				return nil
+			}
+		}
+		managers = append(managers, contract.ManagerId.Value())
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	// find unfunded managers
+	q = pack.Query{
 		Name: "etl.addr.babylon_airdrop",
 		Conditions: pack.ConditionList{
 			pack.Condition{
@@ -1455,14 +1496,9 @@ func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *chain.Params) e
 				Value: false,
 			},
 			pack.Condition{
-				Field: table.Fields().Find("5"), // n_origination
-				Mode:  pack.FilterModeGt,
-				Value: int64(0),
-			},
-			pack.Condition{
-				Field: table.Fields().Find("t"), // address_type
-				Mode:  pack.FilterModeNotEqual,
-				Value: int64(chain.AddressTypeContract),
+				Field: table.Fields().Find("I"), // pk
+				Mode:  pack.FilterModeIn,
+				Value: vec.UniqueUint64Slice(managers), // make list unique
 			},
 		},
 	}
