@@ -83,6 +83,7 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		BakerId             uint64                 `json:"baker_id"`
 		Baker               string                 `json:"baker"`
 		SlotsEndorsed       uint32                 `json:"endorsed_slots"`
+		NSlotsEndorsed      int                    `json:"n_endorsed_slots"`
 		NOps                int                    `json:"n_ops"`
 		NOpsFailed          int                    `json:"n_ops_failed"`
 		NOpsContract        int                    `json:"n_ops_contract"`
@@ -138,6 +139,7 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		BakerId:             b.BakerId.Value(),
 		Baker:               lookupAddress(b.ctx, b.BakerId).String(),
 		SlotsEndorsed:       b.SlotsEndorsed,
+		NSlotsEndorsed:      b.NSlotsEndorsed,
 		NOps:                b.NOps,
 		NOpsFailed:          b.NOpsFailed,
 		NOpsContract:        b.NOpsContract,
@@ -230,6 +232,8 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendQuote(buf, lookupAddress(b.ctx, b.BakerId).String())
 		case "endorsed_slots":
 			buf = strconv.AppendInt(buf, int64(b.SlotsEndorsed), 10)
+		case "n_endorsed_slots":
+			buf = strconv.AppendInt(buf, int64(b.NSlotsEndorsed), 10)
 		case "n_ops":
 			buf = strconv.AppendInt(buf, int64(b.NOps), 10)
 		case "n_ops_failed":
@@ -358,6 +362,8 @@ func (b *Block) MarshalCSV() ([]string, error) {
 			res[i] = strconv.Quote(lookupAddress(b.ctx, b.BakerId).String())
 		case "endorsed_slots":
 			res[i] = strconv.FormatInt(int64(b.SlotsEndorsed), 10)
+		case "n_endorsed_slots":
+			res[i] = strconv.FormatInt(int64(b.NSlotsEndorsed), 10)
 		case "n_ops":
 			res[i] = strconv.FormatInt(int64(b.NOps), 10)
 		case "n_ops_failed":

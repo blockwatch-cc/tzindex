@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math/bits"
 	"sync"
 	"time"
 
@@ -49,6 +50,7 @@ type Block struct {
 	VotingPeriodKind    chain.VotingPeriodKind `pack:"k,snappy"      json:"voting_period_kind"`             // bc: tezos voting period (enum)
 	BakerId             AccountID              `pack:"B,snappy"      json:"baker_id"`                       // bc: block baker (address id)
 	SlotsEndorsed       uint32                 `pack:"s,snappy"      json:"endorsed_slots"`                 // bc: slots that were endorsed by the following block
+	NSlotsEndorsed      int                    `pack:"e,snappy"      json:"n_endorsed_slots"`               // stats: successful endorsed slots
 	NOps                int                    `pack:"1,snappy"      json:"n_ops"`                          // stats: successful operation count
 	NOpsFailed          int                    `pack:"2,snappy"      json:"n_ops_failed"`                   // stats: failed operation coiunt
 	NOpsContract        int                    `pack:"3,snappy"      json:"n_ops_contract"`                 // stats: successful contract operation count
@@ -280,6 +282,7 @@ func (b *Block) Reset() {
 	b.VotingPeriodKind = 0
 	b.BakerId = 0
 	b.SlotsEndorsed = 0
+	b.NSlotsEndorsed = 0
 	b.NOps = 0
 	b.NOpsFailed = 0
 	b.NOpsContract = 0
@@ -425,6 +428,7 @@ func (b *Block) Update(accounts, delegates map[AccountID]*Account) {
 
 	if b.Parent != nil {
 		b.Parent.SlotsEndorsed = slotsEndorsed
+		b.Parent.NSlotsEndorsed = bits.OnesCount32(slotsEndorsed)
 	}
 
 	b.NOps = len(b.Ops)

@@ -24,6 +24,7 @@ import (
 var (
 	blockSeriesNames = util.StringList([]string{
 		"time",
+		"n_slots_endorsed",
 		"n_ops",
 		"n_ops_failed",
 		"n_ops_contract",
@@ -63,6 +64,7 @@ var (
 // configurable marshalling helper
 type BlockSeries struct {
 	Timestamp           time.Time `json:"time"`
+	NSlotsEndorsed      int64     `json:"n_slots_endorsed"`
 	NOps                int64     `json:"n_ops"`
 	NOpsFailed          int64     `json:"n_ops_failed"`
 	NOpsContract        int64     `json:"n_ops_contract"`
@@ -102,6 +104,7 @@ type BlockSeries struct {
 }
 
 func (s *BlockSeries) Add(b *model.Block) {
+	s.NSlotsEndorsed += int64(b.NSlotsEndorsed)
 	s.NOps += int64(b.NOps)
 	s.NOpsFailed += int64(b.NOpsFailed)
 	s.NOpsContract += int64(b.NOpsContract)
@@ -138,6 +141,7 @@ func (s *BlockSeries) Add(b *model.Block) {
 
 func (s *BlockSeries) Reset() {
 	s.Timestamp = time.Time{}
+	s.NSlotsEndorsed = 0
 	s.NOps = 0
 	s.NOpsFailed = 0
 	s.NOpsContract = 0
@@ -183,6 +187,7 @@ func (s *BlockSeries) MarshalJSON() ([]byte, error) {
 func (b *BlockSeries) MarshalJSONVerbose() ([]byte, error) {
 	block := struct {
 		Timestamp           time.Time `json:"time"`
+		NSlotsEndorsed      int64     `json:"n_endorsed_slots"`
 		NOps                int64     `json:"n_ops"`
 		NOpsFailed          int64     `json:"n_ops_failed"`
 		NOpsContract        int64     `json:"n_ops_contract"`
@@ -217,6 +222,7 @@ func (b *BlockSeries) MarshalJSONVerbose() ([]byte, error) {
 		TDD                 float64   `json:"days_destroyed"`
 	}{
 		Timestamp:           b.Timestamp,
+		NSlotsEndorsed:      b.NSlotsEndorsed,
 		NOps:                b.NOps,
 		NOpsFailed:          b.NOpsFailed,
 		NOpsContract:        b.NOpsContract,
@@ -261,6 +267,8 @@ func (b *BlockSeries) MarshalJSONBrief() ([]byte, error) {
 		switch v {
 		case "time":
 			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(b.Timestamp), 10)
+		case "n_endorsed_slots":
+			buf = strconv.AppendInt(buf, int64(b.NSlotsEndorsed), 10)
 		case "n_ops":
 			buf = strconv.AppendInt(buf, int64(b.NOps), 10)
 		case "n_ops_failed":
@@ -343,6 +351,8 @@ func (b *BlockSeries) MarshalCSV() ([]string, error) {
 		switch v {
 		case "time":
 			res[i] = strconv.FormatInt(util.UnixMilliNonZero(b.Timestamp), 10)
+		case "n_endorsed_slots":
+			res[i] = strconv.FormatInt(int64(b.NSlotsEndorsed), 10)
 		case "n_ops":
 			res[i] = strconv.FormatInt(int64(b.NOps), 10)
 		case "n_ops_failed":

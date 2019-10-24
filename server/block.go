@@ -36,6 +36,7 @@ type ExplorerBlock struct {
 	Nonce               uint64                 `json:"nonce"`
 	VotingPeriodKind    chain.VotingPeriodKind `json:"voting_period_kind"`
 	SlotsEndorsed       uint32                 `json:"endorsed_slots"`
+	NSlotsEndorsed      int                    `json:"n_endorsed_slots"`
 	NOps                int                    `json:"n_ops"`
 	NOpsFailed          int                    `json:"n_ops_failed"`
 	NOpsContract        int                    `json:"n_ops_contract"`
@@ -94,6 +95,7 @@ func NewExplorerBlock(ctx *ApiContext, block *model.Block, p *chain.Params) *Exp
 		Nonce:               block.Nonce,
 		VotingPeriodKind:    block.VotingPeriodKind,
 		SlotsEndorsed:       block.SlotsEndorsed,
+		NSlotsEndorsed:      block.NSlotsEndorsed,
 		NOps:                block.NOps,
 		NOpsFailed:          block.NOpsFailed,
 		NOpsContract:        block.NOpsContract,
