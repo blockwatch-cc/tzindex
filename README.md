@@ -146,7 +146,7 @@ Flags:
 
 ### License
 
-This Software is available under two different licenses, a **Community Edition** license and a **PROfessional** license. The community license is intended for personal use and for developers and businesses who like to try out new ideas but don't make any money yet. The professional license is meant for businesses that already earn money with their services (such as staking providers, funds and auditors) and would like to use this software for their internal operations or even make it part of their commercial offering.
+This Software is available under two different licenses, a **Community Edition** license and a **PROfessional** license. The community license is intended for personal use and for developers and businesses who like to try out new ideas but don't make any money yet. The professional license is meant for businesses that already earn money with their services (such as staking providers, wallet providers, exchanges, funds and auditors) and would like to use this software for their internal operations or even make it part of their commercial offering.
 
 Commercial licenses help us update and maintain the software itself and the community services like Tzstats.com which build on it.
 
@@ -160,7 +160,7 @@ The following table may help you pick the right license for your intended use-ca
 | Use | Personal & Academic Use | Commercial Use |
 | Limitations | No resale, no services, no ads | - |
 | Support | Best effort | Commercial Support |
-| Protocol Upgrade Availability | 1 week after activation | 1 week after proposal period ends |
+| Protocol Upgrade Availability | 1 week before activation | 1 week after proposal period ends |
 | DB Rebuild on Upgrade | Required | Integrated |
 | RPC Proxy | No | Available |
 | QA Tools | No | Available |
