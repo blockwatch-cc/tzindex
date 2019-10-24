@@ -195,6 +195,8 @@ func (api *ApiContext) handleError(e error) {
 				err).(*Error)
 		case context.Canceled:
 			re = EConnectionClosed(EC_NETWORK, "context canceled", err).(*Error)
+		case *net.OpError:
+			re = EConnectionClosed(EC_NETWORK, "connection closed", err).(*Error)
 		case syscall.EPIPE:
 			re = EConnectionClosed(EC_NETWORK, "connection closed", err).(*Error)
 		default:
