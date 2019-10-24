@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strconv"
+	"math/big"
 	"strings"
 )
 
@@ -65,7 +65,7 @@ type Prim struct {
 	OpCode OpCode   // primitive opcode (invalid on sequences, strings, bytes, int)
 	Args   []*Prim  // optional arguments
 	Anno   []string // optional type annotations
-	Int    int64    // optional data
+	Int    *big.Int // optional data
 	String string   // optional data
 	Bytes  []byte   // optional data
 }
@@ -76,7 +76,7 @@ func (p Prim) MarshalJSON() ([]byte, error) {
 	case PrimSequence:
 		return json.Marshal(p.Args)
 	case PrimInt:
-		m["int"] = strconv.FormatInt(int64(p.Int), 10)
+		m["int"] = p.Int.Text(10)
 	case PrimString:
 		m["string"] = p.String
 	case PrimBytes:
@@ -116,7 +116,8 @@ func (p Prim) EncodeBuffer(buf *bytes.Buffer) error {
 	// write contents
 	switch p.Type {
 	case PrimInt:
-		z := Z(p.Int)
+		var z Z
+		z.Set(p.Int)
 		if err := z.EncodeBuffer(buf); err != nil {
 			return err
 		}
@@ -273,8 +274,8 @@ func (p *Prim) UnpackPrimitive(val map[string]interface{}) error {
 			if !ok {
 				return fmt.Errorf("micheline: invalid int value type %T %v", v, v)
 			}
-			i, err := strconv.ParseInt(str, 10, 64)
-			if err != nil {
+			i := big.NewInt(0)
+			if err := i.UnmarshalText([]byte(str)); err != nil {
 				return err
 			}
 			p.Int = i
@@ -367,7 +368,7 @@ func (p *Prim) DecodeBuffer(buf *bytes.Buffer) error {
 		if err := z.DecodeBuffer(buf); err != nil {
 			return err
 		}
-		p.Int = int64(z)
+		p.Int = z.Big()
 
 	case PrimString:
 		// cross-check content size
@@ -386,6 +387,7 @@ func (p *Prim) DecodeBuffer(buf *bytes.Buffer) error {
 		// extract sub-buffer
 		seq := bytes.NewBuffer(buf.Next(size))
 		// decode contained primitives
+		p.Args = make([]*Prim, 0)
 		for seq.Len() > 0 {
 			prim := &Prim{}
 			if err := prim.DecodeBuffer(seq); err != nil {

@@ -25,5 +25,5 @@ func GetVestingBalance(prim *micheline.Prim) (int64, error) {
 	if prim.Type != micheline.PrimInt {
 		return 0, fmt.Errorf("unexpected prim type %s for vesting contract balance", prim.Type)
 	}
-	return prim.Int, nil
+	return prim.Int.Int64(), nil
 }

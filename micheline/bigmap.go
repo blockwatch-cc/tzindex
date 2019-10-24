@@ -9,7 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strconv"
+	"math/big"
 
 	"blockwatch.cc/tzindex/chain"
 )
@@ -62,7 +62,7 @@ type BigMapDiffElem struct {
 	Id        int64
 	KeyType   PrimType
 	KeyHash   chain.ExprHash
-	IntKey    int64
+	IntKey    *big.Int
 	StringKey string
 	BytesKey  []byte
 	Value     *Prim
@@ -87,21 +87,21 @@ func (e *BigMapDiffElem) UnmarshalJSON(data []byte) error {
 		switch n {
 		case "int":
 			e.KeyType = PrimInt
-			e.IntKey, err = strconv.ParseInt(v, 10, 64)
-			if err != nil {
-				fmt.Errorf("micheline: decoding bigmap int key '%s': %v", v, err)
+			e.IntKey = big.NewInt(0)
+			if err := e.IntKey.UnmarshalText([]byte(v)); err != nil {
+				return fmt.Errorf("micheline: decoding bigmap int key '%s': %v", v, err)
 			}
 		case "bytes":
 			e.KeyType = PrimBytes
 			e.BytesKey, err = hex.DecodeString(v)
 			if err != nil {
-				fmt.Errorf("micheline: decoding bigmap bytes key '%s': %v", v, err)
+				return fmt.Errorf("micheline: decoding bigmap bytes key '%s': %v", v, err)
 			}
 		case "string":
 			e.KeyType = PrimString
 			e.StringKey = v
 		default:
-			fmt.Errorf("micheline: unsupported bigmap key type %s", n)
+			return fmt.Errorf("micheline: unsupported bigmap key type %s", n)
 		}
 	}
 
@@ -135,7 +135,7 @@ func (e BigMapDiffElem) MarshalJSON() ([]byte, error) {
 	}
 	switch e.KeyType {
 	case PrimInt:
-		val.Key["int"] = strconv.FormatInt(e.IntKey, 10)
+		val.Key["int"] = e.IntKey.Text(10)
 	case PrimBytes:
 		val.Key["bytes"] = hex.EncodeToString(e.BytesKey)
 	case PrimString:
@@ -230,7 +230,7 @@ func (e BigMapDiffElem) Dump() string {
 	var key string
 	switch e.KeyType {
 	case PrimInt:
-		key = strconv.FormatInt(e.IntKey, 10)
+		key = e.IntKey.Text(10)
 	case PrimBytes:
 		key = hex.EncodeToString(e.BytesKey)
 	case PrimString:
