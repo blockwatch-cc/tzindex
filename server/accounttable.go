@@ -887,13 +887,13 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 					}
 					v = strconv.FormatInt(params.ConvertAmount(fval), 10)
-				case "account_type":
+				case "address_type":
 					// consider comma separated lists, convert type to int and back to string list
 					typs := make([]int64, 0)
 					for _, t := range strings.Split(v, ",") {
 						typ := chain.ParseAddressType(t)
 						if !typ.IsValid() {
-							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid account type '%s'", val[0]), nil))
+							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("address account type '%s'", val[0]), nil))
 						}
 						typs = append(typs, int64(typ))
 					}

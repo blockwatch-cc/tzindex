@@ -4,6 +4,7 @@ go 1.13
 
 require (
 	blockwatch.cc/packdb v0.0.0-20191020185501-297e12b9df13
+	blockwatch.cc/tzwatch v0.0.0-20191024060537-35d54b9eb21f // indirect
 	github.com/cespare/xxhash v1.1.0
 	github.com/echa/config v1.0.0
 	github.com/echa/log v1.0.0
