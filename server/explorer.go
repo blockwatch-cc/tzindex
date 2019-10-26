@@ -27,7 +27,7 @@ func (e Explorer) LastModified() time.Time {
 }
 
 func (e Explorer) Expires() time.Time {
-	return time.Time{}
+	return time.Now().UTC().Add(10 * time.Second)
 }
 
 func (e Explorer) RESTPrefix() string {

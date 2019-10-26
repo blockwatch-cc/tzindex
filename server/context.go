@@ -369,7 +369,7 @@ func (api *ApiContext) writeResponseHeaders(contentType, trailers string) {
 		// UTC format: time.RFC1123 (would set timezone string to UTC instead of GMT)
 		w.Header().Set("Date", now.Format(http.TimeFormat))
 		w.Header().Set("Expires", now.Add(expires).Format(http.TimeFormat))
-		w.Header().Set("Cache-Control", api.Cfg.Http.CacheControl+",max-age="+strconv.FormatInt(int64(expires/time.Second), 10)+"s")
+		w.Header().Set("Cache-Control", api.Cfg.Http.CacheControl+", max-age="+strconv.FormatInt(int64(expires/time.Second), 10))
 	} else {
 		h.Set("Cache-Control", "max-age=0, no-cache, no-store, must-revalidate")
 		h.Set("Pragma", "no-cache")
