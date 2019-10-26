@@ -60,6 +60,7 @@ type Params struct {
 	Invoices map[string]int64 `json:"invoices,omitempty"`
 
 	// extra features to follow protocol upgrades
+	SilentSpendable      bool `json:"silent_spendable"` // contracts are spendable/delegatable without flag set
 	HasOriginationBug    bool `json:"has_origination_bug"`
 	ReactivateByTx       bool `json:"reactivate_by_tx"`
 	OperationTagsVersion int  `json:"operation_tags_version"`

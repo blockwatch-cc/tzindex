@@ -19,8 +19,8 @@ type OriginationOp struct {
 	ManagerPubkey  chain.Address          `json:"manager_pubkey"` // proto v1 & >= v4
 	ManagerPubkey2 chain.Address          `json:"managerPubkey"`  // proto v2, v3
 	Balance        int64                  `json:"balance,string"`
-	Spendable      bool                   `json:"spendable"`
-	Delegatable    bool                   `json:"delegatable"`
+	Spendable      *bool                  `json:"spendable"`   // true when missing before v5 Babylon
+	Delegatable    *bool                  `json:"delegatable"` // true when missing before v5 Babylon
 	Delegate       *chain.Address         `json:"delegate"`
 	Script         *micheline.Script      `json:"script"`
 	Metadata       *OriginationOpMetadata `json:"metadata"`

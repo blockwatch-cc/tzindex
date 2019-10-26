@@ -56,8 +56,8 @@ func NewContract(acc *Account, oop *rpc.OriginationOp) *Contract {
 	if oop.Script != nil {
 		c.Script, _ = oop.Script.MarshalBinary()
 	}
-	c.IsSpendable = oop.Spendable
-	c.IsDelegatable = oop.Delegatable
+	c.IsSpendable = acc.IsSpendable
+	c.IsDelegatable = acc.IsDelegatable
 	return c
 }
 

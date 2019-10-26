@@ -165,6 +165,10 @@ func (t HashType) String() string {
 	return t.Prefix()
 }
 
+func (t HashType) MatchPrefix(s string) bool {
+	return strings.HasPrefix(s, t.Prefix())
+}
+
 func (t HashType) Prefix() string {
 	switch t {
 	case HashTypeChainId:

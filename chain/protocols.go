@@ -45,14 +45,19 @@ func (p *Params) ForProtocol(proto ProtocolHash) *Params {
 	case ProtoV000.IsEqual(proto):
 		pp.ReactivateByTx = true
 		pp.HasOriginationBug = true
+		pp.SilentSpendable = true
 	case ProtoV001.IsEqual(proto):
 		pp.ReactivateByTx = true
 		pp.HasOriginationBug = true
+		pp.SilentSpendable = true
 	case ProtoV002.IsEqual(proto):
 		pp.ReactivateByTx = true
+		pp.SilentSpendable = true
 	case ProtoV003.IsEqual(proto):
 		pp.ReactivateByTx = true
+		pp.SilentSpendable = true
 	case ProtoV004.IsEqual(proto):
+		pp.SilentSpendable = true
 		pp.Invoices = map[string]int64{
 			"tz1iSQEcaGpUn6EW5uAy3XhPiNg7BHMnRSXi": 100 * 1000000,
 		}

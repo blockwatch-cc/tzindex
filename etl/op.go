@@ -1050,8 +1050,18 @@ func (b *Builder) NewOriginationOp(oh *rpc.OperationHeader, op_n, op_c int, roll
 			// initialize originated account
 			dst.ManagerId = op.ManagerId
 			dst.IsContract = oop.Script != nil
-			dst.IsSpendable = oop.Spendable
-			dst.IsDelegatable = oop.Delegatable
+			if b.block.Params.SilentSpendable {
+				if oop.Spendable != nil {
+					dst.IsSpendable = *oop.Spendable
+				} else {
+					dst.IsSpendable = true
+				}
+				if oop.Delegatable != nil {
+					dst.IsDelegatable = *oop.Delegatable
+				} else {
+					dst.IsDelegatable = true
+				}
+			}
 			dst.LastSeen = b.block.Height
 			dst.IsDirty = true
 			if newdlg != nil {

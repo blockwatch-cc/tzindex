@@ -369,7 +369,7 @@ func (m *Indexer) LookupBlock(ctx context.Context, blockIdent string) (*model.Bl
 	switch true {
 	case blockIdent == "head":
 		b, err = m.BlockByHeight(ctx, m.tips[index.BlockTableKey].Height)
-	case len(blockIdent) == chain.HashTypeBlock.Base58Len():
+	case len(blockIdent) == chain.HashTypeBlock.Base58Len() || chain.HashTypeBlock.MatchPrefix(blockIdent):
 		// assume it's a hash
 		var blockHash chain.BlockHash
 		blockHash, err = chain.ParseBlockHash(blockIdent)
