@@ -1,9 +1,5 @@
-blockwatch.cc/packdb v0.0.0-20191010220416-1df84c629c3a h1:BO/d0EmSBZ3pwvMFx3aPuBOVGMzTW3OyzWZD82l3ELE=
-blockwatch.cc/packdb v0.0.0-20191010220416-1df84c629c3a/go.mod h1:FY/quF9xQRYz98aGqcz7tUBp8hCxBHDcTxksB2SZSsE=
 blockwatch.cc/packdb v0.0.0-20191020185501-297e12b9df13 h1:8wTEo5bQzFUedC0rN34l4teYf2/UkP4PXl6BcRxVzS4=
 blockwatch.cc/packdb v0.0.0-20191020185501-297e12b9df13/go.mod h1:FY/quF9xQRYz98aGqcz7tUBp8hCxBHDcTxksB2SZSsE=
-blockwatch.cc/tzwatch v0.0.0-20191024060537-35d54b9eb21f h1:35TPx9Af9i+wluvqWw8FrBOMyxUDOquDut2v+tUywsk=
-blockwatch.cc/tzwatch v0.0.0-20191024060537-35d54b9eb21f/go.mod h1:Dp4KgknG4ovwKwS7YBqGv5nuQr6N67cgdy/1XbvQWU4=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/OneOfOne/xxhash v1.2.2 h1:KMrpdQIwFcEqXDklaen+P1axHaj9BSKzvpUUfnHldSE=
 github.com/OneOfOne/xxhash v1.2.2/go.mod h1:HSdplMjZKSmBqAxg5vPj2TmRDmfkzw+cTzAElWljhcU=
