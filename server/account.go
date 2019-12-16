@@ -295,6 +295,7 @@ func (b ExplorerAccount) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/{ident}", C(ReadAccount)).Methods("GET").Name("account")
 	r.HandleFunc("/{ident}/managed", C(ReadManagedAccounts)).Methods("GET")
 	r.HandleFunc("/{ident}/op", C(ReadAccountOps)).Methods("GET")
+	r.HandleFunc("/{ident}/delegation/ledger", C(ReadAccountLedgerDelegation)).Methods("GET")
 	r.HandleFunc("/{ident}/ballots", C(ReadAccountBallots)).Methods("GET")
 	return nil
 
@@ -352,6 +353,28 @@ func ReadManagedAccounts(ctx *ApiContext) (interface{}, int) {
 		resp = append(resp, NewExplorerAccount(ctx, v, params, false))
 	}
 	return resp, http.StatusOK
+}
+
+func ReadAccountLedgerDelegation(ctx *ApiContext) (interface{}, int) {
+	args := &ExplorerOpsRequest{}
+	ctx.ParseRequestArgs(args)
+	gasLimitMark := ctx.Cfg.Ledger.DelegationGasLimit
+	acc := loadAccount(ctx)
+	params := ctx.Crawler.ParamsByHeight(-1)
+	a := NewExplorerAccount(ctx, acc, params, false)
+	ops, err := ctx.Indexer.ListAccountDelegation(ctx, acc.RowId, args.Offset, ctx.Cfg.ClampExplore(args.Limit))
+	if err != nil {
+		panic(EInternal(EC_DATABASE, "cannot read account delegations", err))
+	}
+
+	eops := make([]*ExplorerOp, 0)
+	for _, v := range ops {
+		if v.GasLimit/1000 == gasLimitMark {
+			eops = append(eops, NewExplorerOp(ctx, v, nil, params))
+		}
+	}
+	a.Ops = &eops
+	return a, http.StatusOK
 }
 
 func ReadAccountOps(ctx *ApiContext) (interface{}, int) {

@@ -20,6 +20,7 @@ type Config struct {
 	Reporter *etl.Reporter
 	Client   *rpc.Client
 	Http     HttpConfig
+	Ledger   LedgerConfig
 }
 
 func (c Config) ClampList(count int) int {
@@ -201,4 +202,15 @@ func (cfg *HttpConfig) Check() error {
 	}
 
 	return nil
+}
+
+type LedgerConfig struct {
+	// The special gas limit marker (the last three number) in the delegation ops initilized Ledger Live
+	DelegationGasLimit int64 `json:"delegation_gas_limit"`
+}
+
+func NewLedgerConfig() LedgerConfig {
+	return LedgerConfig{
+		DelegationGasLimit: 136,
+	}
 }

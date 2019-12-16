@@ -944,6 +944,12 @@ func (m *Indexer) ListBlockOps(ctx context.Context, height int64, typ chain.OpTy
 	return ops, nil
 }
 
+// ListAccountDelegation ...
+// List the delegation made by the account
+func (m *Indexer) ListAccountDelegation(ctx context.Context, accId model.AccountID, offset, limit int) ([]*model.Op, error) {
+	return m.ListAccountOps(ctx, accId, chain.OpTypeDelegation, offset, limit)
+}
+
 // Note:
 // - OR queries are not supported by pack table yet!
 // - order is defined by funding or spending operation
