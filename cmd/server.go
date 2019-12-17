@@ -203,6 +203,7 @@ func runServer(args []string) error {
 				CacheEnable:         config.GetBool("server.cache_enable"),
 				CacheControl:        config.GetString("server.cache_control"),
 			},
+			Ledger: server.NewLedgerConfig(),
 		})
 		if err != nil {
 			return err

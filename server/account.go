@@ -369,8 +369,10 @@ func ReadAccountLedgerDelegation(ctx *ApiContext) (interface{}, int) {
 
 	eops := make([]*ExplorerOp, 0)
 	for _, v := range ops {
-		if v.GasLimit/1000 == gasLimitMark {
+		if v.GasLimit%1000 == gasLimitMark {
 			eops = append(eops, NewExplorerOp(ctx, v, nil, params))
+		} else {
+			v.Free()
 		}
 	}
 	a.Ops = &eops
