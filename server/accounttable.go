@@ -597,21 +597,21 @@ func (a *Account) MarshalCSV() ([]string, error) {
 		case "grace_period":
 			res[i] = strconv.FormatInt(a.GracePeriod, 10)
 		case "first_seen_time":
-			res[i] = strconv.FormatInt(a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.FirstSeen), 10)
+			res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, a.FirstSeen).Format(time.RFC3339))
 		case "last_seen_time":
-			res[i] = strconv.FormatInt(a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.LastSeen), 10)
+			res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, a.LastSeen).Format(time.RFC3339))
 		case "first_in_time":
-			res[i] = strconv.FormatInt(a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.FirstIn), 10)
+			res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, a.FirstIn).Format(time.RFC3339))
 		case "last_in_time":
-			res[i] = strconv.FormatInt(a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.LastIn), 10)
+			res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, a.LastIn).Format(time.RFC3339))
 		case "first_out_time":
-			res[i] = strconv.FormatInt(a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.FirstOut), 10)
+			res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, a.FirstOut).Format(time.RFC3339))
 		case "last_out_time":
-			res[i] = strconv.FormatInt(a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.LastOut), 10)
+			res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, a.LastOut).Format(time.RFC3339))
 		case "delegated_since_time":
-			res[i] = strconv.FormatInt(a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.DelegatedSince), 10)
+			res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, a.DelegatedSince).Format(time.RFC3339))
 		case "delegate_since_time":
-			res[i] = strconv.FormatInt(a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.DelegateSince), 10)
+			res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, a.DelegateSince).Format(time.RFC3339))
 		case "rich_rank":
 			if rank != nil {
 				res[i] = strconv.FormatInt(int64(rank.RichRank), 10)
@@ -692,7 +692,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 	q := pack.Query{
 		Name:       ctx.RequestID,
 		Fields:     table.Fields().Select(srcNames...),
-		Limit:      args.Limit,
+		Limit:      int(args.Limit),
 		Conditions: make(pack.ConditionList, 0),
 		Order:      args.Order,
 	}
@@ -750,10 +750,10 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 				// multi-address lookup (Note: does not check for address type so may
 				// return duplicates)
 				hashes := make([][]byte, 0)
-				for _, a := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(a)
+				for _, v := range strings.Split(val[0], ",") {
+					addr, err := chain.ParseAddress(v)
 					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", a), err))
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					hashes = append(hashes, addr.Hash)
 				}
@@ -838,10 +838,10 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
-				for _, a := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(a)
+				for _, v := range strings.Split(val[0], ",") {
+					addr, err := chain.ParseAddress(v)
 					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
@@ -876,24 +876,28 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 			// the same field name may appear multiple times, in which case conditions
 			// are combined like any other condition with logical AND
 			for _, v := range val {
-				// convert amounts from float to int64
+				// convert amounts from float to int64, handle multiple values for rg, in, nin
 				switch prefix {
 				case "total_received", "total_sent", "total_burned",
 					"total_fees_paid", "total_rewards_earned", "total_fees_earned",
 					"total_lost", "frozen_deposits", "frozen_rewards", "frozen_fees",
 					"unclaimed_balance", "spendable_balance", "delegated_balance":
-					fval, err := strconv.ParseFloat(v, 64)
-					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
+					fvals := make([]string, 0)
+					for _, vv := range strings.Split(v, ",") {
+						fval, err := strconv.ParseFloat(vv, 64)
+						if err != nil {
+							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, vv), err))
+						}
+						fvals = append(fvals, strconv.FormatInt(params.ConvertAmount(fval), 10))
 					}
-					v = strconv.FormatInt(params.ConvertAmount(fval), 10)
+					v = strings.Join(fvals, ",")
 				case "address_type":
 					// consider comma separated lists, convert type to int and back to string list
 					typs := make([]int64, 0)
 					for _, t := range strings.Split(v, ",") {
 						typ := chain.ParseAddressType(t)
 						if !typ.IsValid() {
-							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("address account type '%s'", val[0]), nil))
+							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address type '%s'", val[0]), nil))
 						}
 						typs = append(typs, int64(typ))
 					}
@@ -937,8 +941,8 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 		// get a unique copy of delegate and manager id columns (clip on request limit)
 		dcol, _ := res.Uint64Column("D")
 		mcol, _ := res.Uint64Column("M")
-		find := vec.UniqueUint64Slice(dcol[:util.Min(len(dcol), args.Limit)])
-		find = vec.UniqueUint64Slice(append(find, mcol[:util.Min(len(mcol), args.Limit)]...))
+		find := vec.UniqueUint64Slice(dcol[:util.Min(len(dcol), int(args.Limit))])
+		find = vec.UniqueUint64Slice(append(find, mcol[:util.Min(len(mcol), int(args.Limit))]...))
 
 		// lookup accounts from id
 		q := pack.Query{
@@ -1020,7 +1024,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 			}
 			count++
 			lastId = acc.RowId.Value()
-			if args.Limit > 0 && count == args.Limit {
+			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
 			return nil
@@ -1046,7 +1050,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 				}
 				count++
 				lastId = acc.RowId.Value()
-				if args.Limit > 0 && count == args.Limit {
+				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}
 				return nil

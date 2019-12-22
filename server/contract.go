@@ -33,7 +33,7 @@ type ExplorerContract struct {
 	StorageLimit       int64             `json:"storage_limit"`
 	StorageSize        int64             `json:"storage_size"`
 	StoragePaid        int64             `json:"storage_paid"`
-	Script             *micheline.Script `json:"script,omitempty"`
+	Script             *micheline.Script `json:"script,omitempty"` // DEPRECATED
 	IsFunded           bool              `json:"is_funded"`
 	IsVesting          bool              `json:"is_vesting"`
 	IsSpendable        bool              `json:"is_spendable"`
@@ -60,9 +60,9 @@ type ExplorerContract struct {
 	NOrigination       int               `json:"n_origination"`
 	TokenGenMin        int64             `json:"token_gen_min"`
 	TokenGenMax        int64             `json:"token_gen_max"`
-	DelegateAcc        *ExplorerAccount  `json:"delegate_account,omitempty"`
-	ManagerAcc         *ExplorerAccount  `json:"manager_account,omitempty"`
-	Ops                *[]*ExplorerOp    `json:"ops,omitempty"`
+	DelegateAcc        *ExplorerAccount  `json:"delegate_account,omitempty"` // DEPRECATED
+	ManagerAcc         *ExplorerAccount  `json:"manager_account,omitempty"`  // DEPRECATED
+	Ops                *[]*ExplorerOp    `json:"ops,omitempty"`              // DEPRECATED
 	expires            time.Time         `json:"-"`
 }
 
@@ -99,11 +99,16 @@ func NewExplorerContract(ctx *ApiContext, c *model.Contract, a *model.Account, p
 		expires:        ctx.Now.Add(p.TimeBetweenBlocks[0]),
 	}
 
-	if c.Script != nil {
-		cc.Script = micheline.NewScript()
-		if err := cc.Script.UnmarshalBinary(c.Script); err != nil {
-			log.Errorf("explorer contract: unmarshal script: %v", err)
-		}
+	// need manager address hash
+	var mgrHash []byte
+	if mgr, err := ctx.Indexer.LookupAccountId(ctx, c.ManagerId); err == nil {
+		mgrHash = mgr.Address().Bytes()
+	}
+	tip := ctx.Crawler.Tip()
+	if sc, err := c.LoadScript(tip, tip.BestHeight, mgrHash); err != nil {
+		log.Errorf("explorer contract: unmarshal script: %v", err)
+	} else {
+		cc.Script = sc
 	}
 
 	// resolve block times
@@ -115,6 +120,7 @@ func NewExplorerContract(ctx *ApiContext, c *model.Contract, a *model.Account, p
 	cc.LastSeenTime = ctx.Indexer.BlockTime(ctx.Context, a.LastSeen)
 	cc.DelegatedSinceTime = ctx.Indexer.BlockTime(ctx.Context, a.DelegatedSince)
 
+	// DEPRECATED
 	if details {
 		// load related accounts from id
 		xc, err := ctx.Indexer.LookupAccountIds(ctx.Context,
@@ -166,9 +172,13 @@ func (b ExplorerContract) RegisterDirectRoutes(r *mux.Router) error {
 
 func (b ExplorerContract) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/{ident}", C(ReadContract)).Methods("GET").Name("contract")
-	r.HandleFunc("/{ident}/op", C(ReadContractOps)).Methods("GET")
+	r.HandleFunc("/{ident}/op", C(ReadContractOps)).Methods("GET") // DEPRECATED
 	return nil
 
+}
+
+type ContractRequest struct {
+	ExplorerListRequest // offset, limit
 }
 
 func loadContract(ctx *ApiContext) *model.Contract {
@@ -221,7 +231,16 @@ func ReadContractOps(ctx *ApiContext) (interface{}, int) {
 	}
 	params := ctx.Crawler.ParamsByHeight(-1)
 	c := NewExplorerContract(ctx, cc, acc, params, false)
-	ops, err := ctx.Indexer.ListAccountOps(ctx, acc.RowId, args.Type, args.Offset, ctx.Cfg.ClampExplore(args.Limit))
+	ops, err := ctx.Indexer.ListAccountOps(
+		ctx,
+		acc.RowId,
+		args.Type,
+		0,
+		0,
+		args.Offset,
+		ctx.Cfg.ClampExplore(args.Limit),
+		0,
+	)
 	if err != nil {
 		panic(EInternal(EC_DATABASE, "cannot read contract operations", err))
 	}
@@ -229,7 +248,7 @@ func ReadContractOps(ctx *ApiContext) (interface{}, int) {
 	// FIXME: collect account and op lookup into only two queries
 	eops := make([]*ExplorerOp, len(ops))
 	for i, v := range ops {
-		eops[i] = NewExplorerOp(ctx, v, nil, params)
+		eops[i] = NewExplorerOp(ctx, v, nil, cc, params, nil)
 	}
 	c.Ops = &eops
 	return c, http.StatusOK

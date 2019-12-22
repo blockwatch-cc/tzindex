@@ -59,6 +59,9 @@ type Op struct {
 	BigMapDiff   []byte              `pack:"B,snappy"      json:"big_map_diff"`                   // bc: result big map diff
 	Errors       string              `pack:"e,snappy"      json:"errors"`                         // bc: result errors
 	TDD          float64             `pack:"x,convert,precision=6,snappy"  json:"days_destroyed"` // stats: token days destroyed
+	BranchId     uint64              `pack:"X,snappy"      json:"branch_id"`                      // bc: branch block the op is based on
+	BranchHeight int64               `pack:"#,snappy"      json:"branch_height"`                  // bc: height of the branch block
+	BranchDepth  int64               `pack:"<,snappy"      json:"branch_depth"`                   // stats: diff between branch block and current block
 }
 
 // Ensure Op implements the pack.Item interface.
@@ -68,7 +71,7 @@ func AllocOp() *Op {
 	return opPool.Get().(*Op)
 }
 
-func NewOp(block *Block, head *rpc.OperationHeader, op_n, op_c, op_i int) *Op {
+func NewOp(block, branch *Block, head *rpc.OperationHeader, op_n, op_c, op_i int) *Op {
 	o := AllocOp()
 	o.RowId = 0
 	o.Timestamp = block.Timestamp
@@ -79,6 +82,11 @@ func NewOp(block *Block, head *rpc.OperationHeader, op_n, op_c, op_i int) *Op {
 	o.OpC = op_c
 	o.OpI = op_i
 	o.Type = head.Contents[op_c].OpKind()
+	if branch != nil {
+		o.BranchId = branch.RowId
+		o.BranchHeight = branch.Height
+		o.BranchDepth = block.Height - branch.Height
+	}
 	// other fields are type specific and will be set by builder
 	return o
 }
@@ -133,4 +141,7 @@ func (o *Op) Reset() {
 	o.BigMapDiff = nil
 	o.Errors = ""
 	o.TDD = 0
+	o.BranchId = 0
+	o.BranchHeight = 0
+	o.BranchDepth = 0
 }

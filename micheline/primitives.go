@@ -12,6 +12,9 @@ import (
 	"io"
 	"math/big"
 	"strings"
+	"time"
+
+	"blockwatch.cc/tzindex/chain"
 )
 
 type PrimType byte
@@ -30,6 +33,45 @@ const (
 	PrimBytes                        // 0A {name: 'bytes' }
 )
 
+func (t PrimType) TypeCode() OpCode {
+	switch t {
+	case PrimInt:
+		return T_INT
+	case PrimString:
+		return T_STRING
+	default:
+		return T_BYTES
+	}
+}
+
+func (t PrimType) IsValid() bool {
+	return t <= PrimBytes
+}
+
+func ParsePrimType(val string) (PrimType, error) {
+	switch val {
+	case "int":
+		return PrimInt, nil
+	case "string":
+		return PrimString, nil
+	case "bytes":
+		return PrimBytes, nil
+	default:
+		return 0, fmt.Errorf("micheline: invalid prim type '%s'", val)
+	}
+}
+
+func PrimTypeFromTypeCode(o OpCode) PrimType {
+	switch o {
+	case T_INT, T_NAT, T_MUTEZ, T_TIMESTAMP:
+		return PrimInt
+	case T_STRING:
+		return PrimString
+	default:
+		return PrimBytes
+	}
+}
+
 // non-normative strings, use for debugging only
 func (t PrimType) String() string {
 	switch t {
@@ -44,15 +86,15 @@ func (t PrimType) String() string {
 	case PrimNullaryAnno:
 		return "prim%"
 	case PrimUnary:
-		return "prim_1"
+		return "unary"
 	case PrimUnaryAnno:
-		return "prim_1%"
+		return "unary%"
 	case PrimBinary:
-		return "prim_2"
+		return "binary"
 	case PrimBinaryAnno:
-		return "prim_2%"
+		return "binary%"
 	case PrimVariadicAnno:
-		return "prim_n"
+		return "variadic"
 	case PrimBytes:
 		return "bytes"
 	default:
@@ -60,14 +102,251 @@ func (t PrimType) String() string {
 	}
 }
 
+func (t PrimType) MarshalText() ([]byte, error) {
+	return []byte(t.String()), nil
+}
+
 type Prim struct {
-	Type   PrimType // primitive type
-	OpCode OpCode   // primitive opcode (invalid on sequences, strings, bytes, int)
-	Args   []*Prim  // optional arguments
-	Anno   []string // optional type annotations
-	Int    *big.Int // optional data
-	String string   // optional data
-	Bytes  []byte   // optional data
+	Type      PrimType // primitive type
+	OpCode    OpCode   // primitive opcode (invalid on sequences, strings, bytes, int)
+	Args      []*Prim  // optional arguments
+	Anno      []string // optional type annotations
+	Int       *big.Int // optional data
+	String    string   // optional data
+	Bytes     []byte   // optional data
+	WasPacked bool     // true when content was unpacked (and no type info is available)
+}
+
+func (p Prim) Name() string {
+	return p.GetAnno()
+}
+
+// returns true when the prim can be expressed as a single value
+// key/value pairs (ie. prims with annots) do not fit into this category
+// used when mapping complex big map values to JSON objects
+func (p Prim) IsScalar() bool {
+	switch p.Type {
+	case PrimInt, PrimString, PrimBytes, PrimNullary:
+		return true // generally ok
+	case PrimSequence, PrimNullaryAnno, PrimUnaryAnno, PrimBinaryAnno, PrimVariadicAnno:
+		return false // all annotated types become JSON properties
+	case PrimUnary:
+		switch p.OpCode {
+		case D_LEFT, D_RIGHT, D_SOME:
+			return p.Args[0].IsScalar()
+		}
+		return false
+	case PrimBinary: // mostly not ok, unless type is option/or and sub-types are scalar
+		switch p.OpCode {
+		case T_OPTION, T_OR:
+			return p.Args[0].IsScalar()
+		}
+		return false
+	}
+	return false
+}
+
+func (p Prim) Text() string {
+	switch p.Type {
+	case PrimInt:
+		return p.Int.Text(10)
+	case PrimString:
+		return p.String
+	case PrimBytes:
+		return hex.EncodeToString(p.Bytes)
+	default:
+		return ""
+	}
+}
+
+func (p Prim) IsPacked() bool {
+	return (p.OpCode == T_BYTES || p.Type == PrimBytes) && len(p.Bytes) > 1 && p.Bytes[0] == 0x5
+}
+
+func (p Prim) PackedType() PrimType {
+	if !p.IsPacked() {
+		return PrimNullary
+	}
+	return PrimType(p.Bytes[1])
+}
+
+func (p Prim) Unpack() (*Prim, error) {
+	if !p.IsPacked() {
+		return nil, fmt.Errorf("prim is not packed")
+	}
+	pp := &Prim{WasPacked: true}
+	if err := pp.UnmarshalBinary(p.Bytes[1:]); err != nil {
+		return nil, err
+	}
+	return pp, nil
+}
+
+func (p Prim) IsPackedAny() bool {
+	if p.IsPacked() {
+		return true
+	}
+	for _, v := range p.Args {
+		if v.IsPackedAny() {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Prim) UnpackAny() (*Prim, error) {
+	if p.IsPacked() {
+		return p.Unpack()
+	}
+	pp := *p // copy
+	pp.Args = make([]*Prim, len(p.Args))
+	for i, v := range p.Args {
+		vv := *v // copy
+		if vv.IsPackedAny() {
+			up, err := v.UnpackAny()
+			if err != nil {
+				return nil, err
+			}
+			pp.Args[i] = up
+		} else {
+			pp.Args[i] = &vv
+		}
+	}
+	return &pp, nil
+}
+
+func (p Prim) Value(as OpCode) interface{} {
+	var warn bool
+	switch p.Type {
+	case PrimInt:
+		switch as {
+		case T_TIMESTAMP:
+			return time.Unix(p.Int.Int64(), 0).UTC()
+		default:
+			return p.Int.Text(10)
+		}
+
+	case PrimString:
+		switch as {
+		case T_TIMESTAMP:
+			t, err := time.Parse(time.RFC3339, p.String)
+			if err != nil {
+				return time.Unix(0, 0).UTC()
+			}
+			return t
+		default:
+			return p.String
+		}
+
+	case PrimBytes:
+		switch as {
+		case T_BYTES:
+			// try address unpack
+			a := chain.Address{}
+			if err := a.UnmarshalBinary(p.Bytes); err == nil {
+				return a
+			}
+
+		case T_KEY_HASH, T_ADDRESS, T_CONTRACT:
+			a := chain.Address{}
+			if err := a.UnmarshalBinary(p.Bytes); err == nil {
+				return a
+			} else {
+				log.Errorf("Rendering prim type %s as %s: %v", p.Type, as, err)
+			}
+		case T_KEY:
+			k := chain.Key{}
+			if err := k.UnmarshalBinary(p.Bytes); err == nil {
+				return k
+			} else {
+				log.Errorf("Rendering prim type %s as %s: %v", p.Type, as, err)
+			}
+
+		case T_SIGNATURE:
+			s := chain.Signature{}
+			if err := s.UnmarshalBinary(p.Bytes); err == nil {
+				return s
+			} else {
+				log.Errorf("Rendering prim type %s as %s: %v", p.Type, as, err)
+			}
+
+		case T_CHAIN_ID:
+			if len(p.Bytes) == chain.HashTypeChainId.Len() {
+				return chain.NewChainIdHash(p.Bytes)
+			}
+
+		default:
+			// case T_LAMBDA:
+			// case T_LIST, T_MAP, T_BIG_MAP, T_SET:
+			// case T_OPTION, T_OR, T_PAIR, T_UNIT:
+			// case T_OPERATION:
+			warn = true
+		}
+
+		// default is to render bytes as hex string
+		return hex.EncodeToString(p.Bytes)
+
+	case PrimUnary, PrimUnaryAnno:
+		switch as {
+		case T_OR, T_OPTION:
+			// expected, just render as prim tree
+		default:
+			warn = true
+		}
+
+	case PrimNullary, PrimNullaryAnno:
+		switch p.OpCode {
+		case D_FALSE:
+			return false
+		case D_TRUE:
+			return true
+		case D_NONE, D_UNIT:
+			return nil
+		default:
+			return p.OpCode.String()
+		}
+
+	case PrimBinary, PrimBinaryAnno:
+		switch p.OpCode {
+		case D_PAIR:
+			// FIXME: recurse into Pair tree
+			// mangle pair contents into string, used when rendering complex keys
+			return fmt.Sprintf("%s#%s",
+				p.Args[0].Value(p.Args[0].OpCode),
+				p.Args[1].Value(p.Args[1].OpCode),
+			)
+		}
+
+	case PrimSequence:
+		switch as {
+		case T_LAMBDA, T_LIST, T_MAP, T_BIG_MAP, T_SET:
+			return &p
+		default:
+			warn = true
+		}
+
+	default:
+		switch as {
+		case T_BOOL:
+			if p.OpCode == D_TRUE {
+				return true
+			} else if p.OpCode == D_FALSE {
+				return false
+			}
+		case T_OPERATION:
+			return p.OpCode.String()
+		case T_BYTES:
+			return hex.EncodeToString(p.Bytes)
+		default:
+			warn = true
+		}
+	}
+
+	if warn {
+		buf, _ := json.Marshal(p)
+		log.Warnf("Rendering prim type %s as %s: not implemented (%s)", p.Type, as, string(buf))
+	}
+
+	return &p
 }
 
 func (p Prim) MarshalJSON() ([]byte, error) {
@@ -226,11 +505,11 @@ func (p *Prim) UnmarshalJSON(data []byte) error {
 		if err := json.Unmarshal(data, &m); err != nil {
 			return err
 		}
-		return p.Unpack(m)
+		return p.UnpackJSON(m)
 	}
 }
 
-func (p *Prim) Unpack(val interface{}) error {
+func (p *Prim) UnpackJSON(val interface{}) error {
 	switch t := val.(type) {
 	case map[string]interface{}:
 		return p.UnpackPrimitive(t)
@@ -246,7 +525,7 @@ func (p *Prim) UnpackSequence(val []interface{}) error {
 	p.Args = make([]*Prim, 0)
 	for _, v := range val {
 		prim := &Prim{}
-		if err := prim.Unpack(v); err != nil {
+		if err := prim.UnpackJSON(v); err != nil {
 			return err
 		}
 		p.Args = append(p.Args, prim)
@@ -309,6 +588,11 @@ func (p *Prim) UnpackPrimitive(val map[string]interface{}) error {
 		}
 	}
 
+	// update type when annots are present, but no more args are defined
+	if len(p.Anno) > 0 && p.Type == PrimNullary {
+		p.Type = PrimNullaryAnno
+	}
+
 	// process args separately and detect type based on number of args
 	if a, ok := val["args"]; ok {
 		args, ok := a.([]interface{})
@@ -338,7 +622,7 @@ func (p *Prim) UnpackPrimitive(val map[string]interface{}) error {
 		// every arg is handled as embedded primitive
 		for _, v := range args {
 			prim := &Prim{}
-			if err := prim.Unpack(v); err != nil {
+			if err := prim.UnpackJSON(v); err != nil {
 				return err
 			}
 			p.Args = append(p.Args, prim)
@@ -348,11 +632,7 @@ func (p *Prim) UnpackPrimitive(val map[string]interface{}) error {
 }
 
 func (p *Prim) UnmarshalBinary(data []byte) error {
-	buf := bytes.NewBuffer(data)
-	if err := p.DecodeBuffer(buf); err != nil {
-		return err
-	}
-	return nil
+	return p.DecodeBuffer(bytes.NewBuffer(data))
 }
 
 func (p *Prim) DecodeBuffer(buf *bytes.Buffer) error {
@@ -369,6 +649,7 @@ func (p *Prim) DecodeBuffer(buf *bytes.Buffer) error {
 			return err
 		}
 		p.Int = z.Big()
+		p.OpCode = T_INT
 
 	case PrimString:
 		// cross-check content size
@@ -377,6 +658,7 @@ func (p *Prim) DecodeBuffer(buf *bytes.Buffer) error {
 			return io.ErrShortBuffer
 		}
 		p.String = string(buf.Next(size))
+		p.OpCode = T_STRING
 
 	case PrimSequence:
 		// cross-check content size
@@ -395,6 +677,7 @@ func (p *Prim) DecodeBuffer(buf *bytes.Buffer) error {
 			}
 			p.Args = append(p.Args, prim)
 		}
+		p.OpCode = T_LIST
 
 	case PrimNullary:
 		// opcode only
@@ -537,10 +820,116 @@ func (p *Prim) DecodeBuffer(buf *bytes.Buffer) error {
 			return io.ErrShortBuffer
 		}
 		p.Bytes = buf.Next(size)
+		p.OpCode = T_BYTES
 
 	default:
 		return fmt.Errorf("micheline: unknown primitive type 0x%x", tag)
 	}
 	p.Type = tag
 	return nil
+}
+
+func (p *Prim) FindType(typ OpCode) (*Prim, bool) {
+	if p == nil {
+		return nil, false
+	}
+	if p.OpCode == typ {
+		return p, true
+	}
+	for i := range p.Args {
+		if p.Args[i].OpCode == typ {
+			return p.Args[i], true
+		} else {
+			x, ok := p.Args[i].FindType(typ)
+			if ok {
+				return x, ok
+			}
+		}
+	}
+	return nil, false
+}
+
+// build matching type tree for value
+func (p *Prim) BuildType() *Prim {
+	if p == nil {
+		return nil
+	}
+	t := &Prim{}
+	if p.OpCode.IsType() {
+		t.OpCode = p.OpCode
+	}
+	switch p.Type {
+	case PrimInt, PrimString, PrimBytes:
+		t.OpCode = p.Type.TypeCode()
+		t.Type = PrimNullary
+	case PrimSequence:
+		if p.OpCode == D_ELT || len(p.Args) > 0 && p.Args[0].OpCode == D_ELT {
+			// ELT can be T_MAP, T_SET, T_BIG_MAP
+			t.OpCode = T_MAP
+			t.Type = PrimBinary
+			t.Args = []*Prim{
+				p.Args[0].Args[0].BuildType(), // key type
+				p.Args[0].Args[1].BuildType(), // value type
+			}
+		} else if len(p.Args) > 0 && p.Args[0].OpCode.Type() == T_OPERATION {
+			// sequences can be T_LIST, T_LAMBDA (if T_OPERATION is included)
+			t.Type = PrimNullary // we don't know in/out types
+			t.OpCode = T_LAMBDA
+		} else {
+			t.OpCode = T_LIST
+			if len(p.Args) > 0 {
+				t.Type = PrimUnary
+				t.Args = []*Prim{p.Args[0].BuildType()}
+			} else {
+				t.Type = PrimNullary
+			}
+		}
+	case PrimNullary, PrimNullaryAnno:
+		t.Type = PrimNullary
+		t.OpCode = p.OpCode.Type()
+	case PrimUnary, PrimUnaryAnno:
+		t.OpCode = p.OpCode.Type()
+		switch t.OpCode {
+		case T_OPERATION:
+			t.Type = PrimNullary
+		case T_OR:
+			// in data we only see one branch, so we have to guess the other type
+			t.Type = PrimBinary
+			inner := p.Args[0].BuildType()
+			t.Args = []*Prim{inner, inner}
+		case T_OPTION:
+			// we only know the embedded type on D_SOME
+			if p.OpCode == D_SOME {
+				t.Type = PrimUnary
+				t.Args = []*Prim{p.Args[0].BuildType()}
+			} else {
+				t.Type = PrimNullary
+			}
+		case T_BOOL, T_UNIT:
+			t.Type = PrimNullary
+		}
+	case PrimBinary, PrimBinaryAnno:
+		if p.OpCode == D_ELT {
+			t.OpCode = T_MAP
+			t.Type = PrimBinary
+			t.Args = []*Prim{
+				p.Args[0].BuildType(),
+				p.Args[1].BuildType(),
+			}
+		} else {
+			// probably a regular pair
+			t.Type = PrimBinary
+			t.OpCode = p.OpCode.Type()
+			t.Args = []*Prim{
+				p.Args[0].BuildType(),
+				p.Args[1].BuildType(),
+			}
+		}
+
+	case PrimVariadicAnno:
+		// probably an operation
+		t.Type = PrimNullary
+		t.OpCode = p.OpCode.Type()
+	}
+	return t
 }

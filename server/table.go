@@ -28,7 +28,7 @@ var _ RESTful = (*TableRequest)(nil)
 type TableRequest struct {
 	Table   string          `schema:"-"`
 	Columns util.StringList `schema:"columns"`
-	Limit   int             `schema:"limit"`
+	Limit   uint            `schema:"limit"`
 	Cursor  string          `schema:"cursor"`
 	Format  string          `schema:"-"`     // from URL
 	Order   pack.OrderType  `schema:"order"` // asc/desc

@@ -21,6 +21,7 @@ const rankDefaultSize = 1 << 16
 
 type AccountRankingEntry struct {
 	AccountId    model.AccountID
+	Address      chain.Address
 	Balance      int64 // total balance
 	TxFlow24h    int64 // tx volume in+out
 	TxTraffic24h int64 // number of tx in+out
@@ -127,7 +128,7 @@ func (m *Indexer) BuildAccountRanking(ctx context.Context, now time.Time) (*Acco
 	q := pack.Query{
 		Name:    "rank.accounts",
 		NoCache: true,
-		Fields:  accounts.Fields().Select("A", "z", "Z", "Y", "U", "s"),
+		Fields:  accounts.Fields().Select("A", "H", "t", "z", "Z", "Y", "U", "s"),
 		Conditions: pack.ConditionList{
 			pack.Condition{
 				Field: accounts.Fields().Find("f"), // filter is_funded
@@ -137,12 +138,14 @@ func (m *Indexer) BuildAccountRanking(ctx context.Context, now time.Time) (*Acco
 		},
 	}
 	type XAcc struct {
-		RowId            model.AccountID `pack:"I,pk,snappy"`
-		FrozenDeposits   int64           `pack:"z,snappy"`
-		FrozenRewards    int64           `pack:"Z,snappy"`
-		FrozenFees       int64           `pack:"Y,snappy"`
-		UnclaimedBalance int64           `pack:"U,snappy"`
-		SpendableBalance int64           `pack:"s,snappy"`
+		RowId            model.AccountID   `pack:"I,pk,snappy"`
+		Hash             []byte            `pack:"H"`
+		Type             chain.AddressType `pack:"t,snappy"`
+		FrozenDeposits   int64             `pack:"z,snappy"`
+		FrozenRewards    int64             `pack:"Z,snappy"`
+		FrozenFees       int64             `pack:"Y,snappy"`
+		UnclaimedBalance int64             `pack:"U,snappy"`
+		SpendableBalance int64             `pack:"s,snappy"`
 	}
 	a := &XAcc{}
 	err = accounts.Stream(ctx, q, func(r pack.Row) error {
@@ -155,6 +158,7 @@ func (m *Indexer) BuildAccountRanking(ctx context.Context, now time.Time) (*Acco
 		}
 		acc := &AccountRankingEntry{
 			AccountId: a.RowId,
+			Address:   chain.NewAddress(a.Type, a.Hash),
 			Balance:   bal,
 		}
 		ranks.idmap[a.RowId] = acc

@@ -26,7 +26,12 @@ const (
 	KeyTypeEd25519 KeyType = iota
 	KeyTypeSecp256k1
 	KeyTypeP256
+	KeyTypeInvalid
 )
+
+func (t KeyType) IsValid() bool {
+	return t >= 0 && t < KeyTypeInvalid
+}
 
 func (t KeyType) HashType() HashType {
 	switch t {
@@ -77,6 +82,32 @@ func (t KeyType) Prefix() string {
 		return P256_PUBLIC_KEY_PREFIX
 	default:
 		return ""
+	}
+}
+
+func (t KeyType) Tag() byte {
+	switch t {
+	case KeyTypeEd25519:
+		return 0
+	case KeyTypeSecp256k1:
+		return 1
+	case KeyTypeP256:
+		return 2
+	default:
+		return 255
+	}
+}
+
+func ParseKeyTag(b byte) KeyType {
+	switch b {
+	case 0:
+		return KeyTypeEd25519
+	case 1:
+		return KeyTypeSecp256k1
+	case 2:
+		return KeyTypeP256
+	default:
+		return KeyTypeInvalid
 	}
 }
 
@@ -165,6 +196,32 @@ func (k *Key) UnmarshalText(data []byte) error {
 		return err
 	}
 	*k = key
+	return nil
+}
+
+func (k Key) MarshalBinary() ([]byte, error) {
+	if !k.Type.IsValid() {
+		return nil, ErrUnknownKeyType
+	}
+	return append([]byte{k.Type.Tag()}, k.Data...), nil
+}
+
+func (k *Key) UnmarshalBinary(b []byte) error {
+	l := len(b)
+	if l < 33 {
+		return fmt.Errorf("invalid binary key length %d", l)
+	}
+	if typ := ParseKeyTag(b[0]); !typ.IsValid() {
+		return fmt.Errorf("invalid binary key type %x", b[0])
+	} else {
+		k.Type = typ
+	}
+	if cap(k.Data) < l-1 {
+		k.Data = make([]byte, l-1)
+	} else {
+		k.Data = k.Data[:l-1]
+	}
+	copy(k.Data, b)
 	return nil
 }
 

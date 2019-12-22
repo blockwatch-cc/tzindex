@@ -335,7 +335,7 @@ func (b *Block) MarshalCSV() ([]string, error) {
 		case "is_orphan":
 			res[i] = strconv.FormatBool(b.IsOrphan)
 		case "time":
-			res[i] = strconv.FormatInt(util.UnixMilliNonZero(b.Timestamp), 10)
+			res[i] = strconv.Quote(b.Timestamp.Format(time.RFC3339))
 		case "height":
 			res[i] = strconv.FormatInt(b.Height, 10)
 		case "cycle":
@@ -481,7 +481,7 @@ func StreamBlockTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	q := pack.Query{
 		Name:       ctx.RequestID,
 		Fields:     table.Fields().Select(srcNames...),
-		Limit:      args.Limit,
+		Limit:      int(args.Limit),
 		Conditions: make(pack.ConditionList, 0),
 		Order:      args.Order,
 	}
@@ -579,10 +579,10 @@ func StreamBlockTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
-				for _, a := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(a)
+				for _, v := range strings.Split(val[0], ",") {
+					addr, err := chain.ParseAddress(v)
 					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
@@ -641,11 +641,15 @@ func StreamBlockTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				case "volume", "rewards", "fees", "deposits", "burned_supply",
 					"unfrozen_fees", "unfrozen_rewards", "unfrozen_deposits",
 					"activated_supply":
-					fval, err := strconv.ParseFloat(v, 64)
-					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
+					fvals := make([]string, 0)
+					for _, vv := range strings.Split(v, ",") {
+						fval, err := strconv.ParseFloat(vv, 64)
+						if err != nil {
+							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, vv), err))
+						}
+						fvals = append(fvals, strconv.FormatInt(params.ConvertAmount(fval), 10))
 					}
-					v = strconv.FormatInt(params.ConvertAmount(fval), 10)
+					v = strings.Join(fvals, ",")
 				}
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
@@ -710,7 +714,7 @@ func StreamBlockTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			}
 			count++
 			lastId = block.RowId
-			if args.Limit > 0 && count == args.Limit {
+			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
 			return nil
@@ -737,7 +741,7 @@ func StreamBlockTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				count++
 				lastId = block.RowId
-				if args.Limit > 0 && count == args.Limit {
+				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}
 				return nil

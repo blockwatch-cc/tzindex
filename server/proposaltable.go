@@ -145,7 +145,7 @@ func (p *Proposal) MarshalCSV() ([]string, error) {
 		case "height":
 			res[i] = strconv.FormatInt(p.Height, 10)
 		case "time":
-			res[i] = strconv.FormatInt(util.UnixMilliNonZero(p.Time), 10)
+			res[i] = strconv.Quote(p.Time.Format(time.RFC3339))
 		case "source_id":
 			res[i] = strconv.FormatUint(p.SourceId.Value(), 10)
 		case "source":
@@ -200,7 +200,7 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 	q := pack.Query{
 		Name:       ctx.RequestID,
 		Fields:     table.Fields().Select(srcNames...),
-		Limit:      args.Limit,
+		Limit:      int(args.Limit),
 		Conditions: make(pack.ConditionList, 0),
 		Order:      args.Order,
 	}
@@ -297,10 +297,10 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
-				for _, a := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(a)
+				for _, v := range strings.Split(val[0], ",") {
+					addr, err := chain.ParseAddress(v)
 					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
@@ -479,7 +479,7 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			}
 			count++
 			lastId = proposal.RowId.Value()
-			if args.Limit > 0 && count == args.Limit {
+			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
 			return nil
@@ -506,7 +506,7 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				}
 				count++
 				lastId = proposal.RowId.Value()
-				if args.Limit > 0 && count == args.Limit {
+				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}
 				return nil

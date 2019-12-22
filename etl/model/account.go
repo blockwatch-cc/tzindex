@@ -138,6 +138,24 @@ func (a Account) String() string {
 	return s
 }
 
+func (a Account) Address() chain.Address {
+	return chain.NewAddress(a.Type, a.Hash)
+}
+
+func (a *Account) ManagerContract() (*Contract, error) {
+	if a.Type != chain.AddressTypeContract {
+		return nil, fmt.Errorf("account is not a contract")
+	}
+	c := AllocContract()
+	c.Hash = make([]byte, len(a.Hash))
+	copy(c.Hash, a.Hash)
+	c.AccountId = a.RowId
+	c.ManagerId = a.ManagerId
+	c.IsSpendable = a.IsSpendable
+	c.IsDelegatable = a.IsDelegatable
+	return c, nil
+}
+
 func (a Account) Balance() int64 {
 	b := a.FrozenBalance() + a.SpendableBalance
 	if a.IsVesting {
@@ -154,6 +172,13 @@ func (a Account) FrozenBalance() int64 {
 // all delegated balances (this is self-delegation safe)
 func (a Account) StakingBalance() int64 {
 	return a.FrozenDeposits + a.FrozenFees + a.SpendableBalance + a.DelegatedBalance
+}
+
+func (a Account) Rolls(p *chain.Params) int64 {
+	if p.TokensPerRoll == 0 {
+		return 0
+	}
+	return a.StakingBalance() / p.TokensPerRoll
 }
 
 func (a *Account) Reset() {
@@ -327,6 +352,7 @@ func (a *Account) UpdateBalance(f *Flow) error {
 
 	// reset token generation
 	if !a.IsFunded {
+		a.IsRevealed = false
 		a.TokenGenMin = 0
 		a.TokenGenMax = 0
 	}

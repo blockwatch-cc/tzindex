@@ -192,9 +192,9 @@ func (e *Election) MarshalCSV() ([]string, error) {
 		case "voting_perid":
 			res[i] = strconv.FormatInt(e.VotingPeriod, 10)
 		case "start_time":
-			res[i] = strconv.FormatInt(util.UnixMilliNonZero(e.StartTime), 10)
+			res[i] = strconv.Quote(e.StartTime.Format(time.RFC3339))
 		case "end_time":
-			res[i] = strconv.FormatInt(util.UnixMilliNonZero(e.EndTime), 10)
+			res[i] = strconv.Quote(e.EndTime.Format(time.RFC3339))
 		case "start_height":
 			res[i] = strconv.FormatInt(e.StartHeight, 10)
 		case "end_height":
@@ -251,7 +251,7 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 	q := pack.Query{
 		Name:       ctx.RequestID,
 		Fields:     table.Fields().Select(srcNames...),
-		Limit:      args.Limit,
+		Limit:      int(args.Limit),
 		Conditions: make(pack.ConditionList, 0),
 		Order:      args.Order,
 	}
@@ -335,7 +335,7 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				for _, v := range strings.Split(val[0], ",") {
 					h, err := chain.ParseProtocolHash(v)
 					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", val[0]), err))
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", v), err))
 					}
 					prop, err := ctx.Indexer.LookupProposal(ctx, h)
 					if err != nil && err != index.ErrNoProposalEntry {
@@ -445,7 +445,7 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			}
 			count++
 			lastId = election.RowId.Value()
-			if args.Limit > 0 && count == args.Limit {
+			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
 			return nil
@@ -472,7 +472,7 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				}
 				count++
 				lastId = election.RowId.Value()
-				if args.Limit > 0 && count == args.Limit {
+				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}
 				return nil

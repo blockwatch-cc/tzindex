@@ -69,6 +69,10 @@ func (b *Builder) NewBakerFlows() ([]*Flow, error) {
 				}
 			} else {
 				// payout: deduct unfrozen deposits, rewards and fees
+				// when cycle is set and > N-5 then this is a seed nonce slashing
+				// because the baker did not publish nonces
+				cycle := u.Cycle()
+				isSeedNonceSlashing := cycle > 0 && cycle > b.block.Cycle-b.block.Params.PreservedCycles
 				switch u.Category {
 				case "deposits":
 					f := NewFlow(b.block, acc, acc)
@@ -78,19 +82,37 @@ func (b *Builder) NewBakerFlows() ([]*Flow, error) {
 					f.IsUnfrozen = true
 					flows = append(flows, f)
 				case "rewards":
-					f := NewFlow(b.block, acc, acc)
-					f.Category = FlowCategoryRewards
-					f.Operation = FlowTypeInternal
-					f.AmountOut = -u.Change
-					f.IsUnfrozen = true
-					flows = append(flows, f)
+					if isSeedNonceSlashing {
+						f := NewFlow(b.block, acc, acc)
+						f.Category = FlowCategoryRewards
+						f.Operation = FlowTypeNonceRevelation
+						f.AmountOut = -u.Change
+						f.IsBurned = true
+						flows = append(flows, f)
+					} else {
+						f := NewFlow(b.block, acc, acc)
+						f.Category = FlowCategoryRewards
+						f.Operation = FlowTypeInternal
+						f.AmountOut = -u.Change
+						f.IsUnfrozen = true
+						flows = append(flows, f)
+					}
 				case "fees":
-					f := NewFlow(b.block, acc, acc)
-					f.Category = FlowCategoryFees
-					f.Operation = FlowTypeInternal
-					f.AmountOut = -u.Change
-					f.IsUnfrozen = true
-					flows = append(flows, f)
+					if isSeedNonceSlashing {
+						f := NewFlow(b.block, acc, acc)
+						f.Category = FlowCategoryFees
+						f.Operation = FlowTypeNonceRevelation
+						f.AmountOut = -u.Change
+						f.IsBurned = true
+						flows = append(flows, f)
+					} else {
+						f := NewFlow(b.block, acc, acc)
+						f.Category = FlowCategoryFees
+						f.Operation = FlowTypeInternal
+						f.AmountOut = -u.Change
+						f.IsUnfrozen = true
+						flows = append(flows, f)
+					}
 				}
 			}
 		}

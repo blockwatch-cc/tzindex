@@ -51,7 +51,6 @@ type ApiContext struct {
 	Server         *RestServer
 	Crawler        *etl.Crawler
 	Indexer        *etl.Indexer
-	Reporter       *etl.Reporter
 	Client         *rpc.Client
 
 	// QoS and Debugging
@@ -106,7 +105,6 @@ func NewContext(ctx context.Context, r *http.Request, w http.ResponseWriter, f A
 		Server:         srv,
 		Crawler:        srv.cfg.Crawler,
 		Indexer:        srv.cfg.Indexer,
-		Reporter:       srv.cfg.Reporter,
 		Client:         srv.cfg.Client,
 		Request:        r,
 		ResponseWriter: w,
@@ -126,14 +124,14 @@ func (api *ApiContext) ParseRequestArgs(args interface{}) {
 
 	if r.Method == http.MethodGet {
 		if err := schemaDecoder.Decode(args, r.URL.Query()); err != nil {
-			panic(EBadRequest(EC_BAD_URL_QUERY, "request syntax error", err))
+			panic(EBadRequest(EC_BAD_URL_QUERY, err.Error(), nil))
 		}
 	} else {
 		// POST, PUT, PATCH, DELETE
 
 		// decode URL arguments
 		if err := schemaDecoder.Decode(args, r.URL.Query()); err != nil {
-			panic(EBadRequest(EC_BAD_URL_QUERY, "request syntax error", err))
+			panic(EBadRequest(EC_BAD_URL_QUERY, err.Error(), nil))
 		}
 		// JSON overwrites URL arguments
 		jsonDecoder := json.NewDecoder(r.Body)
@@ -311,6 +309,13 @@ func (api *ApiContext) writeResponseHeaders(contentType, trailers string) {
 	h.Set(headerVersion, ApiVersion)
 	h.Set("X-Request-Id", api.RequestID)
 
+	// add blockchain info
+	tip := api.Crawler.Tip()
+	h.Set("X-Network-Id", tip.ChainId.String())
+	if l := len(tip.Deployments); l > 0 {
+		h.Set("X-Protocol-Hash", tip.Deployments[l-1].Protocol.String())
+	}
+
 	// set content type if not already set by request handler function
 	if h.Get("Content-Type") == "" && api.status != http.StatusNoContent {
 		if contentType == "" {
@@ -369,7 +374,7 @@ func (api *ApiContext) writeResponseHeaders(contentType, trailers string) {
 		// UTC format: time.RFC1123 (would set timezone string to UTC instead of GMT)
 		w.Header().Set("Date", now.Format(http.TimeFormat))
 		w.Header().Set("Expires", now.Add(expires).Format(http.TimeFormat))
-		w.Header().Set("Cache-Control", api.Cfg.Http.CacheControl+", max-age="+strconv.FormatInt(int64(expires/time.Second), 10))
+		w.Header().Set("Cache-Control", api.Cfg.Http.CacheControl+",max-age="+strconv.FormatInt(int64(expires/time.Second), 10))
 	} else {
 		h.Set("Cache-Control", "max-age=0, no-cache, no-store, must-revalidate")
 		h.Set("Pragma", "no-cache")
@@ -386,6 +391,8 @@ func (api *ApiContext) writeResponseHeaders(contentType, trailers string) {
 func (api *ApiContext) writeResponseBody() {
 	if api.result != nil {
 		switch t := api.result.(type) {
+		case string:
+			api.ResponseWriter.Write([]byte(t))
 		case *string:
 			api.ResponseWriter.Write([]byte(*t))
 		case []byte:
@@ -394,6 +401,13 @@ func (api *ApiContext) writeResponseBody() {
 			// marshal and write the result to the HTTP body
 			if b, err := json.MarshalIndent(api.result, "", "  "); err != nil {
 				api.Log.Errorf("Error sending response: %v in struct %#v", err, api.result)
+				e := EInternal(EC_MARSHAL_FAILED, "cannot marshal response", err).(*Error)
+				e.SetScope(api.name)
+				if api.isStreamed {
+					api.ResponseWriter.Header().Set(trailerError, e.String())
+				} else {
+					api.ResponseWriter.Write(e.MarshalIndent())
+				}
 			} else {
 				api.ResponseWriter.Write(append(b, '\n'))
 			}

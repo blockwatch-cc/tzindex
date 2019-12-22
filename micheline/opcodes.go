@@ -9,6 +9,10 @@ import (
 
 type OpCode byte
 
+func (o OpCode) Byte() byte {
+	return byte(o)
+}
+
 // Michelson V1 Primitives
 const (
 	// Keys
@@ -142,6 +146,10 @@ const (
 	T_CHAIN_ID      // 74
 	I_CHAIN_ID      // 75
 )
+
+func (op OpCode) IsValid() bool {
+	return op <= I_CHAIN_ID
+}
 
 var (
 	opCodeToString = map[OpCode]string{
@@ -282,6 +290,10 @@ func (op OpCode) String() string {
 	return str
 }
 
+func (op OpCode) MarshalText() ([]byte, error) {
+	return []byte(op.String()), nil
+}
+
 func ParseOpCode(str string) (OpCode, error) {
 	op, ok := stringToOp[str]
 	if !ok {
@@ -300,5 +312,27 @@ func (op OpCode) IsKey() bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func (op OpCode) Type() OpCode {
+	if op.IsType() {
+		return op
+	}
+	switch op {
+	case K_PARAMETER, K_STORAGE, K_CODE, D_UNIT:
+		return T_UNIT
+	case D_FALSE, D_TRUE:
+		return T_BOOL
+	case D_LEFT, D_RIGHT:
+		return T_OR
+	case D_NONE, D_SOME:
+		return T_OPTION
+	case D_PAIR:
+		return T_PAIR
+	case D_ELT:
+		return T_MAP // may also be T_SET, T_BIG_MAP
+	default:
+		return T_OPERATION
 	}
 }

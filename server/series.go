@@ -26,7 +26,7 @@ type SeriesRequest struct {
 	Collapse util.Duration   `schema:"collapse"`
 	From     util.Time       `schema:"start_date"`
 	To       util.Time       `schema:"end_date"`
-	Limit    int             `schema:"limit"`
+	Limit    uint            `schema:"limit"`
 	Verbose  bool            `schema:"verbose"`
 	Format   string          `schema:"-"`     // from URL
 	Order    pack.OrderType  `schema:"order"` // asc/desc

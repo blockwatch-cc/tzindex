@@ -167,7 +167,7 @@ func (b *Ballot) MarshalCSV() ([]string, error) {
 		case "height":
 			res[i] = strconv.FormatInt(b.Height, 10)
 		case "time":
-			res[i] = strconv.FormatInt(util.UnixMilliNonZero(b.Time), 10)
+			res[i] = strconv.Quote(b.Time.Format(time.RFC3339))
 		case "source_id":
 			res[i] = strconv.FormatUint(b.SourceId.Value(), 10)
 		case "source":
@@ -242,7 +242,7 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	q := pack.Query{
 		Name:       ctx.RequestID,
 		Fields:     table.Fields().Select(srcNames...),
-		Limit:      args.Limit,
+		Limit:      int(args.Limit),
 		Conditions: make(pack.ConditionList, 0),
 		Order:      args.Order,
 	}
@@ -328,10 +328,10 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
-				for _, a := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(a)
+				for _, v := range strings.Split(val[0], ",") {
+					addr, err := chain.ParseAddress(v)
 					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
@@ -483,7 +483,7 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	if needAccountT && res.Rows() > 0 {
 		// get a unique copy of source id column (clip on request limit)
 		ucol, _ := res.Uint64Column("S")
-		find := vec.UniqueUint64Slice(ucol[:util.Min(len(ucol), args.Limit)])
+		find := vec.UniqueUint64Slice(ucol[:util.Min(len(ucol), int(args.Limit))])
 
 		// filter already known accounts
 		var n int
@@ -531,7 +531,7 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	if needOpT && res.Rows() > 0 {
 		// get a unique copy of source id column (clip on request limit)
 		ucol, _ := res.Uint64Column("O")
-		find := vec.UniqueUint64Slice(ucol[:util.Min(len(ucol), args.Limit)])
+		find := vec.UniqueUint64Slice(ucol[:util.Min(len(ucol), int(args.Limit))])
 
 		// filter already known accounts
 		var n int
@@ -618,7 +618,7 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			}
 			count++
 			lastId = ballot.RowId
-			if args.Limit > 0 && count == args.Limit {
+			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
 			return nil
@@ -645,7 +645,7 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				count++
 				lastId = ballot.RowId
-				if args.Limit > 0 && count == args.Limit {
+				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}
 				return nil

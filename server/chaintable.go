@@ -243,7 +243,7 @@ func (c *Chain) MarshalCSV() ([]string, error) {
 		case "cycle":
 			res[i] = strconv.FormatInt(c.Cycle, 10)
 		case "time":
-			res[i] = strconv.FormatInt(util.UnixMilliNonZero(c.Timestamp), 10)
+			res[i] = strconv.Quote(c.Timestamp.Format(time.RFC3339))
 		case "total_accounts":
 			res[i] = strconv.FormatInt(c.TotalAccounts, 10)
 		case "total_implicit":
@@ -353,7 +353,7 @@ func StreamChainTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	q := pack.Query{
 		Name:       ctx.RequestID,
 		Fields:     table.Fields().Select(srcNames...),
-		Limit:      args.Limit,
+		Limit:      int(args.Limit),
 		Conditions: make(pack.ConditionList, 0),
 		Order:      args.Order,
 	}
@@ -468,7 +468,7 @@ func StreamChainTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			}
 			count++
 			lastId = ch.RowId
-			if args.Limit > 0 && count == args.Limit {
+			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
 			return nil
@@ -494,7 +494,7 @@ func StreamChainTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				count++
 				lastId = ch.RowId
-				if args.Limit > 0 && count == args.Limit {
+				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}
 				return nil

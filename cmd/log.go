@@ -10,7 +10,6 @@ import (
 	"blockwatch.cc/packdb/store"
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/index"
-	"blockwatch.cc/tzindex/etl/report"
 	"blockwatch.cc/tzindex/micheline"
 	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
@@ -24,7 +23,6 @@ var (
 	dataLog = logpkg.NewLogger("DATA") // database
 	jrpcLog = logpkg.NewLogger("JRPC") // json rpc client
 	srvrLog = logpkg.NewLogger("SRVR") // api server
-	repoLog = logpkg.NewLogger("REPO") // reports
 	michLog = logpkg.NewLogger("MICH") // micheline
 )
 
@@ -32,7 +30,7 @@ var (
 func init() {
 	config.SetDefault("logging.backend", "stdout")
 	config.SetDefault("logging.flags", "date,time,micro,utc")
-	config.SetDefault("logging.level", "warn")
+	config.SetDefault("logging.level", "info")
 	config.SetDefault("logging.blockchain", "info")
 	config.SetDefault("logging.database", "info")
 	config.SetDefault("logging.rpc", "info")
@@ -45,7 +43,6 @@ func init() {
 	pack.UseLogger(dataLog)
 	rpc.UseLogger(jrpcLog)
 	server.UseLogger(srvrLog)
-	report.UseLogger(repoLog)
 	micheline.UseLogger(michLog)
 }
 
@@ -56,7 +53,6 @@ var subsystemLoggers = map[string]logpkg.Logger{
 	"DATA": dataLog,
 	"JRPC": jrpcLog,
 	"SRVR": srvrLog,
-	"REPO": repoLog,
 	"MICH": michLog,
 }
 
@@ -83,8 +79,6 @@ func initLogging() {
 	jrpcLog.SetLevel(logpkg.ParseLevel(config.GetString("logging.rpc")))
 	srvrLog = logpkg.NewLogger("SRVR") // api server
 	srvrLog.SetLevel(logpkg.ParseLevel(config.GetString("logging.server")))
-	repoLog = logpkg.NewLogger("REPO") // reports
-	repoLog.SetLevel(logpkg.ParseLevel(config.GetString("logging.report")))
 	michLog = logpkg.NewLogger("MICH") // micheline
 	michLog.SetLevel(logpkg.ParseLevel(config.GetString("logging.micheline")))
 
@@ -95,7 +89,6 @@ func initLogging() {
 	pack.UseLogger(dataLog)
 	rpc.UseLogger(jrpcLog)
 	server.UseLogger(srvrLog)
-	report.UseLogger(repoLog)
 	micheline.UseLogger(michLog)
 
 	// store loggers in map
@@ -105,7 +98,6 @@ func initLogging() {
 		"DATA": dataLog,
 		"JRPC": jrpcLog,
 		"SRVR": srvrLog,
-		"REPO": repoLog,
 		"MICH": michLog,
 	}
 

@@ -31,7 +31,7 @@ func init() {
 
 // Block contains extracted and translated data describing a Tezos block. Block also
 // contains raw data and translations for related types such as operations, chain totals
-// rights, etc. that is used by indexers and reporters
+// rights, etc. that is used by indexers
 type Block struct {
 	RowId               uint64                 `pack:"I,pk,snappy"   json:"row_id"`                         // internal: id, not height!
 	ParentId            uint64                 `pack:"P,snappy"      json:"parent_id"`                      // internal: parent block id
@@ -201,7 +201,7 @@ func (b *Block) FetchRPC(ctx context.Context, c *rpc.Client) error {
 		b.Params = b.Params.
 			ForProtocol(b.TZ.Block.Protocol).
 			ForNetwork(b.TZ.Block.ChainId)
-		b.Params.Version = b.Version
+		b.Params.Deployment = b.TZ.Block.Header.Proto
 	}
 	b.TZ.Params = b.Params
 	// start fetching more rights at cycle 2 (look-ahead is 5)
@@ -257,6 +257,31 @@ func (b *Block) Age(height int64) int64 {
 	// instead of real time we use block offsets and the target time
 	// between blocks as time diff
 	return (b.Height - height) * int64(b.Params.TimeBetweenBlocks[0]/time.Second)
+}
+
+func (b *Block) BlockReward(p *chain.Params) int64 {
+	blockReward := p.BlockReward
+	if b.Cycle < p.NoRewardCycles {
+		blockReward = 0
+	}
+
+	if p.Version < 5 {
+		return blockReward
+	}
+
+	// The baking reward is now calculated w.r.t a given priority [p] and a
+	// number [e] of included endorsements as follows:
+	var nEndorsements int
+	for _, op := range b.Ops {
+		if op.Type != chain.OpTypeEndorsement {
+			continue
+		}
+		eop, _ := b.GetRPCOp(op.OpN, op.OpC)
+		nEndorsements += len(eop.(*rpc.EndorsementOp).Metadata.Slots)
+	}
+	endorseFactor := 0.8 + 0.2*float64(nEndorsements)/float64(p.EndorsersPerBlock)
+	blockReward = int64(float64(blockReward) / float64(b.Priority+1) * endorseFactor)
+	return blockReward
 }
 
 func (b *Block) Free() {
@@ -457,6 +482,14 @@ func (b *Block) Update(accounts, delegates map[AccountID]*Account) {
 				case FlowCategoryFees:
 					b.UnfrozenFees += f.AmountOut
 				}
+			}
+		case FlowTypeNonceRevelation:
+			// seed nonce burn is no operation, but still creates a flow
+			if f.IsBurned {
+				// technically this happends at the end of parent block
+				// but we have no process in place to run updates after
+				// all indexers have run
+				b.BurnedSupply += f.AmountOut
 			}
 		case FlowTypeVest:
 			b.ActivatedSupply += f.AmountIn

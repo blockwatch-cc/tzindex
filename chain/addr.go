@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 
 	"blockwatch.cc/tzindex/base58"
@@ -100,8 +99,20 @@ func (t AddressType) Tag() byte {
 	case AddressTypeP256:
 		return 2
 	default:
-		log.Printf("tezos: no tag for address type %s", t)
-		return 0
+		return 255
+	}
+}
+
+func ParseAddressTag(b byte) AddressType {
+	switch b {
+	case 0:
+		return AddressTypeEd25519
+	case 1:
+		return AddressTypeSecp256k1
+	case 2:
+		return AddressTypeP256
+	default:
+		return AddressTypeInvalid
 	}
 }
 
@@ -159,6 +170,7 @@ func (a Address) IsEqual(b Address) bool {
 	return a.Type == b.Type && bytes.Compare(a.Hash, b.Hash) == 0
 }
 
+// String returns the string encoding of the address.
 func (a Address) String() string {
 	s, _ := EncodeAddress(a.Type, a.Hash)
 	return s
@@ -177,6 +189,20 @@ func (a Address) MarshalText() ([]byte, error) {
 	return []byte(a.String()), nil
 }
 
+// output the 21 or 22byte version
+func (a Address) Bytes() []byte {
+	if !a.Type.IsValid() {
+		return nil
+	}
+	if a.Type == AddressTypeContract {
+		buf := append([]byte{01}, a.Hash...)
+		buf = append(buf, byte(0)) // padding
+		return buf
+	}
+	return append([]byte{a.Type.Tag()}, a.Hash...)
+}
+
+// output the 22byte version
 func (a Address) MarshalBinary() ([]byte, error) {
 	if !a.Type.IsValid() {
 		return nil, ErrUnknownAddressType
@@ -189,6 +215,39 @@ func (a Address) MarshalBinary() ([]byte, error) {
 	return append([]byte{00, a.Type.Tag()}, a.Hash...), nil
 }
 
+// support both the 21 byte and 22 byte versions
+func (a *Address) UnmarshalBinary(b []byte) error {
+	switch len(b) {
+	case 21:
+		a.Type = ParseAddressTag(b[0])
+		b = b[1:21]
+	case 22:
+		if b[0] == 0 {
+			a.Type = ParseAddressTag(b[1])
+			b = b[2:]
+		} else if b[0] == 1 {
+			a.Type = AddressTypeContract
+			b = b[1:21]
+		} else {
+			return fmt.Errorf("invalid binary address prefix %x", b[0])
+		}
+	default:
+		return fmt.Errorf("invalid binary address length %d", len(b))
+	}
+	if !a.Type.IsValid() {
+		return ErrUnknownAddressType
+	}
+	if cap(a.Hash) < 20 {
+		a.Hash = make([]byte, 20)
+	} else {
+		a.Hash = a.Hash[:20]
+	}
+	copy(a.Hash, b)
+	return nil
+}
+
+// ContractAddress returns the string encoding of the address when used
+// as originated contract.
 func (a Address) ContractAddress() string {
 	s, _ := EncodeAddress(AddressTypeContract, a.Hash)
 	return s
@@ -248,7 +307,6 @@ func EncodeAddress(typ AddressType, addrhash []byte) (string, error) {
 	case AddressTypeBlinded:
 		return base58.CheckEncode(addrhash, BLINDED_PUBLIC_KEY_HASH_ID), nil
 	default:
-		log.Printf("tezos: unknown address type %s for hash=%x\n", typ, addrhash)
-		return "", ErrUnknownAddressType
+		return "", fmt.Errorf("unknown address type %s for hash=%x\n", typ, addrhash)
 	}
 }

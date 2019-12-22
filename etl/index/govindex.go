@@ -18,6 +18,10 @@ import (
 	"blockwatch.cc/tzindex/rpc"
 )
 
+const (
+	firstVoteBlock int64 = 2 // chain is initialized at block 1 !
+)
+
 var (
 	GovPackSizeLog2    = 14 // 16k
 	GovJournalSizeLog2 = 15 // 32k
@@ -209,9 +213,14 @@ func (idx *GovIndex) Close() error {
 }
 
 func (idx *GovIndex) ConnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
+	// skip genesis and bootstrap blocks
+	if block.Height < firstVoteBlock {
+		return nil
+	}
+
 	// detect first and last block of a voting period
-	isPeriodStart := block.Height == 0 || block.Height%block.Params.BlocksPerVotingPeriod == 0
-	isPeriodEnd := block.Height > 0 && (block.Height+1)%block.Params.BlocksPerVotingPeriod == 0
+	isPeriodStart := block.Height == firstVoteBlock || block.Height%block.Params.BlocksPerVotingPeriod == 0
+	isPeriodEnd := block.Height > firstVoteBlock && (block.Height+1)%block.Params.BlocksPerVotingPeriod == 0
 
 	// open a new election or vote on first block
 	if isPeriodStart {
@@ -361,7 +370,7 @@ func (idx *GovIndex) closeElection(ctx context.Context, block *Block, builder Bl
 	election.EndHeight = vote.EndHeight
 	election.EndTime = vote.EndTime
 	election.IsOpen = false
-	election.IsEmpty = election.NumPeriods == 1 && vote.IsFailed
+	election.IsEmpty = election.NumProposals == 0 && vote.IsFailed
 	election.IsFailed = vote.IsFailed
 	election.NoQuorum = vote.NoQuorum
 	election.NoMajority = vote.NoMajority
@@ -388,7 +397,11 @@ func (idx *GovIndex) openVote(ctx context.Context, block *Block, builder BlockBu
 		election.NumPeriods = 4
 	}
 
+	// Note: this adjusts end height of first cycle (we run this func at height 2 instead of 0)
+	//       otherwise the formula could be simpler
 	p := block.Params
+	endHeight := (block.Height - block.Height%p.BlocksPerVotingPeriod) + p.BlocksPerVotingPeriod - 1
+
 	vote := &Vote{
 		ElectionId:       election.RowId,
 		ProposalId:       election.ProposalId, // voted proposal, zero in first voting period
@@ -397,42 +410,34 @@ func (idx *GovIndex) openVote(ctx context.Context, block *Block, builder BlockBu
 		StartTime:        block.Timestamp,
 		EndTime:          time.Time{}.UTC(), // set on close
 		StartHeight:      block.Height,
-		EndHeight:        block.Height + p.BlocksPerVotingPeriod - 1,
+		EndHeight:        endHeight,
 		IsOpen:           true,
 	}
 
 	// add rolls and calculate quorum
 	// - for roll snapshot we use the parent block's chain data
 	// - at genesis there is no parent block, we use defaults here
-	if block.Height == 0 {
-		cd := block.Chain
-		vote.EligibleRolls = cd.Rolls
-		vote.EligibleVoters = cd.RollOwners
-		vote.QuorumPct = 8000
-		vote.QuorumRolls = vote.EligibleRolls * vote.QuorumPct / 10000
-	} else {
-		cd := block.Parent.Chain
-		vote.EligibleRolls = cd.Rolls
-		vote.EligibleVoters = cd.RollOwners
-		switch vote.VotingPeriodKind {
-		case chain.VotingPeriodProposal:
-			// fixed min proposal quorum as defined by protocol
-			vote.QuorumPct = p.MinProposalQuorum
-		case chain.VotingPeriodTesting:
-			// no quorum
-			vote.QuorumPct = 0
-		case chain.VotingPeriodTestingVote, chain.VotingPeriodPromotionVote:
-			// from most recent (testing_vote or promotion_vote) period
-			quorumPct, turnoutEma, err := idx.quorumByHeight(ctx, block.Height, p)
-			if err != nil {
-				return err
-			}
-			// quorum adjusts at the end of each voting period (exploration & promotion)
-			vote.QuorumPct = quorumPct
-			vote.TurnoutEma = turnoutEma
+	cd := block.Chain
+	vote.EligibleRolls = cd.Rolls
+	vote.EligibleVoters = cd.RollOwners
+	switch vote.VotingPeriodKind {
+	case chain.VotingPeriodProposal:
+		// fixed min proposal quorum as defined by protocol
+		vote.QuorumPct = p.MinProposalQuorum
+	case chain.VotingPeriodTesting:
+		// no quorum
+		vote.QuorumPct = 0
+	case chain.VotingPeriodTestingVote, chain.VotingPeriodPromotionVote:
+		// from most recent (testing_vote or promotion_vote) period
+		quorumPct, turnoutEma, err := idx.quorumByHeight(ctx, block.Height, p)
+		if err != nil {
+			return err
 		}
-		vote.QuorumRolls = vote.EligibleRolls * vote.QuorumPct / 10000
+		// quorum adjusts at the end of each voting period (exploration & promotion)
+		vote.QuorumPct = quorumPct
+		vote.TurnoutEma = turnoutEma
 	}
+	vote.QuorumRolls = vote.EligibleRolls * vote.QuorumPct / 10000
 
 	// insert vote
 	if err := idx.voteTable.Insert(ctx, vote); err != nil {
@@ -461,38 +466,8 @@ func (idx *GovIndex) closeVote(ctx context.Context, block *Block, builder BlockB
 		// select the winning proposal if any and update election
 		var isDraw bool
 		if vote.TurnoutRolls > 0 {
-			// load ballots (technically they are not ballots on-chain, but we store them as such)
-			ballots, err := idx.ballotsByVote(ctx, vote.VotingPeriod)
-			if err != nil {
-				return false, err
-			}
 			proposals, err := idx.proposalsByElection(ctx, vote.ElectionId)
 			if err != nil {
-				return false, err
-			}
-
-			proposalMap := make(map[ProposalID]*Proposal)
-			for _, v := range proposals {
-				proposalMap[v.RowId] = v
-			}
-
-			// count proposal votes
-			for _, v := range ballots {
-				if p, ok := proposalMap[v.ProposalId]; ok {
-					p.Rolls += v.Rolls
-					p.Voters++
-				} else {
-					return false, fmt.Errorf("closing vote: %d/%d unknown proposal id %d from ballot %d",
-						vote.ElectionId, vote.VotingPeriod, v.ProposalId, v.RowId)
-				}
-			}
-
-			// update proposals
-			items := make([]pack.Item, len(proposals))
-			for i, v := range proposals {
-				items[i] = v
-			}
-			if err := idx.proposalTable.Update(ctx, items); err != nil {
 				return false, err
 			}
 
@@ -557,6 +532,7 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *Block, builder
 	if block.NProposal == 0 {
 		return nil
 	}
+	// log.Infof("Proposals for block %d", block.Height)
 
 	// load current vote
 	vote, err := idx.voteByHeight(ctx, block.Height, block.Params)
@@ -658,9 +634,10 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *Block, builder
 			return fmt.Errorf("missing roll snapshot for %s in vote period %d (%s) start %d",
 				acc, vote.VotingPeriod, vote.VotingPeriodKind, vote.StartHeight)
 		}
-		// update vote
-		vote.TurnoutRolls += rolls
-		vote.TurnoutVoters++
+		// fix for missing pre-genesis snapshot
+		if block.Cycle == 0 && rolls == 0 {
+			rolls = acc.Rolls(block.Params)
+		}
 
 		// create ballots for all proposals
 		for _, v := range pop.Proposals {
@@ -668,6 +645,41 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *Block, builder
 			if !ok {
 				return fmt.Errorf("missing proposal %s in op [%d:%d]", v, op.OpN, op.OpC)
 			}
+
+			// skip when the same account voted for the same proposal already
+			q := pack.Query{
+				Name:   "etl.count_account_ballots",
+				Fields: idx.ballotTable.Fields(),
+				Conditions: pack.ConditionList{
+					pack.Condition{
+						Field: idx.ballotTable.Fields().Find("S"), // search for source account id
+						Mode:  pack.FilterModeEqual,
+						Value: acc.RowId.Value(),
+					},
+					pack.Condition{
+						Field: idx.ballotTable.Fields().Find("p"), // voting period
+						Mode:  pack.FilterModeEqual,
+						Value: vote.VotingPeriod,
+					},
+					pack.Condition{
+						Field: idx.ballotTable.Fields().Find("P"), // proposal id
+						Mode:  pack.FilterModeEqual,
+						Value: prop.RowId.Value(),
+					},
+				},
+			}
+			var cnt int
+			err := idx.ballotTable.Stream(ctx, q, func(r pack.Row) error {
+				cnt++
+				return nil
+			})
+			if err != nil {
+				return err
+			} else if cnt > 0 {
+				// log.Infof("Skipping voter %s for proposal %s with %d rolls (already voted %d times)", acc, v, rolls, cnt)
+				continue
+			}
+
 			b := &Ballot{
 				ElectionId:       vote.ElectionId,
 				ProposalId:       prop.RowId,
@@ -683,9 +695,51 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *Block, builder
 			insBallots = append(insBallots, b)
 
 			// update proposal too
+			// log.Infof("New voter %s for proposal %s with %d rolls (add to %d voters, %d rolls)",
+			// 	acc, v, rolls, prop.Voters, prop.Rolls)
 			prop.Voters++
 			prop.Rolls += rolls
 		}
+
+		// update vote, skip when the same account voted already
+		q := pack.Query{
+			Name:   "etl.count_account_ballots",
+			Fields: idx.ballotTable.Fields(),
+			Conditions: pack.ConditionList{
+				pack.Condition{
+					Field: idx.ballotTable.Fields().Find("S"), // search for source account id
+					Mode:  pack.FilterModeEqual,
+					Value: acc.RowId.Value(),
+				},
+				pack.Condition{
+					Field: idx.ballotTable.Fields().Find("p"), // voting period
+					Mode:  pack.FilterModeEqual,
+					Value: vote.VotingPeriod,
+				},
+			},
+		}
+		var cnt int
+		err = idx.ballotTable.Stream(ctx, q, func(r pack.Row) error {
+			cnt++
+			return nil
+		})
+		if err != nil {
+			return err
+		} else if cnt == 0 {
+			// log.Infof("Update turnout for period %d voter %s with %d rolls (add to %d voters, %d rolls)",
+			// 	vote.VotingPeriod, acc, rolls, vote.TurnoutVoters, vote.TurnoutRolls)
+			vote.TurnoutRolls += rolls
+			vote.TurnoutVoters++
+		} else {
+			// log.Infof("Skipping turnout calc for period %d voter %s  with %d rolls (already voted %d times)", vote.VotingPeriod, acc, rolls, cnt)
+		}
+	}
+
+	// update eligible rolls when zero (happens when vote opens on genesis)
+	if vote.EligibleRolls == 0 {
+		vote.EligibleRolls = block.Chain.Rolls
+		vote.EligibleVoters = block.Chain.RollOwners
+		vote.QuorumPct, _, _ = idx.quorumByHeight(ctx, block.Height, block.Params)
 	}
 
 	// finalize vote for this round and safe
@@ -740,6 +794,10 @@ func (idx *GovIndex) processBallots(ctx context.Context, block *Block, builder B
 			return fmt.Errorf("missing roll snapshot for %s in vote period %d (%s) start %d",
 				acc, vote.VotingPeriod, vote.VotingPeriodKind, vote.StartHeight)
 		}
+		// fix for missing pre-genesis snapshot
+		if block.Cycle == 0 && rolls == 0 {
+			rolls = acc.Rolls(block.Params)
+		}
 
 		// update vote
 		vote.TurnoutRolls += rolls
@@ -770,6 +828,14 @@ func (idx *GovIndex) processBallots(ctx context.Context, block *Block, builder B
 		}
 		insBallots = append(insBallots, b)
 	}
+
+	// update eligible rolls when zero (happens when vote opens on genesis)
+	if vote.EligibleRolls == 0 {
+		vote.EligibleRolls = block.Chain.Rolls
+		vote.EligibleVoters = block.Chain.RollOwners
+		vote.QuorumPct, _, _ = idx.quorumByHeight(ctx, block.Height, block.Params)
+	}
+
 	// finalize vote for this round and safe
 	vote.TurnoutPct = vote.TurnoutRolls * 10000 / vote.EligibleRolls
 	if idx.voteTable.Update(ctx, vote); err != nil {
@@ -795,11 +861,12 @@ func (idx *GovIndex) electionByHeight(ctx context.Context, height int64, period 
 	q := pack.Query{
 		Name:    "find_election",
 		NoCache: true,
+		Limit:   1,
 		Fields:  idx.electionTable.Fields(),
 		Conditions: pack.ConditionList{
 			pack.Condition{
 				Field: idx.electionTable.Fields().Find("H"), // start height
-				Mode:  pack.FilterModeEqual,
+				Mode:  pack.FilterModeGte,                   // first cycle starts at 2!
 				Value: startHeight,
 			},
 		},
@@ -821,11 +888,12 @@ func (idx *GovIndex) voteByHeight(ctx context.Context, height int64, params *cha
 	q := pack.Query{
 		Name:    "find_vote",
 		NoCache: true,
+		Limit:   1,
 		Fields:  idx.voteTable.Fields(),
 		Conditions: pack.ConditionList{
 			pack.Condition{
 				Field: idx.voteTable.Fields().Find("H"), // start height
-				Mode:  pack.FilterModeEqual,
+				Mode:  pack.FilterModeGte,               // first cycle starts at 2!
 				Value: height / params.BlocksPerVotingPeriod * params.BlocksPerVotingPeriod,
 			},
 		},
@@ -934,7 +1002,7 @@ func (idx *GovIndex) rollsByHeight(ctx context.Context, aid AccountID, height in
 		return 0, err
 	}
 	if count != 1 {
-		log.Errorf("Roll snapshot for %d at height %d returned %d results", aid, height, count)
+		log.Warnf("govindex: roll snapshot for account %d at height %d returned %d results", aid, height, count)
 	}
 	return xr.Rolls, nil
 }
@@ -976,7 +1044,13 @@ func (idx *GovIndex) quorumByHeight(ctx context.Context, height int64, params *c
 			return 0, 0, err
 		} else {
 			// initial protocol quorum
-			return 8000, params.QuorumMax, nil
+			if params.Version < 5 {
+				return 8000, 0, nil
+			} else {
+				lastTurnoutEma = params.QuorumMax
+				nextQuorum = params.QuorumMin + lastTurnoutEma*(params.QuorumMax-params.QuorumMin)/10000
+				return nextQuorum, lastTurnoutEma, nil
+			}
 		}
 	}
 	// calculate next quorum
@@ -992,7 +1066,7 @@ func (idx *GovIndex) quorumByHeight(ctx context.Context, height int64, params *c
 			nextEma = (8*lastTurnoutEma + 2*lastTurnout) / 10
 		}
 		// q = q_min + participation_ema * (q_max - q_min)
-		nextQuorum = params.QuorumMin + lastTurnoutEma*(params.QuorumMax-params.QuorumMin)
+		nextQuorum = params.QuorumMin + lastTurnoutEma*(params.QuorumMax-params.QuorumMin)/10000
 
 	default:
 		// 80/20 until Athens v004

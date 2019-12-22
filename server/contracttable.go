@@ -69,7 +69,7 @@ func (c *Contract) MarshalJSONVerbose() ([]byte, error) {
 		RowId         uint64  `json:"row_id"`
 		AccountId     uint64  `json:"account_id"`
 		Account       string  `json:"address"`
-		ManagerId     uint64  `json:"account_id"`
+		ManagerId     uint64  `json:"manager_id"`
 		Manager       string  `json:"manager"`
 		Height        int64   `json:"height"`
 		Fee           float64 `json:"fee"`
@@ -237,6 +237,10 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			if n == "-" {
 				continue
 			}
+			switch v {
+			case "address":
+				srcNames = append(srcNames, "H") // hash
+			}
 			srcNames = append(srcNames, n)
 		}
 	} else {
@@ -249,7 +253,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 	q := pack.Query{
 		Name:       ctx.RequestID,
 		Fields:     table.Fields().Select(srcNames...),
-		Limit:      args.Limit,
+		Limit:      int(args.Limit),
 		Conditions: make(pack.ConditionList, 0),
 		Order:      args.Order,
 	}
@@ -305,13 +309,13 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				// multi-address lookup (Note: does not check for address type so may
 				// return duplicates)
 				hashes := make([][]byte, 0)
-				for _, a := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(a)
+				for _, v := range strings.Split(val[0], ",") {
+					addr, err := chain.ParseAddress(v)
 					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					if addr.Type != chain.AddressTypeContract {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid contract address '%s'", val[0]), err))
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid contract address '%s'", v), err))
 					}
 					hashes = append(hashes, addr.Hash)
 				}
@@ -362,17 +366,17 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
-				for _, a := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(a)
+				for _, v := range strings.Split(val[0], ",") {
+					addr, err := chain.ParseAddress(v)
 					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
 						panic(err)
 					}
 					// skip not found account
-					if acc.RowId == 0 {
+					if acc == nil || acc.RowId == 0 {
 						continue
 					}
 					// collect list of account ids
@@ -403,11 +407,15 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				// convert amounts from float to int64
 				switch prefix {
 				case "fee":
-					fval, err := strconv.ParseFloat(v, 64)
-					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
+					fvals := make([]string, 0)
+					for _, vv := range strings.Split(v, ",") {
+						fval, err := strconv.ParseFloat(vv, 64)
+						if err != nil {
+							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, vv), err))
+						}
+						fvals = append(fvals, strconv.FormatInt(params.ConvertAmount(fval), 10))
 					}
-					v = strconv.FormatInt(params.ConvertAmount(fval), 10)
+					v = strings.Join(fvals, ",")
 				}
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
@@ -442,7 +450,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 	if res.Rows() > 0 {
 		// get a unique copy of delegate and manager id columns (clip on request limit)
 		mcol, _ := res.Uint64Column("M")
-		find := vec.UniqueUint64Slice(mcol[:util.Min(len(mcol), args.Limit)])
+		find := vec.UniqueUint64Slice(mcol[:util.Min(len(mcol), int(args.Limit))])
 
 		// lookup accounts from id
 		q := pack.Query{
@@ -517,7 +525,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			}
 			count++
 			lastId = contract.RowId
-			if args.Limit > 0 && count == args.Limit {
+			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
 			return nil
@@ -543,7 +551,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				}
 				count++
 				lastId = contract.RowId
-				if args.Limit > 0 && count == args.Limit {
+				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}
 				return nil

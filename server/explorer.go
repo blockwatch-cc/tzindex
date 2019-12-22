@@ -27,7 +27,7 @@ func (e Explorer) LastModified() time.Time {
 }
 
 func (e Explorer) Expires() time.Time {
-	return time.Now().UTC().Add(10 * time.Second)
+	return time.Time{}
 }
 
 func (e Explorer) RESTPrefix() string {
@@ -51,8 +51,8 @@ func (b Explorer) RegisterRoutes(r *mux.Router) error {
 
 // generic list request
 type ExplorerListRequest struct {
-	Limit  int `schema:"limit"`
-	Offset int `schema:"offset"`
+	Limit  uint `schema:"limit"`
+	Offset uint `schema:"offset"`
 }
 
 func GetStatus(ctx *ApiContext) (interface{}, int) {
@@ -89,11 +89,21 @@ type BlockchainTip struct {
 
 	Supply *Supply           `json:"supply"`
 	Status etl.CrawlerStatus `json:"status"`
+
+	expires time.Time `json:"-"`
 }
 
 func GetBlockchainTip(ctx *ApiContext) (interface{}, int) {
 	tip := buildBlockchainTip(ctx, ctx.Crawler.Tip())
 	return tip, http.StatusOK
+}
+
+func (t BlockchainTip) LastModified() time.Time {
+	return t.Timestamp
+}
+
+func (t BlockchainTip) Expires() time.Time {
+	return t.expires
 }
 
 func buildBlockchainTip(ctx *ApiContext, tip *model.ChainTip) *BlockchainTip {
@@ -122,7 +132,7 @@ func buildBlockchainTip(ctx *ApiContext, tip *model.ChainTip) *BlockchainTip {
 	if err != nil {
 		panic(EInternal(EC_DATABASE, "cannot read last year supply", err))
 	}
-	supplyDays := int64(supply.Timestamp.Sub(supply365.Timestamp) / oneDay)
+	supplyDays := int64(supply.Timestamp.Truncate(oneDay).Sub(supply365.Timestamp.Truncate(oneDay)) / oneDay)
 
 	return &BlockchainTip{
 		Name:        tip.Name,
@@ -159,10 +169,16 @@ func buildBlockchainTip(ctx *ApiContext, tip *model.ChainTip) *BlockchainTip {
 			params:  params,
 		},
 		Status: ctx.Crawler.Status(),
+
+		// expires when next block is expected
+		expires: tip.BestTime.Add(params.TimeBetweenBlocks[0]),
 	}
 }
 
 func annualizedPercent(a, b, days int64) float64 {
+	if days == 0 {
+		days = 1
+	}
 	diff := float64(a) - float64(b)
 	return diff / float64(days) * 365 / float64(b) * 100.0
 }
@@ -173,6 +189,7 @@ type BlockchainConfig struct {
 	Network     string             `json:"network"`
 	Symbol      string             `json:"symbol"`
 	ChainId     chain.ChainIdHash  `json:"chain_id"`
+	Deployment  int                `json:"deployment"`
 	Version     int                `json:"version"`
 	Protocol    chain.ProtocolHash `json:"protocol"`
 	StartHeight int64              `json:"start_height"`
@@ -215,6 +232,17 @@ type BlockchainConfig struct {
 	MinProposalQuorum            int64   `json:"min_proposal_quorum"`
 	QuorumMin                    int64   `json:"quorum_min"`
 	QuorumMax                    int64   `json:"quorum_max"`
+
+	timestamp time.Time `json:"-"`
+	expires   time.Time `json:"-"`
+}
+
+func (c BlockchainConfig) LastModified() time.Time {
+	return c.timestamp
+}
+
+func (c BlockchainConfig) Expires() time.Time {
+	return c.expires
 }
 
 func GetBlockchainConfig(ctx *ApiContext) (interface{}, int) {
@@ -235,6 +263,7 @@ func GetBlockchainConfig(ctx *ApiContext) (interface{}, int) {
 		Network:                      p.Network,
 		Symbol:                       p.Symbol,
 		ChainId:                      p.ChainId,
+		Deployment:                   p.Deployment,
 		Version:                      p.Version,
 		Protocol:                     p.Protocol,
 		StartHeight:                  p.StartHeight,
@@ -276,6 +305,8 @@ func GetBlockchainConfig(ctx *ApiContext) (interface{}, int) {
 		MinProposalQuorum: p.MinProposalQuorum,
 		QuorumMin:         p.QuorumMin,
 		QuorumMax:         p.QuorumMax,
+		timestamp:         ctx.Crawler.Time(),
+		expires:           ctx.Crawler.Time().Add(p.TimeBetweenBlocks[0]),
 	}
 	return cfg, http.StatusOK
 }

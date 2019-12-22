@@ -241,13 +241,13 @@ func (v *Vote) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(v.VotingPeriod, 10)
 		case "voting_period_kind":
 			res[i] = strconv.Quote(v.VotingPeriodKind.String())
-		case "start_time":
-			res[i] = strconv.FormatInt(util.UnixMilliNonZero(v.StartTime), 10)
-		case "end_time":
-			res[i] = strconv.FormatInt(util.UnixMilliNonZero(v.EndTime), 10)
-		case "start_height":
+		case "period_start_time":
+			res[i] = strconv.Quote(v.StartTime.Format(time.RFC3339))
+		case "period_end_time":
+			res[i] = strconv.Quote(v.EndTime.Format(time.RFC3339))
+		case "period_start_height":
 			res[i] = strconv.FormatInt(v.StartHeight, 10)
-		case "end_height":
+		case "period_end_height":
 			res[i] = strconv.FormatInt(v.EndHeight, 10)
 		case "eligible_rolls":
 			res[i] = strconv.FormatInt(v.EligibleRolls, 10)
@@ -327,7 +327,7 @@ func StreamVoteTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	q := pack.Query{
 		Name:       ctx.RequestID,
 		Fields:     table.Fields().Select(srcNames...),
-		Limit:      args.Limit,
+		Limit:      int(args.Limit),
 		Conditions: make(pack.ConditionList, 0),
 		Order:      args.Order,
 	}
@@ -411,7 +411,7 @@ func StreamVoteTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				for _, v := range strings.Split(val[0], ",") {
 					h, err := chain.ParseProtocolHash(v)
 					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", val[0]), err))
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", v), err))
 					}
 					prop, err := ctx.Indexer.LookupProposal(ctx, h)
 					if err != nil && err != index.ErrNoProposalEntry {
@@ -508,7 +508,7 @@ func StreamVoteTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			}
 			count++
 			lastId = vote.RowId
-			if args.Limit > 0 && count == args.Limit {
+			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
 			return nil
@@ -535,7 +535,7 @@ func StreamVoteTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				count++
 				lastId = vote.RowId
-				if args.Limit > 0 && count == args.Limit {
+				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}
 				return nil

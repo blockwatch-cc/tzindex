@@ -501,6 +501,12 @@ type ChainIdHash struct {
 	Hash
 }
 
+func NewChainIdHash(buf []byte) ChainIdHash {
+	b := make([]byte, len(buf))
+	copy(b, buf)
+	return ChainIdHash{Hash: NewHash(HashTypeChainId, b)}
+}
+
 func (h ChainIdHash) IsEqual(h2 ChainIdHash) bool {
 	return h.Hash.IsEqual(h2.Hash)
 }
@@ -553,6 +559,12 @@ type BlockHash struct {
 	Hash
 }
 
+func NewBlockHash(buf []byte) BlockHash {
+	b := make([]byte, len(buf))
+	copy(b, buf)
+	return BlockHash{Hash: NewHash(HashTypeBlock, b)}
+}
+
 func (h BlockHash) Clone() BlockHash {
 	return BlockHash{h.Hash.Clone()}
 }
@@ -584,12 +596,6 @@ func (h *BlockHash) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func NewBlockHash(b []byte) BlockHash {
-	var h BlockHash
-	h.UnmarshalBinary(b)
-	return h
-}
-
 func MustParseBlockHash(s string) BlockHash {
 	h, err := ParseBlockHash(s)
 	if err != nil {
@@ -609,6 +615,12 @@ func ParseBlockHash(s string) (BlockHash, error) {
 // ProtocolHash
 type ProtocolHash struct {
 	Hash
+}
+
+func NewProtocolHash(buf []byte) ProtocolHash {
+	b := make([]byte, len(buf))
+	copy(b, buf)
+	return ProtocolHash{Hash: NewHash(HashTypeProtocol, b)}
 }
 
 func (h ProtocolHash) Clone() ProtocolHash {
@@ -669,6 +681,12 @@ type OperationHash struct {
 	Hash
 }
 
+func NewOperationHash(buf []byte) OperationHash {
+	b := make([]byte, len(buf))
+	copy(b, buf)
+	return OperationHash{Hash: NewHash(HashTypeOperation, b)}
+}
+
 func (h OperationHash) Clone() OperationHash {
 	return OperationHash{h.Hash.Clone()}
 }
@@ -719,6 +737,12 @@ func ParseOperationHash(s string) (OperationHash, error) {
 // ExprHash
 type ExprHash struct {
 	Hash
+}
+
+func NewExprHash(buf []byte) ExprHash {
+	b := make([]byte, len(buf))
+	copy(b, buf)
+	return ExprHash{Hash: NewHash(HashTypeScriptExpr, b)}
 }
 
 func (h ExprHash) Clone() ExprHash {

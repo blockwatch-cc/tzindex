@@ -64,12 +64,20 @@ func (r *Right) MarshalJSON() ([]byte, error) {
 	}
 }
 
-func (r *Right) Timestamp() int64 {
+func (r *Right) TimestampMs() int64 {
 	if diff := r.Height - r.height; diff > 0 {
 		return r.ctx.Now.Add(time.Duration(diff)*r.params.TimeBetweenBlocks[0]).Unix() * 1000
 	}
 	// blocktime cache is lazy initialzed on first use by querying block table
 	return r.ctx.Indexer.BlockTimeMs(context.Background(), r.Height)
+}
+
+func (r *Right) Timestamp() time.Time {
+	if diff := r.Height - r.height; diff > 0 {
+		return r.ctx.Now.Add(time.Duration(diff) * r.params.TimeBetweenBlocks[0])
+	}
+	// blocktime cache is lazy initialzed on first use by querying block table
+	return r.ctx.Indexer.BlockTime(context.Background(), r.Height)
 }
 
 func (r *Right) MarshalJSONVerbose() ([]byte, error) {
@@ -89,7 +97,7 @@ func (r *Right) MarshalJSONVerbose() ([]byte, error) {
 		IsSeedRevealed bool   `json:"is_seed_revealed"`
 	}{
 		RowId:          r.RowId,
-		Timestamp:      r.Timestamp(),
+		Timestamp:      r.TimestampMs(),
 		Height:         r.Height,
 		Cycle:          r.Cycle,
 		Type:           r.Type.String(),
@@ -117,7 +125,7 @@ func (r *Right) MarshalJSONBrief() ([]byte, error) {
 		case "cycle":
 			buf = strconv.AppendInt(buf, r.Cycle, 10)
 		case "time":
-			buf = strconv.AppendInt(buf, r.Timestamp(), 10)
+			buf = strconv.AppendInt(buf, r.TimestampMs(), 10)
 		case "type":
 			buf = strconv.AppendQuote(buf, r.Type.String())
 		case "priority":
@@ -178,7 +186,7 @@ func (r *Right) MarshalCSV() ([]string, error) {
 		case "cycle":
 			res[i] = strconv.FormatInt(r.Cycle, 10)
 		case "time":
-			res[i] = strconv.FormatInt(r.Timestamp(), 10)
+			res[i] = strconv.Quote(r.Timestamp().Format(time.RFC3339))
 		case "type":
 			res[i] = strconv.Quote(r.Type.String())
 		case "priority":
@@ -238,7 +246,7 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	q := pack.Query{
 		Name:       ctx.RequestID,
 		Fields:     table.Fields().Select(srcNames...),
-		Limit:      args.Limit,
+		Limit:      int(args.Limit),
 		Conditions: make(pack.ConditionList, 0),
 		Order:      args.Order,
 	}
@@ -397,10 +405,10 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
-				for _, a := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(a)
+				for _, v := range strings.Split(val[0], ",") {
+					addr, err := chain.ParseAddress(v)
 					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
@@ -506,7 +514,7 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			}
 			count++
 			lastId = right.RowId
-			if args.Limit > 0 && count == args.Limit {
+			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
 			return nil
@@ -532,7 +540,7 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				count++
 				lastId = right.RowId
-				if args.Limit > 0 && count == args.Limit {
+				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}
 				return nil

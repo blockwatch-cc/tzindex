@@ -22,6 +22,7 @@ var _ RESTful = (*ExplorerBlock)(nil)
 type ExplorerBlock struct {
 	Hash                chain.BlockHash        `json:"hash"`
 	ParentHash          chain.BlockHash        `json:"predecessor"`
+	FollowerHash        chain.BlockHash        `json:"successor"`
 	Baker               chain.Address          `json:"baker"`
 	IsOrphan            bool                   `json:"is_orphan,omitempty"`
 	Height              int64                  `json:"height"`
@@ -132,18 +133,23 @@ func NewExplorerBlock(ctx *ApiContext, block *model.Block, p *chain.Params) *Exp
 		StorageSize:         block.StorageSize,
 		TDD:                 block.TDD,
 	}
-	if b.SlotsEndorsed == 0 {
-		b.expires = ctx.Now.Add(p.TimeBetweenBlocks[0])
-	}
-
+	nowHeight := ctx.Crawler.Height()
 	if block.SeenAccounts > 0 {
 		b.PctAccountsReused = float64(block.SeenAccounts-block.NewAccounts) / float64(block.SeenAccounts) * 100
 	}
 	prev, err := ctx.Indexer.BlockByID(ctx.Context, block.ParentId)
 	if err != nil {
-		log.Errorf("explorer block: cannot resolve block id %d: %v", block.ParentId, err)
+		log.Errorf("explorer block: cannot resolve parent block id %d: %v", block.ParentId, err)
 	} else {
 		b.ParentHash = prev.Hash
+	}
+	if nowHeight > block.Height {
+		next, err := ctx.Indexer.BlockByParentId(ctx.Context, block.RowId)
+		if err != nil {
+			log.Errorf("explorer block: cannot resolve successor for block id %d: %v", block.RowId, err)
+		} else {
+			b.FollowerHash = next.Hash
+		}
 	}
 	rights, err := ctx.Indexer.ListBlockEndorsingRights(ctx.Context, block.Height)
 	if err != nil {
@@ -153,6 +159,13 @@ func NewExplorerBlock(ctx *ApiContext, block *model.Block, p *chain.Params) *Exp
 		for i, v := range rights {
 			b.Endorsers[i] = lookupAddress(ctx, v.AccountId)
 		}
+	}
+	if b.Height == nowHeight {
+		// cache most recent block only until next block
+		b.expires = b.Timestamp.Add(p.TimeBetweenBlocks[0])
+	} else if b.Height+chain.MaxBranchDepth >= nowHeight {
+		// cache blocks in the reorg safety zone only until next block is expected
+		b.expires = ctx.Crawler.Time().Add(p.TimeBetweenBlocks[0])
 	}
 	return b
 }
@@ -226,7 +239,7 @@ func ReadBlockOps(ctx *ApiContext) (interface{}, int) {
 	// FIXME: collect account and op lookup into only two queries
 	eops := make([]*ExplorerOp, len(ops))
 	for i, v := range ops {
-		eops[i] = NewExplorerOp(ctx, v, block, params)
+		eops[i] = NewExplorerOp(ctx, v, block, nil, params, nil)
 	}
 	b.Ops = &eops
 	return b, http.StatusOK

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzindex/chain"
 	"blockwatch.cc/tzindex/etl"
@@ -81,18 +82,24 @@ type ExplorerOp struct {
 	IsInternal   bool                  `json:"is_internal"`
 	HasData      bool                  `json:"has_data"`
 	TDD          float64               `json:"days_destroyed"`
+	Data         json.RawMessage       `json:"data,omitempty"`
+	Errors       json.RawMessage       `json:"errors,omitempty"`
 	Parameters   *micheline.Parameters `json:"parameters,omitempty"`
 	Storage      *micheline.Prim       `json:"storage,omitempty"`
-	Data         json.RawMessage       `json:"data,omitempty"`
 	BigMapDiff   micheline.BigMapDiff  `json:"big_map_diff,omitempty"`
-	Errors       json.RawMessage       `json:"errors,omitempty"`
 	Sender       *chain.Address        `json:"sender,omitempty"`
 	Receiver     *chain.Address        `json:"receiver,omitempty"`
 	Manager      *chain.Address        `json:"manager,omitempty"`
 	Delegate     *chain.Address        `json:"delegate,omitempty"`
+	BranchId     uint64                `json:"branch_id"`
+	BranchHeight int64                 `json:"branch_height"`
+	BranchDepth  int64                 `json:"branch_depth"`
+	BranchHash   chain.BlockHash       `json:"branch"`
+
+	expires time.Time `json:"-"`
 }
 
-func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, p *chain.Params) *ExplorerOp {
+func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.Contract, p *chain.Params, args *ContractRequest) *ExplorerOp {
 	t := &ExplorerOp{
 		Hash:         op.Hash,
 		Type:         op.Type,
@@ -120,54 +127,9 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, p *chain.P
 		IsInternal:   op.IsInternal,
 		HasData:      op.HasData,
 		TDD:          op.TDD,
-	}
-	if op.HasData {
-		switch op.Type {
-		case chain.OpTypeDoubleBakingEvidence, chain.OpTypeDoubleEndorsementEvidence:
-			t.Data = json.RawMessage{}
-			if err := json.Unmarshal([]byte(op.Data), &t.Data); err != nil {
-				t.Data = nil
-				log.Errorf("Unmarshal %s data: %v", op.Type, err)
-			}
-		default:
-			if op.Data != "" {
-				t.Data = json.RawMessage(strconv.Quote(op.Data))
-			}
-		}
-	}
-
-	// set params
-	if len(op.Parameters) > 0 {
-		t.Parameters = &micheline.Parameters{}
-		if err := t.Parameters.UnmarshalBinary(op.Parameters); err != nil {
-			log.Errorf("Unmarshal %s params: %v", op.Type, err)
-		}
-	}
-	if len(op.Storage) > 0 {
-		t.Storage = &micheline.Prim{}
-		if err := t.Storage.UnmarshalBinary(op.Storage); err != nil {
-			log.Errorf("Unmarshal %s storage: %v", op.Type, err)
-		}
-	}
-	if len(op.BigMapDiff) > 0 {
-		t.BigMapDiff = make(micheline.BigMapDiff, 0)
-		if err := t.BigMapDiff.UnmarshalBinary(op.BigMapDiff); err != nil {
-			log.Errorf("Unmarshal %s bigmap: %v", op.Type, err)
-		}
-	}
-
-	if op.Errors != "" {
-		t.Errors = json.RawMessage(op.Errors)
-	}
-
-	// set block hash
-	if block != nil {
-		t.BlockHash = block.Hash
-	} else {
-		b, err := ctx.Indexer.BlockByHeight(ctx.Context, op.Height)
-		if err == nil {
-			t.BlockHash = b.Hash
-		}
+		BranchId:     op.BranchId,
+		BranchHeight: op.BranchHeight,
+		BranchDepth:  op.BranchDepth,
 	}
 
 	// lookup accounts
@@ -207,6 +169,68 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, p *chain.P
 			}
 		}
 	}
+
+	if op.HasData {
+		switch op.Type {
+		case chain.OpTypeDoubleBakingEvidence, chain.OpTypeDoubleEndorsementEvidence:
+			t.Data = json.RawMessage{}
+			if err := json.Unmarshal([]byte(op.Data), &t.Data); err != nil {
+				t.Data = nil
+				log.Errorf("Unmarshal %s data: %v", op.Type, err)
+			}
+		default:
+			if op.Data != "" {
+				t.Data = json.RawMessage(strconv.Quote(op.Data))
+			}
+		}
+	}
+
+	if op.Errors != "" {
+		t.Errors = json.RawMessage(op.Errors)
+	}
+
+	// set block hash
+	if block != nil {
+		t.BlockHash = block.Hash
+	} else {
+		b, err := ctx.Indexer.BlockByHeight(ctx.Context, op.Height)
+		if err == nil {
+			t.BlockHash = b.Hash
+		}
+	}
+
+	// set branch hash
+	if op.BranchId != 0 {
+		if h, err := ctx.Indexer.BlockHashById(ctx.Context, op.BranchId); err == nil {
+			t.BranchHash = h
+		}
+	}
+
+	// set params
+	if len(op.Parameters) > 0 {
+		t.Parameters = &micheline.Parameters{}
+		if err := t.Parameters.UnmarshalBinary(op.Parameters); err != nil {
+			log.Errorf("Unmarshal %s params: %v", op.Type, err)
+		}
+	}
+	if len(op.Storage) > 0 {
+		t.Storage = &micheline.Prim{}
+		if err := t.Storage.UnmarshalBinary(op.Storage); err != nil {
+			log.Errorf("Unmarshal %s storage: %v", op.Type, err)
+		}
+	}
+	if len(op.BigMapDiff) > 0 {
+		t.BigMapDiff = make(micheline.BigMapDiff, 0)
+		if err := t.BigMapDiff.UnmarshalBinary(op.BigMapDiff); err != nil {
+			log.Errorf("Unmarshal %s bigmap: %v", op.Type, err)
+		}
+	}
+
+	// cache blocks in the reorg safety zone only until next block is expected
+	if op.Height+chain.MaxBranchDepth >= ctx.Crawler.Height() {
+		t.expires = ctx.Crawler.Time().Add(p.TimeBetweenBlocks[0])
+	}
+
 	return t
 }
 
@@ -215,7 +239,7 @@ func (t ExplorerOp) LastModified() time.Time {
 }
 
 func (t ExplorerOp) Expires() time.Time {
-	return time.Time{}
+	return t.expires
 }
 
 func (t ExplorerOp) RESTPrefix() string {
@@ -240,7 +264,8 @@ func (t ExplorerOp) RegisterRoutes(r *mux.Router) error {
 // used when listing ops in block/account/contract context
 type ExplorerOpsRequest struct {
 	ExplorerListRequest
-	Type chain.OpType `schema:"type"`
+	Type  chain.OpType   `schema:"type"`
+	Order pack.OrderType `schema:"order"`
 }
 
 func loadOps(ctx *ApiContext) []*model.Op {
@@ -263,6 +288,8 @@ func loadOps(ctx *ApiContext) []*model.Op {
 }
 
 func ReadOp(ctx *ApiContext) (interface{}, int) {
+	args := ExplorerListRequest{}
+	ctx.ParseRequestArgs(&args)
 	ops := loadOps(ctx)
 	resp := make(ExplorerOpList, 0, len(ops))
 	var params *chain.Params
@@ -270,7 +297,7 @@ func ReadOp(ctx *ApiContext) (interface{}, int) {
 		if params == nil {
 			params = ctx.Crawler.ParamsByHeight(v.Height)
 		}
-		resp = append(resp, NewExplorerOp(ctx, v, nil, params))
+		resp = append(resp, NewExplorerOp(ctx, v, nil, nil, params, nil))
 	}
 	return resp, http.StatusOK
 }

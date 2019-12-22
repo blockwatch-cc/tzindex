@@ -4,6 +4,7 @@
 package server
 
 import (
+	"encoding/json"
 	"github.com/gorilla/mux"
 	"math/bits"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"blockwatch.cc/tzindex/chain"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 )
 
 func init() {
@@ -151,7 +153,6 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 		blocks, err := ctx.Indexer.Table(index.BlockTableKey)
 		if err != nil {
 			log.Errorf("cycle: block table: %v", err)
-			return ec
 		}
 		b := &model.Block{}
 		err = blocks.Stream(ctx.Context, pack.Query{
@@ -186,8 +187,6 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 
 			// sum misses and ops
 			ec.MissedPriorities += b.Priority
-			ec.N2Baking += b.N2Baking
-			ec.N2Endorsement += b.N2Endorsement
 
 			// collect stats
 			prioStats.Add(int64(b.Priority))
@@ -214,7 +213,6 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 		})
 		if err != nil {
 			log.Errorf("cycle: block stream: %v", err)
-			return ec
 		}
 		ec.ActiveBakers = len(uniqueAccountsMap)
 		ec.SolveTimeMin = timeStats.Min()
@@ -265,7 +263,6 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 		})
 		if err != nil {
 			log.Errorf("cycle: op stream: %v", err)
-			return ec
 		}
 		ec.ActiveEndorsers = len(uniqueAccountsMap)
 
@@ -279,11 +276,58 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 		seeds, err := ops.Count(ctx.Context, q)
 		if err != nil {
 			log.Errorf("cycle: op count: %v", err)
-			return ec
 		}
 		if maxSeeds > 0 {
 			ec.SeedNonceRate = float64(seeds*100) / float64(maxSeeds)
 		}
+
+		// walk all ops to count unique 2bake/2endorse events
+		// count unique double bake and endorse events
+		bake2 := make(map[int64]struct{})    // height
+		endorse2 := make(map[int64]struct{}) // height
+		q = pack.Query{
+			Name: "cycle.denounce_ops",
+			Conditions: pack.ConditionList{
+				pack.Condition{
+					Field: ops.Fields().Find("c"), // cycle
+					Mode:  pack.FilterModeEqual,
+					Value: id,
+				},
+				pack.Condition{
+					Field: ops.Fields().Find("t"), // op type
+					Mode:  pack.FilterModeIn,
+					Value: []int64{
+						int64(chain.OpTypeDoubleBakingEvidence),
+						int64(chain.OpTypeDoubleEndorsementEvidence),
+					},
+				},
+			},
+		}
+		err = ops.Stream(ctx.Context, q, func(r pack.Row) error {
+			if err := r.Decode(op); err != nil {
+				return err
+			}
+			switch op.Type {
+			case chain.OpTypeDoubleBakingEvidence:
+				bhs := make([]rpc.BlockHeader, 0)
+				if err := json.Unmarshal([]byte(op.Data), &bhs); err != nil {
+					return err
+				}
+				bake2[bhs[0].Level] = struct{}{}
+			case chain.OpTypeDoubleEndorsementEvidence:
+				dops := make([]rpc.DoubleEndorsementEvidence, 0)
+				if err := json.Unmarshal([]byte(op.Data), &dops); err != nil {
+					return err
+				}
+				endorse2[dops[0].Operations.Level] = struct{}{}
+			}
+			return nil
+		})
+		if err != nil {
+			log.Errorf("cycle: op stream 2: %v", err)
+		}
+		ec.N2Baking = len(bake2)
+		ec.N2Endorsement = len(endorse2)
 
 		// pull rolls and supply from chain and supply table (no need to fetch snapshot)
 		// determine height from snapshot block, if not exist, use latest snapshot
@@ -360,14 +404,16 @@ func parseCycle(ctx *ApiContext) int64 {
 
 func ReadCycle(ctx *ApiContext) (interface{}, int) {
 	id := parseCycle(ctx)
+	p := ctx.Crawler.ParamsByHeight(-1)
+
 	// compose cycle data from N, N-7 and N+7
 	cycle := NewExplorerCycle(ctx, id)
 
 	// snapshot cycle who defined rights for this cycle
-	cycle.SnapshotCycle = NewExplorerCycle(ctx, id-7)
+	cycle.SnapshotCycle = NewExplorerCycle(ctx, id-(p.PreservedCycles+2))
 
 	// future cycle who's rights are defined by this cycle
-	cycle.FollowerCycle = NewExplorerCycle(ctx, id+7)
+	cycle.FollowerCycle = NewExplorerCycle(ctx, id+(p.PreservedCycles+2))
 
 	return cycle, http.StatusOK
 }

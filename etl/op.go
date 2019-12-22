@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"blockwatch.cc/packdb/util"
@@ -21,11 +20,15 @@ import (
 	"blockwatch.cc/tzindex/rpc"
 )
 
-func (b *Builder) NewActivationOp(oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
+func (b *Builder) NewActivationOp(ctx context.Context, oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
 	o := oh.Contents[op_c]
 	aop, ok := o.(*rpc.AccountActivationOp)
 	if !ok {
 		return fmt.Errorf("activation op [%d:%d]: unexpected type %T ", op_n, op_c, o)
+	}
+	branch, ok := b.BranchByHash(oh.Branch)
+	if !ok {
+		return fmt.Errorf("activation op [%d:%d]: missing branch %s", oh.Branch)
 	}
 
 	// need to lookup using blinded key
@@ -43,14 +46,14 @@ func (b *Builder) NewActivationOp(oh *rpc.OperationHeader, op_n, op_c int, rollb
 	// cross-check if account exists under it's implicity address
 	origacc, ok := b.AccountByAddress(aop.Pkh)
 	if !ok {
-		origacc, _ = b.idx.LookupAccount(context.Background(), aop.Pkh)
+		origacc, _ = b.idx.LookupAccount(ctx, aop.Pkh)
 	}
 
 	// check activated amount against UnclaimedBalance
 	activated := aop.Metadata.BalanceUpdates[0].(*rpc.ContractBalanceUpdate).Change
 
 	// build op
-	op := NewOp(b.block, oh, op_n, op_c, 0)
+	op := NewOp(b.block, branch, oh, op_n, op_c, 0)
 	op.IsSuccess = true
 	op.Status = chain.OpStatusApplied
 	op.Volume = activated
@@ -72,10 +75,12 @@ func (b *Builder) NewActivationOp(oh *rpc.OperationHeader, op_n, op_c int, rollb
 			origacc.NOps++
 			origacc.IsActivated = true
 			origacc.IsDirty = true
+			op.ReceiverId = origacc.RowId // keep reference to activated account
 			acc.UnclaimedBalance = 0
 			acc.LastSeen = b.block.Height
 			acc.IsSpendable = false
-			acc.ManagerId = origacc.RowId // keep reference to activated account
+			acc.IsActivated = true
+			acc.NOps++
 			acc.IsDirty = true
 
 			// register original account with builder
@@ -97,7 +102,7 @@ func (b *Builder) NewActivationOp(oh *rpc.OperationHeader, op_n, op_c int, rollb
 		}
 	} else {
 		// check if deactivated blinded account exists
-		blindedacc, _ := b.idx.LookupAccount(context.Background(), bkey)
+		blindedacc, _ := b.idx.LookupAccount(ctx, bkey)
 		if blindedacc != nil {
 			// reactivate blinded account
 			blindedacc.SpendableBalance = activated
@@ -136,11 +141,15 @@ func (b *Builder) NewActivationOp(oh *rpc.OperationHeader, op_n, op_c int, rollb
 	return nil
 }
 
-func (b *Builder) NewEndorsementOp(oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
+func (b *Builder) NewEndorsementOp(ctx context.Context, oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
 	o := oh.Contents[op_c]
 	eop, ok := o.(*rpc.EndorsementOp)
 	if !ok {
 		return fmt.Errorf("endorsement op [%d:%d]: unexpected type %T ", op_n, op_c, o)
+	}
+	branch, ok := b.BranchByHash(oh.Branch)
+	if !ok {
+		return fmt.Errorf("endorsement op [%d:%d]: missing branch %s", oh.Branch)
 	}
 	acc, ok := b.AccountByAddress(eop.Metadata.Delegate)
 	if !ok {
@@ -154,7 +163,7 @@ func (b *Builder) NewEndorsementOp(oh *rpc.OperationHeader, op_n, op_c int, roll
 	}
 
 	// build op
-	op := NewOp(b.block, oh, op_n, op_c, 0)
+	op := NewOp(b.block, branch, oh, op_n, op_c, 0)
 	op.Status = chain.OpStatusApplied
 	op.IsSuccess = true
 	op.SenderId = acc.RowId
@@ -205,11 +214,15 @@ func (b *Builder) NewEndorsementOp(oh *rpc.OperationHeader, op_n, op_c int, roll
 }
 
 // this is a generic op only, details are in governance table
-func (b *Builder) NewBallotOp(oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
+func (b *Builder) NewBallotOp(ctx context.Context, oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
 	o := oh.Contents[op_c]
 	bop, ok := o.(*rpc.BallotOp)
 	if !ok {
 		return fmt.Errorf("ballot op [%d:%d]: unexpected type %T ", op_n, op_c, o)
+	}
+	branch, ok := b.BranchByHash(oh.Branch)
+	if !ok {
+		return fmt.Errorf("ballot op [%d:%d]: missing branch %s", oh.Branch)
 	}
 	acc, ok := b.AccountByAddress(bop.Source)
 	if !ok {
@@ -217,7 +230,7 @@ func (b *Builder) NewBallotOp(oh *rpc.OperationHeader, op_n, op_c int, rollback 
 	}
 
 	// build op, ballots have no fees, volume, gas, etc
-	op := NewOp(b.block, oh, op_n, op_c, 0)
+	op := NewOp(b.block, branch, oh, op_n, op_c, 0)
 	op.Status = chain.OpStatusApplied
 	op.IsSuccess = true
 	op.SenderId = acc.RowId
@@ -244,11 +257,15 @@ func (b *Builder) NewBallotOp(oh *rpc.OperationHeader, op_n, op_c int, rollback 
 }
 
 // this is a generic op only, details are in governance table
-func (b *Builder) NewProposalsOp(oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
+func (b *Builder) NewProposalsOp(ctx context.Context, oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
 	o := oh.Contents[op_c]
 	pop, ok := o.(*rpc.ProposalsOp)
 	if !ok {
 		return fmt.Errorf("proposals op [%d:%d]: unexpected type %T ", op_n, op_c, o)
+	}
+	branch, ok := b.BranchByHash(oh.Branch)
+	if !ok {
+		return fmt.Errorf("proposals op [%d:%d]: missing branch %s", oh.Branch)
 	}
 	acc, ok := b.AccountByAddress(pop.Source)
 	if !ok {
@@ -256,7 +273,7 @@ func (b *Builder) NewProposalsOp(oh *rpc.OperationHeader, op_n, op_c int, rollba
 	}
 
 	// build op, proposals have no fees, volume, gas, etc
-	op := NewOp(b.block, oh, op_n, op_c, 0)
+	op := NewOp(b.block, branch, oh, op_n, op_c, 0)
 	op.Status = chain.OpStatusApplied
 	op.IsSuccess = true
 	op.SenderId = acc.RowId
@@ -289,11 +306,15 @@ func (b *Builder) NewProposalsOp(oh *rpc.OperationHeader, op_n, op_c int, rollba
 }
 
 // manager operation, extends grace period
-func (b *Builder) NewRevealOp(oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
+func (b *Builder) NewRevealOp(ctx context.Context, oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
 	o := oh.Contents[op_c]
 	rop, ok := o.(*rpc.RevelationOp)
 	if !ok {
 		return fmt.Errorf("revelation op [%d:%d]: unexpected type %T ", op_n, op_c, o)
+	}
+	branch, ok := b.BranchByHash(oh.Branch)
+	if !ok {
+		return fmt.Errorf("revelation op [%d:%d]: missing branch %s", oh.Branch)
 	}
 	src, ok := b.AccountByAddress(rop.Source)
 	if !ok {
@@ -308,7 +329,7 @@ func (b *Builder) NewRevealOp(oh *rpc.OperationHeader, op_n, op_c int, rollback 
 	}
 
 	// build op
-	op := NewOp(b.block, oh, op_n, op_c, 0)
+	op := NewOp(b.block, branch, oh, op_n, op_c, 0)
 	op.SenderId = src.RowId
 	op.Counter = rop.Counter
 	op.Fee = rop.Fee
@@ -367,11 +388,15 @@ func (b *Builder) NewRevealOp(oh *rpc.OperationHeader, op_n, op_c int, rollback 
 	return nil
 }
 
-func (b *Builder) NewSeedNonceOp(oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
+func (b *Builder) NewSeedNonceOp(ctx context.Context, oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
 	o := oh.Contents[op_c]
 	sop, ok := o.(*rpc.SeedNonceOp)
 	if !ok {
 		return fmt.Errorf("seed nonce op [%d:%d]: unexpected type %T ", op_n, op_c, o)
+	}
+	branch, ok := b.BranchByHash(oh.Branch)
+	if !ok {
+		return fmt.Errorf("seed nonce op [%d:%d]: missing branch %s", oh.Branch)
 	}
 
 	flows, err := b.NewSeedNonceFlows(sop.Metadata.BalanceUpdates)
@@ -380,7 +405,7 @@ func (b *Builder) NewSeedNonceOp(oh *rpc.OperationHeader, op_n, op_c int, rollba
 	}
 
 	// build op
-	op := NewOp(b.block, oh, op_n, op_c, 0)
+	op := NewOp(b.block, branch, oh, op_n, op_c, 0)
 	op.Status = chain.OpStatusApplied
 	op.IsSuccess = true
 	op.SenderId = b.block.Baker.RowId
@@ -405,11 +430,15 @@ func (b *Builder) NewSeedNonceOp(oh *rpc.OperationHeader, op_n, op_c int, rollba
 	return nil
 }
 
-func (b *Builder) NewDoubleBakingOp(oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
+func (b *Builder) NewDoubleBakingOp(ctx context.Context, oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
 	o := oh.Contents[op_c]
 	dop, ok := o.(*rpc.DoubleBakingOp)
 	if !ok {
 		return fmt.Errorf("double baking op [%d:%d]: unexpected type %T ", op_n, op_c, o)
+	}
+	branch, ok := b.BranchByHash(oh.Branch)
+	if !ok {
+		return fmt.Errorf("double baking op [%d:%d]: missing branch %s", oh.Branch)
 	}
 	upd := dop.Metadata.BalanceUpdates
 	accuser, ok := b.AccountByAddress(upd[len(upd)-1].(*rpc.FreezerBalanceUpdate).Delegate)
@@ -430,7 +459,7 @@ func (b *Builder) NewDoubleBakingOp(oh *rpc.OperationHeader, op_n, op_c int, rol
 	}
 
 	// build op
-	op := NewOp(b.block, oh, op_n, op_c, 0)
+	op := NewOp(b.block, branch, oh, op_n, op_c, 0)
 	op.IsSuccess = true
 	op.Status = chain.OpStatusApplied
 	op.SenderId = accuser.RowId
@@ -468,11 +497,15 @@ func (b *Builder) NewDoubleBakingOp(oh *rpc.OperationHeader, op_n, op_c int, rol
 	return nil
 }
 
-func (b *Builder) NewDoubleEndorsingOp(oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
+func (b *Builder) NewDoubleEndorsingOp(ctx context.Context, oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
 	o := oh.Contents[op_c]
 	dop, ok := o.(*rpc.DoubleEndorsementOp)
 	if !ok {
 		return fmt.Errorf("double endorse op [%d:%d]: unexpected type %T ", op_n, op_c, o)
+	}
+	branch, ok := b.BranchByHash(oh.Branch)
+	if !ok {
+		return fmt.Errorf("double endorse op [%d:%d]: missing branch %s", oh.Branch)
 	}
 	upd := dop.Metadata.BalanceUpdates
 	accuser, ok := b.AccountByAddress(upd[len(upd)-1].(*rpc.FreezerBalanceUpdate).Delegate)
@@ -493,7 +526,7 @@ func (b *Builder) NewDoubleEndorsingOp(oh *rpc.OperationHeader, op_n, op_c int, 
 	}
 
 	// build op
-	op := NewOp(b.block, oh, op_n, op_c, 0)
+	op := NewOp(b.block, branch, oh, op_n, op_c, 0)
 	op.IsSuccess = true
 	op.Status = chain.OpStatusApplied
 	op.SenderId = accuser.RowId
@@ -533,11 +566,15 @@ func (b *Builder) NewDoubleEndorsingOp(oh *rpc.OperationHeader, op_n, op_c int, 
 
 // can implicitly burn a fee when new account is created
 // manager operation, does not extend grace period
-func (b *Builder) NewTransactionOp(oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
+func (b *Builder) NewTransactionOp(ctx context.Context, oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
 	o := oh.Contents[op_c]
 	top, ok := o.(*rpc.TransactionOp)
 	if !ok {
 		return fmt.Errorf("transaction op [%d:%d]: unexpected type %T ", op_n, op_c, o)
+	}
+	branch, ok := b.BranchByHash(oh.Branch)
+	if !ok {
+		return fmt.Errorf("transaction op [%d:%d]: missing branch %s", oh.Branch)
 	}
 	src, ok := b.AccountByAddress(top.Source)
 	if !ok {
@@ -562,14 +599,14 @@ func (b *Builder) NewTransactionOp(oh *rpc.OperationHeader, op_n, op_c int, roll
 	}
 
 	// build op
-	op := NewOp(b.block, oh, op_n, op_c, 0)
+	op := NewOp(b.block, branch, oh, op_n, op_c, 0)
 	op.SenderId = src.RowId
 	op.ReceiverId = dst.RowId
 	op.Counter = top.Counter
 	op.Fee = top.Fee
 	op.GasLimit = top.GasLimit
 	op.StorageLimit = top.StorageLimit
-	op.IsContract = src.IsContract || dst.IsContract
+	op.IsContract = dst.IsContract || top.Parameters != nil
 	res := top.Metadata.Result
 	op.Status = res.Status
 	op.IsSuccess = op.Status.IsSuccess()
@@ -577,7 +614,7 @@ func (b *Builder) NewTransactionOp(oh *rpc.OperationHeader, op_n, op_c int, roll
 	if op.GasUsed > 0 && op.Fee > 0 {
 		op.GasPrice = float64(op.Fee) / float64(op.GasUsed)
 	}
-	op.HasData = res.Storage != nil || top.Parameters != nil || res.BigMapDiff != nil
+	op.HasData = res.Storage != nil || top.Parameters != nil || len(res.BigMapDiff) > 0
 
 	var err error
 	if top.Parameters != nil {
@@ -593,16 +630,15 @@ func (b *Builder) NewTransactionOp(oh *rpc.OperationHeader, op_n, op_c int, roll
 		}
 	}
 	if len(res.BigMapDiff) > 0 {
-		op.BigMapDiff, err = res.BigMapDiff.MarshalBinary()
+		top.Metadata.Result.BigMapDiff, err = b.PatchBigMapDiff(ctx, res.BigMapDiff, op.ReceiverId, nil)
+		if err != nil {
+			return fmt.Errorf("transaction op [%d:%d]: patch bigmap: %v", op_n, op_c, err)
+		}
+		op.BigMapDiff, err = top.Metadata.Result.BigMapDiff.MarshalBinary()
 		if err != nil {
 			return fmt.Errorf("transaction op [%d:%d]: marshal bigmap: %v", op_n, op_c, err)
 		}
 	}
-
-	// NOTE: this op seems not to extend grace period
-	// if src.IsActiveDelegate {
-	// 	src.UpdateGracePeriod(b.block.Cycle, b.block.Params)
-	// }
 
 	var flows []*Flow
 
@@ -692,6 +728,10 @@ func (b *Builder) NewTransactionOp(oh *rpc.OperationHeader, op_n, op_c int, roll
 					dst.UpdateGracePeriod(b.block.Cycle, b.block.Params)
 				}
 			}
+			// update last seen for contracts (flow might be missing)
+			if op.IsContract {
+				dst.LastSeen = b.block.Height
+			}
 		}
 	} else {
 		if !op.IsSuccess {
@@ -723,15 +763,15 @@ func (b *Builder) NewTransactionOp(oh *rpc.OperationHeader, op_n, op_c int, roll
 	for i, v := range top.Metadata.InternalResults {
 		switch v.OpKind() {
 		case chain.OpTypeTransaction:
-			if err := b.NewInternalTransactionOp(src, srcdlg, oh, v, op_n, op_c, i, rollback); err != nil {
+			if err := b.NewInternalTransactionOp(ctx, src, srcdlg, oh, v, op_n, op_c, i, rollback); err != nil {
 				return err
 			}
 		case chain.OpTypeDelegation:
-			if err := b.NewInternalDelegationOp(src, srcdlg, oh, v, op_n, op_c, i, rollback); err != nil {
+			if err := b.NewInternalDelegationOp(ctx, src, srcdlg, oh, v, op_n, op_c, i, rollback); err != nil {
 				return err
 			}
 		case chain.OpTypeOrigination:
-			if err := b.NewInternalOriginationOp(src, srcdlg, oh, v, op_n, op_c, i, rollback); err != nil {
+			if err := b.NewInternalOriginationOp(ctx, src, srcdlg, oh, v, op_n, op_c, i, rollback); err != nil {
 				return err
 			}
 		default:
@@ -742,7 +782,7 @@ func (b *Builder) NewTransactionOp(oh *rpc.OperationHeader, op_n, op_c int, roll
 	return nil
 }
 
-func (b *Builder) NewInternalTransactionOp(origsrc, origdlg *Account, oh *rpc.OperationHeader, iop *rpc.InternalResult, op_n, op_c, op_i int, rollback bool) error {
+func (b *Builder) NewInternalTransactionOp(ctx context.Context, origsrc, origdlg *Account, oh *rpc.OperationHeader, iop *rpc.InternalResult, op_n, op_c, op_i int, rollback bool) error {
 	src, ok := b.AccountByAddress(iop.Source)
 	if !ok {
 		return fmt.Errorf("internal transaction op [%d:%d]: missing source account %s", op_n, op_c, iop.Source)
@@ -750,6 +790,10 @@ func (b *Builder) NewInternalTransactionOp(origsrc, origdlg *Account, oh *rpc.Op
 	dst, ok := b.AccountByAddress(*iop.Destination)
 	if !ok {
 		return fmt.Errorf("internal transaction op [%d:%d]: missing source account %s", op_n, op_c, iop.Destination)
+	}
+	branch, ok := b.BranchByHash(oh.Branch)
+	if !ok {
+		return fmt.Errorf("internal transaction op [%d:%d]: missing branch %s", oh.Branch)
 	}
 	var srcdlg, dstdlg *Account
 	if src.DelegateId != 0 {
@@ -766,21 +810,21 @@ func (b *Builder) NewInternalTransactionOp(origsrc, origdlg *Account, oh *rpc.Op
 	}
 
 	// build op (internal and outer tx share the same hash and block location)
-	op := NewOp(b.block, oh, op_n, op_c, op_i)
+	op := NewOp(b.block, branch, oh, op_n, op_c, op_i)
 	op.Type = chain.OpTypeTransaction
 	op.IsInternal = true
 	op.SenderId = src.RowId
 	op.ReceiverId = dst.RowId
 	op.Counter = iop.Nonce
-	op.Fee = 0           // n.a. for internal ops
-	op.GasLimit = 0      // n.a. for internal ops
-	op.StorageLimit = 0  // n.a. for internal ops
-	op.IsContract = true // meaning: the outer tx interacted with a smart contract
+	op.Fee = 0          // n.a. for internal ops
+	op.GasLimit = 0     // n.a. for internal ops
+	op.StorageLimit = 0 // n.a. for internal ops
+	op.IsContract = dst.IsContract || iop.Parameters != nil
 	res := iop.Result
 	op.Status = res.Status
 	op.IsSuccess = op.Status.IsSuccess()
 	op.GasUsed = res.ConsumedGas
-	op.HasData = iop.Parameters != nil || res.Storage != nil || res.BigMapDiff != nil
+	op.HasData = iop.Parameters != nil || res.Storage != nil || len(res.BigMapDiff) > 0
 
 	var err error
 	if iop.Parameters != nil {
@@ -796,7 +840,11 @@ func (b *Builder) NewInternalTransactionOp(origsrc, origdlg *Account, oh *rpc.Op
 		}
 	}
 	if len(res.BigMapDiff) > 0 {
-		op.BigMapDiff, err = res.BigMapDiff.MarshalBinary()
+		iop.Result.BigMapDiff, err = b.PatchBigMapDiff(ctx, res.BigMapDiff, op.ReceiverId, nil)
+		if err != nil {
+			return fmt.Errorf("internal transaction op [%d:%d]: patch bigmap: %v", op_n, op_c, err)
+		}
+		op.BigMapDiff, err = iop.Result.BigMapDiff.MarshalBinary()
 		if err != nil {
 			return fmt.Errorf("internal transaction op [%d:%d]: marshal bigmap: %v", op_n, op_c, err)
 		}
@@ -878,6 +926,10 @@ func (b *Builder) NewInternalTransactionOp(origsrc, origdlg *Account, oh *rpc.Op
 					dst.UpdateGracePeriod(b.block.Cycle, b.block.Params)
 				}
 			}
+			// update last seen for contracts (flow might be missing)
+			if op.IsContract {
+				dst.LastSeen = b.block.Height
+			}
 		}
 	} else {
 		if !op.IsSuccess {
@@ -908,11 +960,15 @@ func (b *Builder) NewInternalTransactionOp(origsrc, origdlg *Account, oh *rpc.Op
 // - only originated accounts (KT1) can delegate
 // - only implicit accounts (tz1) can be delegates
 // - by default originated accounts are not delegatable (but initial delegate can be set)
-func (b *Builder) NewOriginationOp(oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
+func (b *Builder) NewOriginationOp(ctx context.Context, oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
 	o := oh.Contents[op_c]
 	oop, ok := o.(*rpc.OriginationOp)
 	if !ok {
 		return fmt.Errorf("origination op [%d:%d]: unexpected type %T ", op_n, op_c, o)
+	}
+	branch, ok := b.BranchByHash(oh.Branch)
+	if !ok {
+		return fmt.Errorf("origination op [%d:%d]: missing branch %s", oh.Branch)
 	}
 	src, ok := b.AccountByAddress(oop.Source)
 	if !ok {
@@ -945,7 +1001,7 @@ func (b *Builder) NewOriginationOp(oh *rpc.OperationHeader, op_n, op_c int, roll
 	}
 
 	// build op
-	op := NewOp(b.block, oh, op_n, op_c, 0)
+	op := NewOp(b.block, branch, oh, op_n, op_c, 0)
 	op.SenderId = src.RowId
 	op.Counter = oop.Counter
 	op.Fee = oop.Fee
@@ -959,11 +1015,7 @@ func (b *Builder) NewOriginationOp(oh *rpc.OperationHeader, op_n, op_c int, roll
 	if op.GasUsed > 0 && op.Fee > 0 {
 		op.GasPrice = float64(op.Fee) / float64(op.GasUsed)
 	}
-
-	// Note: this op seems not to extend grace period
-	// if src.IsActiveDelegate {
-	// 	src.UpdateGracePeriod(b.block.Cycle, b.block.Params)
-	// }
+	op.HasData = len(res.BigMapDiff) > 0
 
 	// store manager and delegate
 	if mgr != nil {
@@ -1016,6 +1068,19 @@ func (b *Builder) NewOriginationOp(oh *rpc.OperationHeader, op_n, op_c int, roll
 			op.TDD += float64(diffsec) / 86400 * b.block.Params.ConvertValue(op.Volume)
 		}
 
+		// create or extend bigmap diff to inject alloc for proto < v005
+		oop.Metadata.Result.BigMapDiff, err = b.PatchBigMapDiff(ctx, res.BigMapDiff, op.ReceiverId, oop.Script)
+		if err != nil {
+			return fmt.Errorf("origination op [%d:%d]: patch bigmap: %v", op_n, op_c, err)
+		}
+		if len(oop.Metadata.Result.BigMapDiff) > 0 {
+			op.BigMapDiff, err = oop.Metadata.Result.BigMapDiff.MarshalBinary()
+			if err != nil {
+				return fmt.Errorf("origination op [%d:%d]: marshal bigmap: %v", op_n, op_c, err)
+			}
+			op.HasData = true
+		}
+
 	} else {
 		// handle errors
 		if len(res.Errors) > 0 {
@@ -1048,8 +1113,14 @@ func (b *Builder) NewOriginationOp(oh *rpc.OperationHeader, op_n, op_c int, roll
 			src.NOrigination++
 			src.IsDirty = true
 			// initialize originated account
-			dst.ManagerId = op.ManagerId
+			// in babylon, keep the sender as manager regardless
+			if mgr != nil {
+				dst.ManagerId = mgr.RowId
+			} else {
+				dst.ManagerId = src.RowId
+			}
 			dst.IsContract = oop.Script != nil
+
 			if b.block.Params.SilentSpendable {
 				if oop.Spendable != nil {
 					dst.IsSpendable = *oop.Spendable
@@ -1119,10 +1190,14 @@ func (b *Builder) NewOriginationOp(oh *rpc.OperationHeader, op_n, op_c int, roll
 // no delegate
 // no gas
 // no more flags (delegatable, spendable)
-func (b *Builder) NewInternalOriginationOp(origsrc, origdlg *Account, oh *rpc.OperationHeader, iop *rpc.InternalResult, op_n, op_c, op_i int, rollback bool) error {
+func (b *Builder) NewInternalOriginationOp(ctx context.Context, origsrc, origdlg *Account, oh *rpc.OperationHeader, iop *rpc.InternalResult, op_n, op_c, op_i int, rollback bool) error {
 	src, ok := b.AccountByAddress(iop.Source)
 	if !ok {
 		return fmt.Errorf("internal origination op [%d:%d:%d]: missing source account %s", op_n, op_c, op_i, iop.Source)
+	}
+	branch, ok := b.BranchByHash(oh.Branch)
+	if !ok {
+		return fmt.Errorf("internal origination op [%d:%d]: missing branch %s", oh.Branch)
 	}
 	var srcdlg, dst *Account
 	if src.DelegateId != 0 {
@@ -1133,7 +1208,7 @@ func (b *Builder) NewInternalOriginationOp(origsrc, origdlg *Account, oh *rpc.Op
 	}
 
 	// build op (internal and outer op share the same hash and block location)
-	op := NewOp(b.block, oh, op_n, op_c, op_i)
+	op := NewOp(b.block, branch, oh, op_n, op_c, op_i)
 	op.IsInternal = true
 	op.Type = chain.OpTypeOrigination
 	op.SenderId = src.RowId
@@ -1142,10 +1217,11 @@ func (b *Builder) NewInternalOriginationOp(origsrc, origdlg *Account, oh *rpc.Op
 	op.GasLimit = 0      // n.a. for internal ops
 	op.StorageLimit = 0  // n.a. for internal ops
 	op.IsContract = true // meaning: the outer op interacted with a smart contract
-	res := iop.Result
+	res := iop.Result    // same as transaction result
 	op.Status = res.Status
 	op.GasUsed = res.ConsumedGas
 	op.IsSuccess = op.Status.IsSuccess()
+	op.HasData = len(res.BigMapDiff) > 0
 
 	var (
 		flows []*Flow
@@ -1188,6 +1264,19 @@ func (b *Builder) NewInternalOriginationOp(origsrc, origdlg *Account, oh *rpc.Op
 			op.TDD += float64(diffsec) / 86400 * b.block.Params.ConvertValue(op.Volume)
 		}
 
+		// create or extend bigmap diff to inject alloc for proto < v005
+		iop.Result.BigMapDiff, err = b.PatchBigMapDiff(ctx, res.BigMapDiff, op.ReceiverId, iop.Script)
+		if err != nil {
+			return fmt.Errorf("internal origination op [%d:%d]: patch bigmap: %v", op_n, op_c, err)
+		}
+		if len(iop.Result.BigMapDiff) > 0 {
+			op.BigMapDiff, err = iop.Result.BigMapDiff.MarshalBinary()
+			if err != nil {
+				return fmt.Errorf("internal origination op [%d:%d]: marshal bigmap: %v", op_n, op_c, err)
+			}
+			op.HasData = true
+		}
+
 	} else {
 		// handle errors
 		if len(res.Errors) > 0 {
@@ -1221,6 +1310,8 @@ func (b *Builder) NewInternalOriginationOp(origsrc, origdlg *Account, oh *rpc.Op
 			dst.IsDirty = true
 
 			// internal originations have no manager, delegate and flags (in protocol v5)
+			// but we still keep the original caller as manager to track contract ownership
+			dst.ManagerId = origsrc.RowId
 		}
 	} else {
 		if !op.IsSuccess {
@@ -1246,11 +1337,15 @@ func (b *Builder) NewInternalOriginationOp(origsrc, origdlg *Account, oh *rpc.Op
 // - delegations may or may not pay a fee, so BalanceUpdates may be empty
 // - originations may delegate as well, so consider this there!
 // - early delegations did neither pay nor consume gas
-func (b *Builder) NewDelegationOp(oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
+func (b *Builder) NewDelegationOp(ctx context.Context, oh *rpc.OperationHeader, op_n, op_c int, rollback bool) error {
 	o := oh.Contents[op_c]
 	dop, ok := o.(*rpc.DelegationOp)
 	if !ok {
 		return fmt.Errorf("delegation op [%d:%d]: unexpected type %T ", op_n, op_c, o)
+	}
+	branch, ok := b.BranchByHash(oh.Branch)
+	if !ok {
+		return fmt.Errorf("delegation op [%d:%d]: missing branch %s", oh.Branch)
 	}
 	src, ok := b.AccountByAddress(dop.Source)
 	if !ok {
@@ -1272,7 +1367,7 @@ func (b *Builder) NewDelegationOp(oh *rpc.OperationHeader, op_n, op_c int, rollb
 	}
 
 	// build op
-	op := NewOp(b.block, oh, op_n, op_c, 0)
+	op := NewOp(b.block, branch, oh, op_n, op_c, 0)
 	op.SenderId = src.RowId
 	if ndlg != nil {
 		op.DelegateId = ndlg.RowId
@@ -1402,48 +1497,29 @@ func (b *Builder) NewDelegationOp(oh *rpc.OperationHeader, op_n, op_c int, rollb
 
 			// find previous delegate, if any
 			var lastsince int64
-			if ops, err := b.idx.ListAccountOps(context.Background(), src.RowId, chain.OpTypeDelegation, 0, 0); err != nil {
-				if err != index.ErrNoAccountEntry {
+			if op, err := b.idx.FindLatestDelegation(ctx, src.RowId); err != nil {
+				if err != index.ErrNoOpEntry {
 					return err
 				}
 				odlg = nil
 			} else {
-				var oid AccountID
-				for i := len(ops) - 1; i > 0; i-- {
-					if ops[i].ReceiverId == 0 {
-						continue
-					}
-					oid = ops[i].ReceiverId
-					lastsince = ops[i].Height
-					break
-				}
-				if oid > 0 {
-					odlg, ok = b.AccountById(oid)
-					if !ok {
-						return fmt.Errorf("delegation rollback [%d:%d]: missing delegate id %d", op_n, op_c, oid)
-					}
+				lastsince = op.Height
+				odlg, ok = b.AccountById(op.ReceiverId)
+				if !ok {
+					return fmt.Errorf("delegation rollback [%d:%d]: missing delegate id %d", op_n, op_c, op.ReceiverId)
 				}
 			}
 			if odlg == nil {
 				// we must also look for the sources' origination op that may have
 				// set the initial delegate
-				if ops, err := b.idx.ListAccountOps(context.Background(), src.RowId, chain.OpTypeOrigination, 0, 0); err != nil {
-					if err != index.ErrNoAccountEntry {
+				if op, err := b.idx.FindOrigination(ctx, src.RowId); err != nil {
+					if err != index.ErrNoOpEntry {
 						return err
 					}
-				} else if len(ops) > 0 {
-					// data contains: manager,delegate
-					mgrAndDelegate := strings.Split(ops[0].Data, ",")
-					lastsince = ops[0].Height
-					if len(mgrAndDelegate) == 2 {
-						ood, err := chain.ParseAddress(mgrAndDelegate[1])
-						if err != nil {
-							return fmt.Errorf("delegation rollback [%d:%d]: cannot decode delegate address '%s' from data: %v", op_n, op_c, mgrAndDelegate[1], err)
-						}
-						odlg, ok = b.AccountByAddress(ood)
-						if !ok {
-							return fmt.Errorf("delegation rollback [%d:%d]: missing origin delegate %s", op_n, op_c, mgrAndDelegate[1])
-						}
+				} else if op.DelegateId != 0 {
+					odlg, ok = b.AccountById(op.DelegateId)
+					if !ok {
+						return fmt.Errorf("delegation rollback [%d:%d]: missing origin delegate %s", op_n, op_c, op.DelegateId)
 					}
 				}
 			}
@@ -1475,10 +1551,14 @@ func (b *Builder) NewDelegationOp(oh *rpc.OperationHeader, op_n, op_c int, rollb
 	return nil
 }
 
-func (b *Builder) NewInternalDelegationOp(origsrc, origdlg *Account, oh *rpc.OperationHeader, iop *rpc.InternalResult, op_n, op_c, op_i int, rollback bool) error {
+func (b *Builder) NewInternalDelegationOp(ctx context.Context, origsrc, origdlg *Account, oh *rpc.OperationHeader, iop *rpc.InternalResult, op_n, op_c, op_i int, rollback bool) error {
 	src, ok := b.AccountByAddress(iop.Source)
 	if !ok {
 		return fmt.Errorf("internal delegation op [%d:%d:%d]: missing source account %s", op_n, op_c, op_i, iop.Source)
+	}
+	branch, ok := b.BranchByHash(oh.Branch)
+	if !ok {
+		return fmt.Errorf("internal delegation op [%d:%d]: missing branch %s", oh.Branch)
 	}
 	var odlg, ndlg *Account
 	if src.DelegateId != 0 {
@@ -1495,7 +1575,7 @@ func (b *Builder) NewInternalDelegationOp(origsrc, origdlg *Account, oh *rpc.Ope
 	}
 
 	// build op (internal and outer op share the same hash and block location)
-	op := NewOp(b.block, oh, op_n, op_c, op_i)
+	op := NewOp(b.block, branch, oh, op_n, op_c, op_i)
 	op.IsInternal = true
 	op.Type = chain.OpTypeDelegation
 	op.SenderId = src.RowId
@@ -1599,51 +1679,29 @@ func (b *Builder) NewInternalDelegationOp(origsrc, origdlg *Account, oh *rpc.Ope
 
 			// find previous delegate, if any
 			var lastsince int64
-			if ops, err := b.idx.ListAccountOps(context.Background(), src.RowId, chain.OpTypeDelegation, 0, 0); err != nil {
-				if err != index.ErrNoAccountEntry {
+			if op, err := b.idx.FindLatestDelegation(ctx, src.RowId); err != nil {
+				if err != index.ErrNoOpEntry {
 					return err
 				}
 				odlg = nil
 			} else {
-				var oid AccountID
-				for i := len(ops) - 1; i > 0; i-- {
-					if ops[i].ReceiverId == 0 {
-						continue
-					}
-					oid = ops[i].ReceiverId
-					lastsince = ops[i].Height
-					break
-				}
-				if oid > 0 {
-					odlg, ok = b.AccountById(oid)
-					if !ok {
-						return fmt.Errorf("internal delegation rollback [%d:%d:%d]: missing delegate id %d",
-							op_n, op_c, op_i, oid)
-					}
+				lastsince = op.Height
+				odlg, ok = b.AccountById(op.ReceiverId)
+				if !ok {
+					return fmt.Errorf("delegation rollback [%d:%d]: missing delegate id %d", op_n, op_c, op.ReceiverId)
 				}
 			}
 			if odlg == nil {
 				// we must also look for the sources' origination op that may have
 				// set the initial delegate
-				if ops, err := b.idx.ListAccountOps(context.Background(), src.RowId, chain.OpTypeOrigination, 0, 0); err != nil {
-					if err != index.ErrNoAccountEntry {
+				if op, err := b.idx.FindOrigination(ctx, src.RowId); err != nil {
+					if err != index.ErrNoOpEntry {
 						return err
 					}
-				} else if len(ops) > 0 {
-					// data contains: manager,delegate
-					mgrAndDelegate := strings.Split(ops[0].Data, ",")
-					lastsince = ops[0].Height
-					if len(mgrAndDelegate) == 2 {
-						ood, err := chain.ParseAddress(mgrAndDelegate[1])
-						if err != nil {
-							return fmt.Errorf("internal delegation rollback [%d:%d:%d]: cannot decode delegate address '%s' from data: %v",
-								op_n, op_c, op_i, mgrAndDelegate[1], err)
-						}
-						odlg, ok = b.AccountByAddress(ood)
-						if !ok {
-							return fmt.Errorf("internal delegation rollback [%d:%d:%d]: missing origin delegate %s",
-								op_n, op_c, op_i, mgrAndDelegate[1])
-						}
+				} else if op.DelegateId != 0 {
+					odlg, ok = b.AccountById(op.DelegateId)
+					if !ok {
+						return fmt.Errorf("delegation rollback [%d:%d]: missing origin delegate %s", op_n, op_c, op.DelegateId)
 					}
 				}
 			}

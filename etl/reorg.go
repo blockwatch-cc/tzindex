@@ -121,13 +121,6 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 				block.ParentId = pid
 			}
 
-			// rollback reports; add orphan block
-			// updates are buffered, so any error observed here is fatal
-			log.Infof("REORGANIZE: dropping reports for block %d %v", block.Height, block.Hash)
-			if err = c.reporter.RemoveBlock(ctx, block); err != nil {
-				return err
-			}
-
 			// update indexes to rollback block
 
 			// disconnect block from indexes
@@ -262,13 +255,6 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 		c.tip = newTip
 		tip = newTip
 		c.Unlock()
-
-		// send reports based on new state
-		// updates are buffered, so any error observed here is fatal
-		log.Infof("REORGANIZE: reporting block %d %v", tip.BestHeight, tip.BestHash)
-		if err = c.reporter.AddBlock(ctx, block); err != nil {
-			return err
-		}
 
 		// cleanup and prepare for next block (forward attach keeps parent relation in builder)
 		c.builder.Clean()

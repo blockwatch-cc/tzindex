@@ -6,7 +6,6 @@ package etl
 import (
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"blockwatch.cc/packdb/store"
 	"blockwatch.cc/tzindex/chain"
@@ -85,29 +84,6 @@ func dbLoadIndexTip(dbTx store.Tx, key string) (*IndexTip, error) {
 		return nil, err
 	}
 	return tip, nil
-}
-
-type ReportTip struct {
-	LastReportTime time.Time `json:"last_time"` // day of last report generation
-}
-
-func dbLoadReportTip(dbTx store.Tx, key string, val interface{}) error {
-	bucket := dbTx.Bucket([]byte(reportBucketKey))
-	buf := bucket.Get([]byte(key))
-	if len(buf) == 0 {
-		return nil
-	}
-	return json.Unmarshal(buf, val)
-}
-
-func dbStoreReportTip(dbTx store.Tx, key string, val interface{}) error {
-	buf, err := json.Marshal(val)
-	if err != nil {
-		return err
-	}
-	bucket := dbTx.Bucket([]byte(reportBucketKey))
-	bucket.FillPercent(1.0)
-	return bucket.Put([]byte(key), buf)
 }
 
 func dbLoadDeployments(dbTx store.Tx, tip *ChainTip) ([]*chain.Params, error) {

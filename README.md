@@ -37,10 +37,10 @@ All-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resour
 
 ### Requirements
 
-- Storage: 2GB (full Mainnet index)
+- Storage: 2.4GB (full Mainnet index, Dec 2019)
 - RAM:  4-16GB (configurable, use more memory for better query latency)
 - CPU:  2+ cores (configurable, use more for better query parallelism)
-- Tezos archive node
+- Tezos node in archive mode
 
 Runs against any Tezos Archive Node (also full nodes when cycle 0 history is not yet pruned). This can be a local node or one of the public Tezos RPC nodes on the Internet. Note that syncing from public nodes over the Internet works but may be slow.
 
@@ -56,15 +56,27 @@ Requires access to the following Tezos RPC calls
 /monitor/heads/main (optional)
 ```
 
+### How to build
+
+The contained Makefile supports local and Docker builds. For local builds you need a recent Golang distribution installed on your system.
+
+```
+# build a binary for your OS
+make build
+
+# build docker images
+make image
+```
+
 ### How to run
 
 tzindex aims to be zero-conf and comes with sane defaults. All you need to do is point it to the RPC endpoint of a running Tezos node.
 
 ```
-tindex run --host tezos-node
+tzindex run --rpcurl tezos-node
 ```
 
-If you prefer running from docker images, check out the docker directory. Official images are available for the [indexer](https://hub.docker.com/r/blockwatch/tzindex) and [frontend](https://hub.docker.com/r/blockwatch/tzstats). You can run both, the indexer and the frontend in local Docker containers and have them connect to your Tezos node in a third container. Make sure all containers run inside the same Docker network or if you choose different networks that they are known. Port forwarding to localhost may or may not be an issue.
+If you prefer running from docker, check out the docker directory. Official images are available for the [indexer](https://hub.docker.com/r/blockwatch/tzindex) and [frontend](https://hub.docker.com/r/blockwatch/tzstats). You can run both, the indexer and the frontend in local Docker containers and have them connect to your Tezos node in a third container. Make sure all containers are connected to the same Docker network or if you choose different networks that they are known. Docker port forwarding on Linux usually works, on OSX its broken.
 
 
 ### Configuration
@@ -132,36 +144,34 @@ Usage:
   tzindex run [flags]
 
 Flags:
-  -h, --help          help for run
-      --host string   RPC hostname (default "127.0.0.1")
-      --noapi         disable API server
-      --noindex       disable indexing
-      --norpc         disable RPC client
-      --pass string   RPC password
-      --port string   RPC port
-      --stop height   stop indexing after height
-      --unsafe        disable fsync for fast ingest (DANGEROUS! data will be lost on crashes)
-      --user string   RPC username
+  -h, --help             help for run
+      --noapi            disable API server
+      --noindex          disable indexing
+      --norpc            disable RPC client
+      --rpcpass string   RPC password
+      --rpcurl string    RPC url (default "http://127.0.0.1:8732")
+      --rpcuser string   RPC username
+      --stop height      stop indexing after height
+      --unsafe           disable fsync for fast ingest (DANGEROUS! data will be lost on crashes)
 ```
 
 ### License
 
-This Software is available under two different licenses, a **Community Edition** license and a **PROfessional** license. The community license is intended for personal use and for developers and businesses who like to try out new ideas but don't make any money yet. The professional license is meant for businesses that already earn money with their services (such as staking providers, wallet providers, exchanges, funds and auditors) and would like to use this software for their internal operations or even make it part of their commercial offering.
+This Software is available under two different licenses, the open-source **MIT** license with limited support and best-effort updates a **PRO** license with professional support and scheduled updates. The professional license is meant for businesses such as staking providers, wallet providers, exchanges, asset issuers, and auditors who would like to use this software for their internal operations or bundle it with their commercial services.
 
-Commercial licenses help us update and maintain the software itself and the community services like Tzstats.com which build on it.
+The PRO licenses helps us pay for software updates and maintenance and operate the free community services like Tzstats.com.
 
 The following table may help you pick the right license for your intended use-case. If in doubt, send an email to license@kidtsunami.com and we'll get back to you.
 
 
-| | KIDTSUNAMI CE | KIDTSUNAMI PRO |
+| | MIT | KIDTSUNAMI PRO |
 |-|---------------|----------------|
 | Price | Free | 199 EUR / protocol upgrade |
 | Type | Perpetual | Perpetual |
-| Use | Personal & Academic Use | Commercial Use |
-| Limitations | No resale, no services, no ads | - |
+| Use | Any | Commercial Use |
+| Limitations | - | Bundle only, No clone |
 | Support | Best effort | Commercial Support |
-| Protocol Upgrade Availability | 1 week before activation | 1 week after proposal period ends |
-| DB Rebuild on Upgrade | Required | Integrated |
+| Protocol Upgrade Availability | best-effort before activation | during testing vote |
 | RPC Proxy | No | Available |
 | QA Tools | No | Available |
 

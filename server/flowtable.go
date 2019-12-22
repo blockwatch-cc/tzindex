@@ -195,7 +195,7 @@ func (f *Flow) MarshalCSV() ([]string, error) {
 		case "cycle":
 			res[i] = strconv.FormatInt(f.Cycle, 10)
 		case "time":
-			res[i] = strconv.FormatInt(util.UnixMilliNonZero(f.Timestamp), 10)
+			res[i] = strconv.Quote(f.Timestamp.Format(time.RFC3339))
 		case "account_id":
 			res[i] = strconv.FormatUint(f.AccountId.Value(), 10)
 		case "address":
@@ -278,7 +278,7 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	q := pack.Query{
 		Name:       ctx.RequestID,
 		Fields:     table.Fields().Select(srcNames...),
-		Limit:      args.Limit,
+		Limit:      int(args.Limit),
 		Conditions: make(pack.ConditionList, 0),
 		Order:      args.Order,
 	}
@@ -350,10 +350,10 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
-				for _, a := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(a)
+				for _, v := range strings.Split(val[0], ",") {
+					addr, err := chain.ParseAddress(v)
 					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
@@ -396,11 +396,15 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 						v = strconv.FormatInt(int64(currentCycle), 10)
 					}
 				case "amount_in", "amount_out":
-					fval, err := strconv.ParseFloat(v, 64)
-					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
+					fvals := make([]string, 0)
+					for _, vv := range strings.Split(v, ",") {
+						fval, err := strconv.ParseFloat(vv, 64)
+						if err != nil {
+							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, vv), err))
+						}
+						fvals = append(fvals, strconv.FormatInt(params.ConvertAmount(fval), 10))
 					}
-					v = strconv.FormatInt(params.ConvertAmount(fval), 10)
+					v = strings.Join(fvals, ",")
 				case "address_type":
 					// consider comma separated lists, convert type to int and back to string list
 					typs := make([]int64, 0)
@@ -481,8 +485,8 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		// get a unique copy of account and origin id columns (clip on request limit)
 		acol, _ := res.Uint64Column("A")
 		ocol, _ := res.Uint64Column("R")
-		find := vec.UniqueUint64Slice(acol[:util.Min(len(acol), args.Limit)])
-		find = vec.UniqueUint64Slice(append(find, ocol[:util.Min(len(ocol), args.Limit)]...))
+		find := vec.UniqueUint64Slice(acol[:util.Min(len(acol), int(args.Limit))])
+		find = vec.UniqueUint64Slice(append(find, ocol[:util.Min(len(ocol), int(args.Limit))]...))
 
 		// lookup accounts from id
 		q := pack.Query{
@@ -557,7 +561,7 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			}
 			count++
 			lastId = flow.RowId
-			if args.Limit > 0 && count == args.Limit {
+			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
 			return nil
@@ -583,7 +587,7 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				count++
 				lastId = flow.RowId
-				if args.Limit > 0 && count == args.Limit {
+				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}
 				return nil

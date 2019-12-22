@@ -85,23 +85,23 @@ func (p *Proposal) SetID(id uint64) {
 // or, when closed, the final result of a voting period. Votes contain the
 // cummulative aggregate state at the current block.
 type Vote struct {
-	RowId            uint64                 `pack:"I,pk,snappy" json:"row_id"`             // unique id
-	ElectionId       ElectionID             `pack:"E,snappy"    json:"election_id"`        // related election id
-	ProposalId       ProposalID             `pack:"P,snappy"    json:"proposal_id"`        // related proposal id
-	VotingPeriod     int64                  `pack:"p,snappy"    json:"voting_period"`      // on-chain sequence number
-	VotingPeriodKind chain.VotingPeriodKind `pack:"k,snappy"    json:"voting_period_kind"` // on-chain period
-	StartTime        time.Time              `pack:"T,snappy"    json:"period_start_time"`  // start time (block time) of voting period
-	EndTime          time.Time              `pack:"t,snappy"    json:"period_end_time"`    // end time (block time), estimate when polls are open
-	StartHeight      int64                  `pack:"H,snappy"    json:"period_start_block"` // start block height of voting period
-	EndHeight        int64                  `pack:"h,snappy"    json:"period_end_block"`   // end block height
-	EligibleRolls    int64                  `pack:"r,snappy"    json:"eligible_rolls"`     // total number of rolls at start of perid
-	EligibleVoters   int64                  `pack:"v,snappy"    json:"eligible_voters"`    // total number of roll owners at start of period
-	QuorumPct        int64                  `pack:"q,snappy"    json:"quorum_pct"`         // required quorum in percent (store as integer with 2 digits)
-	QuorumRolls      int64                  `pack:"Q,snappy"    json:"quorum_rolls"`       // required quorum in rolls (0 for proposal_period)
-	TurnoutRolls     int64                  `pack:"u,snappy"    json:"turnout_rolls"`      // actual participation in rolls
-	TurnoutVoters    int64                  `pack:"U,snappy"    json:"turnout_voters"`     // actual participation in voters
-	TurnoutPct       int64                  `pack:"c,snappy"    json:"turnout_pct"`        // actual participation in percent
-	TurnoutEma       int64                  `pack:"e,snappy"    json:"turnout_ema"`        // EMA (80/20) of participation in percent
+	RowId            uint64                 `pack:"I,pk,snappy" json:"row_id"`              // unique id
+	ElectionId       ElectionID             `pack:"E,snappy"    json:"election_id"`         // related election id
+	ProposalId       ProposalID             `pack:"P,snappy"    json:"proposal_id"`         // related proposal id
+	VotingPeriod     int64                  `pack:"p,snappy"    json:"voting_period"`       // on-chain sequence number
+	VotingPeriodKind chain.VotingPeriodKind `pack:"k,snappy"    json:"voting_period_kind"`  // on-chain period
+	StartTime        time.Time              `pack:"T,snappy"    json:"period_start_time"`   // start time (block time) of voting period
+	EndTime          time.Time              `pack:"t,snappy"    json:"period_end_time"`     // end time (block time), estimate when polls are open
+	StartHeight      int64                  `pack:"H,snappy"    json:"period_start_height"` // start block height of voting period
+	EndHeight        int64                  `pack:"h,snappy"    json:"period_end_height"`   // end block height
+	EligibleRolls    int64                  `pack:"r,snappy"    json:"eligible_rolls"`      // total number of rolls at start of perid
+	EligibleVoters   int64                  `pack:"v,snappy"    json:"eligible_voters"`     // total number of roll owners at start of period
+	QuorumPct        int64                  `pack:"q,snappy"    json:"quorum_pct"`          // required quorum in percent (store as integer with 2 digits)
+	QuorumRolls      int64                  `pack:"Q,snappy"    json:"quorum_rolls"`        // required quorum in rolls (0 for proposal_period)
+	TurnoutRolls     int64                  `pack:"u,snappy"    json:"turnout_rolls"`       // actual participation in rolls
+	TurnoutVoters    int64                  `pack:"U,snappy"    json:"turnout_voters"`      // actual participation in voters
+	TurnoutPct       int64                  `pack:"c,snappy"    json:"turnout_pct"`         // actual participation in percent
+	TurnoutEma       int64                  `pack:"e,snappy"    json:"turnout_ema"`         // EMA (80/20) of participation in percent
 	YayRolls         int64                  `pack:"y,snappy"    json:"yay_rolls"`
 	YayVoters        int64                  `pack:"Y,snappy"    json:"yay_voters"`
 	NayRolls         int64                  `pack:"n,snappy"    json:"nay_rolls"`

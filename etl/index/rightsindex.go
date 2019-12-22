@@ -133,8 +133,9 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 			if !ok {
 				return fmt.Errorf("rights: seed nonce op [%d:%d]: unexpected type %T ", v.OpN, v.OpC, op)
 			}
-			// seed nonces are injected by the current block's baker!
-			// we assume each baker has only one priority level per block
+			// seed nonces are injected by the current block's baker, but may originate
+			// from another baker who was required to publish them as message into the
+			// network
 			err := idx.table.Stream(ctx,
 				pack.Query{
 					Name:   "rights.search_seed",
@@ -150,9 +151,9 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 							Value: int64(chain.RightTypeBaking),
 						},
 						pack.Condition{
-							Field: idx.table.Fields().Find("A"), // delegate account
+							Field: idx.table.Fields().Find("R"), // seed required
 							Mode:  pack.FilterModeEqual,
-							Value: block.Baker.RowId.Value(),
+							Value: true,
 						},
 					}},
 				func(r pack.Row) error {
@@ -171,19 +172,21 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 	}
 
 	// update baking and endorsing rights
-	if block.Priority > 0 {
-		// careful: rights is slice of structs, not pointers
-		rights := builder.Rights(chain.RightTypeBaking)
-		for i := range rights {
-			pd := rights[i].Priority - block.Priority
-			if pd > 0 {
-				continue
-			}
-			rights[i].IsLost = pd < 0
-			rights[i].IsStolen = pd == 0
-			upd = append(upd, &(rights[i]))
+	// careful: rights is slice of structs, not pointers
+	rights := builder.Rights(chain.RightTypeBaking)
+	for i := range rights {
+		pd := rights[i].Priority - block.Priority
+		if pd > 0 {
+			continue
 		}
+		rights[i].IsLost = pd < 0
+		if pd == 0 {
+			rights[i].IsStolen = block.Priority > 0
+			rights[i].IsSeedRequired = block.Height%block.Params.BlocksPerCommitment == 0
+		}
+		upd = append(upd, &(rights[i]))
 	}
+
 	// endorsing rights are for parent block
 	if block.Parent != nil {
 		if missed := ^block.Parent.SlotsEndorsed; missed > 0 {
@@ -215,12 +218,11 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 			return fmt.Errorf("rights: missing baker account %s", v.Delegate)
 		}
 		ins = append(ins, &Right{
-			Type:           chain.RightTypeBaking,
-			Height:         v.Level,
-			Cycle:          block.Params.CycleFromHeight(v.Level),
-			Priority:       v.Priority,
-			AccountId:      acc.RowId,
-			IsSeedRequired: v.Level%block.Params.BlocksPerCommitment == 0,
+			Type:      chain.RightTypeBaking,
+			Height:    v.Level,
+			Cycle:     block.Params.CycleFromHeight(v.Level),
+			Priority:  v.Priority,
+			AccountId: acc.RowId,
 		})
 	}
 	// sort endorsing rights by slot, they are only sorted by height here

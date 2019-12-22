@@ -37,11 +37,11 @@ type FreezerBalanceUpdate struct {
 	GenericBalanceUpdate
 	Category string        `json:"category"`
 	Delegate chain.Address `json:"delegate"`
-	Level_   int           `json:"level"` // wrongly called level, it's cycle
-	Cycle_   int           `json:"cycle"` // v4 fix
+	Level_   int64         `json:"level"` // wrongly called level, it's cycle
+	Cycle_   int64         `json:"cycle"` // v4 fix
 }
 
-func (b *FreezerBalanceUpdate) Cycle() int {
+func (b *FreezerBalanceUpdate) Cycle() int64 {
 	if b.Level_ > 0 {
 		return b.Level_
 	}

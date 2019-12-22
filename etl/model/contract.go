@@ -7,6 +7,8 @@ import (
 	"sync"
 
 	"blockwatch.cc/packdb/pack"
+	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzindex/micheline"
 	"blockwatch.cc/tzindex/rpc"
 )
 
@@ -94,6 +96,11 @@ func (c *Contract) SetID(id uint64) {
 	c.RowId = id
 }
 
+func (c Contract) String() string {
+	s, _ := chain.EncodeAddress(chain.AddressTypeContract, c.Hash)
+	return s
+}
+
 func (c *Contract) Reset() {
 	c.RowId = 0
 	c.Hash = nil
@@ -109,4 +116,38 @@ func (c *Contract) Reset() {
 	c.Script = nil
 	c.IsSpendable = false
 	c.IsDelegatable = false
+}
+
+// loads script and upgrades to babylon on-the-fly if originated earlier
+func (c *Contract) LoadScript(tip *ChainTip, height int64, manager []byte) (*micheline.Script, error) {
+	script := micheline.NewScript()
+
+	// patch empty manager.tz
+	if len(c.Script) == 0 {
+		if tip.ChainId.IsEqual(chain.Mainnet) && height >= 655361 && c.Height < 655361 {
+			script, err := micheline.MakeManagerScript(manager)
+			return script, err
+		}
+		// empty script before Babylon
+		return script, nil
+	}
+
+	// unmarshal script
+	if err := script.UnmarshalBinary(c.Script); err != nil {
+		return nil, err
+	}
+
+	// must upgrade?
+	// - only applies to mainnet and contracts originated before babylon
+	// - don't upgrade when requested height is < babylon so we can handle
+	//   old params/storage properly
+	if tip.ChainId.IsEqual(chain.Mainnet) && height >= 655361 && c.Height < 655361 {
+		switch true {
+		case c.IsSpendable:
+			script.MigrateToBabylonAddDo()
+		case !c.IsSpendable && c.IsDelegatable:
+			script.MigrateToBabylonSetDelegate()
+		}
+	}
+	return script, nil
 }

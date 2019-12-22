@@ -13,16 +13,17 @@ type Params struct {
 	Name        string       `json:"name"`
 	Network     string       `json:"network"`
 	Symbol      string       `json:"symbol"`
-	Version     int          `json:"version"`
+	Deployment  int          `json:"deployment"` // as activated on chain
+	Version     int          `json:"version"`    // as implemented
 	ChainId     ChainIdHash  `json:"chain_id"`
 	Protocol    ProtocolHash `json:"protocol"`
 	StartHeight int64        `json:"start_height"`
 	EndHeight   int64        `json:"end_height"`
 	Decimals    int          `json:"decimals"`
-	Token       int64        `json:"units"`
+	Token       int64        `json:"units"` // atomic units per token
 
-	NoRewardCycles               int64            `json:"no_reward_cycles"`
-	SecurityDepositRampUpCycles  int64            `json:"security_deposit_ramp_up_cycles"`
+	NoRewardCycles               int64            `json:"no_reward_cycles"`                // from mainnet genesis
+	SecurityDepositRampUpCycles  int64            `json:"security_deposit_ramp_up_cycles"` // increase 1/64th each cycle
 	PreservedCycles              int64            `json:"preserved_cycles"`
 	BlocksPerCycle               int64            `json:"blocks_per_cycle"`
 	BlocksPerCommitment          int64            `json:"blocks_per_commitment"`

@@ -27,6 +27,10 @@ type RESTful interface {
 	RegisterDirectRoutes(r *mux.Router) error
 }
 
+func BoolPtr(b bool) *bool {
+	return &b
+}
+
 var models = map[string]RESTful{}
 
 func register(model RESTful) {

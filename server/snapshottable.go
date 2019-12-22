@@ -196,7 +196,7 @@ func (s *Snapshot) MarshalCSV() ([]string, error) {
 		case "is_selected":
 			res[i] = strconv.FormatBool(s.IsSelected)
 		case "time":
-			res[i] = strconv.FormatInt(util.UnixMilliNonZero(s.Timestamp), 10)
+			res[i] = strconv.Quote(s.Timestamp.Format(time.RFC3339))
 		case "index":
 			res[i] = strconv.FormatInt(s.Snapshot.Index, 10)
 		case "rolls":
@@ -222,7 +222,7 @@ func (s *Snapshot) MarshalCSV() ([]string, error) {
 		case "since":
 			res[i] = strconv.FormatInt(s.Since, 10)
 		case "since_time":
-			res[i] = strconv.FormatInt(s.ctx.Indexer.BlockTimeMs(s.ctx.Context, s.Since), 10)
+			res[i] = strconv.Quote(s.ctx.Indexer.BlockTime(s.ctx.Context, s.Since).Format(time.RFC3339))
 		default:
 			continue
 		}
@@ -279,7 +279,7 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 	q := pack.Query{
 		Name:       ctx.RequestID,
 		Fields:     table.Fields().Select(srcNames...),
-		Limit:      args.Limit,
+		Limit:      int(args.Limit),
 		Conditions: make(pack.ConditionList, 0),
 		Order:      args.Order,
 	}
@@ -365,10 +365,10 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
-				for _, a := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(a)
+				for _, v := range strings.Split(val[0], ",") {
+					addr, err := chain.ParseAddress(v)
 					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
@@ -392,6 +392,7 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			default:
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
+
 		case "since_time":
 			// translate time into height, use val[0] only
 			bestTime := ctx.Crawler.Time()
@@ -448,6 +449,7 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 					Value: valueBlocks,
 					Raw:   val[0], // debugging aid
 				})
+
 			default:
 				// cond.Value is time.Time
 				valueTime := cond.Value.(time.Time)
@@ -465,7 +467,6 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 					Raw:   val[0], // debugging aid
 				})
 			}
-
 		default:
 			// translate long column name used in query to short column name used in packs
 			if short, ok := snapSourceNames[prefix]; !ok {
@@ -485,11 +486,15 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 						v = strconv.FormatInt(int64(currentCycle), 10)
 					}
 				case "balance", "delegated":
-					fval, err := strconv.ParseFloat(v, 64)
-					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
+					fvals := make([]string, 0)
+					for _, vv := range strings.Split(v, ",") {
+						fval, err := strconv.ParseFloat(vv, 64)
+						if err != nil {
+							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, vv), err))
+						}
+						fvals = append(fvals, strconv.FormatInt(params.ConvertAmount(fval), 10))
 					}
-					v = strconv.FormatInt(params.ConvertAmount(fval), 10)
+					v = strings.Join(fvals, ",")
 				}
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
@@ -524,7 +529,7 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 	if needAccountT && res.Rows() > 0 {
 		// get a unique copy of account and delegate id columns (clip on request limit)
 		acol, _ := res.Uint64Column("a")
-		find := vec.UniqueUint64Slice(acol[:util.Min(len(acol), args.Limit)])
+		find := vec.UniqueUint64Slice(acol[:util.Min(len(acol), int(args.Limit))])
 
 		// lookup accounts from id
 		q := pack.Query{
@@ -599,7 +604,7 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			}
 			count++
 			lastId = snap.RowId
-			if args.Limit > 0 && count == args.Limit {
+			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
 			return nil
@@ -625,7 +630,7 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				}
 				count++
 				lastId = snap.RowId
-				if args.Limit > 0 && count == args.Limit {
+				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}
 				return nil

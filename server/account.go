@@ -360,7 +360,16 @@ func ReadAccountOps(ctx *ApiContext) (interface{}, int) {
 	acc := loadAccount(ctx)
 	params := ctx.Crawler.ParamsByHeight(-1)
 	a := NewExplorerAccount(ctx, acc, params, false)
-	ops, err := ctx.Indexer.ListAccountOps(ctx, acc.RowId, args.Type, args.Offset, ctx.Cfg.ClampExplore(args.Limit))
+	ops, err := ctx.Indexer.ListAccountOps(
+		ctx,
+		acc.RowId,
+		args.Type,
+		0,
+		0,
+		args.Offset,
+		ctx.Cfg.ClampExplore(args.Limit),
+		args.Order,
+	)
 	if err != nil {
 		panic(EInternal(EC_DATABASE, "cannot read account operations", err))
 	}
@@ -368,7 +377,7 @@ func ReadAccountOps(ctx *ApiContext) (interface{}, int) {
 	// FIXME: collect account and op lookup into only two queries
 	eops := make([]*ExplorerOp, len(ops))
 	for i, v := range ops {
-		eops[i] = NewExplorerOp(ctx, v, nil, params)
+		eops[i] = NewExplorerOp(ctx, v, nil, nil, params, nil)
 	}
 	a.Ops = &eops
 	return a, http.StatusOK

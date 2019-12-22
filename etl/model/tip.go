@@ -11,8 +11,8 @@ import (
 
 // ChainTip reflects the blockchain state at the currently indexed height.
 type ChainTip struct {
-	Name          string            `json:"name"`         // chain name, e.g. Tezos
-	Symbol        string            `json:"symbol"`       // chain symbol, e.g. XTZ
+	Name          string            `json:"name"`         // chain name, e.g. Bitcoin
+	Symbol        string            `json:"symbol"`       // chain symbol, e.g. BTC
 	ChainId       chain.ChainIdHash `json:"chain_id"`     // chain identifier (same for all blocks)
 	BestHash      chain.BlockHash   `json:"last_block"`   // The hash of the chain tip block.
 	BestId        uint64            `json:"last_id"`      // The internal blockindex id of the tip block;
@@ -26,7 +26,8 @@ type ChainTip struct {
 
 type Deployment struct {
 	Protocol    chain.ProtocolHash `json:"protocol"`
-	Version     int                `json:"version"`      // protocol version sequence on indexed chain
+	Version     int                `json:"version"`      // protocol version
+	Deployment  int                `json:"deployment"`   // protocol sequence id on indexed chain
 	StartHeight int64              `json:"start_height"` // first block on indexed chain
 	EndHeight   int64              `json:"end_height"`   // last block on indexed chain or -1
 }
@@ -39,6 +40,7 @@ func (t *ChainTip) AddDeployment(p *chain.Params) {
 	t.Deployments = append(t.Deployments, Deployment{
 		Protocol:    p.Protocol,
 		Version:     p.Version,
+		Deployment:  p.Deployment,
 		StartHeight: p.StartHeight,
 		EndHeight:   p.EndHeight,
 	})

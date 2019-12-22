@@ -209,10 +209,10 @@ func StreamFlowSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
-				for _, a := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(a)
+				for _, v := range strings.Split(val[0], ",") {
+					addr, err := chain.ParseAddress(v)
 					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
@@ -367,7 +367,7 @@ func StreamFlowSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 					return err
 				}
 				count++
-				if args.Limit > 0 && count == args.Limit {
+				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}
 				fs.Reset()
@@ -421,7 +421,7 @@ func StreamFlowSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 						return err
 					}
 					count++
-					if args.Limit > 0 && count == args.Limit {
+					if args.Limit > 0 && count == int(args.Limit) {
 						return io.EOF
 					}
 					fs.Reset()

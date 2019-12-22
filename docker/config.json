@@ -94,8 +94,7 @@
 		"blockchain": "info",
 		"database": "info",
 		"rpc": "info",
-		"server": "debug",
-		"report": "info",
+		"server": "info",
 		"micheline": "info"
 	}
 }

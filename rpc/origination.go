@@ -28,17 +28,18 @@ type OriginationOp struct {
 
 // OriginationOpMetadata represents a transaction operation metadata
 type OriginationOpMetadata struct {
-	BalanceUpdates BalanceUpdates    `json:"balance_updates"` // fee-related
-	Result         OriginationResult `json:"operation_result"`
+	BalanceUpdates BalanceUpdates     `json:"balance_updates"` // fee-related
+	Result         *OriginationResult `json:"operation_result"`
 }
 
 // OriginationResult represents a contract creation result
 type OriginationResult struct {
-	BalanceUpdates      BalanceUpdates   `json:"balance_updates"` // burned fees
-	OriginatedContracts []chain.Address  `json:"originated_contracts"`
-	ConsumedGas         int64            `json:"consumed_gas,string"`
-	StorageSize         int64            `json:"storage_size,string"`
-	PaidStorageSizeDiff int64            `json:"paid_storage_size_diff,string"`
-	Status              chain.OpStatus   `json:"status"`
-	Errors              []OperationError `json:"errors,omitempty"`
+	BalanceUpdates      BalanceUpdates       `json:"balance_updates"` // burned fees
+	OriginatedContracts []chain.Address      `json:"originated_contracts"`
+	ConsumedGas         int64                `json:"consumed_gas,string"`
+	StorageSize         int64                `json:"storage_size,string"`
+	PaidStorageSizeDiff int64                `json:"paid_storage_size_diff,string"`
+	BigMapDiff          micheline.BigMapDiff `json:"big_map_diff,omitempty"`
+	Status              chain.OpStatus       `json:"status"`
+	Errors              []OperationError     `json:"errors,omitempty"`
 }

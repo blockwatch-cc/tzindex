@@ -280,19 +280,20 @@ func loadElection(ctx *ApiContext) *model.Election {
 		panic(EBadRequest(EC_RESOURCE_ID_MISSING, "missing election identifier", nil))
 	} else {
 		var (
-			height   int64
 			err      error
 			election *model.Election
 		)
 		switch true {
 		case id == "head":
-			height = ctx.Crawler.Height()
+			election, err = ctx.Indexer.ElectionByHeight(ctx.Context, ctx.Crawler.Height())
 		case strings.HasPrefix(id, chain.HashTypeProtocol.Prefix()):
-			p, err := chain.ParseProtocolHash(id)
+			var p chain.ProtocolHash
+			p, err = chain.ParseProtocolHash(id)
 			if err != nil {
 				panic(EBadRequest(EC_RESOURCE_ID_MALFORMED, "invalid proposal", err))
 			}
-			proposal, err := ctx.Indexer.LookupProposal(ctx.Context, p)
+			var proposal *model.Proposal
+			proposal, err = ctx.Indexer.LookupProposal(ctx.Context, p)
 			if err != nil {
 				switch err {
 				case index.ErrNoProposalEntry:
@@ -301,17 +302,14 @@ func loadElection(ctx *ApiContext) *model.Election {
 					panic(EInternal(EC_DATABASE, err.Error(), nil))
 				}
 			}
-			height = proposal.Height
+			election, err = ctx.Indexer.ElectionById(ctx.Context, proposal.ElectionId)
 		default:
-			height, err = strconv.ParseInt(id, 10, 64)
+			var i int64
+			i, err = strconv.ParseInt(id, 10, 64)
 			if err != nil {
-				panic(EBadRequest(EC_RESOURCE_ID_MALFORMED, "invalid election block height", err))
+				panic(EBadRequest(EC_RESOURCE_ID_MALFORMED, "invalid election id", err))
 			}
-		}
-		if height < 1024 {
-			election, err = ctx.Indexer.ElectionById(ctx.Context, model.ElectionID(height))
-		} else {
-			election, err = ctx.Indexer.ElectionByHeight(ctx.Context, height)
+			election, err = ctx.Indexer.ElectionById(ctx.Context, model.ElectionID(i))
 		}
 		if err != nil {
 			switch err {

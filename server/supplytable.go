@@ -81,6 +81,7 @@ func (s *Supply) MarshalJSONVerbose() ([]byte, error) {
 		BurnedDoubleEndorse float64   `json:"burned_double_endorse"`
 		BurnedOrigination   float64   `json:"burned_origination"`
 		BurnedImplicit      float64   `json:"burned_implicit"`
+		BurnedSeedMiss      float64   `json:"burned_seed_miss"`
 		Frozen              float64   `json:"frozen"`
 		FrozenDeposits      float64   `json:"frozen_deposits"`
 		FrozenRewards       float64   `json:"frozen_rewards"`
@@ -112,6 +113,7 @@ func (s *Supply) MarshalJSONVerbose() ([]byte, error) {
 		BurnedDoubleEndorse: s.params.ConvertValue(s.BurnedDoubleEndorse),
 		BurnedOrigination:   s.params.ConvertValue(s.BurnedOrigination),
 		BurnedImplicit:      s.params.ConvertValue(s.BurnedImplicit),
+		BurnedSeedMiss:      s.params.ConvertValue(s.BurnedSeedMiss),
 		Frozen:              s.params.ConvertValue(s.Frozen),
 		FrozenDeposits:      s.params.ConvertValue(s.FrozenDeposits),
 		FrozenRewards:       s.params.ConvertValue(s.FrozenRewards),
@@ -178,6 +180,8 @@ func (s *Supply) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedOrigination), 'f', dec, 64)
 		case "burned_implicit":
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedImplicit), 'f', dec, 64)
+		case "burned_seed_miss":
+			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedSeedMiss), 'f', dec, 64)
 		case "frozen":
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Frozen), 'f', dec, 64)
 		case "frozen_deposits":
@@ -209,7 +213,7 @@ func (s *Supply) MarshalCSV() ([]string, error) {
 		case "cycle":
 			res[i] = strconv.FormatInt(s.Cycle, 10)
 		case "time":
-			res[i] = strconv.FormatInt(util.UnixMilliNonZero(s.Timestamp), 10)
+			res[i] = strconv.Quote(s.Timestamp.Format(time.RFC3339))
 		case "total":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Total), 'f', dec, 64)
 		case "activated":
@@ -254,6 +258,8 @@ func (s *Supply) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.BurnedOrigination), 'f', dec, 64)
 		case "burned_implicit":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.BurnedImplicit), 'f', dec, 64)
+		case "burned_seed_miss":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.BurnedSeedMiss), 'f', dec, 64)
 		case "frozen":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Frozen), 'f', dec, 64)
 		case "frozen_deposits":
@@ -303,7 +309,7 @@ func StreamSupplyTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	q := pack.Query{
 		Name:       ctx.RequestID,
 		Fields:     table.Fields().Select(srcNames...),
-		Limit:      args.Limit,
+		Limit:      int(args.Limit),
 		Conditions: make(pack.ConditionList, 0),
 		Order:      args.Order,
 	}
@@ -359,11 +365,15 @@ func StreamSupplyTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				case "height", "time":
 					// need no conversion
 				default:
-					fval, err := strconv.ParseFloat(v, 64)
-					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
+					fvals := make([]string, 0)
+					for _, vv := range strings.Split(v, ",") {
+						fval, err := strconv.ParseFloat(vv, 64)
+						if err != nil {
+							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, vv), err))
+						}
+						fvals = append(fvals, strconv.FormatInt(params.ConvertAmount(fval), 10))
 					}
-					v = strconv.FormatInt(params.ConvertAmount(fval), 10)
+					v = strings.Join(fvals, ",")
 				}
 
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
@@ -428,7 +438,7 @@ func StreamSupplyTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			}
 			count++
 			lastId = supply.RowId
-			if args.Limit > 0 && count == args.Limit {
+			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
 			return nil
@@ -454,7 +464,7 @@ func StreamSupplyTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				count++
 				lastId = supply.RowId
-				if args.Limit > 0 && count == args.Limit {
+				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}
 				return nil

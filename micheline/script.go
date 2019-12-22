@@ -148,6 +148,11 @@ func (p *Script) UnmarshalBinary(data []byte) error {
 
 	// 2 Storage
 
+	// check storage is present
+	if buf.Len() < 4 {
+		return io.ErrShortBuffer
+	}
+
 	// starts with BE uint32 total size
 	size = int(binary.BigEndian.Uint32(buf.Next(4)))
 	if buf.Len() < size {

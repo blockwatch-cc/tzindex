@@ -87,10 +87,8 @@ func initConfig() {
 		setLogLevels(logpkg.LevelTrace)
 	case vdebug:
 		setLogLevels(logpkg.LevelDebug)
-	case verbose:
-		setLogLevels(logpkg.LevelInfo)
 	default:
-		setLogLevels(logpkg.LevelWarn)
+		setLogLevels(logpkg.LevelInfo)
 	}
 
 	// load config
@@ -106,7 +104,7 @@ func initConfig() {
 		}
 		log.Infof("Using configuration file %s", realconf)
 	} else {
-		log.Infof("Missing config file, using default values.")
+		log.Warnf("Missing config file, using default values.")
 	}
 	initLogging()
 
@@ -135,6 +133,7 @@ func initConfig() {
 	log.Infof("%s tzindex %s -- %s", ORG_NAME, VERSION, GITCOMMIT)
 	log.Infof("(c) Copyright 2018-2019 -- %s", COMPANY_NAME)
 	log.Infof("Starting %s on %d cores", UserAgent, maxcpu)
+	log.Infof("Go version %s", runtime.Version())
 	runtime.GOMAXPROCS(maxcpu)
 	runtime.SetBlockProfileRate(profrate)
 	runtime.SetMutexProfileFraction(profrate)

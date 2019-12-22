@@ -33,9 +33,22 @@ func (z *Z) Big() *big.Int {
 	return (*big.Int)(z)
 }
 
+func (z *Z) Int64() int64 {
+	return (*big.Int)(z).Int64()
+}
+
 func (z *Z) Set(b *big.Int) *Z {
 	(*big.Int)(z).Set(b)
 	return z
+}
+
+func (z *Z) SetInt64(i int64) *Z {
+	(*big.Int)(z).SetInt64(i)
+	return z
+}
+
+func (z *Z) UnmarshalBinary(data []byte) error {
+	return z.DecodeBuffer(bytes.NewBuffer(data))
 }
 
 func (z *Z) DecodeBuffer(buf *bytes.Buffer) error {
@@ -71,6 +84,14 @@ func (z *Z) DecodeBuffer(buf *bytes.Buffer) error {
 		(*big.Int)(z).Set(x)
 	}
 	return nil
+}
+
+func (z *Z) MarshalBinary() ([]byte, error) {
+	buf := bytes.NewBuffer(nil)
+	if err := z.EncodeBuffer(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (z *Z) EncodeBuffer(buf *bytes.Buffer) error {

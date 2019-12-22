@@ -53,7 +53,6 @@ func (t SystemRequest) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/flush", C(FlushDatabases)).Methods("PUT")
 	r.HandleFunc("/flush_journal", C(FlushJournals)).Methods("PUT")
 	r.HandleFunc("/gc", C(GcDatabases)).Methods("PUT")
-	r.HandleFunc("/rollback", C(RollbackDatabases)).Methods("PUT")
 	r.HandleFunc("/log/{subsystem}/{level}", C(UpdateLog)).Methods("PUT")
 	return nil
 }
@@ -71,16 +70,13 @@ func GetConfig(ctx *ApiContext) (interface{}, int) {
 }
 
 func SnapshotDatabases(ctx *ApiContext) (interface{}, int) {
-	if err := ctx.Crawler.Snapshot(ctx.Context); err != nil {
+	if err := ctx.Crawler.SnapshotRequest(ctx.Context); err != nil {
 		panic(EInternal(EC_DATABASE, "snapshot failed", err))
 	}
 	return nil, http.StatusNoContent
 }
 
 func FlushDatabases(ctx *ApiContext) (interface{}, int) {
-	if err := ctx.Reporter.Flush(ctx.Context); err != nil {
-		panic(EInternal(EC_DATABASE, "flush failed", err))
-	}
 	if err := ctx.Indexer.Flush(ctx.Context); err != nil {
 		panic(EInternal(EC_DATABASE, "flush failed", err))
 	}
@@ -88,9 +84,6 @@ func FlushDatabases(ctx *ApiContext) (interface{}, int) {
 }
 
 func FlushJournals(ctx *ApiContext) (interface{}, int) {
-	if err := ctx.Reporter.FlushJournals(ctx.Context); err != nil {
-		panic(EInternal(EC_DATABASE, "journal flush failed", err))
-	}
 	if err := ctx.Indexer.FlushJournals(ctx.Context); err != nil {
 		panic(EInternal(EC_DATABASE, "journal flush failed", err))
 	}
@@ -98,9 +91,6 @@ func FlushJournals(ctx *ApiContext) (interface{}, int) {
 }
 
 func GcDatabases(ctx *ApiContext) (interface{}, int) {
-	if err := ctx.Reporter.GC(ctx.Context, config.GetFloat64("database.gc_ratio")); err != nil {
-		panic(EInternal(EC_DATABASE, "gc failed", err))
-	}
 	if err := ctx.Indexer.GC(ctx.Context, config.GetFloat64("database.gc_ratio")); err != nil {
 		panic(EInternal(EC_DATABASE, "gc failed", err))
 	}
@@ -126,8 +116,8 @@ func UpdateLog(ctx *ApiContext) (interface{}, int) {
 		key = "JRPC"
 	case "server":
 		key = "SRVR"
-	case "report":
-		key = "REPO"
+	case "micheline":
+		key = "MICH"
 	default:
 		panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("undefined subsystem '%s'", sub), nil))
 	}

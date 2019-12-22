@@ -20,7 +20,7 @@ type Supply struct {
 	Unclaimed           int64     `pack:"U,snappy"    json:"unclaimed"`          // all non-activated fundraiser supply
 	Vested              int64     `pack:"V,snappy"    json:"vested"`             // foundation vested supply
 	Unvested            int64     `pack:"N,snappy"    json:"unvested"`           // remaining unvested supply
-	Circulating         int64     `pack:"C,snappy"    json:"circulating"`        // free floating (active + vested - frozen)
+	Circulating         int64     `pack:"C,snappy"    json:"circulating"`        // able to move next block floating (total - unvested)
 	Delegated           int64     `pack:"E,snappy"    json:"delegated"`          // all delegated balances
 	Staking             int64     `pack:"D,snappy"    json:"staking"`            // all delegated + delegate's own balances
 	ActiveDelegated     int64     `pack:"G,snappy"    json:"active_delegated"`   // delegated  balances to active delegates
@@ -37,6 +37,7 @@ type Supply struct {
 	BurnedDoubleEndorse int64     `pack:"2,snappy"    json:"burned_double_endorse"`
 	BurnedOrigination   int64     `pack:"3,snappy"    json:"burned_origination"`
 	BurnedImplicit      int64     `pack:"4,snappy"    json:"burned_implicit"`
+	BurnedSeedMiss      int64     `pack:"5,snappy"    json:"burned_seed_miss"`
 	Frozen              int64     `pack:"F,snappy"    json:"frozen"`
 	FrozenDeposits      int64     `pack:"d,snappy"    json:"frozen_deposits"`
 	FrozenRewards       int64     `pack:"r,snappy"    json:"frozen_rewards"`
@@ -60,7 +61,6 @@ func (s *Supply) Update(b *Block, delegates map[AccountID]*Account) {
 	s.Cycle = b.Cycle
 	s.Timestamp = b.Timestamp
 	s.Total += b.Rewards - b.BurnedSupply
-	s.Circulating += b.ActivatedSupply + b.UnfrozenFees + b.UnfrozenRewards + b.UnfrozenDeposits - b.Fees - b.Deposits - b.BurnedSupply
 	s.Minted += b.Rewards
 	s.Burned += b.BurnedSupply
 	s.FrozenDeposits += b.Deposits - b.UnfrozenDeposits
@@ -77,9 +77,22 @@ func (s *Supply) Update(b *Block, delegates map[AccountID]*Account) {
 		case FlowTypeVest:
 			s.Vested += f.AmountIn
 			s.Unvested -= f.AmountIn
+		case FlowTypeNonceRevelation:
+			// adjust different supply types because block.BurnedSupply contains
+			// seed burn already, but it comes from frozen supply and not from
+			// circulating supply
+			if f.IsBurned {
+				s.BurnedSeedMiss += f.AmountOut
+				s.Frozen -= f.AmountOut
+				switch f.Category {
+				case FlowCategoryRewards:
+					s.FrozenRewards -= f.AmountOut
+				case FlowCategoryFees:
+					s.FrozenFees -= f.AmountOut
+				}
+			}
 		case FlowTypeInvoice, FlowTypeAirdrop:
 			s.Total += f.AmountIn
-			s.Circulating += f.AmountIn
 			s.MintedAirdrop += f.AmountIn
 			s.Minted += f.AmountIn
 		}
@@ -125,6 +138,10 @@ func (s *Supply) Update(b *Block, delegates map[AccountID]*Account) {
 	// we don't explicitly count baking and there's also no explicit op, but
 	// we can calculate total baking rewards as difference to total rewards
 	s.MintedBaking = s.Minted - s.MintedSeeding - s.MintedEndorsing - s.MintedAirdrop
+
+	// unanimous consent that unclaimed can move at next block and frozen is
+	// generally considered as part of circulating
+	s.Circulating = s.Total - s.Unvested
 }
 
 func (s *Supply) Rollback(b *Block) {

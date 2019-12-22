@@ -16,6 +16,10 @@ var (
 	Alphanet   = MustParseChainIdHash("NetXgtSLGNJvNye")
 	Zeronet    = MustParseChainIdHash("NetXKakFj1A7ouL")
 	Babylonnet = MustParseChainIdHash("NetXUdfLh6Gm88t")
+
+	// maximum depth of branches for ops to be included on chain, also
+	// defines max depth of a possible reorg and max block priorities
+	MaxBranchDepth int64 = 64
 )
 
 func (p *Params) ForNetwork(net ChainIdHash) *Params {
@@ -43,25 +47,31 @@ func (p *Params) ForProtocol(proto ProtocolHash) *Params {
 	pp.Protocol = proto
 	switch true {
 	case ProtoV000.IsEqual(proto):
+		pp.Version = 0
 		pp.ReactivateByTx = true
 		pp.HasOriginationBug = true
 		pp.SilentSpendable = true
 	case ProtoV001.IsEqual(proto):
+		pp.Version = 1
 		pp.ReactivateByTx = true
 		pp.HasOriginationBug = true
 		pp.SilentSpendable = true
 	case ProtoV002.IsEqual(proto):
+		pp.Version = 2
 		pp.ReactivateByTx = true
 		pp.SilentSpendable = true
 	case ProtoV003.IsEqual(proto):
+		pp.Version = 3
 		pp.ReactivateByTx = true
 		pp.SilentSpendable = true
 	case ProtoV004.IsEqual(proto):
+		pp.Version = 4
 		pp.SilentSpendable = true
 		pp.Invoices = map[string]int64{
 			"tz1iSQEcaGpUn6EW5uAy3XhPiNg7BHMnRSXi": 100 * 1000000,
 		}
 	case ProtoV005_1.IsEqual(proto) || ProtoV005_2.IsEqual(proto):
+		pp.Version = 5
 		pp.Invoices = map[string]int64{
 			"KT1DUfaMfTRZZkvZAYQT5b3byXnvqoAykc43": 500 * 1000000,
 		}

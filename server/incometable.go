@@ -38,7 +38,7 @@ func init() {
 	incomeSourceNames = fields.NameMapReverse()
 	incomeAllAliases = fields.Aliases()
 
-	// add extra transalations
+	// add extra translations
 	incomeSourceNames["address"] = "A"
 	incomeAllAliases = append(incomeAllAliases, "address")
 }
@@ -62,73 +62,85 @@ func (r *Income) MarshalJSON() ([]byte, error) {
 
 func (c *Income) MarshalJSONVerbose() ([]byte, error) {
 	inc := struct {
-		RowId                 uint64  `json:"row_id"`
-		Cycle                 int64   `json:"cycle"`
-		AccountId             uint64  `json:"account_id"`
-		Address               string  `json:"address"`
-		Rolls                 int64   `json:"rolls"`
-		Balance               float64 `json:"balance"`
-		Delegated             float64 `json:"delegated"`
-		NDelegations          int64   `json:"n_delegations"`
-		NBakingRights         int64   `json:"n_baking_rights"`
-		NEndorsingRights      int64   `json:"n_endorsing_rights"`
-		Luck                  float64 `json:"luck"`
-		LuckPercent           float64 `json:"luck_percent"`
-		EfficiencyPercent     float64 `json:"efficiency_percent"`
-		NBlocksBaked          int64   `json:"n_blocks_baked"`
-		NBlocksLost           int64   `json:"n_blocks_lost"`
-		NBlocksStolen         int64   `json:"n_blocks_stolen"`
-		NSlotsEndorsed        int64   `json:"n_slots_endorsed"`
-		NSlotsMissed          int64   `json:"n_slots_missed"`
-		NSeedsRevealed        int64   `json:"n_seeds_revealed"`
-		ExpectedIncome        float64 `json:"expected_income"`
-		ExpectedBonds         float64 `json:"expected_bonds"`
-		TotalIncome           float64 `json:"total_income"`
-		TotalBonds            float64 `json:"total_bonds"`
-		BakingIncome          float64 `json:"baking_income"`
-		EndorsingIncome       float64 `json:"endorsing_income"`
-		DoubleBakingIncome    float64 `json:"double_baking_income"`
-		DoubleEndorsingIncome float64 `json:"double_endorsing_income"`
-		SeedIncome            float64 `json:"seed_income"`
-		FeesIncome            float64 `json:"fees_income"`
-		LostBakingIncome      float64 `json:"lost_baking_income"`
-		StolenBakingIncome    float64 `json:"stolen_baking_income"`
-		SlashedIncome         float64 `json:"slashed_income"`
-		MissedEndorsingIncome float64 `json:"missed_endorsing_income"`
+		RowId                  uint64  `json:"row_id"`
+		Cycle                  int64   `json:"cycle"`
+		AccountId              uint64  `json:"account_id"`
+		Address                string  `json:"address"`
+		Rolls                  int64   `json:"rolls"`
+		Balance                float64 `json:"balance"`
+		Delegated              float64 `json:"delegated"`
+		NDelegations           int64   `json:"n_delegations"`
+		NBakingRights          int64   `json:"n_baking_rights"`
+		NEndorsingRights       int64   `json:"n_endorsing_rights"`
+		Luck                   float64 `json:"luck"`
+		LuckPct                float64 `json:"luck_percent"`
+		ContributionPct        float64 `json:"contribution_percent"`
+		PerformancePct         float64 `json:"performance_percent"`
+		NBlocksBaked           int64   `json:"n_blocks_baked"`
+		NBlocksLost            int64   `json:"n_blocks_lost"`
+		NBlocksStolen          int64   `json:"n_blocks_stolen"`
+		NSlotsEndorsed         int64   `json:"n_slots_endorsed"`
+		NSlotsMissed           int64   `json:"n_slots_missed"`
+		NSeedsRevealed         int64   `json:"n_seeds_revealed"`
+		ExpectedIncome         float64 `json:"expected_income"`
+		ExpectedBonds          float64 `json:"expected_bonds"`
+		TotalIncome            float64 `json:"total_income"`
+		TotalBonds             float64 `json:"total_bonds"`
+		BakingIncome           float64 `json:"baking_income"`
+		EndorsingIncome        float64 `json:"endorsing_income"`
+		DoubleBakingIncome     float64 `json:"double_baking_income"`
+		DoubleEndorsingIncome  float64 `json:"double_endorsing_income"`
+		SeedIncome             float64 `json:"seed_income"`
+		FeesIncome             float64 `json:"fees_income"`
+		MissedBakingIncome     float64 `json:"missed_baking_income"`
+		MissedEndorsingIncome  float64 `json:"missed_endorsing_income"`
+		StolenBakingIncome     float64 `json:"stolen_baking_income"`
+		TotalLost              float64 `json:"total_lost"`
+		LostAccusationFees     float64 `json:"lost_accusation_fees"`
+		LostAccusationRewards  float64 `json:"lost_accusation_rewards"`
+		LostAccusationDeposits float64 `json:"lost_accusation_deposits"`
+		LostRevelationFees     float64 `json:"lost_revelation_fees"`
+		LostRevelationRewards  float64 `json:"lost_revelation_rewards"`
 	}{
-		RowId:                 c.RowId,
-		Cycle:                 c.Cycle,
-		AccountId:             c.AccountId.Value(),
-		Address:               lookupAddress(c.ctx, c.AccountId).String(),
-		Rolls:                 c.Rolls,
-		Balance:               c.params.ConvertValue(c.Balance),
-		Delegated:             c.params.ConvertValue(c.Delegated),
-		NDelegations:          c.NDelegations,
-		NBakingRights:         c.NBakingRights,
-		NEndorsingRights:      c.NEndorsingRights,
-		Luck:                  c.params.ConvertValue(c.Luck),
-		LuckPercent:           c.LuckPercent,
-		EfficiencyPercent:     c.EfficiencyPercent,
-		NBlocksBaked:          c.NBlocksBaked,
-		NBlocksLost:           c.NBlocksLost,
-		NBlocksStolen:         c.NBlocksStolen,
-		NSlotsEndorsed:        c.NSlotsEndorsed,
-		NSlotsMissed:          c.NSlotsMissed,
-		NSeedsRevealed:        c.NSeedsRevealed,
-		ExpectedIncome:        c.params.ConvertValue(c.ExpectedIncome),
-		ExpectedBonds:         c.params.ConvertValue(c.ExpectedBonds),
-		TotalIncome:           c.params.ConvertValue(c.TotalIncome),
-		TotalBonds:            c.params.ConvertValue(c.TotalBonds),
-		BakingIncome:          c.params.ConvertValue(c.BakingIncome),
-		EndorsingIncome:       c.params.ConvertValue(c.EndorsingIncome),
-		DoubleBakingIncome:    c.params.ConvertValue(c.DoubleBakingIncome),
-		DoubleEndorsingIncome: c.params.ConvertValue(c.DoubleEndorsingIncome),
-		SeedIncome:            c.params.ConvertValue(c.SeedIncome),
-		FeesIncome:            c.params.ConvertValue(c.FeesIncome),
-		LostBakingIncome:      c.params.ConvertValue(c.LostBakingIncome),
-		StolenBakingIncome:    c.params.ConvertValue(c.StolenBakingIncome),
-		SlashedIncome:         c.params.ConvertValue(c.SlashedIncome),
-		MissedEndorsingIncome: c.params.ConvertValue(c.MissedEndorsingIncome),
+		RowId:                  c.RowId,
+		Cycle:                  c.Cycle,
+		AccountId:              c.AccountId.Value(),
+		Address:                lookupAddress(c.ctx, c.AccountId).String(),
+		Rolls:                  c.Rolls,
+		Balance:                c.params.ConvertValue(c.Balance),
+		Delegated:              c.params.ConvertValue(c.Delegated),
+		NDelegations:           c.NDelegations,
+		NBakingRights:          c.NBakingRights,
+		NEndorsingRights:       c.NEndorsingRights,
+		Luck:                   c.params.ConvertValue(c.Luck),
+		LuckPct:                float64(c.LuckPct) / 100,
+		ContributionPct:        float64(c.ContributionPct) / 100,
+		PerformancePct:         float64(c.PerformancePct) / 100,
+		NBlocksBaked:           c.NBlocksBaked,
+		NBlocksLost:            c.NBlocksLost,
+		NBlocksStolen:          c.NBlocksStolen,
+		NSlotsEndorsed:         c.NSlotsEndorsed,
+		NSlotsMissed:           c.NSlotsMissed,
+		NSeedsRevealed:         c.NSeedsRevealed,
+		ExpectedIncome:         c.params.ConvertValue(c.ExpectedIncome),
+		ExpectedBonds:          c.params.ConvertValue(c.ExpectedBonds),
+		TotalIncome:            c.params.ConvertValue(c.TotalIncome),
+		TotalBonds:             c.params.ConvertValue(c.TotalBonds),
+		BakingIncome:           c.params.ConvertValue(c.BakingIncome),
+		EndorsingIncome:        c.params.ConvertValue(c.EndorsingIncome),
+		DoubleBakingIncome:     c.params.ConvertValue(c.DoubleBakingIncome),
+		DoubleEndorsingIncome:  c.params.ConvertValue(c.DoubleEndorsingIncome),
+		SeedIncome:             c.params.ConvertValue(c.SeedIncome),
+		FeesIncome:             c.params.ConvertValue(c.FeesIncome),
+		MissedBakingIncome:     c.params.ConvertValue(c.MissedBakingIncome),
+		MissedEndorsingIncome:  c.params.ConvertValue(c.MissedEndorsingIncome),
+		StolenBakingIncome:     c.params.ConvertValue(c.StolenBakingIncome),
+		TotalLost:              c.params.ConvertValue(c.TotalLost),
+		LostAccusationFees:     c.params.ConvertValue(c.LostAccusationFees),
+		LostAccusationRewards:  c.params.ConvertValue(c.LostAccusationRewards),
+		LostAccusationDeposits: c.params.ConvertValue(c.LostAccusationDeposits),
+		LostRevelationFees:     c.params.ConvertValue(c.LostRevelationFees),
+		LostRevelationRewards:  c.params.ConvertValue(c.LostRevelationRewards),
 	}
 	return json.Marshal(inc)
 }
@@ -162,9 +174,11 @@ func (c *Income) MarshalJSONBrief() ([]byte, error) {
 		case "luck":
 			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.Luck), 'f', dec, 64)
 		case "luck_percent":
-			buf = strconv.AppendFloat(buf, c.LuckPercent, 'f', dec, 64)
-		case "efficiency_percent":
-			buf = strconv.AppendFloat(buf, c.EfficiencyPercent, 'f', dec, 64)
+			buf = strconv.AppendFloat(buf, float64(c.LuckPct)/100, 'f', 2, 64)
+		case "contribution_percent":
+			buf = strconv.AppendFloat(buf, float64(c.ContributionPct)/100, 'f', 2, 64)
+		case "performance_percent":
+			buf = strconv.AppendFloat(buf, float64(c.PerformancePct)/100, 'f', 2, 64)
 		case "n_blocks_baked":
 			buf = strconv.AppendInt(buf, int64(c.NBlocksBaked), 10)
 		case "n_blocks_lost":
@@ -197,14 +211,24 @@ func (c *Income) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.SeedIncome), 'f', dec, 64)
 		case "fees_income":
 			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.FeesIncome), 'f', dec, 64)
-		case "lost_baking_income":
-			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.LostBakingIncome), 'f', dec, 64)
-		case "stolen_baking_income":
-			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.StolenBakingIncome), 'f', dec, 64)
-		case "slashed_income":
-			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.SlashedIncome), 'f', dec, 64)
+		case "missed_baking_income":
+			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.MissedBakingIncome), 'f', dec, 64)
 		case "missed_endorsing_income":
 			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.MissedEndorsingIncome), 'f', dec, 64)
+		case "stolen_baking_income":
+			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.StolenBakingIncome), 'f', dec, 64)
+		case "total_lost":
+			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.TotalLost), 'f', dec, 64)
+		case "lost_accusation_fees":
+			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.LostAccusationFees), 'f', dec, 64)
+		case "lost_accusation_rewards":
+			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.LostAccusationRewards), 'f', dec, 64)
+		case "lost_accusation_deposits":
+			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.LostAccusationDeposits), 'f', dec, 64)
+		case "lost_revelation_fees":
+			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.LostRevelationFees), 'f', dec, 64)
+		case "lost_revelation_rewards":
+			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.LostRevelationRewards), 'f', dec, 64)
 		default:
 			continue
 		}
@@ -244,9 +268,11 @@ func (c *Income) MarshalCSV() ([]string, error) {
 		case "luck":
 			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.Luck), 'f', dec, 64)
 		case "luck_percent":
-			res[i] = strconv.FormatFloat(c.LuckPercent, 'f', dec, 64)
-		case "efficiency_percent":
-			res[i] = strconv.FormatFloat(c.EfficiencyPercent, 'f', dec, 64)
+			res[i] = strconv.FormatFloat(float64(c.LuckPct)/100, 'f', 2, 64)
+		case "contribution_percent":
+			res[i] = strconv.FormatFloat(float64(c.ContributionPct)/100, 'f', 2, 64)
+		case "performance_percent":
+			res[i] = strconv.FormatFloat(float64(c.PerformancePct)/100, 'f', 2, 64)
 		case "n_blocks_baked":
 			res[i] = strconv.FormatInt(int64(c.NBlocksBaked), 10)
 		case "n_blocks_lost":
@@ -279,14 +305,24 @@ func (c *Income) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.SeedIncome), 'f', dec, 64)
 		case "fees_income":
 			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.FeesIncome), 'f', dec, 64)
-		case "lost_baking_income":
-			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.LostBakingIncome), 'f', dec, 64)
-		case "stolen_baking_income":
-			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.StolenBakingIncome), 'f', dec, 64)
-		case "slashed_income":
-			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.SlashedIncome), 'f', dec, 64)
+		case "missed_baking_income":
+			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.MissedBakingIncome), 'f', dec, 64)
 		case "missed_endorsing_income":
 			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.MissedEndorsingIncome), 'f', dec, 64)
+		case "stolen_baking_income":
+			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.StolenBakingIncome), 'f', dec, 64)
+		case "total_lost":
+			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.TotalLost), 'f', dec, 64)
+		case "lost_accusation_fees":
+			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.LostAccusationFees), 'f', dec, 64)
+		case "lost_accusation_rewards":
+			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.LostAccusationRewards), 'f', dec, 64)
+		case "lost_accusation_deposits":
+			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.LostAccusationDeposits), 'f', dec, 64)
+		case "lost_revelation_fees":
+			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.LostRevelationFees), 'f', dec, 64)
+		case "lost_revelation_rewards":
+			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.LostRevelationRewards), 'f', dec, 64)
 		default:
 			continue
 		}
@@ -328,7 +364,7 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	q := pack.Query{
 		Name:       ctx.RequestID,
 		Fields:     table.Fields().Select(srcNames...),
-		Limit:      args.Limit,
+		Limit:      int(args.Limit),
 		Conditions: make(pack.ConditionList, 0),
 		Order:      args.Order,
 	}
@@ -400,10 +436,10 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
-				for _, a := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(a)
+				for _, v := range strings.Split(val[0], ",") {
+					addr, err := chain.ParseAddress(v)
 					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
@@ -445,16 +481,34 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 						currentCycle := params.CycleFromHeight(ctx.Crawler.Height())
 						v = strconv.FormatInt(int64(currentCycle), 10)
 					}
+
+				case "luck_percent", "contribution_percent", "performance_percent":
+					fvals := make([]string, 0)
+					for _, vv := range strings.Split(v, ",") {
+						fval, err := strconv.ParseFloat(vv, 64)
+						if err != nil {
+							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, vv), err))
+						}
+						fvals = append(fvals, strconv.FormatInt(int64(fval*10000), 10))
+					}
+					v = strings.Join(fvals, ",")
+
 				case "luck", "balance", "delegated", "expected_income", "expected_bonds",
 					"total_income", "total_bonds", "baking_income", "endorsing_income",
 					"double_baking_income", "double_endorsing_income", "seed_income",
-					"fees_income", "lost_baking_income", "stolen_baking_income",
-					"slashed_income", "missed_endorsing_income":
-					fval, err := strconv.ParseFloat(v, 64)
-					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
+					"fees_income", "missed_baking_income", "missed_endorsing_income",
+					"stolen_baking_income", "total_lost", "lost_accusation_fees",
+					"lost_accusation_rewards", "lost_accusation_deposits",
+					"lost_revelation_fees", "lost_revelation_rewards":
+					fvals := make([]string, 0)
+					for _, vv := range strings.Split(v, ",") {
+						fval, err := strconv.ParseFloat(vv, 64)
+						if err != nil {
+							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, vv), err))
+						}
+						fvals = append(fvals, strconv.FormatInt(params.ConvertAmount(fval), 10))
 					}
-					v = strconv.FormatInt(params.ConvertAmount(fval), 10)
+					v = strings.Join(fvals, ",")
 				}
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
@@ -519,7 +573,7 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			}
 			count++
 			lastId = inc.RowId
-			if args.Limit > 0 && count == args.Limit {
+			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
 			return nil
@@ -545,7 +599,7 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				count++
 				lastId = inc.RowId
-				if args.Limit > 0 && count == args.Limit {
+				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}
 				return nil

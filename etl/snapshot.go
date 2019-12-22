@@ -5,6 +5,7 @@ package etl
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,17 +15,65 @@ import (
 	"blockwatch.cc/packdb/util"
 )
 
+func (c *Crawler) SnapshotRequest(ctx context.Context) error {
+	if c.snap == nil {
+		return fmt.Errorf("snapshots disabled")
+	}
+	c.Lock()
+	if c.snapch != nil {
+		return fmt.Errorf("snapshot in progress")
+	}
+	// snapshot under lock held
+	if c.state == STATE_SYNCHRONIZED {
+		defer c.Unlock()
+		return c.Snapshot(ctx)
+	}
+
+	log.Infof("Scheduling snapshot.")
+	c.snapch = make(chan error)
+
+	// no more lock required
+	c.Unlock()
+
+	// prevent shutdown
+	c.wg.Add(1)
+	defer c.wg.Done()
+
+	// wait for snapshot to finish (or connection to close)
+	select {
+	case <-ctx.Done():
+		c.snapch = nil
+		return ctx.Err()
+	case err := <-c.snapch:
+		c.snapch = nil
+		return err
+	}
+	return nil
+}
+
 func (c *Crawler) MaybeSnapshot(ctx context.Context) error {
 	if c.snap == nil {
 		return nil
+	}
+
+	var (
+		err   error
+		match bool
+	)
+	snapch := c.snapch
+	if snapch != nil {
+		match = true
+		defer func() {
+			snapch <- err
+			close(snapch)
+		}()
 	}
 
 	// use current block
 	tip := c.Tip()
 
 	// check pre-condition (all conditions are logical OR)
-	var match bool
-	if len(c.snap.Blocks) > 0 {
+	if !match && len(c.snap.Blocks) > 0 {
 		for _, v := range c.snap.Blocks {
 			if v == tip.BestHeight {
 				match = true
@@ -41,7 +90,8 @@ func (c *Crawler) MaybeSnapshot(ctx context.Context) error {
 		return nil
 	}
 
-	return c.Snapshot(ctx)
+	err = c.Snapshot(ctx)
+	return err
 }
 
 func (c *Crawler) Snapshot(ctx context.Context) error {
@@ -69,8 +119,8 @@ func (c *Crawler) Snapshot(ctx context.Context) error {
 		return err
 	}
 
-	// dump index and report db's
-	dbs := []*pack.DB{c.reporter.db}
+	// dump index db's
+	dbs := make([]*pack.DB, 0)
 	for _, v := range c.indexer.indexes {
 		dbs = append(dbs, v.DB())
 	}

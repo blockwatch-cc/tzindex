@@ -10,16 +10,16 @@ import (
 )
 
 type Registry struct {
-	byProtocol map[string]*chain.Params
-	byVersion  map[int]*chain.Params
-	inOrder    []*chain.Params
+	byProtocol   map[string]*chain.Params
+	byDeployment map[int]*chain.Params
+	inOrder      []*chain.Params
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
-		byProtocol: make(map[string]*chain.Params),
-		byVersion:  make(map[int]*chain.Params),
-		inOrder:    make([]*chain.Params, 0),
+		byProtocol:   make(map[string]*chain.Params),
+		byDeployment: make(map[int]*chain.Params),
+		inOrder:      make([]*chain.Params, 0),
 	}
 }
 
@@ -30,9 +30,11 @@ func (r *Registry) Register(p *chain.Params) error {
 	}
 	_, isUpdate := r.byProtocol[p.Protocol.String()]
 	r.byProtocol[p.Protocol.String()] = p
-	r.byVersion[p.Version] = p
+	r.byDeployment[p.Deployment] = p
 	if !isUpdate {
 		r.inOrder = append(r.inOrder, p)
+	} else {
+		r.inOrder[len(r.inOrder)-1] = p
 	}
 	return nil
 }
@@ -46,7 +48,7 @@ func (r *Registry) GetParams(h chain.ProtocolHash) (*chain.Params, error) {
 }
 
 func (r *Registry) GetParamsByHeight(height int64) *chain.Params {
-	for _, v := range r.byVersion {
+	for _, v := range r.byDeployment {
 		if height >= v.StartHeight && (v.EndHeight < 0 || height <= v.EndHeight) {
 			return v
 		}
@@ -54,9 +56,9 @@ func (r *Registry) GetParamsByHeight(height int64) *chain.Params {
 	return r.GetParamsLatest()
 }
 
-func (r *Registry) GetParamsByVersion(v int) (*chain.Params, error) {
-	if p, ok := r.byVersion[v]; !ok {
-		return nil, fmt.Errorf("unknown protocol version %d", v)
+func (r *Registry) GetParamsByDeployment(v int) (*chain.Params, error) {
+	if p, ok := r.byDeployment[v]; !ok {
+		return nil, fmt.Errorf("unknown protocol deployment %d", v)
 	} else {
 		return p, nil
 	}

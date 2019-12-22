@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"blockwatch.cc/packdb/pack"
@@ -31,6 +32,11 @@ const (
 var (
 	start string // time
 	end   string // time
+
+	// rpc-specific options
+	rpcurl  string
+	rpcuser string
+	rpcpass string
 )
 
 var (
@@ -92,10 +98,9 @@ func openReadOnlyBlockchain() (*etl.Crawler, error) {
 	})
 
 	bc := etl.NewCrawler(etl.CrawlerConfig{
-		DB:       statedb,
-		Indexer:  indexer,
-		Reporter: nil,
-		Client:   nil,
+		DB:      statedb,
+		Indexer: indexer,
+		Client:  nil,
 	})
 
 	ctx, cancel = context.WithCancel(context.Background())
@@ -137,10 +142,9 @@ func openReadWriteBlockchain() (*etl.Crawler, error) {
 	})
 
 	bc := etl.NewCrawler(etl.CrawlerConfig{
-		DB:       statedb,
-		Indexer:  indexer,
-		Reporter: nil,
-		Client:   nil,
+		DB:      statedb,
+		Indexer: indexer,
+		Client:  nil,
 	})
 	ctx, cancel = context.WithCancel(context.Background())
 	if err := bc.Init(ctx, etl.MODE_INFO); err != nil {
@@ -225,4 +229,29 @@ func newRPCClient() (*rpc.Client, error) {
 	}
 	rpcclient.UserAgent = Ua()
 	return rpcclient, nil
+}
+
+func parseRPCFlags() error {
+	// overwrite config from flags
+	if rpcurl != "" {
+		u, err := url.Parse(rpcurl)
+		if err != nil {
+			return fmt.Errorf("invalid rpc url: %v", err)
+		}
+		fields := strings.Split(u.Host, ":")
+		if len(fields[0]) > 0 {
+			config.Set("rpc.host", fields[0])
+		}
+		if len(fields) > 1 && len(fields[1]) > 0 {
+			config.Set("rpc.port", fields[1])
+		}
+		config.Set("rpc.disable_tls", u.Scheme != "https")
+	}
+	if rpcuser != "" {
+		config.Set("rpc.user", rpcuser)
+	}
+	if rpcpass != "" {
+		config.Set("rpc.pass", rpcpass)
+	}
+	return nil
 }

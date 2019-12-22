@@ -24,9 +24,9 @@ type TransactionOp struct {
 
 // TransactionOpMetadata represents a transaction operation metadata
 type TransactionOpMetadata struct {
-	BalanceUpdates  BalanceUpdates    `json:"balance_updates"` // fee-related
-	Result          TransactionResult `json:"operation_result"`
-	InternalResults []*InternalResult `json:"internal_operation_results,omitempty"`
+	BalanceUpdates  BalanceUpdates     `json:"balance_updates"` // fee-related
+	Result          *TransactionResult `json:"operation_result"`
+	InternalResults []*InternalResult  `json:"internal_operation_results,omitempty"`
 }
 
 // TransactionResult represents a transaction result
@@ -49,7 +49,7 @@ type InternalResult struct {
 	GenericOp
 	Source      chain.Address         `json:"source"`
 	Nonce       int64                 `json:"nonce"`
-	Result      TransactionResult     `json:"result"`
+	Result      *TransactionResult    `json:"result"`
 	Destination *chain.Address        `json:"destination,omitempty"` // transaction
 	Delegate    *chain.Address        `json:"delegate,omitempty"`    // delegation
 	Parameters  *micheline.Parameters `json:"parameters,omitempty"`  // transaction

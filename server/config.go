@@ -15,14 +15,13 @@ import (
 )
 
 type Config struct {
-	Crawler  *etl.Crawler
-	Indexer  *etl.Indexer
-	Reporter *etl.Reporter
-	Client   *rpc.Client
-	Http     HttpConfig
+	Crawler *etl.Crawler
+	Indexer *etl.Indexer
+	Client  *rpc.Client
+	Http    HttpConfig
 }
 
-func (c Config) ClampList(count int) int {
+func (c Config) ClampList(count uint) uint {
 	def := c.Http.DefaultListCount
 	max := c.Http.MaxListCount
 	if count <= 0 {
@@ -46,7 +45,7 @@ func (c Config) ClampList64(count int64) int64 {
 	return count
 }
 
-func (c Config) ClampExplore(count int) int {
+func (c Config) ClampExplore(count uint) uint {
 	def := c.Http.DefaultExploreCount
 	max := c.Http.MaxExploreCount
 	if count <= 0 {
@@ -83,10 +82,10 @@ type HttpConfig struct {
 	WriteTimeout        time.Duration `json:"write_timeout"`
 	KeepAlive           time.Duration `json:"keep_alive"`
 	ShutdownTimeout     time.Duration `json:"shutdown_timeout"`
-	DefaultListCount    int           `json:"default_list_count"`
-	MaxListCount        int           `json:"max_list_count"`
-	DefaultExploreCount int           `json:"default_explore_count"`
-	MaxExploreCount     int           `json:"max_explore_count"`
+	DefaultListCount    uint          `json:"default_list_count"`
+	MaxListCount        uint          `json:"max_list_count"`
+	DefaultExploreCount uint          `json:"default_explore_count"`
+	MaxExploreCount     uint          `json:"max_explore_count"`
 	CorsEnable          bool          `json:"cors_enable"`
 	CorsOrigin          string        `json:"cors_origin"`
 	CorsAllowHeaders    string        `json:"cors_allow_headers"`

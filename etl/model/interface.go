@@ -5,7 +5,6 @@ package model
 
 import (
 	"context"
-	"time"
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzindex/chain"
@@ -98,38 +97,5 @@ type BlockIndexer interface {
 	DB() *pack.DB
 
 	// returns the list of database tables used by the indexer
-	Tables() []*pack.Table
-}
-
-// BlockReporter provides a generic interface for reports that is managed by a
-// etl.Reporter.
-type BlockReporter interface {
-	// Name returns the human-readable name of the report.
-	Name() string
-
-	// Name returns the unique key of the report.
-	Key() string
-
-	// IsEOD returns if the report is an end-of-day only report
-	IsEOD() bool
-
-	// init tables
-	Init(context.Context, BlockCrawler, *pack.DB) error
-
-	// AddBlock is invoked when the report manager is notified that a new
-	// block has been connected to the main chain.
-	AddBlock(context.Context, *Block) error
-
-	// RemoveBlock is invoked when the report manager is notified that a
-	// block has been disconnected from the main chain.
-	RemoveBlock(context.Context, *Block, time.Time) error
-
-	// Re-generates a report for a specific date
-	FixReport(context.Context, time.Time, int64) error
-
-	// release resources, store state
-	Close() error
-
-	// returns the specified database table or nil when no table is used
 	Tables() []*pack.Table
 }

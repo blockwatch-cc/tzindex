@@ -18,7 +18,6 @@ import (
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
-	"blockwatch.cc/tzindex/etl/report"
 	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 	"github.com/echa/config"
@@ -30,17 +29,12 @@ var (
 	norpc   bool
 	noapi   bool
 	stop    int64
-	host    string
-	user    string
-	pass    string
-	port    string
 )
 
 func init() {
-	runCmd.Flags().StringVar(&host, "host", "127.0.0.1", "RPC hostname")
-	runCmd.Flags().StringVar(&user, "user", "", "RPC username")
-	runCmd.Flags().StringVar(&pass, "pass", "", "RPC password")
-	runCmd.Flags().StringVar(&port, "port", "", "RPC port")
+	runCmd.Flags().StringVar(&rpcurl, "rpcurl", "http://127.0.0.1:8732", "RPC url")
+	runCmd.Flags().StringVar(&rpcuser, "rpcuser", "", "RPC username")
+	runCmd.Flags().StringVar(&rpcpass, "rpcpass", "", "RPC password")
 	runCmd.Flags().BoolVar(&norpc, "norpc", false, "disable RPC client")
 	runCmd.Flags().BoolVar(&noapi, "noapi", false, "disable API server")
 	runCmd.Flags().BoolVar(&noindex, "noindex", false, "disable indexing")
@@ -62,17 +56,8 @@ var runCmd = &cobra.Command{
 
 func runServer(args []string) error {
 	// overwrite config from flags
-	if host != "" {
-		config.Set("rpc.host", host)
-	}
-	if user != "" {
-		config.Set("rpc.user", user)
-	}
-	if pass != "" {
-		config.Set("rpc.pass", pass)
-	}
-	if port != "" {
-		config.Set("rpc.port", port)
+	if err := parseRPCFlags(); err != nil {
+		return err
 	}
 
 	// set user agent in library client
@@ -101,6 +86,8 @@ func runServer(args []string) error {
 		if err != nil {
 			return err
 		}
+	} else {
+		noindex = true
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -127,26 +114,9 @@ func runServer(args []string) error {
 	})
 	defer indexer.Close()
 
-	// reports depend on index
-	var reporter *etl.Reporter
-	if !noindex {
-		reporter = etl.NewReporter(etl.ReporterConfig{
-			StateDB: statedb,
-			DBPath:  pathname,
-			DBOpts:  DBOpts(engine, false, unsafe),
-			Reports: []model.BlockReporter{
-				report.NewSupplyReport(),
-				report.NewAccountReport(),
-				report.NewOpReport(),
-			},
-		})
-		defer reporter.Close()
-	}
-
 	crawler := etl.NewCrawler(etl.CrawlerConfig{
 		DB:        statedb,
 		Indexer:   indexer,
-		Reporter:  reporter,
 		Client:    rpcclient,
 		Queue:     config.GetInt("crawler.queue"),
 		StopBlock: stop,
@@ -173,10 +143,9 @@ func runServer(args []string) error {
 	// setup HTTP server
 	if !noapi {
 		srv, err := server.New(&server.Config{
-			Crawler:  crawler,
-			Indexer:  indexer,
-			Reporter: reporter,
-			Client:   rpcclient,
+			Crawler: crawler,
+			Indexer: indexer,
+			Client:  rpcclient,
 			Http: server.HttpConfig{
 				Addr:                config.GetString("server.addr"),
 				Port:                config.GetInt("server.port"),
@@ -189,10 +158,10 @@ func runServer(args []string) error {
 				WriteTimeout:        config.GetDuration("server.write_timeout"),
 				KeepAlive:           config.GetDuration("server.keepalive"),
 				ShutdownTimeout:     config.GetDuration("server.shutdown_timeout"),
-				DefaultListCount:    config.GetInt("server.default_list_count"),
-				MaxListCount:        config.GetInt("server.max_list_count"),
-				DefaultExploreCount: config.GetInt("server.default_explore_count"),
-				MaxExploreCount:     config.GetInt("server.max_explore_count"),
+				DefaultListCount:    config.GetUint("server.default_list_count"),
+				MaxListCount:        config.GetUint("server.max_list_count"),
+				DefaultExploreCount: config.GetUint("server.default_explore_count"),
+				MaxExploreCount:     config.GetUint("server.max_explore_count"),
 				CorsEnable:          config.GetBool("server.cors_enable"),
 				CorsOrigin:          config.GetString("server.cors_origin"),
 				CorsAllowHeaders:    config.GetString("server.cors_allow_headers"),

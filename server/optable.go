@@ -110,6 +110,9 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		BigMapDiff   string          `json:"big_map_diff,omitempty"`
 		Errors       json.RawMessage `json:"errors,omitempty"`
 		TDD          float64         `json:"days_destroyed"`
+		BranchId     uint64          `json:"branch_id"`
+		BranchHeight int64           `json:"branch_height"`
+		BranchDepth  int64           `json:"branch_depth"`
 	}{
 		RowId:        o.RowId.Value(),
 		Timestamp:    util.UnixMilliNonZero(o.Timestamp),
@@ -151,6 +154,9 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		BigMapDiff:   "",
 		Errors:       nil,
 		TDD:          o.TDD,
+		BranchId:     o.BranchId,
+		BranchHeight: o.BranchHeight,
+		BranchDepth:  o.BranchDepth,
 	}
 
 	if len(o.Parameters) > 0 {
@@ -307,6 +313,12 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 			}
 		case "days_destroyed":
 			buf = strconv.AppendFloat(buf, o.TDD, 'f', -1, 64)
+		case "branch_id":
+			buf = strconv.AppendUint(buf, o.BranchId, 10)
+		case "branch_height":
+			buf = strconv.AppendInt(buf, o.BranchHeight, 10)
+		case "branch_depth":
+			buf = strconv.AppendInt(buf, o.BranchDepth, 10)
 		default:
 			continue
 		}
@@ -326,7 +338,7 @@ func (o *Op) MarshalCSV() ([]string, error) {
 		case "row_id":
 			res[i] = strconv.FormatUint(o.RowId.Value(), 10)
 		case "time":
-			res[i] = strconv.FormatInt(util.UnixMilliNonZero(o.Timestamp), 10)
+			res[i] = strconv.Quote(o.Timestamp.Format(time.RFC3339))
 		case "height":
 			res[i] = strconv.FormatInt(o.Height, 10)
 		case "cycle":
@@ -403,6 +415,12 @@ func (o *Op) MarshalCSV() ([]string, error) {
 			res[i] = strconv.Quote(o.Errors)
 		case "days_destroyed":
 			res[i] = strconv.FormatFloat(o.TDD, 'f', -1, 64)
+		case "branch_id":
+			res[i] = strconv.FormatUint(o.BranchId, 10)
+		case "branch_height":
+			res[i] = strconv.FormatInt(o.BranchHeight, 10)
+		case "branch_depth":
+			res[i] = strconv.FormatInt(o.BranchDepth, 10)
 		default:
 			continue
 		}
@@ -459,7 +477,7 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	q := pack.Query{
 		Name:       ctx.RequestID,
 		Fields:     table.Fields().Select(srcNames...),
-		Limit:      args.Limit,
+		Limit:      int(args.Limit),
 		Conditions: make(pack.ConditionList, 0),
 		Order:      args.Order,
 	}
@@ -671,11 +689,15 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 						v = strconv.FormatInt(int64(currentCycle), 10)
 					}
 				case "volume", "reward", "fee", "deposit", "burned":
-					fval, err := strconv.ParseFloat(v, 64)
-					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
+					fvals := make([]string, 0)
+					for _, vv := range strings.Split(v, ",") {
+						fval, err := strconv.ParseFloat(vv, 64)
+						if err != nil {
+							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, vv), err))
+						}
+						fvals = append(fvals, strconv.FormatInt(params.ConvertAmount(fval), 10))
 					}
-					v = strconv.FormatInt(params.ConvertAmount(fval), 10)
+					v = strings.Join(fvals, ",")
 				}
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
@@ -712,7 +734,7 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		for _, v := range []string{"S", "R", "M", "D"} {
 			// get a unique copy of sender and receiver id columns (clip on request limit)
 			col, _ := res.Uint64Column(v)
-			find = vec.UniqueUint64Slice(append(find, col[:util.Min(len(col), args.Limit)]...))
+			find = vec.UniqueUint64Slice(append(find, col[:util.Min(len(col), int(args.Limit))]...))
 		}
 
 		// lookup accounts from id
@@ -788,7 +810,7 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			}
 			count++
 			lastId = op.RowId.Value()
-			if args.Limit > 0 && count == args.Limit {
+			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
 			return nil
@@ -814,7 +836,7 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				count++
 				lastId = op.RowId.Value()
-				if args.Limit > 0 && count == args.Limit {
+				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}
 				return nil
