@@ -33,6 +33,10 @@ func NewScript() *Script {
 	}
 }
 
+func (s *Script) StorageType() BigMapType {
+	return BigMapType(*s.Code.Storage.Args[0])
+}
+
 func (c Code) MarshalJSON() ([]byte, error) {
 	root := &Prim{
 		Type: PrimSequence,

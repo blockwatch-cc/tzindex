@@ -1,5 +1,32 @@
 # Changelog
 
+### FIXES
+
+### NEW EXPLORER FEATURES
+- listing account ops supports `order`, `block` and `since` query arguments
+- extended op fields `paramaters`, `storage` and `big_map_diff` to include unboxed types and values and made prim tree optional
+- added new contract endpoints
+	- `/explorer/contract/{addr}/calls` to list smart contract calls
+	- `/explorer/contract/{addr}/manager` current manager account (originator in v005)
+	- `/explorer/contract/{addr}/script` code, storage &  parameter types
+	- `/explorer/contract/{addr}/storage` current storage state
+- added contract field `bigmap_ids` to list ids of bigmaps owned by this contract
+- added bigmap endpoints
+	- `/explorer/bigmap/{id}` bigmap metadata
+	- `/explorer/bigmap/{id}/type` bigmap type definition
+	- `/explorer/bigmap/{id}/keys` list bigmap keys
+	- `/explorer/bigmap/{id}/values` list bigmap key/value pairs
+	- `/explorer/bigmap/{id}/updates` list bigmap updates
+	- `/explorer/bigmap/{id}/{key}` single bigmap value
+	- `/explorer/bigmap/{id}/{key}/updates` list updates for a single bigmap value
+
+
+### NEW TABLE FEATURES
+- added bigmap table `/tables/bigmap` to access raw bigmap updates
+
+### DEPRECATION NOTICES
+
+
 ## v5.2.0
 
 ### CLI CHANGES

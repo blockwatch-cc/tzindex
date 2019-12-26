@@ -73,8 +73,14 @@
 		},
 		"income": {
 			"cache_size": 2
-		}
-	},
+		},
+		"bigmap": {
+			"cache_size": 2
+		},
+		"bigmap_index": {
+			"cache_size": 16
+ 		}
+ 	},
 	"rpc": {
 		"host": "127.0.0.1",
 		"port": 8732,

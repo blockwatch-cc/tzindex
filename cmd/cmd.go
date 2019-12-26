@@ -104,7 +104,7 @@ func initConfig() {
 		}
 		log.Infof("Using configuration file %s", realconf)
 	} else {
-		log.Warnf("Missing config file, using default values.")
+		log.Warn("Missing config file, using default values.")
 	}
 	initLogging()
 

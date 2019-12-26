@@ -18,6 +18,7 @@ import (
 	"blockwatch.cc/tzindex/chain"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/micheline"
 )
 
 func (m *Indexer) ParamsByHeight(height int64) *chain.Params {
@@ -1431,6 +1432,41 @@ func (m *Indexer) FindLastCall(ctx context.Context, acc model.AccountID, height 
 	return op, nil
 }
 
+func (m *Indexer) ListContractBigMapIds(ctx context.Context, acc model.AccountID) ([]int64, error) {
+	table, err := m.Table(index.BigMapTableKey)
+	if err != nil {
+		return nil, err
+	}
+	q := pack.Query{
+		Name: "api.search_bigmaps",
+		Conditions: pack.ConditionList{
+			pack.Condition{
+				Field: table.Fields().Find("A"), // account_id
+				Mode:  pack.FilterModeEqual,
+				Value: acc.Value(),
+			},
+			pack.Condition{
+				Field: table.Fields().Find("a"), // action
+				Mode:  pack.FilterModeEqual,
+				Value: uint64(micheline.BigMapDiffActionAlloc), // byte -> uint
+			},
+		},
+	}
+	ids := make([]int64, 0)
+	bmi := &model.BigMapItem{}
+	err = table.Stream(ctx, q, func(r pack.Row) error {
+		if err := r.Decode(bmi); err != nil {
+			return err
+		}
+		ids = append(ids, bmi.BigMapId)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 func (m *Indexer) Flush(ctx context.Context) error {
 	for _, idx := range m.indexes {
 		for _, t := range idx.Tables() {
@@ -1755,6 +1791,251 @@ func (m *Indexer) LookupSnapshot(ctx context.Context, accId model.AccountID, cyc
 		return nil, index.ErrNoSnapshotEntry
 	}
 	return snap, nil
+}
+
+func (m *Indexer) LookupBigmap(ctx context.Context, id int64, withLast bool) (*model.BigMapItem, *model.BigMapItem, error) {
+	table, err := m.Table(index.BigMapTableKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	alloc := model.AllocBigMapItem()
+	err = table.Stream(ctx, pack.Query{
+		Name:  "api.search_bigmap",
+		Limit: 1,
+		Conditions: pack.ConditionList{
+			pack.Condition{
+				Field: table.Fields().Find("B"), // id
+				Mode:  pack.FilterModeEqual,
+				Value: id,
+			},
+			pack.Condition{
+				Field: table.Fields().Find("a"), // alloc
+				Mode:  pack.FilterModeEqual,
+				Value: uint64(micheline.BigMapDiffActionAlloc),
+			},
+		},
+	}, func(r pack.Row) error {
+		return r.Decode(alloc)
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if alloc.RowId == 0 {
+		return nil, nil, index.ErrNoBigMapEntry
+	}
+	if !withLast {
+		return alloc, nil, nil
+	}
+	last := model.AllocBigMapItem()
+	err = table.Stream(ctx, pack.Query{
+		Name:  "api.search_bigmap",
+		Order: pack.OrderDesc,
+		Limit: 1,
+		Conditions: pack.ConditionList{
+			pack.Condition{
+				Field: table.Fields().Find("B"), // id
+				Mode:  pack.FilterModeEqual,
+				Value: id,
+			},
+		},
+	}, func(r pack.Row) error {
+		return r.Decode(last)
+	})
+	return alloc, last, err
+}
+
+func (m *Indexer) ListBigMapKeys(ctx context.Context, id, height int64, keyhash chain.ExprHash, key []byte, offset, limit uint) ([]*model.BigMapItem, error) {
+	table, err := m.Table(index.BigMapTableKey)
+	if err != nil {
+		return nil, err
+	}
+	q := pack.Query{
+		Name:   "api.search_bigmap",
+		Fields: table.Fields(),
+		Conditions: pack.ConditionList{
+			pack.Condition{
+				Field: table.Fields().Find("B"), // id
+				Mode:  pack.FilterModeEqual,
+				Value: id,
+			},
+			pack.Condition{
+				Field: table.Fields().Find("a"), // action
+				Mode:  pack.FilterModeNotIn,
+				Value: []uint64{
+					uint64(micheline.BigMapDiffActionAlloc),
+					uint64(micheline.BigMapDiffActionCopy),
+				},
+			},
+		},
+	}
+	if height == 0 {
+		// rely on flags to quickly find latest state
+		q.Conditions = append(q.Conditions, pack.Condition{
+			Field: table.Fields().Find("r"), // is_replaced
+			Mode:  pack.FilterModeEqual,
+			Value: false,
+		})
+		q.Conditions = append(q.Conditions, pack.Condition{
+			Field: table.Fields().Find("d"), // is_deleted
+			Mode:  pack.FilterModeEqual,
+			Value: false,
+		})
+	} else {
+		// time-warp: ignore flags and future updates after height
+		q.Conditions = append(q.Conditions, pack.Condition{
+			Field: table.Fields().Find("h"), // height
+			Mode:  pack.FilterModeLte,
+			Value: height,
+		})
+	}
+	if keyhash.IsValid() {
+		q.Conditions = append(q.Conditions, pack.Condition{
+			Field: table.Fields().Find("H"), // hash
+			Mode:  pack.FilterModeEqual,
+			Value: keyhash.Hash.Hash,
+		})
+	} else if len(key) > 0 {
+		// log.Infof("searching key %x", key)
+		q.Conditions = append(q.Conditions, pack.Condition{
+			Field: table.Fields().Find("k"), // key
+			Mode:  pack.FilterModeEqual,
+			Value: key,
+		})
+	}
+	items := make([]*model.BigMapItem, 0)
+	err = table.Stream(ctx, q, func(r pack.Row) error {
+		var b *model.BigMapItem
+		if height > 0 {
+			// time-warp check requires to decode first
+			b = model.AllocBigMapItem()
+			if err := r.Decode(b); err != nil {
+				return err
+			}
+			// skip values that were updated before height
+			// FIXME: when the database supports OR conditions, this can be
+			// done more efficiently with a condtion updated.eq=0 || updated.gt=height
+			if b.Updated > 0 && b.Updated <= height {
+				b.Free()
+				return nil
+			}
+			// skip values that were removed
+			if b.IsDeleted {
+				b.Free()
+				return nil
+			}
+			// skip matches when offset is used
+			if offset > 0 {
+				offset--
+				b.Free()
+				return nil
+			}
+		} else {
+			// for non-time-warp it's more efficient to skip before decoding
+			if offset > 0 {
+				offset--
+				return nil
+			}
+			b = model.AllocBigMapItem()
+			if err := r.Decode(b); err != nil {
+				b.Free()
+				return err
+			}
+		}
+
+		// log.Infof("Found item %s %d %d key %x", b.Action, b.BigMapId, b.RowId, b.Key)
+		items = append(items, b)
+		if len(items) == int(limit) {
+			return io.EOF
+		}
+		if len(items)%128 == 0 {
+			if util.InterruptRequested(ctx) {
+				return ctx.Err()
+			}
+		}
+		return nil
+	})
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (m *Indexer) ListBigMapUpdates(ctx context.Context, id, minHeight, maxHeight int64, keyhash chain.ExprHash, key []byte, offset, limit uint) ([]*model.BigMapItem, error) {
+	table, err := m.Table(index.BigMapTableKey)
+	if err != nil {
+		return nil, err
+	}
+	q := pack.Query{
+		Name:   "api.search_bigmap",
+		Fields: table.Fields(),
+		Conditions: pack.ConditionList{
+			pack.Condition{
+				Field: table.Fields().Find("B"), // id
+				Mode:  pack.FilterModeEqual,
+				Value: id,
+			},
+			pack.Condition{
+				Field: table.Fields().Find("a"), // action
+				Mode:  pack.FilterModeNotIn,
+				Value: []uint64{
+					uint64(micheline.BigMapDiffActionAlloc),
+					uint64(micheline.BigMapDiffActionCopy),
+				},
+			},
+		},
+	}
+	if minHeight > 0 {
+		q.Conditions = append(q.Conditions, pack.Condition{
+			Field: table.Fields().Find("h"), // height
+			Mode:  pack.FilterModeGte,
+			Value: minHeight,
+		})
+	}
+	if maxHeight > 0 {
+		q.Conditions = append(q.Conditions, pack.Condition{
+			Field: table.Fields().Find("h"), // height
+			Mode:  pack.FilterModeLte,
+			Value: maxHeight,
+		})
+	}
+	if keyhash.IsValid() {
+		q.Conditions = append(q.Conditions, pack.Condition{
+			Field: table.Fields().Find("H"), // hash
+			Mode:  pack.FilterModeEqual,
+			Value: keyhash.Hash.Hash,
+		})
+	} else if len(key) > 0 {
+		q.Conditions = append(q.Conditions, pack.Condition{
+			Field: table.Fields().Find("k"), // key
+			Mode:  pack.FilterModeEqual,
+			Value: key,
+		})
+	}
+	items := make([]*model.BigMapItem, 0)
+	err = table.Stream(ctx, q, func(r pack.Row) error {
+		if offset > 0 {
+			offset--
+			return nil
+		}
+		b := model.AllocBigMapItem()
+		if err := r.Decode(b); err != nil {
+			return err
+		}
+		items = append(items, b)
+		if len(items) == int(limit) {
+			return io.EOF
+		}
+		if len(items)%128 == 0 {
+			if util.InterruptRequested(ctx) {
+				return ctx.Err()
+			}
+		}
+		return nil
+	})
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	return items, nil
 }
 
 func (m *Indexer) LookupRanking(ctx context.Context, id model.AccountID) (*AccountRankingEntry, bool) {

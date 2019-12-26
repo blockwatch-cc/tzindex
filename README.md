@@ -33,7 +33,7 @@ All-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resour
 - **elections**, **votes**, **proposals** and **ballots** capturing all on-chain governance activities
 - **snapshots**: balances of active delegates & delegators at all snapshot blocks
 - baker **income**: per-cycle statistics on baker income, efficiency, etc
-
+- **bigmap**: bigmap smart contract storage index
 
 ### Requirements
 

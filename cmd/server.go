@@ -110,6 +110,7 @@ func runServer(args []string) error {
 			index.NewSnapshotIndex(tableOptions("snapshot")),
 			index.NewIncomeIndex(tableOptions("income")),
 			index.NewGovIndex(tableOptions("gov")),
+			index.NewBigMapIndex(tableOptions("bigmap"), indexOptions("bigmap")),
 		},
 	})
 	defer indexer.Close()

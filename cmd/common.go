@@ -94,6 +94,7 @@ func openReadOnlyBlockchain() (*etl.Crawler, error) {
 			index.NewSnapshotIndex(tableOptions("snapshot")),
 			index.NewIncomeIndex(tableOptions("income")),
 			index.NewGovIndex(tableOptions("gov")),
+			index.NewBigMapIndex(tableOptions("bigmap"), indexOptions("bigmap")),
 		},
 	})
 
@@ -138,6 +139,7 @@ func openReadWriteBlockchain() (*etl.Crawler, error) {
 			index.NewSnapshotIndex(tableOptions("snapshot")),
 			index.NewIncomeIndex(tableOptions("income")),
 			index.NewGovIndex(tableOptions("gov")),
+			index.NewBigMapIndex(tableOptions("bigmap"), indexOptions("bigmap")),
 		},
 	})
 

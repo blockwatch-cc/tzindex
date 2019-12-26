@@ -109,21 +109,21 @@ func (e *BigMapDiffElem) Encoding() PrimType {
 	return PrimTypeFromTypeCode(e.KeyType)
 }
 
-// func (e *BigMapDiffElem) Key() *BigMapKey {
-// 	k, err := NewBigMapKey(e.KeyType, e.IntKey, e.StringKey, e.BytesKey, e.Value)
-// 	if err != nil {
-// 		log.Error(err)
-// 	}
-// 	return k
-// }
+func (e *BigMapDiffElem) Key() *BigMapKey {
+	k, err := NewBigMapKey(e.KeyType, e.IntKey, e.StringKey, e.BytesKey, e.Value)
+	if err != nil {
+		log.Error(err)
+	}
+	return k
+}
 
-// func (e *BigMapDiffElem) KeyAs(typ OpCode) *BigMapKey {
-// 	k, err := NewBigMapKey(typ, e.IntKey, e.StringKey, e.BytesKey, e.Value)
-// 	if err != nil {
-// 		log.Error(err)
-// 	}
-// 	return k
-// }
+func (e *BigMapDiffElem) KeyAs(typ OpCode) *BigMapKey {
+	k, err := NewBigMapKey(typ, e.IntKey, e.StringKey, e.BytesKey, e.Value)
+	if err != nil {
+		log.Error(err)
+	}
+	return k
+}
 
 func (e *BigMapDiffElem) KeyString() string {
 	switch true {
