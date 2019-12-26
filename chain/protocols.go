@@ -11,11 +11,14 @@ var (
 	ProtoV004   = ParseProtocolHashSafe("Pt24m4xiPbLDhVgVfABUjirbmda3yohdN82Sp9FeuAXJ4eV9otd")
 	ProtoV005_1 = ParseProtocolHashSafe("PsBABY5HQTSkA4297zNHfsZNKtxULfL18y95qb3m53QJiXGmrbU")
 	ProtoV005_2 = ParseProtocolHashSafe("PsBabyM1eUXZseaJdmXFApDSBqj8YBfwELoxZHHW77EMcAbbwAS")
+	ProtoV006_1 = ParseProtocolHashSafe("PtCarthavAMoXqbjBPVgDCRd5LgT7qqKWUPXnYii3xCaHRBMfHH")
+	ProtoV006_2 = ParseProtocolHashSafe("PsCARTHAGazKbHtnKfLzQg3kms52kSRpgnDY982a9oYsSXRLQEb")
 
-	Mainnet    = MustParseChainIdHash("NetXdQprcVkpaWU")
-	Alphanet   = MustParseChainIdHash("NetXgtSLGNJvNye")
-	Zeronet    = MustParseChainIdHash("NetXKakFj1A7ouL")
-	Babylonnet = MustParseChainIdHash("NetXUdfLh6Gm88t")
+	Mainnet     = MustParseChainIdHash("NetXdQprcVkpaWU")
+	Alphanet    = MustParseChainIdHash("NetXgtSLGNJvNye")
+	Zeronet     = MustParseChainIdHash("NetXKakFj1A7ouL")
+	Babylonnet  = MustParseChainIdHash("NetXUdfLh6Gm88t")
+	Carthagenet = MustParseChainIdHash("NetXjD3HPJJjmcd")
 
 	// maximum depth of branches for ops to be included on chain, also
 	// defines max depth of a possible reorg and max block priorities
@@ -35,6 +38,8 @@ func (p *Params) ForNetwork(net ChainIdHash) *Params {
 		pp.Network = "Zeronet"
 	case Babylonnet.IsEqual(net):
 		pp.Network = "Babylonnet"
+	case Carthagenet.IsEqual(net):
+		pp.Network = "Carthagenet"
 	default:
 		pp.Network = "Sandbox"
 	}
@@ -76,6 +81,10 @@ func (p *Params) ForProtocol(proto ProtocolHash) *Params {
 			"KT1DUfaMfTRZZkvZAYQT5b3byXnvqoAykc43": 500 * 1000000,
 		}
 		pp.OperationTagsVersion = 1
+	case ProtoV006_1.IsEqual(proto) || ProtoV006_2.IsEqual(proto):
+		pp.Version = 6
+		pp.OperationTagsVersion = 1
+		// no invoice
 	}
 	return pp
 }

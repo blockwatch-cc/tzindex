@@ -286,48 +286,75 @@ func (idx *IncomeIndex) BootstrapIncome(ctx context.Context, block *Block, build
 
 // use to update cycles 0..14 expected income and deposits because ramp-up constants
 // are only available at start of cycle and not when the income rows are created
+//
+// also used to update income after upgrade to v006 for all remaining cycles due
+// to changes in rewards
 func (idx *IncomeIndex) UpdateCycleIncome(ctx context.Context, block *Block, builder BlockBuilder) error {
-	if block.Cycle > 2*(block.Params.PreservedCycles+2) {
-		return nil
-	}
 	p := block.Params
-	incomes := make([]*Income, 0)
-	var totalRolls int64
-	err := idx.table.Stream(ctx, pack.Query{
-		Name: "etl.income.update",
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: idx.table.Fields().Find("c"), // cycle (!)
-				Mode:  pack.FilterModeEqual,
-				Value: block.Cycle,
-			},
-		},
-	}, func(r pack.Row) error {
-		in := &Income{}
-		if err := r.Decode(in); err != nil {
-			return err
+
+	// check pre-conditon and pick cycles to update
+	var updateCycles []int64
+	switch true {
+	case block.Cycle <= 2*(p.PreservedCycles+2):
+		// during ramp-up cycles
+		log.Debugf("Updating expected income for cycle %d during ramp-up.", block.Cycle)
+		updateCycles = []int64{block.Cycle}
+
+	case block.Height == p.StartHeight && p.Version == 6:
+		// on upgrade to v6, update all future reward expectations
+		log.Debug("Updating expected income after v006 activation.")
+		updateCycles = make([]int64, 0)
+		for i := int64(0); i < p.PreservedCycles; i++ {
+			updateCycles = append(updateCycles, block.Cycle+i)
 		}
-		blockDeposit, endorseDeposit := p.BlockSecurityDeposit, p.EndorsementSecurityDeposit
-		blockReward, endorseReward := p.BlockReward, p.EndorsementReward
-		in.ExpectedIncome += blockReward * in.NBakingRights
-		in.ExpectedBonds += blockDeposit * in.NBakingRights
-		in.ExpectedIncome += endorseReward * in.NEndorsingRights
-		in.ExpectedBonds += endorseDeposit * in.NEndorsingRights
-		totalRolls += in.Rolls
-		incomes = append(incomes, in)
+
+	default:
+		// no update required on
 		return nil
-	})
-	if err != nil {
-		return err
 	}
 
-	// update luck and convert type
-	upd := make([]pack.Item, len(incomes))
-	for i, v := range incomes {
-		v.UpdateLuck(totalRolls, p)
-		upd[i] = v
+	for _, v := range updateCycles {
+		incomes := make([]*Income, 0)
+		var totalRolls int64
+		err := idx.table.Stream(ctx, pack.Query{
+			Name: "etl.income.update",
+			Conditions: pack.ConditionList{
+				pack.Condition{
+					Field: idx.table.Fields().Find("c"), // cycle (!)
+					Mode:  pack.FilterModeEqual,
+					Value: v,
+				},
+			},
+		}, func(r pack.Row) error {
+			in := &Income{}
+			if err := r.Decode(in); err != nil {
+				return err
+			}
+			blockDeposit, endorseDeposit := p.BlockSecurityDeposit, p.EndorsementSecurityDeposit
+			blockReward, endorseReward := p.BlockReward, p.EndorsementReward
+			in.ExpectedIncome += blockReward * in.NBakingRights
+			in.ExpectedBonds += blockDeposit * in.NBakingRights
+			in.ExpectedIncome += endorseReward * in.NEndorsingRights
+			in.ExpectedBonds += endorseDeposit * in.NEndorsingRights
+			totalRolls += in.Rolls
+			incomes = append(incomes, in)
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+
+		// update luck and convert type
+		upd := make([]pack.Item, len(incomes))
+		for i, v := range incomes {
+			v.UpdateLuck(totalRolls, p)
+			upd[i] = v
+		}
+		if err := idx.table.Update(ctx, upd); err != nil {
+			return err
+		}
 	}
-	return idx.table.Update(ctx, upd)
+	return nil
 }
 
 func (idx *IncomeIndex) CreateCycleIncome(ctx context.Context, block *Block, builder BlockBuilder) error {

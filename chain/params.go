@@ -44,6 +44,8 @@ type Params struct {
 	EndorsementSecurityDeposit   int64            `json:"endorsement_security_deposit"`
 	BlockReward                  int64            `json:"block_reward"`
 	EndorsementReward            int64            `json:"endorsement_reward"`
+	BlockRewardV6                [2]int64         `json:"block_rewards_v6"`
+	EndorsementRewardV6          [2]int64         `json:"endorsement_rewards_v6"`
 	CostPerByte                  int64            `json:"cost_per_byte"`
 	HardStorageLimitPerOperation int64            `json:"hard_storage_limit_per_operation"`
 	TestChainDuration            int64            `json:"test_chain_duration"`
