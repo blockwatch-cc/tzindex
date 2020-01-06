@@ -339,7 +339,9 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 		}
 		if supply, err := ctx.Indexer.SupplyByHeight(ctx.Context, snapHeight); err == nil {
 			ec.StakingSupply = p.ConvertValue(supply.Staking)
-			ec.StakingPercent = float64(supply.Staking*100) / float64(supply.Total)
+			if supply.Total > 0 {
+				ec.StakingPercent = float64(supply.Staking*100) / float64(supply.Total)
+			}
 		}
 	}
 
