@@ -5,6 +5,7 @@ package micheline
 
 import (
 	"fmt"
+	"strings"
 )
 
 type Entrypoint struct {
@@ -75,11 +76,31 @@ func searchEntrypointName(name, branch string, node *Prim) string {
 	return ""
 }
 
-// walks prim tree of T_OR expressions in in-order and appends each non-T_OR branch
+// Explicit list of prefixes for detecting entrypoints.
+//
+// This is necessary to resolve ambiguities in contract designs that
+// use T_OR as call parameter.
+
 // - to handle conflicts between T_OR used for call params vs used for marking entrypoint
 //   skip annotated T_OR branches (exclude the root T_OR and any branch called 'default')
+var knownEntrypointPrefixes = []string{"_Liq_entry_"}
+
+func isKnownEntrypointPrefix(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for _, v := range knownEntrypointPrefixes {
+		if strings.HasPrefix(s, v) {
+			return true
+		}
+	}
+	return false
+}
+
+// walks T_OR expressions and stores each non-T_OR branch as entrypoint
 func listEntrypoints(e Entrypoints, branch string, node *Prim) error {
-	if node.OpCode == T_OR && (len(branch) == 0 || !node.HasAnno() || node.GetAnno() == "default") {
+	// if node.OpCode == T_OR && (len(branch) == 0 || !node.HasAnno() || node.GetAnno() == "default") {
+	if node.OpCode == T_OR && !isKnownEntrypointPrefix(node.GetAnno()) {
 		if l := len(node.Args); l != 2 {
 			return fmt.Errorf("micheline: expected 2 arguments for T_OR, git %d", l)
 		}
