@@ -131,3 +131,11 @@ func (p *Params) VotingStartCycleFromHeight(height int64) int64 {
 	offset := height % p.BlocksPerVotingPeriod
 	return currentCycle - offset/p.BlocksPerCycle
 }
+
+func (p *Params) IsVoteStart(height int64) bool {
+	return height > 0 && (height-1)%p.BlocksPerVotingPeriod == 0
+}
+
+func (p *Params) IsVoteEnd(height int64) bool {
+	return height > 0 && height%p.BlocksPerVotingPeriod == 0
+}
