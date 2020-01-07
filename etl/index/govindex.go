@@ -1055,9 +1055,11 @@ func (idx *GovIndex) quorumByHeight(ctx context.Context, height int64, params *c
 				lastTurnoutEma = (8*lastQuorum + 2*lastTurnout) / 10
 				// nextEma = lastTurnoutEma
 			}
+			nextEma = lastTurnoutEma
+		} else {
+			// update using actual turnout
+			nextEma = (8*lastTurnoutEma + 2*lastTurnout) / 10
 		}
-		// update using actual turnout
-		nextEma = (8*lastTurnoutEma + 2*lastTurnout) / 10
 
 		// q = q_min + participation_ema * (q_max - q_min)
 		nextQuorum = params.QuorumMin + nextEma*(params.QuorumMax-params.QuorumMin)/10000
