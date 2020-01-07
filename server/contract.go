@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzindex/chain"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
@@ -23,49 +22,45 @@ func init() {
 var _ RESTful = (*ExplorerContract)(nil)
 
 type ExplorerContract struct {
-	Address            string            `json:"address"`
-	Manager            string            `json:"manager"`
-	Delegate           string            `json:"delegate"`
-	Height             int64             `json:"height"`
-	Fee                float64           `json:"fee"`
-	GasLimit           int64             `json:"gas_limit"`
-	GasUsed            int64             `json:"gas_used"`
-	GasPrice           float64           `json:"gas_price"`
-	StorageLimit       int64             `json:"storage_limit"`
-	StorageSize        int64             `json:"storage_size"`
-	StoragePaid        int64             `json:"storage_paid"`
-	Script             *micheline.Script `json:"script,omitempty"` // DEPRECATED
-	IsFunded           bool              `json:"is_funded"`
-	IsVesting          bool              `json:"is_vesting"`
-	IsSpendable        bool              `json:"is_spendable"`
-	IsDelegatable      bool              `json:"is_delegatable"`
-	IsDelegated        bool              `json:"is_delegated"`
-	FirstIn            int64             `json:"first_in"`
-	FirstOut           int64             `json:"first_out"`
-	LastIn             int64             `json:"last_in"`
-	LastOut            int64             `json:"last_out"`
-	FirstSeen          int64             `json:"first_seen"`
-	LastSeen           int64             `json:"last_seen"`
-	DelegatedSince     int64             `json:"delegated_since"`
-	FirstInTime        time.Time         `json:"first_in_time"`
-	FirstOutTime       time.Time         `json:"first_out_time"`
-	LastInTime         time.Time         `json:"last_in_time"`
-	LastOutTime        time.Time         `json:"last_out_time"`
-	FirstSeenTime      time.Time         `json:"first_seen_time"`
-	LastSeenTime       time.Time         `json:"last_seen_time"`
-	DelegatedSinceTime time.Time         `json:"delegated_since_time"`
-	NOps               int               `json:"n_ops"`
-	NOpsFailed         int               `json:"n_ops_failed"`
-	NTx                int               `json:"n_tx"`
-	NDelegation        int               `json:"n_delegation"`
-	NOrigination       int               `json:"n_origination"`
-	TokenGenMin        int64             `json:"token_gen_min"`
-	TokenGenMax        int64             `json:"token_gen_max"`
-	DelegateAcc        *ExplorerAccount  `json:"delegate_account,omitempty"` // DEPRECATED
-	ManagerAcc         *ExplorerAccount  `json:"manager_account,omitempty"`  // DEPRECATED
-	Ops                *[]*ExplorerOp    `json:"ops,omitempty"`              // DEPRECATED
-	BigMapIds          []int64           `json:"bigmap_ids"`
-	expires            time.Time         `json:"-"`
+	Address            string    `json:"address"`
+	Manager            string    `json:"manager"`
+	Delegate           string    `json:"delegate"`
+	Height             int64     `json:"height"`
+	Fee                float64   `json:"fee"`
+	GasLimit           int64     `json:"gas_limit"`
+	GasUsed            int64     `json:"gas_used"`
+	GasPrice           float64   `json:"gas_price"`
+	StorageLimit       int64     `json:"storage_limit"`
+	StorageSize        int64     `json:"storage_size"`
+	StoragePaid        int64     `json:"storage_paid"`
+	IsFunded           bool      `json:"is_funded"`
+	IsVesting          bool      `json:"is_vesting"`
+	IsSpendable        bool      `json:"is_spendable"`
+	IsDelegatable      bool      `json:"is_delegatable"`
+	IsDelegated        bool      `json:"is_delegated"`
+	FirstIn            int64     `json:"first_in"`
+	FirstOut           int64     `json:"first_out"`
+	LastIn             int64     `json:"last_in"`
+	LastOut            int64     `json:"last_out"`
+	FirstSeen          int64     `json:"first_seen"`
+	LastSeen           int64     `json:"last_seen"`
+	DelegatedSince     int64     `json:"delegated_since"`
+	FirstInTime        time.Time `json:"first_in_time"`
+	FirstOutTime       time.Time `json:"first_out_time"`
+	LastInTime         time.Time `json:"last_in_time"`
+	LastOutTime        time.Time `json:"last_out_time"`
+	FirstSeenTime      time.Time `json:"first_seen_time"`
+	LastSeenTime       time.Time `json:"last_seen_time"`
+	DelegatedSinceTime time.Time `json:"delegated_since_time"`
+	NOps               int       `json:"n_ops"`
+	NOpsFailed         int       `json:"n_ops_failed"`
+	NTx                int       `json:"n_tx"`
+	NDelegation        int       `json:"n_delegation"`
+	NOrigination       int       `json:"n_origination"`
+	TokenGenMin        int64     `json:"token_gen_min"`
+	TokenGenMax        int64     `json:"token_gen_max"`
+	BigMapIds          []int64   `json:"bigmap_ids"`
+	expires            time.Time `json:"-"`
 }
 
 func NewExplorerContract(ctx *ApiContext, c *model.Contract, a *model.Account, p *chain.Params, details bool) *ExplorerContract {
@@ -101,18 +96,6 @@ func NewExplorerContract(ctx *ApiContext, c *model.Contract, a *model.Account, p
 		expires:        ctx.Now.Add(p.TimeBetweenBlocks[0]),
 	}
 
-	// need manager address hash
-	var mgrHash []byte
-	if mgr, err := ctx.Indexer.LookupAccountId(ctx, c.ManagerId); err == nil {
-		mgrHash = mgr.Address().Bytes()
-	}
-	tip := ctx.Crawler.Tip()
-	if sc, err := c.LoadScript(tip, tip.BestHeight, mgrHash); err != nil {
-		log.Errorf("explorer contract: unmarshal script: %v", err)
-	} else {
-		cc.Script = sc
-	}
-
 	// resolve block times
 	cc.FirstInTime = ctx.Indexer.BlockTime(ctx.Context, a.FirstIn)
 	cc.FirstOutTime = ctx.Indexer.BlockTime(ctx.Context, a.FirstOut)
@@ -128,31 +111,8 @@ func NewExplorerContract(ctx *ApiContext, c *model.Contract, a *model.Account, p
 		log.Errorf("explorer contract: cannot load bigmap ids: %v", err)
 	}
 
-	// DEPRECATED
-	if details {
-		// load related accounts from id
-		xc, err := ctx.Indexer.LookupAccountIds(ctx.Context,
-			vec.UniqueUint64Slice([]uint64{
-				a.ManagerId.Value(),
-				a.DelegateId.Value(),
-			}))
-		if err != nil {
-			log.Errorf("explorer contract: cannot resolve related accounts: %v", err)
-		}
-		for _, xcc := range xc {
-			if xcc.RowId == a.ManagerId {
-				cc.Manager = xcc.String()
-				cc.ManagerAcc = NewExplorerAccount(ctx, xcc, p, false)
-			}
-			if xcc.RowId == a.DelegateId {
-				cc.Delegate = xcc.String()
-				cc.DelegateAcc = NewExplorerAccount(ctx, xcc, p, false)
-			}
-		}
-	} else {
-		cc.Manager = lookupAddress(ctx, a.ManagerId).String()
-		cc.Delegate = lookupAddress(ctx, a.DelegateId).String()
-	}
+	cc.Manager = lookupAddress(ctx, a.ManagerId).String()
+	cc.Delegate = lookupAddress(ctx, a.DelegateId).String()
 
 	return cc
 }
@@ -180,8 +140,6 @@ func (b ExplorerContract) RegisterDirectRoutes(r *mux.Router) error {
 
 func (b ExplorerContract) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/{ident}", C(ReadContract)).Methods("GET").Name("contract")
-	r.HandleFunc("/{ident}/op", C(ReadContractOps)).Methods("GET") // DEPRECATED
-
 	r.HandleFunc("/{ident}/calls", C(ReadContractCalls)).Methods("GET")
 	r.HandleFunc("/{ident}/manager", C(ReadContractManager)).Methods("GET")
 	r.HandleFunc("/{ident}/script", C(ReadContractScript)).Methods("GET")
@@ -292,37 +250,6 @@ func ReadContract(ctx *ApiContext) (interface{}, int) {
 		}
 	}
 	return NewExplorerContract(ctx, cc, acc, ctx.Crawler.ParamsByHeight(-1), true), http.StatusOK
-}
-
-// DEPRECATED
-func ReadContractOps(ctx *ApiContext) (interface{}, int) {
-	args := &ExplorerOpsRequest{}
-	ctx.ParseRequestArgs(args)
-	cc := loadContract(ctx)
-	acc, err := ctx.Indexer.LookupAccountId(ctx, cc.AccountId)
-	if err != nil {
-		switch err {
-		case index.ErrNoAccountEntry:
-			panic(ENotFound(EC_RESOURCE_NOTFOUND, "no such contract", err))
-		default:
-			panic(EInternal(EC_DATABASE, err.Error(), nil))
-		}
-	}
-	params := ctx.Crawler.ParamsByHeight(-1)
-	c := NewExplorerContract(ctx, cc, acc, params, false)
-	ops, err := ctx.Indexer.ListAccountOps(ctx, acc.RowId, args.Type,
-		0, 0, args.Offset, ctx.Cfg.ClampExplore(args.Limit), 0)
-	if err != nil {
-		panic(EInternal(EC_DATABASE, "cannot read contract calls", err))
-	}
-
-	// FIXME: collect account and op lookup into only two queries
-	eops := make([]*ExplorerOp, len(ops))
-	for i, v := range ops {
-		eops[i] = NewExplorerOp(ctx, v, nil, cc, params, nil)
-	}
-	c.Ops = &eops
-	return c, http.StatusOK
 }
 
 // list incoming transaction with data
