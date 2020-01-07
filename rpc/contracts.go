@@ -18,7 +18,7 @@ type Contracts []chain.Address
 // https://tezos.gitlab.io/tezos/api/rpc.html#get-block-id-context-contracts
 func (c *Client) GetContracts(ctx context.Context) (Contracts, error) {
 	contracts := make(Contracts, 0)
-	u := fmt.Sprintf("/chains/%s/blocks/head/context/contracts", c.ChainID)
+	u := fmt.Sprintf("chains/%s/blocks/head/context/contracts", c.ChainID)
 	if err := c.Get(ctx, u, &contracts); err != nil {
 		return nil, err
 	}
@@ -28,7 +28,7 @@ func (c *Client) GetContracts(ctx context.Context) (Contracts, error) {
 // GetContractsHeight returns a list of all known contracts at height
 // https://tezos.gitlab.io/tezos/api/rpc.html#get-block-id-context-contracts
 func (c *Client) GetContractsHeight(ctx context.Context, height int64) (Contracts, error) {
-	u := fmt.Sprintf("/chains/%s/blocks/%d/context/contracts", c.ChainID, height)
+	u := fmt.Sprintf("chains/%s/blocks/%d/context/contracts", c.ChainID, height)
 	contracts := make(Contracts, 0)
 	if err := c.Get(ctx, u, &contracts); err != nil {
 		return nil, err
@@ -39,7 +39,7 @@ func (c *Client) GetContractsHeight(ctx context.Context, height int64) (Contract
 // GetContractBalance returns the current balance of a contract at head
 // https://tezos.gitlab.io/tezos/api/rpc.html#get-block-id-context-contracts-contract-id-balance
 func (c *Client) GetContractBalance(ctx context.Context, addr chain.Address) (int64, error) {
-	u := fmt.Sprintf("/chains/%s/blocks/head/context/contracts/%s/balance", c.ChainID, addr)
+	u := fmt.Sprintf("chains/%s/blocks/head/context/contracts/%s/balance", c.ChainID, addr)
 	var bal string
 	err := c.Get(ctx, u, &bal)
 	if err != nil {
@@ -51,7 +51,7 @@ func (c *Client) GetContractBalance(ctx context.Context, addr chain.Address) (in
 // GetContractBalanceHeight returns the current balance of a contract at height
 // https://tezos.gitlab.io/tezos/api/rpc.html#get-block-id-context-contracts-contract-id-balance
 func (c *Client) GetContractBalanceHeight(ctx context.Context, addr chain.Address, height int64) (int64, error) {
-	u := fmt.Sprintf("/chains/%s/blocks/%d/context/contracts/%s/balance", c.ChainID, height, addr)
+	u := fmt.Sprintf("chains/%s/blocks/%d/context/contracts/%s/balance", c.ChainID, height, addr)
 	var bal string
 	err := c.Get(ctx, u, &bal)
 	if err != nil {

@@ -121,7 +121,7 @@ func (bhm *BlockMetadata) UnmarshalJSON(data []byte) error {
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-block-id
 func (c *Client) GetBlock(ctx context.Context, blockID chain.BlockHash) (*Block, error) {
 	var block Block
-	u := fmt.Sprintf("/chains/%s/blocks/%s", c.ChainID, blockID)
+	u := fmt.Sprintf("chains/%s/blocks/%s", c.ChainID, blockID)
 	if err := c.Get(ctx, u, &block); err != nil {
 		return nil, err
 	}
@@ -132,7 +132,7 @@ func (c *Client) GetBlock(ctx context.Context, blockID chain.BlockHash) (*Block,
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-block-id
 func (c *Client) GetBlockHeight(ctx context.Context, height int64) (*Block, error) {
 	var block Block
-	u := fmt.Sprintf("/chains/%s/blocks/%d", c.ChainID, height)
+	u := fmt.Sprintf("chains/%s/blocks/%d", c.ChainID, height)
 	if err := c.Get(ctx, u, &block); err != nil {
 		return nil, err
 	}
@@ -149,9 +149,9 @@ func (c *Client) GetTips(ctx context.Context, depth int, head chain.BlockHash) (
 	tips := make([][]chain.BlockHash, 0, 10)
 	var u string
 	if head.IsValid() {
-		u = fmt.Sprintf("/chains/%s/blocks?length=%d&head=%s", c.ChainID, depth, head)
+		u = fmt.Sprintf("chains/%s/blocks?length=%d&head=%s", c.ChainID, depth, head)
 	} else {
-		u = fmt.Sprintf("/chains/%s/blocks?length=%d", c.ChainID, depth)
+		u = fmt.Sprintf("chains/%s/blocks?length=%d", c.ChainID, depth)
 	}
 	if err := c.Get(ctx, u, &tips); err != nil {
 		return nil, err
@@ -163,7 +163,7 @@ func (c *Client) GetTips(ctx context.Context, depth int, head chain.BlockHash) (
 // https://tezos.gitlab.io/mainnet/api/rpc.html#chains-chain-id-blocks
 func (c *Client) GetTipHeader(ctx context.Context) (*BlockHeader, error) {
 	var head BlockHeader
-	u := fmt.Sprintf("/chains/%s/blocks/head/header", c.ChainID)
+	u := fmt.Sprintf("chains/%s/blocks/head/header", c.ChainID)
 	if err := c.Get(ctx, u, &head); err != nil {
 		return nil, err
 	}
@@ -177,7 +177,7 @@ func (c *Client) GetBlockPredHashes(ctx context.Context, blockID chain.BlockHash
 		count = 1
 	}
 	blockIds := make([][]chain.BlockHash, 0, count)
-	u := fmt.Sprintf("/chains/%s/blocks?length=%d&head=%s", c.ChainID, count, blockID)
+	u := fmt.Sprintf("chains/%s/blocks?length=%d&head=%s", c.ChainID, count, blockID)
 	if err := c.Get(ctx, u, &blockIds); err != nil {
 		return nil, err
 	}
@@ -198,7 +198,7 @@ func (c *Client) GetInvalidBlocks(ctx context.Context) ([]*InvalidBlock, error) 
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-chains-chain-id-invalid-blocks-block-hash
 func (c *Client) GetInvalidBlock(ctx context.Context, blockID chain.BlockHash) (*InvalidBlock, error) {
 	var invalidBlock InvalidBlock
-	u := fmt.Sprintf("/chains/%s/invalid_blocks/%s", c.ChainID, blockID)
+	u := fmt.Sprintf("chains/%s/invalid_blocks/%s", c.ChainID, blockID)
 	if err := c.Get(ctx, u, &invalidBlock); err != nil {
 		return nil, err
 	}

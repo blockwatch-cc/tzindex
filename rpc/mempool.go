@@ -20,7 +20,7 @@ type MempoolOperations struct {
 // GetMempoolPendingOperations returns mempool pending operations
 func (c *Client) GetMempoolPendingOperations(ctx context.Context) (*MempoolOperations, error) {
 	var ops MempoolOperations
-	if err := c.Get(ctx, "/chains/"+c.ChainID+"/mempool/pending_operations", &ops); err != nil {
+	if err := c.Get(ctx, "chains/"+c.ChainID+"/mempool/pending_operations", &ops); err != nil {
 		return nil, err
 	}
 	return &ops, nil

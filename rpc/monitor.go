@@ -355,22 +355,22 @@ func (m *NetworkPointMonitor) Closed() <-chan struct{} {
 
 // MonitorBootstrapped reads from the bootstrapped blocks stream http://tezos.gitlab.io/mainnet/api/rpc.html#get-monitor-bootstrapped
 func (c *Client) MonitorBootstrapped(ctx context.Context, monitor *BootstrapMonitor) error {
-	return c.GetAsync(ctx, "/monitor/bootstrapped", monitor)
+	return c.GetAsync(ctx, "monitor/bootstrapped", monitor)
 }
 
 // MonitorBlockHeader reads from the chain heads stream http://tezos.gitlab.io/mainnet/api/rpc.html#get-monitor-heads-chain-id
 func (c *Client) MonitorBlockHeader(ctx context.Context, monitor *BlockHeaderMonitor) error {
-	return c.GetAsync(ctx, "/monitor/heads/"+c.ChainID, monitor)
+	return c.GetAsync(ctx, "monitor/heads/"+c.ChainID, monitor)
 }
 
 // MonitorNetworkPointLog monitors network events related to an `IP:addr`.
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-network-peers-peer-id-log
 func (c *Client) MonitorNetworkPointLog(ctx context.Context, address string, monitor *NetworkPointMonitor) error {
-	return c.GetAsync(ctx, "/network/points/"+address+"/log?monitor", monitor)
+	return c.GetAsync(ctx, "network/points/"+address+"/log?monitor", monitor)
 }
 
 // MonitorNetworkPeerLog monitors network events related to a given peer.
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-network-peers-peer-id-log
 func (c *Client) MonitorNetworkPeerLog(ctx context.Context, peerID string, monitor *NetworkPeerMonitor) error {
-	return c.GetAsync(ctx, "/network/peers/"+peerID+"/log?monitor", monitor)
+	return c.GetAsync(ctx, "network/peers/"+peerID+"/log?monitor", monitor)
 }

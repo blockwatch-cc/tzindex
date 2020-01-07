@@ -129,7 +129,7 @@ func (i *IDTimestamp) UnmarshalJSON(data []byte) error {
 // GetNetworkStats returns current network stats https://tezos.gitlab.io/betanet/api/rpc.html#get-network-stat
 func (c *Client) GetNetworkStats(ctx context.Context) (*NetworkStats, error) {
 	var stats NetworkStats
-	if err := c.Get(ctx, "/network/stat", &stats); err != nil {
+	if err := c.Get(ctx, "network/stat", &stats); err != nil {
 		return nil, err
 	}
 	return &stats, nil
@@ -138,7 +138,7 @@ func (c *Client) GetNetworkStats(ctx context.Context) (*NetworkStats, error) {
 // GetNetworkConnections returns all network connections http://tezos.gitlab.io/mainnet/api/rpc.html#get-network-connections
 func (c *Client) GetNetworkConnections(ctx context.Context) ([]*NetworkConnection, error) {
 	var conns []*NetworkConnection
-	if err := c.Get(ctx, "/network/connections", &conns); err != nil {
+	if err := c.Get(ctx, "network/connections", &conns); err != nil {
 		return nil, err
 	}
 	return conns, nil
@@ -148,7 +148,7 @@ func (c *Client) GetNetworkConnections(ctx context.Context) ([]*NetworkConnectio
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-network-peers
 func (c *Client) GetNetworkPeers(ctx context.Context, filter string) ([]*NetworkPeer, error) {
 	u := url.URL{
-		Path: "/network/peers",
+		Path: "network/peers",
 	}
 
 	if filter != "" {
@@ -175,7 +175,7 @@ func (c *Client) GetNetworkPeers(ctx context.Context, filter string) ([]*Network
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-network-peers-peer-id
 func (c *Client) GetNetworkPeer(ctx context.Context, peerID string) (*NetworkPeer, error) {
 	var peer NetworkPeer
-	if err := c.Get(ctx, "/network/peers/"+peerID, &peer); err != nil {
+	if err := c.Get(ctx, "network/peers/"+peerID, &peer); err != nil {
 		return nil, err
 	}
 	peer.PeerID = peerID
@@ -186,20 +186,20 @@ func (c *Client) GetNetworkPeer(ctx context.Context, peerID string) (*NetworkPee
 // BanNetworkPeer blacklists the given peer.
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-network-peers-peer-id-ban
 func (c *Client) BanNetworkPeer(ctx context.Context, peerID string) error {
-	return c.Get(ctx, "/network/peers/"+peerID+"/ban", nil)
+	return c.Get(ctx, "network/peers/"+peerID+"/ban", nil)
 }
 
 // TrustNetworkPeer used to trust a given peer permanently: the peer cannot be blocked (but its host IP still can).
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-network-peers-peer-id-trust
 func (c *Client) TrustNetworkPeer(ctx context.Context, peerID string) error {
-	return c.Get(ctx, "/network/peers/"+peerID+"/trust", nil)
+	return c.Get(ctx, "network/peers/"+peerID+"/trust", nil)
 }
 
 // GetNetworkPeerBanned checks if a given peer is blacklisted or greylisted.
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-network-peers-peer-id-banned
 func (c *Client) GetNetworkPeerBanned(ctx context.Context, peerID string) (bool, error) {
 	var banned bool
-	if err := c.Get(ctx, "/network/peers/"+peerID+"/banned", &banned); err != nil {
+	if err := c.Get(ctx, "network/peers/"+peerID+"/banned", &banned); err != nil {
 		return false, err
 	}
 	return banned, nil
@@ -209,7 +209,7 @@ func (c *Client) GetNetworkPeerBanned(ctx context.Context, peerID string) (bool,
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-network-peers-peer-id-log
 func (c *Client) GetNetworkPeerLog(ctx context.Context, peerID string) ([]*NetworkPeerLogEntry, error) {
 	var log []*NetworkPeerLogEntry
-	if err := c.Get(ctx, "/network/peers/"+peerID+"/log", &log); err != nil {
+	if err := c.Get(ctx, "network/peers/"+peerID+"/log", &log); err != nil {
 		return nil, err
 	}
 	return log, nil
@@ -219,7 +219,7 @@ func (c *Client) GetNetworkPeerLog(ctx context.Context, peerID string) ([]*Netwo
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-network-points
 func (c *Client) GetNetworkPoints(ctx context.Context, filter string) ([]*NetworkPoint, error) {
 	u := url.URL{
-		Path: "/network/points",
+		Path: "network/points",
 	}
 
 	if filter != "" {
@@ -246,7 +246,7 @@ func (c *Client) GetNetworkPoints(ctx context.Context, filter string) ([]*Networ
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-network-points-point
 func (c *Client) GetNetworkPoint(ctx context.Context, address string) (*NetworkPoint, error) {
 	var point NetworkPoint
-	if err := c.Get(ctx, "/network/points/"+address, &point); err != nil {
+	if err := c.Get(ctx, "network/points/"+address, &point); err != nil {
 		return nil, err
 	}
 	point.Address = address
@@ -257,7 +257,7 @@ func (c *Client) GetNetworkPoint(ctx context.Context, address string) (*NetworkP
 // https://tezos.gitlab.io/mainnet/api/rpc.html#put-network-points-point
 func (c *Client) ConnectToNetworkPoint(ctx context.Context, address string, timeout time.Duration) error {
 	u := url.URL{
-		Path: "/network/points/" + address,
+		Path: "network/points/" + address,
 	}
 
 	if timeout > 0 {
@@ -273,20 +273,20 @@ func (c *Client) ConnectToNetworkPoint(ctx context.Context, address string, time
 // BanNetworkPoint blacklists the given address.
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-network-points-point-ban
 func (c *Client) BanNetworkPoint(ctx context.Context, address string) error {
-	return c.Get(ctx, "/network/points/"+address+"/ban", nil)
+	return c.Get(ctx, "network/points/"+address+"/ban", nil)
 }
 
 // TrustNetworkPoint used to trust a given address permanently. Connections from this address can still be closed on authentication if the peer is blacklisted or greylisted.
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-network-points-point-trust
 func (c *Client) TrustNetworkPoint(ctx context.Context, address string) error {
-	return c.Get(ctx, "/network/points/"+address+"/trust", nil)
+	return c.Get(ctx, "network/points/"+address+"/trust", nil)
 }
 
 // GetNetworkPointBanned check is a given address is blacklisted or greylisted.
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-network-points-point-banned
 func (c *Client) GetNetworkPointBanned(ctx context.Context, address string) (bool, error) {
 	var banned bool
-	if err := c.Get(ctx, "/network/points/"+address+"/banned", &banned); err != nil {
+	if err := c.Get(ctx, "network/points/"+address+"/banned", &banned); err != nil {
 		return false, err
 	}
 	return banned, nil
@@ -296,7 +296,7 @@ func (c *Client) GetNetworkPointBanned(ctx context.Context, address string) (boo
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-network-peers-peer-id-log
 func (c *Client) GetNetworkPointLog(ctx context.Context, address string) ([]*NetworkPointLogEntry, error) {
 	var log []*NetworkPointLogEntry
-	if err := c.Get(ctx, "/network/points/"+address+"/log", &log); err != nil {
+	if err := c.Get(ctx, "network/points/"+address+"/log", &log); err != nil {
 		return nil, err
 	}
 	return log, nil
