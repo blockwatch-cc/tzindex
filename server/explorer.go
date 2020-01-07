@@ -5,12 +5,16 @@ package server
 
 import (
 	"github.com/gorilla/mux"
+	"math"
 	"net/http"
 	"strconv"
 	"time"
 
+	"blockwatch.cc/packdb/pack"
+
 	"blockwatch.cc/tzindex/chain"
 	"blockwatch.cc/tzindex/etl"
+	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 )
 
@@ -85,7 +89,7 @@ type BlockchainTip struct {
 	Inflation1Y        float64 `json:"inflation_1y"`
 	InflationRate1Y    float64 `json:"inflation_rate_1y"`
 
-	Health float64 `json:"health"`
+	Health int `json:"health"`
 
 	Supply *Supply           `json:"supply"`
 	Status etl.CrawlerStatus `json:"status"`
@@ -160,8 +164,8 @@ func buildBlockchainTip(ctx *ApiContext, tip *model.ChainTip) *BlockchainTip {
 		Inflation1Y:        params.ConvertValue(supply.Total - supply365.Total),
 		InflationRate1Y:    annualizedPercent(supply.Total, supply365.Total, supplyDays),
 
-		// TODO: implement formula and track health over time
-		Health: 100,
+		// track health over the past 128 blocks
+		Health: estimateHealth(ctx, tip.BestHeight, 127),
 
 		Supply: &Supply{
 			Supply:  *supply,
@@ -309,4 +313,93 @@ func GetBlockchainConfig(ctx *ApiContext) (interface{}, int) {
 		expires:           ctx.Crawler.Time().Add(p.TimeBetweenBlocks[0]),
 	}
 	return cfg, http.StatusOK
+}
+
+// Estimates network health based on past on-chain observations.
+//
+// Result [0..100]
+//
+// Factor                  Penalty      Comment
+//
+// missed priorities       2            also translates past due blocks into missed prio
+// missed endorsements     0.5
+// orphan block            5
+// double-x                10           TODO
+//
+// Decay function: x^(1/n)
+//
+func estimateHealth(ctx *ApiContext, height, history int64) int {
+	nowheight := ctx.Crawler.Height()
+	params := ctx.Crawler.ParamsByHeight(-1)
+	isSync := ctx.Crawler.Status().Status == etl.STATE_SYNCHRONIZED
+	health := 100.0
+	const (
+		missedPriorityPenalty = 2.0
+		missedEndorsePenalty  = 0.5
+		orphanPenalty         = 5.0
+		doubleSignPenalty     = 10.0
+	)
+
+	blocks, err := ctx.Indexer.Table(index.BlockTableKey)
+	if err != nil {
+		log.Errorf("health: block table: %v", err)
+		return 0
+	}
+	b := &model.Block{}
+	err = blocks.Stream(ctx.Context, pack.Query{
+		Name:  "health.blocks",
+		Order: pack.OrderDesc,
+		Limit: int(history),
+		Conditions: pack.ConditionList{pack.Condition{
+			Field: blocks.Fields().Find("h"), // search for height (include orphans)
+			Mode:  pack.FilterModeGt,
+			Value: height - history,
+		}},
+	}, func(r pack.Row) error {
+		if err := r.Decode(b); err != nil {
+			return err
+		}
+		// skip blocks past height (may happen during sync)
+		if b.Height > height {
+			return nil
+		}
+
+		// more weight for recent blocks
+		weight := 1.0 / float64(height-b.Height+1)
+
+		// orphan penalty
+		if b.IsOrphan {
+			health -= orphanPenalty * weight
+			// don't proceed when orphan
+			return nil
+		}
+
+		// priority penalty
+		health -= float64(b.Priority) * missedPriorityPenalty * weight
+
+		// endorsement penalty, don't count endorsements for the most recent block
+		if b.Height < nowheight {
+			missed := float64(params.EndorsersPerBlock - b.NSlotsEndorsed)
+			health -= missed * missedEndorsePenalty * weight
+		}
+
+		return nil
+	})
+	if err != nil {
+		log.Errorf("health: block stream: %v", err)
+	}
+
+	// check if next block is past due and estimate expected priority
+	if height == nowheight && isSync {
+		delay := ctx.Now.Sub(ctx.Crawler.Time())
+		if delay > params.TimeBetweenBlocks[0] {
+			estprio := (delay-params.TimeBetweenBlocks[0]+params.TimeBetweenBlocks[1]/2)/params.TimeBetweenBlocks[1] + 1
+			health -= float64(estprio) * missedPriorityPenalty
+		}
+	}
+
+	if health < 0 {
+		health = 0
+	}
+	return int(math.Round(health))
 }

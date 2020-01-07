@@ -201,7 +201,7 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 			// don't count endorsements for the current block
 			if b.Height != nowheight {
 				nEndorse := bits.OnesCount32(b.SlotsEndorsed)
-				ec.MissedEndorsements += 32 - nEndorse
+				ec.MissedEndorsements += p.EndorsersPerBlock - nEndorse
 				endorseStats.Add(int64(nEndorse))
 				if nEndorse < worstEndorsements {
 					worstEndorsements = nEndorse
