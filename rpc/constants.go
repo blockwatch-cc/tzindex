@@ -66,7 +66,7 @@ func (c Constants) HaveV6Rewards() bool {
 
 func (c Constants) GetBlockReward() int64 {
 	if c.HaveV6Rewards() {
-		return c.BakingRewardPerEndorsement_v6[0]
+		return c.BakingRewardPerEndorsement_v6[0] * int64(c.EndorsersPerBlock)
 	}
 	return c.BlockReward_v1
 }
