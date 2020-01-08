@@ -1,6 +1,15 @@
 # Changelog
 
+## v5.3.0
+
+### CLI CHANGES
+- support url paths in `--rpcurl`
+
 ### FIXES
+- fixed empty cycle response on zero supply
+- voting period start and end heights are no longer off by 1
+- voting quorum, ema and eligible rolls calculations are corrected
+- improved smart contract entrypoint detection so that annotated parent nodes in the parameter primitive tree are no longer shadowing valid entrypoints
 
 ### NEW EXPLORER FEATURES
 - listing account ops supports `order`, `block` and `since` query arguments
@@ -19,12 +28,14 @@
 	- `/explorer/bigmap/{id}/updates` list bigmap updates
 	- `/explorer/bigmap/{id}/{key}` single bigmap value
 	- `/explorer/bigmap/{id}/{key}/updates` list updates for a single bigmap value
-
+- add network health estimation based on recent 128 blocks (priority, endorsements, reorgs)
 
 ### NEW TABLE FEATURES
 - added bigmap table `/tables/bigmap` to access raw bigmap updates
 
 ### DEPRECATION NOTICES
+- removed deprecated [contract](#contracts) field `ops` and endpoint `/explorer/contract/{addr}/op` (use `/explorer/account/{addr}/op` endpoint instead)
+- removed deprecated [contract](#contracts) fields `delegate`, `manager`, `script` (use new endpoints or related account endpoints instead)
 
 
 ## v5.2.0
