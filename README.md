@@ -8,7 +8,7 @@ All-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resour
 
 - indexes and cross-checks full on-chain state
 - feature-rich [REST API](https://tzstats.com/docs/api/index.html) with objects, bulk tables and time-series
-- supports protocols up to Babylon 2.0.1 (v005)
+- supports protocols up to Carthage 2.0 (v006)
 - auto-detects and locks Tezos network (never mixes data from different networks)
 - indexes all accounts and smart-contracts (including genesis data)
 - follows chain reorgs as they are resolved
