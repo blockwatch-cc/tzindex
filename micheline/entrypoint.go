@@ -99,7 +99,6 @@ func isKnownEntrypointPrefix(s string) bool {
 
 // walks T_OR expressions and stores each non-T_OR branch as entrypoint
 func listEntrypoints(e Entrypoints, branch string, node *Prim) error {
-	// if node.OpCode == T_OR && (len(branch) == 0 || !node.HasAnno() || node.GetAnno() == "default") {
 	if node.OpCode == T_OR && !isKnownEntrypointPrefix(node.GetAnno()) {
 		if l := len(node.Args); l != 2 {
 			return fmt.Errorf("micheline: expected 2 arguments for T_OR, git %d", l)

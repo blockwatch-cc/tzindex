@@ -259,8 +259,6 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 					log.Errorf("explorer op: %s missing entrypoint %s", t.Hash, params.Entrypoint)
 				}
 			}
-			// buf, _ := json.Marshal(t.Errors)
-			// log.Infof("Params op=%s params_branch=%s branch=%s entry=%s status=%s %s", op.Hash, branch, ep.Branch, params.Entrypoint, t.Status, string(buf))
 			prim := params.Unwrap(eps) // strip L/R T_OR data
 			t.Parameters = &ExplorerParameters{
 				Entrypoint: params.Entrypoint, // from params, e.g. "default"

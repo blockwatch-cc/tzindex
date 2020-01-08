@@ -200,10 +200,10 @@ type BlockchainConfig struct {
 	EndHeight   int64              `json:"end_height"`
 
 	// fixed
-	NoRewardCycles              int64 `json:"no_reward_cycles"`                // from mainnet genesis
-	SecurityDepositRampUpCycles int64 `json:"security_deposit_ramp_up_cycles"` // increase 1/64th each cycle
+	NoRewardCycles              int64 `json:"no_reward_cycles"`
+	SecurityDepositRampUpCycles int64 `json:"security_deposit_ramp_up_cycles"`
 	Decimals                    int   `json:"decimals"`
-	Token                       int64 `json:"units"` // atomic units per token
+	Token                       int64 `json:"units"`
 
 	// may change with protocol updates
 	BlockReward                  float64 `json:"block_reward"`
