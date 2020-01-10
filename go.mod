@@ -3,7 +3,7 @@ module blockwatch.cc/tzindex
 go 1.13
 
 require (
-	blockwatch.cc/packdb v0.0.0-20191211094103-2d121763284e
+	blockwatch.cc/packdb v0.0.0-20200110211315-542dec809046
 	github.com/cespare/xxhash v1.1.0
 	github.com/echa/config v1.0.0
 	github.com/echa/log v1.0.0
@@ -15,9 +15,9 @@ require (
 	github.com/spf13/cobra v0.0.5
 	github.com/spf13/pflag v1.0.5 // indirect
 	go.etcd.io/bbolt v1.3.3
-	golang.org/x/crypto v0.0.0-20191206172530-e9b2fee46413
+	golang.org/x/crypto v0.0.0-20200109152110-61a87790db17
 	golang.org/x/net v0.0.0-20191209160850-c0dbc17a3553
-	golang.org/x/sys v0.0.0-20191218084908-4a24b4065292 // indirect
+	golang.org/x/sys v0.0.0-20200107162124-548cf772de50 // indirect
 	golang.org/x/text v0.3.2 // indirect
 	gopkg.in/bson.v2 v2.0.0-20171018101713-d8c8987b8862 // indirect
 	gopkg.in/mgo.v2 v2.0.0-20190816093944-a6b53ec6cb22 // indirect
