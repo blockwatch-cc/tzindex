@@ -240,9 +240,16 @@ func newRPCClient() (*rpc.Client, error) {
 func parseRPCFlags() error {
 	// overwrite config from flags
 	if rpcurl != "" {
-		u, err := url.Parse(rpcurl)
+		ux := rpcurl
+		if !strings.HasPrefix(ux, "http") {
+			ux = "http://" + ux
+		}
+		u, err := url.Parse(ux)
 		if err != nil {
-			return fmt.Errorf("invalid rpc url: %v", err)
+			return fmt.Errorf("invalid rpc url '%s': %v", rpcurl, err)
+		}
+		if u.Scheme == "" || u.Host == "" {
+			return fmt.Errorf("invalid rpc url '%s'", rpcurl)
 		}
 		fields := strings.Split(u.Host, ":")
 		if len(fields[0]) > 0 {
