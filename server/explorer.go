@@ -392,8 +392,13 @@ func estimateHealth(ctx *ApiContext, height, history int64) int {
 	// check if next block is past due and estimate expected priority
 	if height == nowheight && isSync {
 		delay := ctx.Now.Sub(ctx.Crawler.Time())
-		if delay > params.TimeBetweenBlocks[0] {
-			estprio := (delay-params.TimeBetweenBlocks[0]+params.TimeBetweenBlocks[1]/2)/params.TimeBetweenBlocks[1] + 1
+		t1 := params.TimeBetweenBlocks[0]
+		t2 := params.TimeBetweenBlocks[1]
+		if t2 == 0 {
+			t2 = t1
+		}
+		if delay > t1 {
+			estprio := (delay-t1+t2/2)/t2 + 1
 			health -= float64(estprio) * missedPriorityPenalty
 		}
 	}
