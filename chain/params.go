@@ -33,7 +33,7 @@ type Params struct {
 	EndorsersPerBlock            int              `json:"endorsers_per_block"`
 	HardGasLimitPerOperation     int64            `json:"hard_gas_limit_per_operation"`
 	HardGasLimitPerBlock         int64            `json:"hard_gas_limit_per_block"`
-	ProofOfWorkThreshold         uint64           `json:"proof_of_work_threshold"`
+	ProofOfWorkThreshold         int64            `json:"proof_of_work_threshold"`
 	ProofOfWorkNonceSize         int              `json:"proof_of_work_nonce_size"`
 	TokensPerRoll                int64            `json:"tokens_per_roll"`
 	MichelsonMaximumTypeSize     int              `json:"michelson_maximum_type_size"`

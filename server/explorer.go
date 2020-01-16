@@ -228,7 +228,7 @@ type BlockchainConfig struct {
 	OriginationSize              int64   `json:"origination_size"`
 	PreservedCycles              int64   `json:"preserved_cycles"`
 	ProofOfWorkNonceSize         int     `json:"proof_of_work_nonce_size"`
-	ProofOfWorkThreshold         uint64  `json:"proof_of_work_threshold"`
+	ProofOfWorkThreshold         int64   `json:"proof_of_work_threshold"`
 	SeedNonceRevelationTip       float64 `json:"seed_nonce_revelation_tip"`
 	TimeBetweenBlocks            [2]int  `json:"time_between_blocks"`
 	TokensPerRoll                float64 `json:"tokens_per_roll"`
