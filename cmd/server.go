@@ -28,6 +28,7 @@ var (
 	unsafe  bool
 	norpc   bool
 	noapi   bool
+	cors    bool
 	stop    int64
 )
 
@@ -40,6 +41,7 @@ func init() {
 	runCmd.Flags().BoolVar(&noindex, "noindex", false, "disable indexing")
 	runCmd.Flags().BoolVar(&unsafe, "unsafe", false, "disable fsync for fast ingest (DANGEROUS! data will be lost on crashes)")
 	runCmd.Flags().Int64Var(&stop, "stop", 0, "stop indexing after `height`")
+	runCmd.Flags().BoolVar(&cors, "enable-cors", false, "enable API CORS support")
 
 	rootCmd.AddCommand(runCmd)
 }
@@ -163,7 +165,7 @@ func runServer(args []string) error {
 				MaxListCount:        config.GetUint("server.max_list_count"),
 				DefaultExploreCount: config.GetUint("server.default_explore_count"),
 				MaxExploreCount:     config.GetUint("server.max_explore_count"),
-				CorsEnable:          config.GetBool("server.cors_enable"),
+				CorsEnable:          cors || config.GetBool("server.cors_enable"),
 				CorsOrigin:          config.GetString("server.cors_origin"),
 				CorsAllowHeaders:    config.GetString("server.cors_allow_headers"),
 				CorsExposeHeaders:   config.GetString("server.cors_expose_headers"),
