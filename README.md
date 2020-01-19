@@ -144,6 +144,7 @@ Usage:
   tzindex run [flags]
 
 Flags:
+      --enable-cors      enable API CORS support
   -h, --help             help for run
       --noapi            disable API server
       --noindex          disable indexing

@@ -1,5 +1,17 @@
 # Changelog
 
+## v5.3.2
+
+- add --enable-cors switch for local mode
+- change proof_of_work_threshold type to int64
+- fix rpc url parsing
+- fix for empty time config in zeronet
+
+
+## v5.3.1
+
+- update packdb to flush table metadata on journal flush
+
 ## v5.3.0
 
 ### CLI CHANGES
