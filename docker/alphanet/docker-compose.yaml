@@ -5,15 +5,17 @@
 #       FILESYSTEM PERMISSIONS.
 #
 version: '2.2'
+volumes:
+  alphanet_data:
 services:
   # # run tezos node
   # tezos_alphanet:
   #   image: tezos/tezos:alphanet
-  #   command: ["tezos-node", "run", "--history-mode", "archive"]
+  #   command: ["tezos-node", "--history-mode", "archive"]
   #   ports:
   #     - "9732:9732"
   #   volumes:
-  #     - /blockchain_data:/var/run/tezos/node
+  #     - alphanet_data:/var/run/tezos/node
 
   # # optional rpc prozy, not required for regular operation
   # tzproxy_alphanet:
@@ -21,7 +23,7 @@ services:
   #   image: blockwatch/tzproxy:latest
   #   command: [
   #     "tzproxy",
-  #     "-db", "/data/alphanet/tzproxy/tezos-alphanet.db",
+  #     "-db", "/data/proxy/tezos-alphanet.db",
   #     "-host", "http://tezos_alphanet:8732",
   #     "-server", "0.0.0.0:8732",
   #     "-blocks-per-cycle", "2048",
@@ -29,13 +31,13 @@ services:
   #     "run"
   #   ]
   #   volumes:
-  #     - index_data:/data
+  #     - alphanet_data:/data
 
   # tezos index
   tzindex_alphanet:
     image: blockwatch/tzindex:latest
     volumes:
-      - ./tezos:/data
+      - alphanet_data:/data
     ports:
       - 8002:8002
     environment:
@@ -45,8 +47,8 @@ services:
       - TZ_SERVER_ADDR=0.0.0.0
       - TZ_SERVER_PORT=8002
       - TZ_SERVER_CORS_ENABLE=true
-      - TZ_DATABASE_PATH=/data/alphanet/tzindex
-      - TZ_SNAPSHOT_PATH=/data/snapshots/alphanet
+      - TZ_DATABASE_PATH=/data/index
+      - TZ_SNAPSHOT_PATH=/data/snapshots
     stop_grace_period: 1m
 
   # tzstats frontend

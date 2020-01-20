@@ -8,6 +8,7 @@ fi
 
 # allow the container to be started with `--user`
 if [ "$1" = '${BUILD_TARGET}' -a "$(id -u)" = '0' ]; then
+	chown ${USER} /data
 	exec su-exec ${USER} "$0" "$@"
 fi
 

@@ -27,6 +27,5 @@ COPY          docker/config.json /home/$USER/
 RUN           chmod +x /usr/local/bin/${BUILD_TARGET}
 WORKDIR       /home/$USER
 EXPOSE        8000
-USER          $USER
 ENTRYPOINT    ["docker-entrypoint.sh"]
 CMD           ["", "run"]

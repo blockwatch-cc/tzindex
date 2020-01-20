@@ -5,15 +5,17 @@
 #       FILESYSTEM PERMISSIONS.
 #
 version: '2.2'
+volumes:
+  zeronet_data:
 services:
   # # run tezos node
   # tezos_zeronet:
   #   image: tezos/tezos:zeronet
-  #   command: ["tezos-node", "run", "--history-mode", "archive"]
+  #   command: ["tezos-node", "--history-mode", "archive"]
   #   ports:
   #     - "9732:9732"
   #   volumes:
-  #     - /blockchain_data:/var/run/tezos/node
+  #     - zeronet_data:/var/run/tezos/node
 
   # # optional rpc prozy, not required for regular operation
   # tzproxy_zeronet:
@@ -21,7 +23,7 @@ services:
   #   image: blockwatch/tzproxy:latest
   #   command: [
   #     "tzproxy",
-  #     "-db", "/data/zeronet/tzproxy/tezos-zeronet.db",
+  #     "-db", "/data/proxy/tezos-zeronet.db",
   #     "-host", "http://tezos_zeronet:8732",
   #     "-server", "0.0.0.0:8732",
   #     "-blocks-per-cycle", "128",
@@ -29,13 +31,13 @@ services:
   #     "run"
   #   ]
   #   volumes:
-  #     - index_data:/data
+  #     - zeronet_data:/data
 
   # tezos index
   tzindex_zeronet:
     image: blockwatch/tzindex:latest
     volumes:
-      - ./tezos:/data
+      - zeronet_data:/data
     ports:
       - 8002:8002
     environment:
@@ -45,8 +47,8 @@ services:
       - TZ_SERVER_ADDR=0.0.0.0
       - TZ_SERVER_PORT=8002
       - TZ_SERVER_CORS_ENABLE=true
-      - TZ_DATABASE_PATH=/data/zeronet/tzindex
-      - TZ_SNAPSHOT_PATH=/data/snapshots/zeronet
+      - TZ_DATABASE_PATH=/data/index
+      - TZ_SNAPSHOT_PATH=/data/snapshots
     stop_grace_period: 1m
 
   # tzstats frontend
