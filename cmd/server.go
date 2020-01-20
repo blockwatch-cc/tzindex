@@ -74,6 +74,17 @@ func runServer(args []string) error {
 		log.Warnf("Enabled NOSYNC mode. Database will not be safe on crashes!")
 	}
 
+	// make sure paths exist
+	if err := os.MkdirAll(pathname, 0700); err != nil {
+		return err
+	}
+
+	if snapPath := config.GetString("crawler.snapshot_path"); snapPath != "" {
+		if err := os.MkdirAll(snapPath, 0700); err != nil {
+			return err
+		}
+	}
+
 	// open shared state database
 	statedb, err := store.Create(engine, filepath.Join(pathname, etl.StateDBName), DBOpts(engine, false, unsafe))
 	if err != nil {
