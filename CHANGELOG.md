@@ -1,12 +1,15 @@
 # Changelog
 
+## v5.3.3
+
+- changed copyright owner to Blockwatch Data Inc.
+
 ## v5.3.2
 
 - add --enable-cors switch for local mode
 - change proof_of_work_threshold type to int64
 - fix rpc url parsing
 - fix for empty time config in zeronet
-
 
 ## v5.3.1
 

@@ -1,8 +1,8 @@
 # Blockwatch Tezos Indexer
 
-© 2019-2020 KIDTSUNAMI UG, All rights reserved.
+© 2020 Blockwatch Data Inc., All rights reserved.
 
-All-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resource friendly way to gain tactical insights and build dapps on top of Tezos.
+All-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resource friendly way to gain tactical insights and build dapps on top of Tezos. Talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](https://discord.gg/D5e98Hw).
 
 **Core Features**
 
@@ -160,19 +160,19 @@ Flags:
 
 This Software is available under two different licenses, the open-source **MIT** license with limited support / best-effort updates and a **PRO** license with professional support and scheduled updates. The professional license is meant for businesses such as staking providers, wallet providers, exchanges, asset issuers, and auditors who would like to use this software for their internal operations or bundle it with their commercial services.
 
-The PRO licenses helps us pay for software updates and maintenance and operate the free community services like Tzstats.com.
+The PRO licenses helps us pay for software updates and maintenance and operate the free community services on tzstats.com.
 
-The following table may help you pick the right license for your intended use-case. If in doubt, send an email to license@kidtsunami.com and we'll get back to you.
+The following table may help you pick the right license for your intended use-case. If in doubt, send an email to license@blockwatch.cc and we'll get back to you.
 
 
 | | MIT | PRO |
 |-|---------------|----------------|
-| Price | Free | 199 EUR / protocol upgrade |
+| Costs | Free | Per Major Version |
 | Type | Perpetual | Perpetual |
 | Use | Any | Commercial Use |
-| Limitations | - | Bundle only, No clone |
+| Limitations | - | See Agreement |
 | Support | Best effort | Commercial Support Available |
-| Protocol Upgrade Availability | Best-effort before activation | during testing vote |
+| Protocol Upgrade Availability | Best-effort | Early |
 | RPC Proxy | No | Available |
 | QA Tools | No | Available |
 

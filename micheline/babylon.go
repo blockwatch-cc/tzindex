@@ -1,5 +1,5 @@
-// Copyright (c) 2019 KIDTSUNAMI
-// Author: alex@kidtsunami.com
+// Copyright (c) 2020 Blockwatch Data Inc.
+// Author: alex@blockwatch.cc
 
 // see
 // https://gitlab.com/nomadic-labs/mi-cho-coq/merge_requests/29/diffs

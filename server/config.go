@@ -1,5 +1,5 @@
 // Copyright (c) 2018 KIDTSUNAMI
-// Author: alex@kidtsunami.com
+// Author: alex@blockwatch.cc
 
 package server
 

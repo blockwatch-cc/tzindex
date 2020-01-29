@@ -1,5 +1,5 @@
-// Copyright (c) 2019 KIDTSUNAMI
-// Author: alex@kidtsunami.com
+// Copyright (c) 2020 Blockwatch Data Inc.
+// Author: alex@blockwatch.cc
 
 package cmd
 
@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	COMPANY_NAME         = "KIDTSUNAMI UG"
+	COMPANY_NAME         = "Blockwach Data Inc."
 	APP_NAMESPACE        = "cc.blockwatch"
 	ORG_NAME             = "Blockwatch"
 	APP_NAME             = "tzindex"
@@ -45,7 +45,7 @@ var versionCmd = &cobra.Command{
 	Short: "Print the version number of " + APP_NAME,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("%s tzindex %s -- %s\n", ORG_NAME, VERSION, GITCOMMIT)
-		fmt.Printf("(c) Copyright 2018-2020 -- %s\n", COMPANY_NAME)
+		fmt.Printf("(c) Copyright 2020 -- %s\n", COMPANY_NAME)
 		fmt.Printf("Go version (client): %s\n", runtime.Version())
 	},
 }

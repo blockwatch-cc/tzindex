@@ -1,5 +1,5 @@
-// Copyright (c) 2019 KIDTSUNAMI
-// Author: alex@kidtsunami.com
+// Copyright (c) 2020 Blockwatch Data Inc.
+// Author: alex@blockwatch.cc
 
 package rpc
 
