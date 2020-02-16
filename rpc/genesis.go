@@ -136,8 +136,10 @@ type contract struct {
 }
 
 func (b *bootstrap) DecodeContracts() ([]*X1, error) {
-	if len(b.Contracts) > len(vestingContractAddrs) {
-		return nil, fmt.Errorf("invalid list of genesis contracts, are you on Mainnet?")
+	// ignore non-mainnet contract lists (we don't know their addresses)
+	if len(b.Contracts) != len(vestingContractAddrs) {
+		log.Warnf("ignoring genesis contracts")
+		return nil, nil
 	}
 	c := make([]*X1, len(b.Contracts))
 	for i, v := range b.Contracts {
@@ -164,24 +166,24 @@ func (b *bootstrap) DecodeContracts() ([]*X1, error) {
 			return nil, err
 		}
 
-		// skip when this does not look likw a vesting contract
+		// skip when this does not look like a vesting contract
 		isVesting := true
 		switch true {
 		case c[i].Script.Storage == nil:
 			isVesting = false
-		case c[i].Script.Storage.Args == nil:
+		case len(c[i].Script.Storage.Args) == 0:
 			isVesting = false
 		case c[i].Script.Storage.Args[0] == nil:
 			isVesting = false
-		case c[i].Script.Storage.Args[0].Args == nil:
+		case len(c[i].Script.Storage.Args[0].Args) == 0:
 			isVesting = false
 		case c[i].Script.Storage.Args[0].Args[1] == nil:
 			isVesting = false
-		case c[i].Script.Storage.Args[0].Args[1].Args == nil:
+		case len(c[i].Script.Storage.Args[0].Args[1].Args) == 0:
 			isVesting = false
 		case c[i].Script.Storage.Args[0].Args[1].Args[0] == nil:
 			isVesting = false
-		case c[i].Script.Storage.Args[0].Args[1].Args[0].Args == nil:
+		case len(c[i].Script.Storage.Args[0].Args[1].Args[0].Args) == 0:
 			isVesting = false
 		}
 
