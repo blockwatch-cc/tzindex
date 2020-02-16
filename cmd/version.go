@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	COMPANY_NAME         = "Blockwach Data Inc."
+	COMPANY_NAME         = "Blockwatch Data Inc."
 	APP_NAMESPACE        = "cc.blockwatch"
 	ORG_NAME             = "Blockwatch"
 	APP_NAME             = "tzindex"
