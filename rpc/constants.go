@@ -5,6 +5,7 @@ package rpc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
@@ -33,8 +34,6 @@ type Constants struct {
 	OriginationBurn              int64    `json:"origination_burn,string"`
 	BlockSecurityDeposit         int64    `json:"block_security_deposit,string"`
 	EndorsementSecurityDeposit   int64    `json:"endorsement_security_deposit,string"`
-	BlockReward                  int64    `json:"block_reward,string"`
-	EndorsementReward            int64    `json:"endorsement_reward,string"`
 	CostPerByte                  int64    `json:"cost_per_byte,string"`
 	HardStorageLimitPerOperation int64    `json:"hard_storage_limit_per_operation,string"`
 	TestChainDuration            int64    `json:"test_chain_duration,string"`
@@ -43,14 +42,84 @@ type Constants struct {
 	MaxRevelationsPerBlock       int      `json:"max_revelations_per_block"`
 	NonceLength                  int      `json:"nonce_length"`
 
-	// Zeronet only
-	InitialEndorsers           int `json:"initial_endorsers"`
-	DelayPerMissingEndorsement int `json:"delay_per_missing_endorsement,string"`
-
 	// New in Bablyon v005
 	MinProposalQuorum int64 `json:"min_proposal_quorum"`
 	QuorumMin         int64 `json:"quorum_min"`
 	QuorumMax         int64 `json:"quorum_max"`
+
+	// Emmy+ v1
+	InitialEndorsers           int `json:"initial_endorsers"`
+	DelayPerMissingEndorsement int `json:"delay_per_missing_endorsement,string"`
+
+	// New in Carthage v006 (Emmy+ v2)
+	BakingRewardPerEndorsement_v6 [2]int64 `json:"-"`
+	EndorsementReward_v6          [2]int64 `json:"-"`
+
+	// Broken by v6
+	BlockReward_v1       int64 `json:"block_reward,string"` // default unmarshal
+	EndorsementReward_v1 int64 `json:"-"`
+}
+
+func (c Constants) HaveV6Rewards() bool {
+	return c.BakingRewardPerEndorsement_v6[0] > 0
+}
+
+func (c Constants) GetBlockReward() int64 {
+	if c.HaveV6Rewards() {
+		return c.BakingRewardPerEndorsement_v6[0] * int64(c.EndorsersPerBlock)
+	}
+	return c.BlockReward_v1
+}
+
+func (c Constants) GetEndorsementReward() int64 {
+	if c.HaveV6Rewards() {
+		return c.EndorsementReward_v6[0]
+	}
+	return c.EndorsementReward_v1
+}
+
+type v1_const struct {
+	BlockReward       int64 `json:"block_reward,string"`
+	EndorsementReward int64 `json:"endorsement_reward,string"`
+}
+
+type v6_const struct {
+	BakingRewardPerEndorsement [2]string `json:"baking_reward_per_endorsement"`
+	EndorsementReward          [2]string `json:"endorsement_reward"`
+}
+
+func (c *Constants) UnmarshalJSON(buf []byte) error {
+	type X Constants
+	cc := X{}
+	if err := json.Unmarshal(buf, &cc); err != nil {
+		return fmt.Errorf("parsing constants: %v", err)
+	}
+	// try extra unmarshal
+	v1 := v1_const{}
+	v6 := v6_const{}
+	if err := json.Unmarshal(buf, &v1); err == nil {
+		cc.BlockReward_v1 = v1.BlockReward
+		cc.EndorsementReward_v1 = v1.EndorsementReward
+	} else if err := json.Unmarshal(buf, &v6); err == nil {
+		for i, v := range v6.BakingRewardPerEndorsement {
+			val, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				return fmt.Errorf("parsing constants baking_reward_per_endorsement '%s': %v",
+					v, err)
+			}
+			cc.BakingRewardPerEndorsement_v6[i] = val
+		}
+		for i, v := range v6.EndorsementReward {
+			val, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				return fmt.Errorf("parsing constants endorsement_reward '%s': %v",
+					v, err)
+			}
+			cc.EndorsementReward_v6[i] = val
+		}
+	}
+	*c = Constants(cc)
+	return nil
 }
 
 // GetConstants returns chain configuration constants at a block hash
@@ -96,8 +165,12 @@ func (c Constants) MapToChainParams() *chain.Params {
 	p.OriginationBurn = c.OriginationBurn
 	p.BlockSecurityDeposit = c.BlockSecurityDeposit
 	p.EndorsementSecurityDeposit = c.EndorsementSecurityDeposit
-	p.BlockReward = c.BlockReward
-	p.EndorsementReward = c.EndorsementReward
+	p.BlockReward = c.GetBlockReward()
+	p.EndorsementReward = c.GetEndorsementReward()
+	if c.HaveV6Rewards() {
+		p.BlockRewardV6 = c.BakingRewardPerEndorsement_v6
+		p.EndorsementRewardV6 = c.EndorsementReward_v6
+	}
 	p.CostPerByte = c.CostPerByte
 	p.HardStorageLimitPerOperation = c.HardStorageLimitPerOperation
 	p.TestChainDuration = c.TestChainDuration

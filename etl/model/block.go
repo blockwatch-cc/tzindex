@@ -269,8 +269,7 @@ func (b *Block) BlockReward(p *chain.Params) int64 {
 		return blockReward
 	}
 
-	// The baking reward is now calculated w.r.t a given priority [p] and a
-	// number [e] of included endorsements as follows:
+	// count number of included endorsements
 	var nEndorsements int
 	for _, op := range b.Ops {
 		if op.Type != chain.OpTypeEndorsement {
@@ -279,8 +278,26 @@ func (b *Block) BlockReward(p *chain.Params) int64 {
 		eop, _ := b.GetRPCOp(op.OpN, op.OpC)
 		nEndorsements += len(eop.(*rpc.EndorsementOp).Metadata.Slots)
 	}
-	endorseFactor := 0.8 + 0.2*float64(nEndorsements)/float64(p.EndorsersPerBlock)
-	blockReward = int64(float64(blockReward) / float64(b.Priority+1) * endorseFactor)
+
+	if p.Version == 5 {
+		// in v5
+		// The baking reward is now calculated w.r.t a given priority [p] and a
+		// number [e] of included endorsements as follows:
+		endorseFactor := 0.8 + 0.2*float64(nEndorsements)/float64(p.EndorsersPerBlock)
+		blockReward = int64(float64(blockReward) / float64(b.Priority+1) * endorseFactor)
+
+	} else {
+		// starting at v6
+		// baking_reward_per_endorsement represent the reward you get (per endorsement
+		// included) for baking at priority 0 (1st elem of the list) and the reward
+		// for prio 1 and more (2nd elem). endorsement_reward is the same : reward for
+		// endorsing blocks of prio 0 and 1+
+		baseReward := p.BlockRewardV6[0]
+		if b.Priority > 0 {
+			baseReward = p.BlockRewardV6[1]
+		}
+		blockReward = int64(nEndorsements) * baseReward
+	}
 	return blockReward
 }
 

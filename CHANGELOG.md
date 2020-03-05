@@ -1,5 +1,15 @@
 # Changelog
 
+## v6.0.0
+
+## POTOCOL UPGRADE
+- supports Carthage protocol PsCARTHAGazKbHtnKfLzQg3kms52kSRpgnDY982a9oYsSXRLQEb
+- supports new Carthage reward constants for Emmy+ called `baking_reward_per_endorsement` and `endorsement_reward` in the Tezos RPC
+- updated expected income based on new rewards formula
+
+## NEW EXPLORER FEATURES
+- `/explorer/config/{height}` now returns two additional float arrays `block_rewards_v6` and `endorsement_rewards_v6` containing the new Carthage reward constants; the previous fields `block_reward` and `endorsement_reward` remain unchanged and will contain the first elements from the corresponding v6 arrays
+
 ## v5.3.3
 
 - changed copyright owner to Blockwatch Data Inc.
