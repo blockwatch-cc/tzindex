@@ -3,7 +3,7 @@ THIS_FILE := $(lastword $(MAKEFILE_LIST))
 
 REPO ?= blockwatch.cc/tzindex
 BUILD_TARGET ?= tzindex
-BUILD_VERSION ?= $(shell git describe --always --dirty)
+BUILD_VERSION ?= $(shell git describe --always --tags --dirty)
 BUILD_COMMIT ?= $(shell git rev-parse --short HEAD)
 BUILD_IMAGE := blockwatch/$(BUILD_TARGET):$(BUILD_VERSION)
 BUILD_LATEST := blockwatch/$(BUILD_TARGET):latest
