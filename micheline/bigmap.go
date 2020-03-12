@@ -167,15 +167,15 @@ func (e *BigMapDiffElem) DecodeKey(t PrimType, b []byte) error {
 
 func (e *BigMapDiffElem) UnmarshalJSON(data []byte) error {
 	var val struct {
-		Id        int64             `json:"big_map,string"`
-		Action    BigMapDiffAction  `json:"action"`
-		KeyType   *Prim             `json:"key_type"`                   // alloc
-		ValueType *Prim             `json:"value_type"`                 // alloc
-		Key       map[string]string `json:"key"`                        // update/remove
-		KeyHash   chain.ExprHash    `json:"key_hash"`                   // update/remove
-		Value     *Prim             `json:"value"`                      // update
-		SourceId  int64             `json:"source_big_map,string"`      // copy
-		DestId    int64             `json:"destination_big_map,string"` // copy
+		Id        int64                  `json:"big_map,string"`
+		Action    BigMapDiffAction       `json:"action"`
+		KeyType   *Prim                  `json:"key_type"`                   // alloc
+		ValueType *Prim                  `json:"value_type"`                 // alloc
+		Key       map[string]interface{} `json:"key"`                        // update/remove
+		KeyHash   chain.ExprHash         `json:"key_hash"`                   // update/remove
+		Value     *Prim                  `json:"value"`                      // update
+		SourceId  int64                  `json:"source_big_map,string"`      // copy
+		DestId    int64                  `json:"destination_big_map,string"` // copy
 	}
 	err := json.Unmarshal(data, &val)
 	if err != nil {
@@ -185,25 +185,53 @@ func (e *BigMapDiffElem) UnmarshalJSON(data []byte) error {
 	// unpack key type
 	switch val.Action {
 	case BigMapDiffActionUpdate, BigMapDiffActionRemove:
-		for n, v := range val.Key {
-			switch n {
-			case "int":
-				e.KeyType = T_INT
-				e.IntKey = big.NewInt(0)
-				if err := e.IntKey.UnmarshalText([]byte(v)); err != nil {
-					return fmt.Errorf("micheline: decoding bigmap int key '%s': %v", v, err)
+		switch len(val.Key) {
+		case 0:
+			// EMPTY_BIG_MAP opcode emits a remove action without key
+			// e.Key = &Prim{
+			// 	Type:   PrimNullary,
+			// 	OpCode: I_EMPTY_BIG_MAP,
+			// }
+			e.KeyType = T_STRING
+			e.StringKey = ""
+		case 1:
+			// scalar key
+			for n, v := range val.Key {
+				vv, ok := v.(string)
+				if !ok {
+					return fmt.Errorf("micheline: decoding bigmap key '%v': unexpected type %T", v, v, err)
 				}
-			case "bytes":
-				e.KeyType = T_BYTES
-				e.BytesKey, err = hex.DecodeString(v)
-				if err != nil {
-					return fmt.Errorf("micheline: decoding bigmap bytes key '%s': %v", v, err)
+				switch n {
+				case "int":
+					e.KeyType = T_INT
+					e.IntKey = big.NewInt(0)
+					if err := e.IntKey.UnmarshalText([]byte(vv)); err != nil {
+						return fmt.Errorf("micheline: decoding bigmap int key '%s': %v", v, err)
+					}
+				case "bytes":
+					e.KeyType = T_BYTES
+					e.BytesKey, err = hex.DecodeString(vv)
+					if err != nil {
+						return fmt.Errorf("micheline: decoding bigmap bytes key '%s': %v", v, err)
+					}
+				case "string":
+					e.KeyType = T_STRING
+					e.StringKey = vv
+				default:
+					return fmt.Errorf("micheline: unsupported bigmap key type %s", n)
 				}
-			case "string":
-				e.KeyType = T_STRING
-				e.StringKey = v
-			default:
-				return fmt.Errorf("micheline: unsupported bigmap key type %s", n)
+			}
+		default:
+			// Pair key: for now we store it as binary data
+			// FIXME: need to refactor the entire bigmap index to support complex keys
+			p := &Prim{}
+			if err := p.UnpackPrimitive(val.Key); err != nil {
+				return fmt.Errorf("micheline: decoding bigmap pair key: %v", err)
+			}
+			e.KeyType = T_BYTES
+			e.BytesKey, err = p.MarshalBinary()
+			if err != nil {
+				return fmt.Errorf("micheline: packing complex bigmap key: %v", err)
 			}
 		}
 		e.KeyHash = val.KeyHash
