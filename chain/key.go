@@ -221,7 +221,7 @@ func (k *Key) UnmarshalBinary(b []byte) error {
 	} else {
 		k.Data = k.Data[:l-1]
 	}
-	copy(k.Data, b)
+	copy(k.Data, b[1:])
 	return nil
 }
 
