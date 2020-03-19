@@ -1,5 +1,11 @@
 # Changelog
 
+## 6.0.1
+
+- FIXES
+  - contract calls: include non-param transactions
+  - chain: fix binary key decoding
+
 ## v6.0.0
 
 ## POTOCOL UPGRADE

@@ -1324,11 +1324,12 @@ func (m *Indexer) ListContractCalls(ctx context.Context, accId model.AccountID, 
 				Mode:  pack.FilterModeEqual,
 				Value: int64(chain.OpTypeTransaction), // must be int64 type
 			},
-			pack.Condition{
-				Field: table.Fields().Find("w"), // must have data to be a call
-				Mode:  pack.FilterModeEqual,
-				Value: true,
-			},
+			// list originations and non-parameter transactions
+			// pack.Condition{
+			// 	Field: table.Fields().Find("w"), // must have data to be a call
+			// 	Mode:  pack.FilterModeEqual,
+			// 	Value: true,
+			// },
 		},
 		Limit: int(offset + limit),
 	}
