@@ -229,7 +229,8 @@ func handleError(resp *http.Response) error {
 
 	var errs Errors
 	if err := json.Unmarshal(body, &errs); err != nil {
-		return &plainError{&httpErr, fmt.Sprintf("rpc: error decoding RPC error: %v", err)}
+		log.Errorf("rpc: error decoding RPC error: %v", err)
+		return &httpErr
 	}
 
 	if len(errs) == 0 {
