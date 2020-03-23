@@ -24,12 +24,13 @@ import (
 )
 
 var (
-	noindex bool
-	unsafe  bool
-	norpc   bool
-	noapi   bool
-	cors    bool
-	stop    int64
+	noindex   bool
+	nomonitor bool
+	unsafe    bool
+	norpc     bool
+	noapi     bool
+	cors      bool
+	stop      int64
 )
 
 func init() {
@@ -39,6 +40,7 @@ func init() {
 	runCmd.Flags().BoolVar(&norpc, "norpc", false, "disable RPC client")
 	runCmd.Flags().BoolVar(&noapi, "noapi", false, "disable API server")
 	runCmd.Flags().BoolVar(&noindex, "noindex", false, "disable indexing")
+	runCmd.Flags().BoolVar(&nomonitor, "nomonitor", false, "disable block monitor")
 	runCmd.Flags().BoolVar(&unsafe, "unsafe", false, "disable fsync for fast ingest (DANGEROUS! data will be lost on crashes)")
 	runCmd.Flags().Int64Var(&stop, "stop", 0, "stop indexing after `height`")
 	runCmd.Flags().BoolVar(&cors, "enable-cors", false, "enable API CORS support")
@@ -129,11 +131,12 @@ func runServer(args []string) error {
 	defer indexer.Close()
 
 	crawler := etl.NewCrawler(etl.CrawlerConfig{
-		DB:        statedb,
-		Indexer:   indexer,
-		Client:    rpcclient,
-		Queue:     config.GetInt("crawler.queue"),
-		StopBlock: stop,
+		DB:            statedb,
+		Indexer:       indexer,
+		Client:        rpcclient,
+		Queue:         config.GetInt("crawler.queue"),
+		EnableMonitor: !nomonitor,
+		StopBlock:     stop,
 		Snapshot: &etl.SnapshotConfig{
 			Path:          config.GetString("crawler.snapshot_path"),
 			Blocks:        config.GetInt64Slice("crawler.snapshot_blocks"),

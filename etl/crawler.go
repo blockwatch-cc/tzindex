@@ -51,12 +51,13 @@ const (
 )
 
 type CrawlerConfig struct {
-	DB        store.DB
-	Indexer   *Indexer
-	Client    *rpc.Client
-	Queue     int
-	StopBlock int64
-	Snapshot  *SnapshotConfig
+	DB            store.DB
+	Indexer       *Indexer
+	Client        *rpc.Client
+	Queue         int
+	StopBlock     int64
+	Snapshot      *SnapshotConfig
+	EnableMonitor bool
 }
 
 type SnapshotConfig struct {
@@ -70,11 +71,12 @@ type SnapshotConfig struct {
 // It also handles chain reorganizations and API calls.
 type Crawler struct {
 	sync.RWMutex
-	state      State
-	mode       Mode
-	snap       *SnapshotConfig
-	useMonitor bool
-	stopHeight int64
+	state         State
+	mode          Mode
+	snap          *SnapshotConfig
+	useMonitor    bool
+	enableMonitor bool
+	stopHeight    int64
 
 	db      store.DB
 	rpc     *rpc.Client
@@ -98,19 +100,20 @@ type Crawler struct {
 
 func NewCrawler(cfg CrawlerConfig) *Crawler {
 	return &Crawler{
-		state:      STATE_LOADING,
-		mode:       MODE_SYNC,
-		snap:       cfg.Snapshot,
-		useMonitor: false,
-		stopHeight: cfg.StopBlock,
-		db:         cfg.DB,
-		rpc:        cfg.Client,
-		builder:    NewBuilder(cfg.Indexer),
-		indexer:    cfg.Indexer,
-		queue:      make(chan *Bundle, cfg.Queue),
-		params:     chain.NewParams(),
-		plog:       NewBlockProgressLogger("Processed"),
-		quit:       make(chan struct{}),
+		state:         STATE_LOADING,
+		mode:          MODE_SYNC,
+		snap:          cfg.Snapshot,
+		useMonitor:    false,
+		enableMonitor: cfg.EnableMonitor,
+		stopHeight:    cfg.StopBlock,
+		db:            cfg.DB,
+		rpc:           cfg.Client,
+		builder:       NewBuilder(cfg.Indexer),
+		indexer:       cfg.Indexer,
+		queue:         make(chan *Bundle, cfg.Queue),
+		params:        chain.NewParams(),
+		plog:          NewBlockProgressLogger("Processed"),
+		quit:          make(chan struct{}),
 	}
 }
 
@@ -532,8 +535,10 @@ func (c *Crawler) runIngest(next chan chain.BlockHash) {
 				if c.state == STATE_CONNECTING && c.bchead != nil && c.tip != nil {
 					if c.tip.BestHeight == c.bchead.Level {
 						c.state = STATE_SYNCHRONIZED
-						c.useMonitor = true
-						log.Info("Already synchronized. Starting in monitor mode.")
+						if c.enableMonitor {
+							c.useMonitor = true
+							log.Info("Already synchronized. Starting in monitor mode.")
+						}
 					}
 				}
 				c.Unlock()
@@ -655,8 +660,10 @@ func (c *Crawler) ingest(ctx context.Context) {
 	// when received via monitoring (monitor may break, so we don't rely on it)
 	next := make(chan chain.BlockHash, cap(c.queue))
 
-	// run monitor loop in go-routine
-	go c.runMonitor(next)
+	if c.enableMonitor {
+		// run monitor loop in go-routine
+		go c.runMonitor(next)
+	}
 
 	// run ingest loop in go-routine
 	go c.runIngest(next)
@@ -933,10 +940,12 @@ func (c *Crawler) syncBlockchain() {
 		c.Lock()
 		if c.bchead != nil && block.Height >= c.bchead.Level {
 			c.state = STATE_SYNCHRONIZED
-			if !c.useMonitor {
-				log.Info("Fully synchronized. Switching to monitor mode.")
+			if c.enableMonitor {
+				if !c.useMonitor {
+					log.Info("Fully synchronized. Switching to monitor mode.")
+				}
+				c.useMonitor = true
 			}
-			c.useMonitor = true
 		}
 		state := c.state
 		c.Unlock()

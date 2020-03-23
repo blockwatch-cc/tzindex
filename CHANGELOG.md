@@ -5,6 +5,8 @@
 - FIXES
   - contract calls: include non-param transactions
   - chain: fix binary key decoding
+- NEW FEATURES
+  - added `--nomonitor` CLI switch to disable calls to Tezos node monitor enpoints
 
 ## v6.0.0
 
