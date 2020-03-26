@@ -17,6 +17,10 @@ import (
 	"blockwatch.cc/tzindex/chain"
 )
 
+var (
+	EmptyPrim = &Prim{Type: PrimNullary, OpCode: 255}
+)
+
 type PrimType byte
 
 const (

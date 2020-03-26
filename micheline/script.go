@@ -20,6 +20,7 @@ type Code struct {
 	Param   *Prim // call types
 	Storage *Prim // storage types
 	Code    *Prim // program code
+	BadCode *Prim // catch-all for ill-formed contracts
 }
 
 func NewScript() *Script {
@@ -42,6 +43,9 @@ func (c Code) MarshalJSON() ([]byte, error) {
 		Type: PrimSequence,
 		Args: []*Prim{c.Param, c.Storage, c.Code},
 	}
+	if c.BadCode != nil {
+		root = c.BadCode
+	}
 	return json.Marshal(root)
 }
 
@@ -57,6 +61,14 @@ func (p Script) MarshalBinary() ([]byte, error) {
 	root := &Prim{
 		Type: PrimSequence,
 		Args: []*Prim{p.Code.Param, p.Code.Storage, p.Code.Code},
+	}
+
+	// store ill-formed contracts
+	if p.Code.BadCode != nil {
+		root = &Prim{
+			Type: PrimSequence,
+			Args: []*Prim{EmptyPrim, EmptyPrim, EmptyPrim, p.Code.BadCode},
+		}
 	}
 
 	if err := root.EncodeBuffer(buf); err != nil {
@@ -94,10 +106,14 @@ func (c *Code) UnmarshalJSON(data []byte) error {
 
 	// check for sequence tag
 	if prim.Type != PrimSequence {
-		return fmt.Errorf("micheline: unexpected program tag 0x%x", prim.Type)
+		log.Warnf("micheline: unexpected program tag 0x%x", prim.Type)
+		c.BadCode = &prim
+		return nil
 	}
 
 	// unpack keyed program parts
+	isBadCode := false
+stopcode:
 	for _, v := range prim.Args {
 		switch v.OpCode {
 		case K_PARAMETER:
@@ -107,8 +123,13 @@ func (c *Code) UnmarshalJSON(data []byte) error {
 		case K_CODE:
 			c.Code = v
 		default:
-			return fmt.Errorf("micheline: unexpected program key 0x%x", v.OpCode)
+			isBadCode = true
+			log.Warnf("micheline: unexpected program key 0x%x (%d)", byte(v.OpCode), v.OpCode)
+			break stopcode
 		}
+	}
+	if isBadCode {
+		c.BadCode = &prim
 	}
 	return nil
 }
@@ -145,6 +166,8 @@ func (p *Script) UnmarshalBinary(data []byte) error {
 			p.Code.Storage = v
 		case K_CODE:
 			p.Code.Code = v
+		case 255:
+			p.Code.BadCode = v
 		default:
 			return fmt.Errorf("micheline: unexpected program key 0x%x", v.OpCode)
 		}
