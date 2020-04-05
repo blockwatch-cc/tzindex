@@ -1042,7 +1042,7 @@ func (m *Indexer) FindLatestDelegation(ctx context.Context, id model.AccountID) 
 			pack.Condition{
 				Field: table.Fields().Find("D"), // delegate id
 				Mode:  pack.FilterModeNotEqual,
-				Value: int64(0),
+				Value: uint64(0),
 			},
 		},
 	}

@@ -1497,29 +1497,29 @@ func (b *Builder) NewDelegationOp(ctx context.Context, oh *rpc.OperationHeader, 
 
 			// find previous delegate, if any
 			var lastsince int64
-			if op, err := b.idx.FindLatestDelegation(ctx, src.RowId); err != nil {
+			if prevop, err := b.idx.FindLatestDelegation(ctx, src.RowId); err != nil {
 				if err != index.ErrNoOpEntry {
 					return err
 				}
 				odlg = nil
-			} else {
-				lastsince = op.Height
-				odlg, ok = b.AccountById(op.ReceiverId)
+			} else if prevop.DelegateId > 0 {
+				lastsince = prevop.Height
+				odlg, ok = b.AccountById(prevop.DelegateId)
 				if !ok {
-					return fmt.Errorf("delegation rollback [%d:%d]: missing delegate id %d", op_n, op_c, op.ReceiverId)
+					return fmt.Errorf("delegation rollback [%d:%d]: missing previous delegate id %d", op_n, op_c, prevop.DelegateId)
 				}
 			}
 			if odlg == nil {
 				// we must also look for the sources' origination op that may have
 				// set the initial delegate
-				if op, err := b.idx.FindOrigination(ctx, src.RowId); err != nil {
+				if prevop, err := b.idx.FindOrigination(ctx, src.RowId); err != nil {
 					if err != index.ErrNoOpEntry {
 						return err
 					}
-				} else if op.DelegateId != 0 {
-					odlg, ok = b.AccountById(op.DelegateId)
+				} else if prevop.DelegateId != 0 {
+					odlg, ok = b.AccountById(prevop.DelegateId)
 					if !ok {
-						return fmt.Errorf("delegation rollback [%d:%d]: missing origin delegate %s", op_n, op_c, op.DelegateId)
+						return fmt.Errorf("delegation rollback [%d:%d]: missing origin delegate %s", op_n, op_c, prevop.DelegateId)
 					}
 				}
 			}
@@ -1678,29 +1678,29 @@ func (b *Builder) NewInternalDelegationOp(ctx context.Context, origsrc, origdlg 
 
 			// find previous delegate, if any
 			var lastsince int64
-			if op, err := b.idx.FindLatestDelegation(ctx, src.RowId); err != nil {
+			if prevop, err := b.idx.FindLatestDelegation(ctx, src.RowId); err != nil {
 				if err != index.ErrNoOpEntry {
 					return err
 				}
 				odlg = nil
-			} else {
-				lastsince = op.Height
-				odlg, ok = b.AccountById(op.ReceiverId)
+			} else if prevop.DelegateId > 0 {
+				lastsince = prevop.Height
+				odlg, ok = b.AccountById(prevop.DelegateId)
 				if !ok {
-					return fmt.Errorf("delegation rollback [%d:%d]: missing delegate id %d", op_n, op_c, op.ReceiverId)
+					return fmt.Errorf("delegation rollback [%d:%d]: missing previous delegate id %d", op_n, op_c, prevop.DelegateId)
 				}
 			}
 			if odlg == nil {
 				// we must also look for the sources' origination op that may have
 				// set the initial delegate
-				if op, err := b.idx.FindOrigination(ctx, src.RowId); err != nil {
+				if prevop, err := b.idx.FindOrigination(ctx, src.RowId); err != nil {
 					if err != index.ErrNoOpEntry {
 						return err
 					}
-				} else if op.DelegateId != 0 {
-					odlg, ok = b.AccountById(op.DelegateId)
+				} else if prevop.DelegateId != 0 {
+					odlg, ok = b.AccountById(prevop.DelegateId)
 					if !ok {
-						return fmt.Errorf("delegation rollback [%d:%d]: missing origin delegate %s", op_n, op_c, op.DelegateId)
+						return fmt.Errorf("delegation rollback [%d:%d]: missing origin delegate %s", op_n, op_c, prevop.DelegateId)
 					}
 				}
 			}
