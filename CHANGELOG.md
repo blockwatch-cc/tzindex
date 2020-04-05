@@ -6,6 +6,8 @@
   - contract calls: include non-param transactions
   - chain: fix binary key decoding
   - micheline: be resilient to ill-formed programs
+  - etl: fix delegation lookup during reorg
+  - bigmap: properly handle bool keys
 - NEW FEATURES
   - added `--nomonitor` CLI switch to disable calls to Tezos node monitor enpoints
 

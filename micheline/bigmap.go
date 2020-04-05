@@ -217,6 +217,19 @@ func (e *BigMapDiffElem) UnmarshalJSON(data []byte) error {
 				case "string":
 					e.KeyType = T_STRING
 					e.StringKey = vv
+				case "prim":
+					// bool or other nullary type
+					p := &Prim{}
+					if err := p.UnpackPrimitive(val.Key); err != nil {
+						return fmt.Errorf("micheline: decoding bigmap prim key: %v", err)
+					}
+					// store as bytes
+					// FIXME: need refactoring
+					e.KeyType = T_BYTES
+					e.BytesKey, err = p.MarshalBinary()
+					if err != nil {
+						return fmt.Errorf("micheline: repacking bigmap key: %v", err)
+					}
 				default:
 					return fmt.Errorf("micheline: unsupported bigmap key type %s", n)
 				}

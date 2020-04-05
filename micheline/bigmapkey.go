@@ -216,9 +216,9 @@ func (k *BigMapKey) MarshalBinary() ([]byte, error) {
 		return k.BytesKey, nil
 	case T_BOOL:
 		if k.BoolKey {
-			return []byte{byte(True)}, nil
+			return []byte{byte(D_TRUE)}, nil
 		} else {
-			return []byte{byte(False)}, nil
+			return []byte{byte(D_FALSE)}, nil
 		}
 	case T_TIMESTAMP:
 		var z Z
@@ -262,12 +262,12 @@ func NewBigMapKey(typ OpCode, i *big.Int, s string, b []byte, p *Prim) (*BigMapK
 	case T_BYTES:
 		k.BytesKey = b
 	case T_BOOL:
-		if l := len(b); l != 1 {
+		if l := len(b); l != 2 {
 			return nil, fmt.Errorf("micheline: invalid bool big_map key len %d", l)
 		}
-		if b[0] == byte(True) {
+		if b[1] == byte(D_TRUE) {
 			k.BoolKey = true
-		} else if b[0] == byte(False) {
+		} else if b[1] == byte(D_FALSE) {
 			k.BoolKey = false
 		} else {
 			return nil, fmt.Errorf("micheline: invalid bool big_map key val %x", b[0])
@@ -398,7 +398,14 @@ func (k *BigMapKey) Prim() *Prim {
 	case T_BYTES:
 		p.Bytes = k.BytesKey
 		p.Type = PrimBytes
-	case T_BOOL, T_ADDRESS, T_KEY_HASH, T_KEY:
+	case T_BOOL:
+		p.Type = PrimNullary
+		if k.BoolKey {
+			p.OpCode = D_TRUE
+		} else {
+			p.OpCode = D_FALSE
+		}
+	case T_ADDRESS, T_KEY_HASH, T_KEY:
 		p.Bytes, _ = k.MarshalBinary()
 		p.Type = PrimBytes
 	case T_PAIR, D_PAIR:
