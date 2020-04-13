@@ -210,15 +210,11 @@ type ExplorerBallot struct {
 	OpHash           chain.OperationHash    `json:"op"`
 	Ballot           chain.BallotVote       `json:"ballot"`
 	Rolls            int64                  `json:"rolls"`
-	Bond             float64                `json:"bond"`
-	Delegated        float64                `json:"delegated"`
-	NDelegations     int64                  `json:"n_delegations"`
+	Sender           string                 `json:"sender"`
 }
 
 func NewExplorerBallot(ctx *ApiContext, b *model.Ballot, p chain.ProtocolHash, o chain.OperationHash) *ExplorerBallot {
-	// we need params at the time of operation
-	params := ctx.Crawler.ParamsByHeight(b.Height)
-	ballot := &ExplorerBallot{
+	return &ExplorerBallot{
 		Height:           b.Height,
 		Timestamp:        b.Time,
 		ElectionId:       int(b.ElectionId),
@@ -228,20 +224,8 @@ func NewExplorerBallot(ctx *ApiContext, b *model.Ballot, p chain.ProtocolHash, o
 		OpHash:           o,
 		Ballot:           b.Ballot,
 		Rolls:            b.Rolls,
+		Sender:           lookupAddress(ctx, b.SourceId).String(),
 	}
-	// fetch voting roll snapshot at beginning of the election cycle
-	// which is index 15 at the end of the cycle before
-	snapcycle := params.VotingStartCycleFromHeight(b.Height)
-	snap, err := ctx.Indexer.LookupSnapshot(ctx, b.SourceId, snapcycle-1, 15)
-	if err != nil && err != index.ErrNoSnapshotEntry {
-		log.Errorf("cannot read voting snapshot [%d/15] for ballot %d: %v",
-			snapcycle-1, b.RowId, err)
-	} else {
-		ballot.Bond = params.ConvertValue(snap.Balance)
-		ballot.Delegated = params.ConvertValue(snap.Delegated)
-		ballot.NDelegations = snap.NDelegations
-	}
-	return ballot
 }
 
 func (b ExplorerElection) LastModified() time.Time {
