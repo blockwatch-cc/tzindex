@@ -1,15 +1,24 @@
 # Changelog
 
+## [UNRELEASED]
+
+**FIXES**
+
+- API: simplify ballot list return values, add missing sender
+- API: fix `since` off-by-one bug on contract call lists
+- contract calls: include non-param transactions
+- chain: fix binary key decoding
+- micheline: be resilient to ill-formed programs
+- etl: fix delegation lookup during reorg
+- bigmap: properly handle bool keys
+
+**NEW FEATURES**
+
+- added `--nomonitor` CLI switch to disable calls to Tezos node monitor enpoints
+
 ## 6.0.1
 
-- FIXES
-  - contract calls: include non-param transactions
-  - chain: fix binary key decoding
-  - micheline: be resilient to ill-formed programs
-  - etl: fix delegation lookup during reorg
-  - bigmap: properly handle bool keys
-- NEW FEATURES
-  - added `--nomonitor` CLI switch to disable calls to Tezos node monitor enpoints
+- micheline: hotfix for ingesting pair keys on Carthagenet
 
 ## v6.0.0
 

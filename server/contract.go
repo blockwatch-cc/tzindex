@@ -271,7 +271,7 @@ func ReadContractCalls(ctx *ApiContext) (interface{}, int) {
 	ops, err := ctx.Indexer.ListContractCalls(
 		ctx,
 		acc.RowId,
-		args.SinceHeight+1,
+		args.SinceHeight,
 		args.BlockHeight, // since, until (optional)
 		args.Offset,
 		ctx.Cfg.ClampExplore(args.Limit), // offset, limit (optional)
