@@ -1536,7 +1536,7 @@ func (b *Builder) NewDelegationOp(ctx context.Context, oh *rpc.OperationHeader, 
 				src.IsDelegated = true
 				src.DelegateId = odlg.RowId
 				src.DelegatedSince = lastsince
-				if src.RowId != ndlg.RowId {
+				if ndlg != nil && src.RowId != ndlg.RowId {
 					odlg.ActiveDelegations++
 				}
 				odlg.IsDirty = true
@@ -1717,7 +1717,7 @@ func (b *Builder) NewInternalDelegationOp(ctx context.Context, origsrc, origdlg 
 				src.IsDelegated = true
 				src.DelegateId = odlg.RowId
 				src.DelegatedSince = lastsince
-				if src.RowId != ndlg.RowId {
+				if ndlg != nil && src.RowId != ndlg.RowId {
 					odlg.ActiveDelegations++
 				}
 				odlg.IsDirty = true

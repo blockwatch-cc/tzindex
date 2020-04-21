@@ -1,9 +1,10 @@
 # Changelog
 
-## [UNRELEASED]
+## 6.0.2
 
 **FIXES**
 
+- ETL: fix delegation rollback for new delegators
 - API: simplify ballot list return values, add missing sender
 - API: fix `since` off-by-one bug on contract call lists
 - contract calls: include non-param transactions
