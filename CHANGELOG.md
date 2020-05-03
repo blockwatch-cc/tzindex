@@ -1,5 +1,16 @@
 # Changelog
 
+## [UNRELEASED]
+
+**FIXES**
+
+- ETL: fixed reporting volume from failed transactions in block summary
+
+**FEATURES**
+
+- API: added snapshot time to cycle
+
+
 ## 6.0.2
 
 **FIXES**

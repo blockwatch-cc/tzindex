@@ -421,7 +421,9 @@ func (b *Block) Update(accounts, delegates map[AccountID]*Account) {
 	var slotsEndorsed uint32
 
 	for _, op := range b.Ops {
-		b.Volume += op.Volume
+		if op.IsSuccess {
+			b.Volume += op.Volume
+		}
 		b.Fees += op.Fee
 		b.Rewards += op.Reward
 		b.Deposits += op.Deposit
