@@ -370,12 +370,12 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 					}
 					// copy the item
 					if item.Action == micheline.BigMapDiffActionAlloc {
-						log.Infof("BigMap %d %s alloc in block %d", v.DestId, v.Action, block.Height)
+						// log.Infof("BigMap %d %s alloc in block %d", v.DestId, v.Action, block.Height)
 						item := CopyBigMapAlloc(item, op, contract, v.DestId, counter+1, 0)
 						ins = append(ins, item)
 						last = item
 					} else {
-						log.Infof("BigMap %d %s item key %s in block %d", v.DestId, v.Action, v.KeyHash, block.Height)
+						// log.Infof("BigMap %d %s item key %s in block %d", v.DestId, v.Action, v.KeyHash, block.Height)
 						item := CopyBigMapValue(item, op, contract, v.DestId, counter+1, counter)
 						ins = append(ins, item)
 						last = item
