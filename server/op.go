@@ -271,6 +271,11 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 					Type:  ep.Prim,
 					Value: prim,
 				}
+				// HOTFIX: try marshalling the entrypoint and handle failure
+				if _, err := t.Parameters.Value.MarshalJSON(); err != nil {
+					log.Warnf("Invalid entrypoint detected name='%s' branch=%s", params.Entrypoint, params.Branch(eps))
+					t.Parameters.Value = nil
+				}
 			}
 			if args.WithPrim() {
 				t.Parameters.Prim = prim
