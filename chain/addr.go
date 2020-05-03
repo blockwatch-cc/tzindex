@@ -216,21 +216,22 @@ func (a Address) MarshalBinary() ([]byte, error) {
 }
 
 // support both the 21 byte and 22 byte versions
+// be resilient to longer byte strings with extra padding
 func (a *Address) UnmarshalBinary(b []byte) error {
-	switch len(b) {
-	case 21:
-		a.Type = ParseAddressTag(b[0])
-		b = b[1:21]
-	case 22:
+	switch true {
+	case len(b) >= 22 && (b[0] == 0 || b[0] == 1):
 		if b[0] == 0 {
 			a.Type = ParseAddressTag(b[1])
-			b = b[2:]
+			b = b[2:22]
 		} else if b[0] == 1 {
 			a.Type = AddressTypeContract
 			b = b[1:21]
 		} else {
 			return fmt.Errorf("invalid binary address prefix %x", b[0])
 		}
+	case len(b) >= 21:
+		a.Type = ParseAddressTag(b[0])
+		b = b[1:21]
 	default:
 		return fmt.Errorf("invalid binary address length %d", len(b))
 	}
