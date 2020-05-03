@@ -145,7 +145,6 @@ func (b ExplorerContract) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/{ident}/script", C(ReadContractScript)).Methods("GET")
 	r.HandleFunc("/{ident}/storage", C(ReadContractStorage)).Methods("GET")
 	return nil
-
 }
 
 type ContractRequest struct {

@@ -38,12 +38,13 @@ type ExplorerCycle struct {
 	IsActive    bool      `json:"is_active"`   // cycle is in progress
 
 	// this cycle staking data (at snapshot block or last available block)
-	SnapshotHeight int64   `json:"snapshot_height"` // -1 when no snapshot
-	SnapshotIndex  int64   `json:"snapshot_index"`  // -1 when no snapshot
-	Rolls          int64   `json:"rolls"`
-	RollOwners     int64   `json:"roll_owners"`
-	StakingSupply  float64 `json:"staking_supply"`
-	StakingPercent float64 `json:"staking_percent"` // of total supply
+	SnapshotHeight int64     `json:"snapshot_height"` // -1 when no snapshot
+	SnapshotIndex  int64     `json:"snapshot_index"`  // -1 when no snapshot
+	SnapshotTime   time.Time `json:"snapshot_time"`   // zero when no snapshot
+	Rolls          int64     `json:"rolls"`
+	RollOwners     int64     `json:"roll_owners"`
+	StakingSupply  float64   `json:"staking_supply"`
+	StakingPercent float64   `json:"staking_percent"` // of total supply
 
 	// health data across all blocks in cycle (empty for future cycles)
 	ActiveBakers       int     `json:"active_bakers"`
@@ -178,6 +179,7 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 				snapHeight = b.Height
 				ec.SnapshotHeight = b.Height
 				ec.SnapshotIndex = ((b.Height - start) / p.BlocksPerRollSnapshot)
+				ec.SnapshotTime = ctx.Indexer.BlockTime(ctx, b.Height)
 			}
 
 			// collect unique bakers
