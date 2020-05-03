@@ -5,6 +5,8 @@
 **FIXES**
 
 - ETL: fixed reporting volume from failed transactions in block summary
+- Micheline: Handle entrypoint-suffixed addresses
+- API: Hotfix for broken entrypoint detection
 
 **FEATURES**
 
