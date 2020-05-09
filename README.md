@@ -2,7 +2,7 @@
 
 © 2020 Blockwatch Data Inc., All rights reserved.
 
-All-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resource friendly way to gain tactical insights and build dapps on top of Tezos. Talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](https://discord.gg/D5e98Hw).
+All-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resource friendly way to gain tactical insights and build dapps on top of Tezos. Supported by [Blockwatch Data](https://blockwatch.cc), Pro version available on request. Talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](https://discord.gg/D5e98Hw).
 
 **Core Features**
 
