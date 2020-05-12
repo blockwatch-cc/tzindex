@@ -422,19 +422,20 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 
 			case micheline.BigMapDiffActionCopy:
 				// no unboxed value, just types
-				bmt := micheline.BigMapType(*v.ValueType)
-				upd.KeyType = &alloc.KeyType
+				bmd := alloc.BigMapDiff()
 				upd.KeyEncoding = &alloc.KeyEncoding
-				upd.ValueType = &bmt
+				upd.KeyType = &bmd.KeyType
+				upd.ValueType = (*micheline.BigMapType)(bmd.ValueType)
 				upd.SourceId = v.SourceId
 				upd.DestId = v.DestId
+				upd.ExplorerBigmapValue.Meta.BigMapId = v.DestId
 				if args.WithPrim() {
 					upd.Prim = &ExplorerBigmapKeyValue{
 						KeyType: &micheline.Prim{
 							Type:   micheline.PrimNullary,
-							OpCode: v.KeyType,
+							OpCode: bmd.KeyType,
 						},
-						ValueType: v.ValueType,
+						ValueType: bmd.ValueType,
 					}
 				}
 			}
