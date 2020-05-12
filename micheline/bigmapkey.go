@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"math/big"
 	"strconv"
+	"strings"
 	"time"
 	"unicode"
 
@@ -286,7 +287,7 @@ func NewBigMapKey(typ OpCode, i *big.Int, s string, b []byte, p *Prim) (*BigMapK
 	case T_KEY_HASH, T_ADDRESS:
 		// in some cases (originated contract storage) addresses are strings
 		if len(b) == 0 && len(s) > 0 {
-			a, err := chain.ParseAddress(s)
+			a, err := chain.ParseAddress(strings.Split(s, "%")[0])
 			if err != nil {
 				return nil, fmt.Errorf("micheline: invalid big_map key for string type address: %v", err)
 			}
