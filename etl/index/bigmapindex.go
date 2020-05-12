@@ -152,6 +152,7 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 		return err
 	}
 
+	needClear := false
 	contract := &Contract{}
 	for _, op := range block.Ops {
 		if len(op.BigMapDiff) == 0 || !op.IsSuccess {
@@ -162,6 +163,25 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 		if !ok {
 			return fmt.Errorf("missing bigmap transaction op [%d:%d]", op.OpN, op.OpC)
 		}
+
+		// clear temp bigmaps after a batch of internal ops has been processed
+		if !op.IsInternal && needClear {
+			_, err := idx.table.Delete(ctx, pack.Query{
+				Name: "etl.bigmap.clear_temp",
+				Conditions: pack.ConditionList{
+					pack.Condition{
+						Field: idx.table.Fields().Find("B"), // bigmap id
+						Mode:  pack.FilterModeLt,            // < 0
+						Value: int64(0),
+					},
+				},
+			})
+			if err != nil {
+				return fmt.Errorf("clearing temp bigmaps for op [%d:%d] failed: %v", op.OpN, op.OpC, err)
+			}
+			needClear = false
+		}
+
 		// extract deserialized bigmap diff
 		var bmd micheline.BigMapDiff
 		switch op.Type {
@@ -320,8 +340,6 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 					}
 				}
 
-				// log.Infof("BigMap %s %d key %s in block %d", v.Action, v.Id, v.KeyHash, block.Height)
-
 				// insert immediately to allow sequence of updates
 				item := NewBigMapItem(op, contract, v, prev.RowId, alloc.KeyType, last.Counter+1, nkeys)
 				if err := idx.table.Insert(ctx, item); err != nil {
@@ -331,7 +349,6 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 
 			case micheline.BigMapDiffActionAlloc:
 				// insert immediately to allow sequence of updates
-				// log.Infof("BigMap %s %d in block %d", v.Action, v.Id, block.Height)
 				item := NewBigMapItem(op, contract, v, prev.RowId, 0, 0, 0)
 				if err := idx.table.Insert(ctx, item); err != nil {
 					return fmt.Errorf("etl.bigmap.insert: %v", err)
@@ -341,7 +358,7 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 			case micheline.BigMapDiffActionCopy:
 				// copy the alloc and all current keys to new entries, set is_copied
 				ins := make([]pack.Item, 0)
-				item := &BigMapItem{}
+				needClear = needClear || v.DestId < 0
 
 				// find the source alloc and all current bigmap entries
 				var counter int64
@@ -365,18 +382,17 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 						},
 					},
 				}, func(r pack.Row) error {
-					if err := r.Decode(item); err != nil {
+					source := &BigMapItem{}
+					if err := r.Decode(source); err != nil {
 						return err
 					}
 					// copy the item
-					if item.Action == micheline.BigMapDiffActionAlloc {
-						// log.Infof("BigMap %d %s alloc in block %d", v.DestId, v.Action, block.Height)
-						item := CopyBigMapAlloc(item, op, contract, v.DestId, counter+1, 0)
+					if source.Action == micheline.BigMapDiffActionAlloc {
+						item := CopyBigMapAlloc(source, op, contract, v.DestId, counter+1, 0)
 						ins = append(ins, item)
 						last = item
 					} else {
-						// log.Infof("BigMap %d %s item key %s in block %d", v.DestId, v.Action, v.KeyHash, block.Height)
-						item := CopyBigMapValue(item, op, contract, v.DestId, counter+1, counter)
+						item := CopyBigMapValue(source, op, contract, v.DestId, counter+1, counter)
 						ins = append(ins, item)
 						last = item
 					}
@@ -390,6 +406,23 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 					return fmt.Errorf("etl.bigmap.insert: %v", err)
 				}
 			}
+		}
+	}
+
+	// clear temp bigmaps after all ops have been processed
+	if needClear {
+		_, err := idx.table.Delete(ctx, pack.Query{
+			Name: "etl.bigmap.clear_temp",
+			Conditions: pack.ConditionList{
+				pack.Condition{
+					Field: idx.table.Fields().Find("B"), // bigmap id
+					Mode:  pack.FilterModeLt,            // < 0
+					Value: int64(0),
+				},
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("clearing temp bigmaps for block %d failed: %v", block.Height, err)
 		}
 	}
 

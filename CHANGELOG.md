@@ -1,9 +1,10 @@
 # Changelog
 
-## [UNRELEASED]
+## 6.0.3
 
 **FIXES**
 
+- ETL: fixed bigmap copy duplicating temporary bigmap entries
 - ETL: fixed reporting volume from failed transactions in block summary
 - Micheline: Handle entrypoint-suffixed addresses
 - API: Hotfix for broken entrypoint detection
@@ -11,7 +12,6 @@
 **FEATURES**
 
 - API: added snapshot time to cycle
-
 
 ## 6.0.2
 
