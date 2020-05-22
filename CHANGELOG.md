@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+**FIXES**
+
+- ETL: fixed protocol version lookup and deployment numbers
+
 ## 6.0.3
 
 **FIXES**

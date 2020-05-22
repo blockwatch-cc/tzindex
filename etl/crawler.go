@@ -301,6 +301,7 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 		if c.indexer != nil {
 			// register genesis protocol
 			genesis.Params.StartHeight = 0
+			genesis.Params.Version = -1
 			c.indexer.ConnectProtocol(ctx, genesis.Params)
 
 			// add to all indexes
@@ -1031,6 +1032,10 @@ func (c *Crawler) fetchBlockByHash(ctx context.Context, blockID chain.BlockHash)
 			ForProtocol(b.Block.Protocol).
 			ForNetwork(b.Block.ChainId)
 		b.Params.Deployment = b.Block.Header.Proto
+		// adjust deployment number for genesis & bootstrap blocks
+		if height <= 1 {
+			b.Params.Deployment--
+		}
 	}
 	b.Cycle = b.Params.CycleFromHeight(height)
 
@@ -1085,6 +1090,10 @@ func (c *Crawler) fetchBlockByHeight(ctx context.Context, height int64) (*Bundle
 			ForProtocol(b.Block.Protocol).
 			ForNetwork(b.Block.ChainId)
 		b.Params.Deployment = b.Block.Header.Proto
+		// adjust deployment number for genesis & bootstrap blocks
+		if height <= 1 {
+			b.Params.Deployment--
+		}
 	}
 	b.Cycle = b.Params.CycleFromHeight(height)
 

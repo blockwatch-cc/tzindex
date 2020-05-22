@@ -181,7 +181,16 @@ func (b *Builder) Init(ctx context.Context, tip *ChainTip, c *rpc.Client) error 
 	if err != nil {
 		return err
 	}
-	b.parent.Params, err = b.idx.ParamsByDeployment(b.parent.Version)
+
+	// edge-case: when the crawler stops at the last block of a protocol
+	// deployment the protocol version in the header has already switched
+	// to the next protocol
+	version := b.parent.Version
+	p := b.idx.ParamsByHeight(0)
+	if p.IsCycleEnd(tip.BestHeight) && version > 0 {
+		version--
+	}
+	b.parent.Params, err = b.idx.ParamsByDeployment(version)
 	if err != nil {
 		return err
 	}

@@ -142,6 +142,11 @@ func NewBlock(tz *Bundle, parent *Block) (*Block, error) {
 		b.Nonce = binary.BigEndian.Uint64(tz.Block.Header.ProofOfWorkNonce)
 	}
 
+	// adjust protocol version number for genesis and bootstrap blocks
+	if b.Height <= 1 {
+		b.Version--
+	}
+
 	// be robust against missing voting period (like on block 0 and 1)
 	b.VotingPeriodKind = tz.Block.Metadata.VotingPeriodKind
 	if !b.VotingPeriodKind.IsValid() {
