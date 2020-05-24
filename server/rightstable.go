@@ -66,7 +66,7 @@ func (r *Right) MarshalJSON() ([]byte, error) {
 
 func (r *Right) TimestampMs() int64 {
 	if diff := r.Height - r.height; diff > 0 {
-		return r.ctx.Now.Add(time.Duration(diff)*r.params.TimeBetweenBlocks[0]).Unix() * 1000
+		return r.ctx.Crawler.Time().Add(time.Duration(diff)*r.params.TimeBetweenBlocks[0]).Unix() * 1000
 	}
 	// blocktime cache is lazy initialzed on first use by querying block table
 	return r.ctx.Indexer.BlockTimeMs(context.Background(), r.Height)
@@ -74,7 +74,7 @@ func (r *Right) TimestampMs() int64 {
 
 func (r *Right) Timestamp() time.Time {
 	if diff := r.Height - r.height; diff > 0 {
-		return r.ctx.Now.Add(time.Duration(diff) * r.params.TimeBetweenBlocks[0])
+		return r.ctx.Crawler.Time().Add(time.Duration(diff) * r.params.TimeBetweenBlocks[0])
 	}
 	// blocktime cache is lazy initialzed on first use by querying block table
 	return r.ctx.Indexer.BlockTime(context.Background(), r.Height)

@@ -5,6 +5,7 @@
 **FIXES**
 
 - ETL: fixed protocol version lookup and deployment numbers
+- API: fixed cache expiration time for account, contract, rights
 
 ## 6.0.3
 

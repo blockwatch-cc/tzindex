@@ -178,7 +178,7 @@ func NewExplorerAccount(ctx *ApiContext, a *model.Account, p *chain.Params, deta
 		TokenGenMin:        a.TokenGenMin,
 		TokenGenMax:        a.TokenGenMax,
 		GracePeriod:        a.GracePeriod,
-		expires:            ctx.Now.Add(p.TimeBetweenBlocks[0]),
+		expires:            ctx.Crawler.Time().Add(p.TimeBetweenBlocks[0]),
 	}
 
 	// resolve block times

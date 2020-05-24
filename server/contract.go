@@ -93,7 +93,7 @@ func NewExplorerContract(ctx *ApiContext, c *model.Contract, a *model.Account, p
 		NOrigination:   a.NOrigination,
 		TokenGenMin:    a.TokenGenMin,
 		TokenGenMax:    a.TokenGenMax,
-		expires:        ctx.Now.Add(p.TimeBetweenBlocks[0]),
+		expires:        ctx.Crawler.Time().Add(p.TimeBetweenBlocks[0]),
 	}
 
 	// resolve block times
