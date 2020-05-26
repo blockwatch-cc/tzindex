@@ -4,6 +4,7 @@
 
 **FIXES**
 
+- ETL: fixed params init for end of cycle check in builder
 - ETL: fixed protocol version lookup and deployment numbers
 - API: fixed cache expiration time for account, contract, rights
 

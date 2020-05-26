@@ -186,7 +186,7 @@ func (b *Builder) Init(ctx context.Context, tip *ChainTip, c *rpc.Client) error 
 	// deployment the protocol version in the header has already switched
 	// to the next protocol
 	version := b.parent.Version
-	p := b.idx.ParamsByHeight(0)
+	p := b.idx.ParamsByHeight(-1)
 	if p.IsCycleEnd(tip.BestHeight) && version > 0 {
 		version--
 	}
