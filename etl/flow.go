@@ -564,15 +564,15 @@ func (b *Builder) NewInternalTransactionFlows(
 		}
 
 		// cap at unclaimed balance
-		if vestingBalance > src.UnclaimedBalance {
-			vestingBalance = src.UnclaimedBalance
-		}
+		// if vestingBalance > src.UnclaimedBalance {
+		// 	vestingBalance = src.UnclaimedBalance
+		// }
 
-		// cross check
-		if moved > vestingBalance {
-			return nil, fmt.Errorf("vest: %s pour %d is larger than vesting balance %d",
-				src, moved, vestingBalance)
-		}
+		// // cross check
+		// if moved > vestingBalance {
+		// 	return nil, fmt.Errorf("vest: %s pour %d is larger than vesting balance %d",
+		// 		src, moved, vestingBalance)
+		// }
 		// vest moved amount into source
 		f := NewFlow(b.block, src, src)
 		f.Category = FlowCategoryBalance
