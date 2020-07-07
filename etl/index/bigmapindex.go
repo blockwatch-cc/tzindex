@@ -349,6 +349,7 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 
 			case micheline.BigMapDiffActionAlloc:
 				// insert immediately to allow sequence of updates
+				needClear = needClear || v.DestId < 0
 				item := NewBigMapItem(op, contract, v, prev.RowId, 0, 0, 0)
 				if err := idx.table.Insert(ctx, item); err != nil {
 					return fmt.Errorf("etl.bigmap.insert: %v", err)
