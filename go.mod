@@ -3,7 +3,7 @@ module blockwatch.cc/tzindex
 go 1.13
 
 require (
-	blockwatch.cc/packdb v0.0.0-20200709154155-3e842af5f66a
+	blockwatch.cc/packdb v0.0.0-20201121154437-716b4859c9de
 	github.com/cespare/xxhash v1.1.0
 	github.com/coreos/go-etcd v2.0.0+incompatible // indirect
 	github.com/cpuguy83/go-md2man v1.0.10 // indirect
