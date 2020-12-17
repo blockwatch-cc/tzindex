@@ -1,12 +1,44 @@
 # Changelog
 
-## [Unreleased]
+## 7.0.0
+
+Note: compatible with Delphi and API version 2020-06-01. Database rebuild is required.
 
 **FIXES**
 
 - ETL: fixed params init for end of cycle check in builder
 - ETL: fixed protocol version lookup and deployment numbers
+- ETL: fixed snapshot deadlock
+- ETL: fixed temporary bigmap allocation
+- ETL: fixed short bigmap type rendering
+- ETL: fixed params init for end of cycle check in builder
+- ETL: fixed token generation counter for bake and aidrop
+- ETL: fixed calculating performance for small bakers
+- ETL: fixed protocol version lookup and deployment numbers
+- ETL: fixed multiple race conditions
+- ETL: fixed traffic rank sorting
+- ETL: fixed return data from bigmap copy operations
+- ETL: don't update source when delegating twice to the same baker
+- ETL: fixed reporting volume from failed transactions in block summary
+- ETL: handle out-of-bounds RFC3339 timestamps (return integer when year > 9999)
+- API: fixed returning operations with bigmap remove action
+- API: don't return origination when entrypoint filter is used in contract call list
 - API: fixed cache expiration time for account, contract, rights
+- API: fixed bigmap pair key stringifier
+- API: fixed cache expiration time for account, contract, rights
+- API: fixed bigmap action listing
+- API: fixed contract lookup by multiple interface hashes
+- API: fixed account table timestamp loading when columns are limited
+- API: fixed last endorsed block lookup
+
+**FEATURES**
+
+- ETL: add nonce hash type
+- ETL: add Delphi protocol and Delphinet support
+- ETL: add implicit baker registrations to operation table
+- API: optimize access to chain tip and parameters
+- API: list related delegations when account is delegate
+- API: support temporary bigmaps
 
 ## 6.0.3
 

@@ -33,13 +33,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"blockwatch.cc/tzindex/chain"
 )
 
 type BigMapKey struct {
-	Type      OpCode
+	Type      *Prim
 	Hash      chain.ExprHash
 	IntKey    *big.Int
 	StringKey string
@@ -51,14 +50,7 @@ type BigMapKey struct {
 }
 
 func (k BigMapKey) IsPacked() bool {
-	return k.Type == T_BYTES && len(k.BytesKey) > 1 && k.BytesKey[0] == 0x5
-}
-
-func (k BigMapKey) PackedType() PrimType {
-	if !k.IsPacked() {
-		return PrimNullary
-	}
-	return PrimType(k.BytesKey[1])
+	return k.Type.OpCode == T_BYTES && len(k.BytesKey) > 1 && k.BytesKey[0] == 0x5
 }
 
 func (k BigMapKey) UnpackPrim() (*Prim, error) {
@@ -78,7 +70,7 @@ func (k BigMapKey) UnpackKey() (*BigMapKey, error) {
 		return nil, err
 	}
 	return &BigMapKey{
-		Type:      p.OpCode,
+		Type:      p.BuildType(),
 		IntKey:    p.Int,
 		StringKey: p.String,
 		BytesKey:  p.Bytes,
@@ -92,33 +84,35 @@ func ParseBigMapKeyType(typ string) (OpCode, error) {
 		return t, fmt.Errorf("micheline: invalid big_map key type '%s'", typ)
 	}
 	switch t {
-	case T_INT, T_NAT, T_MUTEZ, T_STRING, T_BYTES, T_BOOL, T_KEY_HASH, T_TIMESTAMP, T_ADDRESS:
+	case T_INT, T_NAT, T_MUTEZ, T_STRING, T_BYTES, T_BOOL, T_KEY_HASH, T_TIMESTAMP, T_ADDRESS, T_PAIR:
 		return t, nil
 	default:
-		return t, fmt.Errorf("micheline: unsupported big_map key type '%s'", t)
+		return t, fmt.Errorf("micheline: unsupported big_map key type string '%s'", t)
 	}
 }
 
 // query string parsing used for lookup (does not support Pair keys)
 func ParseBigMapKey(typ, val string) (*BigMapKey, error) {
 	var err error
-	key := &BigMapKey{}
+	key := &BigMapKey{Type: &Prim{}}
 	// try parsing expr hash first
 	key.Hash, err = chain.ParseExprHash(val)
 	if err == nil {
-		key.Type = T_KEY
+		key.Type.OpCode = T_KEY
+		key.Type.Type = PrimBytes
 		return key, nil
 	}
 	if typ == "" {
-		key.Type = InferBigMapKeyType(val)
+		key.Type.OpCode = InferBigMapKeyType(val)
 	} else {
-		key.Type, err = ParseOpCode(typ)
+		key.Type.OpCode, err = ParseOpCode(typ)
 		if err != nil {
 			return nil, err
 		}
 	}
-	switch key.Type {
+	switch key.Type.OpCode {
 	case T_INT, T_NAT, T_MUTEZ:
+		key.Type.Type = PrimInt
 		key.IntKey = big.NewInt(0)
 		if err := key.IntKey.UnmarshalText([]byte(val)); err != nil {
 			var z Z
@@ -132,18 +126,22 @@ func ParseBigMapKey(typ, val string) (*BigMapKey, error) {
 			key.IntKey = z.Big()
 		}
 	case T_STRING:
+		key.Type.Type = PrimString
 		key.StringKey = val
 	case T_BYTES:
+		key.Type.Type = PrimBytes
 		key.BytesKey, err = hex.DecodeString(val)
 		if err != nil {
 			return nil, fmt.Errorf("micheline: decoding bigmap %s key '%s': %v", key.Type, val, err)
 		}
 	case T_BOOL:
+		key.Type.Type = PrimNullary
 		key.BoolKey, err = strconv.ParseBool(val)
 		if err != nil {
 			return nil, fmt.Errorf("micheline: decoding bigmap %s key '%s': %v", key.Type, val, err)
 		}
 	case T_TIMESTAMP:
+		key.Type.Type = PrimInt
 		// either RFC3339 or UNIX seconds
 		if i, err := strconv.ParseInt(val, 10, 64); err == nil {
 			key.TimeKey = time.Unix(i, 0).UTC()
@@ -159,6 +157,7 @@ func ParseBigMapKey(typ, val string) (*BigMapKey, error) {
 			key.TimeKey = time.Unix(z.Int64(), 0).UTC()
 		}
 	case T_KEY_HASH, T_ADDRESS:
+		key.Type.Type = PrimBytes
 		key.AddrKey, err = chain.ParseAddress(val)
 		if err != nil {
 			a := chain.Address{}
@@ -172,8 +171,9 @@ func ParseBigMapKey(typ, val string) (*BigMapKey, error) {
 			key.AddrKey = a
 		}
 	default:
-		return nil, fmt.Errorf("micheline: unsupported big_map key type '%s'", key.Type)
+		return nil, fmt.Errorf("micheline: unsupported big_map key type '%s' in query", key.Type.OpCode)
 	}
+	// log.Infof("Parsed Bigmap key %s type=%s opcode=%s %s", key.String(), key.Type.Type, key.Type.OpCode, key.Type.Text())
 	return key, nil
 }
 
@@ -201,13 +201,47 @@ func InferBigMapKeyType(val string) OpCode {
 }
 
 func (k *BigMapKey) Bytes() []byte {
-	buf, _ := k.MarshalBinary()
+	p := Prim{
+		Type:   k.Type.Type,
+		OpCode: k.Type.OpCode,
+	}
+	switch k.Type.OpCode {
+	case T_INT, T_NAT, T_MUTEZ:
+		p.Int = k.IntKey
+	case T_STRING:
+		p.String = k.StringKey
+	case T_BYTES:
+		p.Bytes = k.BytesKey
+	case T_BOOL:
+		if k.BoolKey {
+			p.OpCode = D_TRUE
+		} else {
+			p.OpCode = D_FALSE
+		}
+	case T_TIMESTAMP:
+		var z Z
+		z.SetInt64(k.TimeKey.Unix())
+		p.Int = z.Big()
+	case T_ADDRESS:
+		p.Bytes, _ = k.AddrKey.MarshalBinary()
+	case T_KEY_HASH:
+		b, _ := k.AddrKey.MarshalBinary()
+		p.Bytes = b[1:] // strip leading flag
+	case T_KEY: // expression hash
+		p.Bytes = k.Hash.Hash.Hash
+	case T_PAIR, D_PAIR:
+		b, _ := k.PrimKey.MarshalBinary()
+		p.Bytes = b
+	default:
+		return nil
+	}
+	buf, _ := p.MarshalBinary()
 	return buf
 }
 
-// FIXME: check binary encoding
+// Note: this is not the encoding stored in bigmap table! (prim wrapper is missing)
 func (k *BigMapKey) MarshalBinary() ([]byte, error) {
-	switch k.Type {
+	switch k.Type.OpCode {
 	case T_INT, T_NAT, T_MUTEZ:
 		var z Z
 		return z.Set(k.IntKey).MarshalBinary()
@@ -233,116 +267,96 @@ func (k *BigMapKey) MarshalBinary() ([]byte, error) {
 			return nil, err
 		}
 		return b[1:], nil // strip leading flag
-	case T_KEY:
+	case T_KEY: // expression hash
 		return k.Hash.Hash.Hash, nil
+	case T_PAIR, D_PAIR:
+		return k.PrimKey.MarshalBinary()
 	default:
-		return nil, fmt.Errorf("micheline: unsupported big_map key type '%s'", k.Type)
+		return nil, fmt.Errorf("micheline: no binary marshaller for big_map key type '%s'", k.Type.OpCode)
 	}
 	return nil, nil
 }
 
-func NewBigMapKey(typ OpCode, i *big.Int, s string, b []byte, p *Prim) (*BigMapKey, error) {
+func NewBigMapKeyAs(typ *Prim, key *Prim) (*BigMapKey, error) {
 	k := &BigMapKey{
 		Type: typ,
 	}
-	switch typ {
+	switch typ.OpCode {
 	case T_INT, T_NAT, T_MUTEZ:
-		k.IntKey = i
+		k.IntKey = key.Int
 	case T_STRING:
 		// check if string contains ASCII only
-		if isASCII(s) {
-			k.StringKey = s
+		if isASCII(key.String) {
+			k.StringKey = key.String
 		} else {
-			b = []byte(s)
+			key.Bytes = []byte(key.String)
 		}
 		// on empty or non-ascii strings convert to bytes
-		if len(k.StringKey) == 0 && len(b) > 0 {
-			k.Type = T_BYTES
-			k.BytesKey = b
+		if len(k.StringKey) == 0 && len(key.Bytes) > 0 {
+			k.Type.OpCode = T_BYTES
+			k.BytesKey = key.Bytes
+			log.Debugf("changed string to bytes key '%x'", key.Bytes)
 		}
 	case T_BYTES:
-		k.BytesKey = b
+		k.BytesKey = key.Bytes
 	case T_BOOL:
-		if l := len(b); l != 2 {
-			return nil, fmt.Errorf("micheline: invalid bool big_map key len %d", l)
-		}
-		if b[1] == byte(D_TRUE) {
+		switch key.OpCode {
+		case D_TRUE:
 			k.BoolKey = true
-		} else if b[1] == byte(D_FALSE) {
+		case D_FALSE:
 			k.BoolKey = false
-		} else {
-			return nil, fmt.Errorf("micheline: invalid bool big_map key val %x", b[0])
+		default:
+			return nil, fmt.Errorf("micheline: invalid bool big_map key opcode %s (%[1]d)", key.OpCode)
 		}
 	case T_TIMESTAMP:
 		// in some cases (originated contract storage) timestamps are strings
-		if i == nil {
-			t, err := time.Parse(time.RFC3339, s)
+		if key.Int == nil {
+			t, err := time.Parse(time.RFC3339, key.String)
 			if err != nil {
 				return nil, fmt.Errorf("micheline: invalid big_map key for string timestamp: %v", err)
 			}
 			k.TimeKey = t
 		} else {
-			k.TimeKey = time.Unix(i.Int64(), 0).UTC()
+			k.TimeKey = time.Unix(key.Int.Int64(), 0).UTC()
 		}
 	case T_KEY_HASH, T_ADDRESS:
 		// in some cases (originated contract storage) addresses are strings
-		if len(b) == 0 && len(s) > 0 {
-			a, err := chain.ParseAddress(strings.Split(s, "%")[0])
+		if len(key.Bytes) == 0 && len(key.String) > 0 {
+			a, err := chain.ParseAddress(strings.Split(key.String, "%")[0])
 			if err != nil {
 				return nil, fmt.Errorf("micheline: invalid big_map key for string type address: %v", err)
 			}
 			k.AddrKey = a
 		} else {
 			a := chain.Address{}
-			if err := a.UnmarshalBinary(b); err != nil {
+			if err := a.UnmarshalBinary(key.Bytes); err != nil {
 				return nil, fmt.Errorf("micheline: invalid big_map key for type address: %v", err)
 			}
 			k.AddrKey = a
 		}
 
 	case T_KEY: // expression hash
-		k.Hash = chain.NewExprHash(b)
+		k.Hash = chain.NewExprHash(key.Bytes)
 
-	case T_PAIR:
-		k.PrimKey = p
+	case T_PAIR, D_PAIR:
+		k.PrimKey = key
 
 	default:
-		return nil, fmt.Errorf("micheline: big_map key type '%s' is not implemented", typ)
+		return nil, fmt.Errorf("micheline: big_map key type '%s' is not implemented", typ.OpCode)
 	}
 	return k, nil
 }
 
-func DecodeBigMapKey(typ OpCode, enc PrimType, b []byte) (*BigMapKey, error) {
-	var (
-		i   *big.Int
-		str string
-		buf []byte
-		p   *Prim
-	)
-	switch enc {
-	case PrimString:
-		str = string(b)
-	case PrimBytes:
-		buf = make([]byte, len(b))
-		copy(buf, b)
-	case PrimInt:
-		var z Z
-		err := z.UnmarshalBinary(b)
-		if err != nil {
-			return nil, err
-		}
-		i = z.Big()
-	case PrimBinary:
-		p = &Prim{}
-		if err := p.UnmarshalBinary(b); err != nil {
-			return nil, err
-		}
+func DecodeBigMapKey(typ *Prim, b []byte) (*BigMapKey, error) {
+	key := &Prim{}
+	if err := key.UnmarshalBinary(b); err != nil {
+		return nil, err
 	}
-	return NewBigMapKey(typ, i, str, buf, p)
+	return NewBigMapKeyAs(typ, key)
 }
 
 func (k *BigMapKey) String() string {
-	switch k.Type {
+	switch k.Type.OpCode {
 	case T_INT, T_NAT, T_MUTEZ:
 		return k.IntKey.Text(10)
 	case T_STRING:
@@ -358,7 +372,6 @@ func (k *BigMapKey) String() string {
 	case T_KEY:
 		return k.Hash.String()
 	case T_PAIR, D_PAIR:
-		// FIXME: recurse into pair tree
 		return fmt.Sprintf("%s#%s",
 			k.PrimKey.Args[0].Value(k.PrimKey.Args[0].OpCode),
 			k.PrimKey.Args[1].Value(k.PrimKey.Args[1].OpCode),
@@ -369,7 +382,7 @@ func (k *BigMapKey) String() string {
 }
 
 func (k *BigMapKey) Encode() string {
-	switch k.Type {
+	switch k.Type.OpCode {
 	case T_STRING:
 		return k.StringKey
 	case T_INT, T_NAT, T_MUTEZ:
@@ -384,9 +397,9 @@ func (k *BigMapKey) Encode() string {
 
 func (k *BigMapKey) Prim() *Prim {
 	p := &Prim{
-		OpCode: k.Type,
+		OpCode: k.Type.OpCode,
 	}
-	switch k.Type {
+	switch k.Type.OpCode {
 	case T_INT, T_NAT, T_MUTEZ:
 		p.Int = k.IntKey
 		p.Type = PrimInt
@@ -409,23 +422,24 @@ func (k *BigMapKey) Prim() *Prim {
 	case T_ADDRESS, T_KEY_HASH, T_KEY:
 		p.Bytes, _ = k.MarshalBinary()
 		p.Type = PrimBytes
-	case T_PAIR, D_PAIR:
+	case T_PAIR:
 		p = k.PrimKey
 	default:
 		if k.BytesKey != nil {
+			log.Debugf("micheline: unpacking big_map key type '%s'", k.Type.OpCode)
 			if err := p.UnmarshalBinary(k.BytesKey); err == nil {
 				break
 			}
 		}
 		p.Bytes, _ = k.MarshalBinary()
 		p.Type = PrimBytes
-		log.Errorf("micheline: unsupported big_map key type '%s'", k.Type)
+		log.Debugf("micheline: marshalled big_map key type '%s' as %s", k.Type.OpCode, p.Type)
 	}
 	return p
 }
 
 func (k *BigMapKey) MarshalJSON() ([]byte, error) {
-	switch k.Type {
+	switch k.Type.OpCode {
 	case T_INT, T_NAT, T_MUTEZ:
 		return []byte(strconv.Quote(k.IntKey.Text(10))), nil
 	case T_STRING:
@@ -435,23 +449,25 @@ func (k *BigMapKey) MarshalJSON() ([]byte, error) {
 	case T_BOOL:
 		return []byte(strconv.FormatBool(k.BoolKey)), nil
 	case T_TIMESTAMP:
+		if y := k.TimeKey.Year(); y < 0 || y >= 10000 {
+			return []byte(strconv.Quote(strconv.FormatInt(k.TimeKey.Unix(), 10))), nil
+		}
 		return []byte(strconv.Quote(k.TimeKey.Format(time.RFC3339))), nil
 	case T_KEY_HASH, T_ADDRESS:
 		return []byte(strconv.Quote(k.AddrKey.String())), nil
 	case T_KEY:
 		return []byte(strconv.Quote(k.Hash.String())), nil
-	case T_PAIR, D_PAIR:
-		return json.Marshal(k.PrimKey)
-	default:
-		return nil, fmt.Errorf("micheline: unsupported big_map key type '%s'", k.Type)
-	}
-}
-
-func isASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] > unicode.MaxASCII {
-			return false
+	case T_PAIR:
+		val := &BigMapValue{
+			Type:  k.Type,
+			Value: k.PrimKey,
 		}
+		return json.Marshal(val)
+	default:
+		key, _ := k.Type.MarshalJSON()
+		val, _ := k.PrimKey.MarshalJSON()
+		return nil, fmt.Errorf("micheline: unsupported big_map key type '%s': typ=%s val=%s",
+			k.Type.OpCode, string(key), string(val),
+		)
 	}
-	return true
 }

@@ -27,6 +27,7 @@ const (
 	OPERATION_LIST_LIST_HASH_PREFIX = "LLo"
 	PROTOCOL_HASH_PREFIX            = "P"
 	CONTEXT_HASH_PREFIX             = "Co"
+	NONCE_HASH_PREFIX               = "nce"
 	ED25519_SEED_PREFIX             = "edsk"
 	ED25519_PUBLIC_KEY_PREFIX       = "edpk"
 	SECP256K1_SECRET_KEY_PREFIX     = "spsk"
@@ -75,6 +76,7 @@ var (
 	OPERATION_LIST_LIST_HASH_ID = []byte{0x1D, 0x9F, 0x6D} // "\029\159\109" (* LLo(53) *)
 	PROTOCOL_HASH_ID            = []byte{0x02, 0xAA}       // "\002\170" (* P(51) *)
 	CONTEXT_HASH_ID             = []byte{0x4F, 0xC7}       // "\079\199" (* Co(52) *)
+	NONCE_HASH_ID               = []byte{0x45, 0xDC, 0xA9} // "\069\220\169" (* nce(53) *)
 
 	ED25519_SEED_ID         = []byte{0x0D, 0x0F, 0x3A, 0x07} // "\013\015\058\007" (* edsk(54) *)
 	ED25519_PUBLIC_KEY_ID   = []byte{0x0D, 0x0F, 0x25, 0xD9} // "\013\015\037\217" (* edpk(54) *)

@@ -21,12 +21,13 @@ func (c *Crawler) SnapshotRequest(ctx context.Context) error {
 	}
 	c.Lock()
 	if c.snapch != nil {
+		c.Unlock()
 		return fmt.Errorf("snapshot in progress")
 	}
 	// snapshot under lock held
 	if c.state == STATE_SYNCHRONIZED {
 		defer c.Unlock()
-		return c.Snapshot(ctx)
+		return c.snapshot_locked(ctx)
 	}
 
 	log.Infof("Scheduling snapshot.")
@@ -69,20 +70,21 @@ func (c *Crawler) MaybeSnapshot(ctx context.Context) error {
 		}()
 	}
 
-	// use current block
-	tip := c.Tip()
+	// run under lock
+	c.Lock()
+	defer c.Unlock()
 
 	// check pre-condition (all conditions are logical OR)
 	if !match && len(c.snap.Blocks) > 0 {
 		for _, v := range c.snap.Blocks {
-			if v == tip.BestHeight {
+			if v == c.tip.BestHeight {
 				match = true
 				break
 			}
 		}
 	}
 	if !match && c.snap.BlockInterval > 0 {
-		if tip.BestHeight > 0 && tip.BestHeight%c.snap.BlockInterval == 0 {
+		if c.tip.BestHeight > 0 && c.tip.BestHeight%c.snap.BlockInterval == 0 {
 			match = true
 		}
 	}
@@ -90,25 +92,28 @@ func (c *Crawler) MaybeSnapshot(ctx context.Context) error {
 		return nil
 	}
 
-	err = c.Snapshot(ctx)
+	// prevent shutdown
+	c.wg.Add(1)
+	defer c.wg.Done()
+
+	err = c.snapshot_locked(ctx)
 	return err
 }
 
-func (c *Crawler) Snapshot(ctx context.Context) error {
-	tip := c.Tip()
-
+// run under lock
+func (c *Crawler) snapshot_locked(ctx context.Context) error {
 	// perform snapshot of all databases
 	start := time.Now()
-	log.Infof("Starting database snapshots at block %d.", tip.BestHeight)
+	log.Infof("Starting database snapshots at block %d.", c.tip.BestHeight)
 
 	// dump state db ()
-	snapName := "block-" + strconv.FormatInt(tip.BestHeight, 10)
+	snapName := "block-" + strconv.FormatInt(c.tip.BestHeight, 10)
 	dbName := filepath.Base(c.db.Path())
 	snapPath := filepath.Join(c.snap.Path, snapName, dbName)
 	if err := os.MkdirAll(filepath.Dir(snapPath), 0700); err != nil {
 		return err
 	}
-	log.Infof("Creating snapshot for %s", dbName)
+	log.Infof("Creating snapshot for %s -> %s", dbName, snapPath)
 	f, err := os.OpenFile(snapPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
@@ -137,7 +142,7 @@ func (c *Crawler) Snapshot(ctx context.Context) error {
 		if err := os.MkdirAll(filepath.Dir(snapPath), 0700); err != nil {
 			return err
 		}
-		log.Infof("Creating snapshot for %s", dbName)
+		log.Infof("Creating snapshot for %s -> %s", dbName, snapPath)
 		f, err := os.OpenFile(snapPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 		if err != nil {
 			return err

@@ -77,6 +77,8 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		Hash         string          `json:"hash"`
 		Counter      int64           `json:"counter"`
 		OpN          int             `json:"op_n"`
+		OpL          int             `json:"op_l"`
+		OpP          int             `json:"op_p"`
 		OpC          int             `json:"op_c"`
 		OpI          int             `json:"op_i"`
 		Type         string          `json:"type"`
@@ -113,14 +115,18 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		BranchId     uint64          `json:"branch_id"`
 		BranchHeight int64           `json:"branch_height"`
 		BranchDepth  int64           `json:"branch_depth"`
+		IsImplicit   bool            `json:"is_implicit"`
+		Entrypoint   int             `json:"entrypoint_id"`
+		IsOrphan     bool            `json:"is_orphan"`
 	}{
 		RowId:        o.RowId.Value(),
 		Timestamp:    util.UnixMilliNonZero(o.Timestamp),
 		Height:       o.Height,
 		Cycle:        o.Cycle,
-		Hash:         o.Hash.String(),
 		Counter:      o.Counter,
 		OpN:          o.OpN,
+		OpL:          o.OpL,
+		OpP:          o.OpP,
 		OpC:          o.OpC,
 		OpI:          o.OpI,
 		Type:         o.Type.String(),
@@ -157,8 +163,14 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		BranchId:     o.BranchId,
 		BranchHeight: o.BranchHeight,
 		BranchDepth:  o.BranchDepth,
+		IsImplicit:   o.IsImplicit,
+		Entrypoint:   o.Entrypoint,
+		IsOrphan:     o.IsOrphan,
 	}
 
+	if !o.Hash.IsEqual(chain.ZeroOpHash) {
+		op.Hash = o.Hash.String()
+	}
 	if len(o.Parameters) > 0 {
 		op.Parameters = hex.EncodeToString(o.Parameters)
 	}
@@ -190,11 +202,19 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 		case "cycle":
 			buf = strconv.AppendInt(buf, o.Cycle, 10)
 		case "hash":
-			buf = strconv.AppendQuote(buf, o.Hash.String())
+			if !o.Hash.IsEqual(chain.ZeroOpHash) {
+				buf = strconv.AppendQuote(buf, o.Hash.String())
+			} else {
+				buf = append(buf, []byte(`""`)...)
+			}
 		case "counter":
 			buf = strconv.AppendInt(buf, o.Counter, 10)
 		case "op_n":
 			buf = strconv.AppendInt(buf, int64(o.OpN), 10)
+		case "op_l":
+			buf = strconv.AppendInt(buf, int64(o.OpL), 10)
+		case "op_p":
+			buf = strconv.AppendInt(buf, int64(o.OpP), 10)
 		case "op_c":
 			buf = strconv.AppendInt(buf, int64(o.OpC), 10)
 		case "op_i":
@@ -319,6 +339,20 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, o.BranchHeight, 10)
 		case "branch_depth":
 			buf = strconv.AppendInt(buf, o.BranchDepth, 10)
+		case "is_implicit":
+			if o.IsImplicit {
+				buf = append(buf, '1')
+			} else {
+				buf = append(buf, '0')
+			}
+		case "entrypoint_id":
+			buf = strconv.AppendInt(buf, int64(o.Entrypoint), 10)
+		case "is_orphan":
+			if o.IsOrphan {
+				buf = append(buf, '1')
+			} else {
+				buf = append(buf, '0')
+			}
 		default:
 			continue
 		}
@@ -344,11 +378,19 @@ func (o *Op) MarshalCSV() ([]string, error) {
 		case "cycle":
 			res[i] = strconv.FormatInt(o.Cycle, 10)
 		case "hash":
-			res[i] = strconv.Quote(o.Hash.String())
+			if !o.Hash.IsEqual(chain.ZeroOpHash) {
+				res[i] = strconv.Quote(o.Hash.String())
+			} else {
+				res[i] = `""`
+			}
 		case "counter":
 			res[i] = strconv.FormatInt(o.Counter, 10)
 		case "op_n":
 			res[i] = strconv.FormatInt(int64(o.OpN), 10)
+		case "op_l":
+			res[i] = strconv.FormatInt(int64(o.OpL), 10)
+		case "op_p":
+			res[i] = strconv.FormatInt(int64(o.OpP), 10)
 		case "op_c":
 			res[i] = strconv.FormatInt(int64(o.OpC), 10)
 		case "op_i":
@@ -421,6 +463,12 @@ func (o *Op) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(o.BranchHeight, 10)
 		case "branch_depth":
 			res[i] = strconv.FormatInt(o.BranchDepth, 10)
+		case "is_implicit":
+			res[i] = strconv.FormatBool(o.IsImplicit)
+		case "entrypoint_id":
+			res[i] = strconv.FormatInt(int64(o.Entrypoint), 10)
+		case "is_orphan":
+			res[i] = strconv.FormatBool(o.IsOrphan)
 		default:
 			continue
 		}
@@ -429,8 +477,8 @@ func (o *Op) MarshalCSV() ([]string, error) {
 }
 
 func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
-	// fetch chain params at current height
-	params := ctx.Crawler.ParamsByHeight(-1)
+	// use chain params at current height
+	params := ctx.Params
 
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
@@ -685,7 +733,7 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				switch prefix {
 				case "cycle":
 					if v == "head" {
-						currentCycle := params.CycleFromHeight(ctx.Crawler.Height())
+						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
 						v = strconv.FormatInt(int64(currentCycle), 10)
 					}
 				case "volume", "reward", "fee", "deposit", "burned":

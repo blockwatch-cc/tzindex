@@ -5,6 +5,7 @@ package chain
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
@@ -177,7 +178,8 @@ func (a Address) String() string {
 }
 
 func (a *Address) UnmarshalText(data []byte) error {
-	addr, err := ParseAddress(string(data))
+	astr := strings.Split(string(data), "%")[0]
+	addr, err := ParseAddress(astr)
 	if err != nil {
 		return err
 	}
@@ -310,4 +312,84 @@ func EncodeAddress(typ AddressType, addrhash []byte) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown address type %s for hash=%x\n", typ, addrhash)
 	}
+}
+
+type AddressSet struct {
+	set map[uint64]struct{}
+}
+
+func NewAddressSet(addrs ...Address) *AddressSet {
+	set := &AddressSet{
+		set: make(map[uint64]struct{}),
+	}
+	for _, v := range addrs {
+		set.Add(v)
+	}
+	return set
+}
+
+func (s AddressSet) hash(addr Address) uint64 {
+	h := NewInlineFNV64a()
+	h.Write([]byte{byte(addr.Type)})
+	h.Write(addr.Hash)
+	return h.Sum64()
+}
+
+func (s *AddressSet) Add(addr Address) {
+	if s.Contains(addr) {
+		fmt.Printf("AddressSet: duplicate %s\n", addr)
+		return
+	}
+	s.set[s.hash(addr)] = struct{}{}
+}
+
+func (s *AddressSet) Remove(addr Address) {
+	delete(s.set, s.hash(addr))
+}
+
+func (s AddressSet) Contains(addr Address) bool {
+	_, ok := s.set[s.hash(addr)]
+	return ok
+}
+
+// from stdlib hash/fnv/fnv.go
+const (
+	prime64  = 1099511628211
+	offset64 = 14695981039346656037
+)
+
+// InlineFNV64a is an alloc-free port of the standard library's fnv64a.
+// See https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function
+type InlineFNV64a uint64
+
+// NewInlineFNV64a returns a new instance of InlineFNV64a.
+func NewInlineFNV64a() InlineFNV64a {
+	return offset64
+}
+
+// Write adds data to the running hash.
+func (s *InlineFNV64a) Write(data []byte) (int, error) {
+	hash := uint64(*s)
+	for _, c := range data {
+		hash ^= uint64(c)
+		hash *= prime64
+	}
+	*s = InlineFNV64a(hash)
+	return len(data), nil
+}
+
+// Write adds data to the running hash.
+func (s *InlineFNV64a) WriteString(data string) (int, error) {
+	return s.Write([]byte(data))
+}
+
+// Sum64 returns the uint64 of the current resulting hash.
+func (s *InlineFNV64a) Sum64() uint64 {
+	return uint64(*s)
+}
+
+func (s *InlineFNV64a) Sum() []byte {
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], s.Sum64())
+	return buf[:]
 }

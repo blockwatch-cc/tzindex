@@ -269,6 +269,13 @@ func (idx *GovIndex) ConnectBlock(ctx context.Context, block *Block, builder Blo
 			}
 		}
 	}
+
+	// // warn at end of each cycle if indexer does not support the selected proposal yet
+	// if block.Params.IsCycleEnd(block.Height) && block.VotingPeriodKind {
+	// 	// fetch the winning proposal
+	// 	// TODO
+	// }
+
 	return nil
 }
 
@@ -555,17 +562,17 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *Block, builder
 		if op.Type != chain.OpTypeProposals {
 			continue
 		}
-		cop, ok := block.GetRPCOp(op.OpN, op.OpC)
+		cop, ok := block.GetRpcOp(op.OpL, op.OpP, op.OpC)
 		if !ok {
-			return fmt.Errorf("missing proposal op [%d:%d]", op.OpN, op.OpC)
+			return fmt.Errorf("missing proposal op [%d:%d]", op.OpL, op.OpP)
 		}
 		pop, ok := cop.(*rpc.ProposalsOp)
 		if !ok {
-			return fmt.Errorf("ballot op [%d:%d]: unexpected type %T ", op.OpN, op.OpC, cop)
+			return fmt.Errorf("ballot op [%d:%d]: unexpected type %T ", op.OpL, op.OpP, cop)
 		}
 		acc, aok := builder.AccountByAddress(pop.Source)
 		if !aok {
-			return fmt.Errorf("missing account %s in proposal op [%d:%d]", pop.Source, op.OpN, op.OpC)
+			return fmt.Errorf("missing account %s in proposal op [%d:%d]", pop.Source, op.OpL, op.OpP)
 		}
 		for _, v := range pop.Proposals {
 			if _, ok := proposalMap[v.String()]; ok {
@@ -615,17 +622,17 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *Block, builder
 		if op.Type != chain.OpTypeProposals {
 			continue
 		}
-		cop, ok := block.GetRPCOp(op.OpN, op.OpC)
+		cop, ok := block.GetRpcOp(op.OpL, op.OpP, op.OpC)
 		if !ok {
-			return fmt.Errorf("missing proposal op [%d:%d]", op.OpN, op.OpC)
+			return fmt.Errorf("missing proposal op [%d:%d]", op.OpL, op.OpP)
 		}
 		pop, ok := cop.(*rpc.ProposalsOp)
 		if !ok {
-			return fmt.Errorf("proposals op [%d:%d]: unexpected type %T ", op.OpN, op.OpC, cop)
+			return fmt.Errorf("proposals op [%d:%d]: unexpected type %T ", op.OpP, op.OpP, cop)
 		}
 		acc, aok := builder.AccountByAddress(pop.Source)
 		if !aok {
-			return fmt.Errorf("missing account %s in proposal op [%d:%d]", pop.Source, op.OpN, op.OpC)
+			return fmt.Errorf("missing account %s in proposal op [%d:%d]", pop.Source, op.OpL, op.OpP)
 		}
 		// load account rolls at snapshot block (i.e. at current voting period start - 1)
 		rolls, err := idx.rollsByHeight(ctx, acc.RowId, vote.StartHeight-1, builder)
@@ -642,7 +649,7 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *Block, builder
 		for _, v := range pop.Proposals {
 			prop, ok := proposalMap[v.String()]
 			if !ok {
-				return fmt.Errorf("missing proposal %s in op [%d:%d]", v, op.OpN, op.OpC)
+				return fmt.Errorf("missing proposal %s in op [%d:%d]", v, op.OpL, op.OpP)
 			}
 
 			// skip when the same account voted for the same proposal already
@@ -775,17 +782,17 @@ func (idx *GovIndex) processBallots(ctx context.Context, block *Block, builder B
 		if op.Type != chain.OpTypeBallot {
 			continue
 		}
-		cop, ok := block.GetRPCOp(op.OpN, op.OpC)
+		cop, ok := block.GetRpcOp(op.OpL, op.OpP, op.OpC)
 		if !ok {
-			return fmt.Errorf("missing ballot op [%d:%d]", op.OpN, op.OpC)
+			return fmt.Errorf("missing ballot op [%d:%d]", op.OpL, op.OpP)
 		}
 		bop, ok := cop.(*rpc.BallotOp)
 		if !ok {
-			return fmt.Errorf("ballot op [%d:%d]: unexpected type %T ", op.OpN, op.OpC, cop)
+			return fmt.Errorf("ballot op [%d:%d]: unexpected type %T ", op.OpL, op.OpP, cop)
 		}
 		acc, aok := builder.AccountByAddress(bop.Source)
 		if !aok {
-			return fmt.Errorf("missing account %s in proposal op [%d:%d]", bop.Source, op.OpN, op.OpC)
+			return fmt.Errorf("missing account %s in proposal op [%d:%d]", bop.Source, op.OpL, op.OpP)
 		}
 		// load account rolls at snapshot block (i.e. at current voting period start - 1)
 		rolls, err := idx.rollsByHeight(ctx, acc.RowId, vote.StartHeight-1, builder)
@@ -1053,7 +1060,6 @@ func (idx *GovIndex) quorumByHeight(ctx context.Context, height int64, params *c
 			} else {
 				// init from last Athens quorum
 				lastTurnoutEma = (8*lastQuorum + 2*lastTurnout) / 10
-				// nextEma = lastTurnoutEma
 			}
 			nextEma = lastTurnoutEma
 		} else {

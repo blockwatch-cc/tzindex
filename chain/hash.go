@@ -18,8 +18,12 @@ var (
 	// starts with an unknown identifier.
 	ErrUnknownHashType = errors.New("unknown hash type")
 
-	// ZeroHash represents an empty invalid hash type
-	ZeroHash = Hash{Type: HashTypeInvalid, Hash: nil}
+	// InvalidHash represents an empty invalid hash type
+	InvalidHash = Hash{Type: HashTypeInvalid, Hash: nil}
+
+	// ZeroHash
+	ZeroOpHash    = NewOperationHash(make([]byte, HashTypeOperation.Len()))
+	ZeroBlockHash = NewBlockHash(make([]byte, HashTypeBlock.Len()))
 )
 
 type HashType int
@@ -39,6 +43,7 @@ const (
 	HashTypeOperationListList
 	HashTypeProtocol
 	HashTypeContext
+	HashTypeNonce
 	HashTypeSeedEd25519
 	HashTypePkEd25519
 	HashTypeSkEd25519
@@ -103,6 +108,8 @@ func ParseHashType(s string) HashType {
 			return HashTypeOperationListList
 		case strings.HasPrefix(s, SECP256K1_SCALAR_PREFIX):
 			return HashTypeScalarSecp256k1
+		case strings.HasPrefix(s, NONCE_HASH_PREFIX):
+			return HashTypeNonce
 		}
 	case 54:
 		switch true {
@@ -197,6 +204,8 @@ func (t HashType) Prefix() string {
 		return PROTOCOL_HASH_PREFIX
 	case HashTypeContext:
 		return CONTEXT_HASH_PREFIX
+	case HashTypeNonce:
+		return NONCE_HASH_PREFIX
 	case HashTypeSeedEd25519:
 		return ED25519_SEED_PREFIX
 	case HashTypePkEd25519:
@@ -264,6 +273,8 @@ func (t HashType) PrefixBytes() []byte {
 		return PROTOCOL_HASH_ID
 	case HashTypeContext:
 		return CONTEXT_HASH_ID
+	case HashTypeNonce:
+		return NONCE_HASH_ID
 	case HashTypeSeedEd25519:
 		return ED25519_SEED_ID
 	case HashTypePkEd25519:
@@ -309,61 +320,39 @@ func (t HashType) Len() int {
 		return 4
 	case HashTypeId:
 		return 16
-	case HashTypePkhEd25519:
+	case HashTypePkhEd25519,
+		HashTypePkhSecp256k1,
+		HashTypePkhP256,
+		HashTypePkhNocurve,
+		HashTypePkhBlinded:
 		return 20
-	case HashTypePkhSecp256k1:
-		return 20
-	case HashTypePkhP256:
-		return 20
-	case HashTypePkhNocurve:
-		return 20
-	case HashTypePkhBlinded:
-		return 20
-	case HashTypeBlock:
+	case HashTypeBlock,
+		HashTypeOperation,
+		HashTypeOperationList,
+		HashTypeOperationListList,
+		HashTypeProtocol,
+		HashTypeContext,
+		HashTypeNonce,
+		HashTypeSeedEd25519,
+		HashTypePkEd25519,
+		HashTypeSkSecp256k1,
+		HashTypeSkP256,
+		HashTypeScriptExpr:
 		return 32
-	case HashTypeOperation:
-		return 32
-	case HashTypeOperationList:
-		return 32
-	case HashTypeOperationListList:
-		return 32
-	case HashTypeProtocol:
-		return 32
-	case HashTypeContext:
-		return 32
-	case HashTypeSeedEd25519:
-		return 32
-	case HashTypePkEd25519:
-		return 32
-	case HashTypeSkEd25519:
-		return 64
-	case HashTypePkSecp256k1:
+	case HashTypePkSecp256k1,
+		HashTypePkP256,
+		HashTypeScalarSecp256k1,
+		HashTypeElementSecp256k1:
 		return 33
-	case HashTypeSkSecp256k1:
-		return 32
-	case HashTypePkP256:
-		return 33
-	case HashTypeSkP256:
-		return 32
-	case HashTypeScalarSecp256k1:
-		return 33
-	case HashTypeElementSecp256k1:
-		return 33
-	case HashTypeScriptExpr:
-		return 32
-	case HashTypeEncryptedSeedEd25519:
+	case HashTypeEncryptedSeedEd25519,
+		HashTypeEncryptedSkSecp256k1,
+		HashTypeEncryptedSkP256:
 		return 56
-	case HashTypeEncryptedSkSecp256k1:
-		return 56
-	case HashTypeEncryptedSkP256:
-		return 56
-	case HashTypeSigEd25519:
-		return 64
-	case HashTypeSigSecp256k1:
-		return 64
-	case HashTypeSigP256:
-		return 64
-	case HashTypeSigGeneric:
+	case HashTypeSkEd25519,
+		HashTypeSigEd25519,
+		HashTypeSigSecp256k1,
+		HashTypeSigP256,
+		HashTypeSigGeneric:
 		return 64
 	default:
 		return 0
@@ -374,64 +363,47 @@ func (t HashType) Base58Len() int {
 	switch t {
 	case HashTypeChainId:
 		return 15
-	case HashTypeId:
-		return 30
-	case HashTypePkhEd25519:
-		return 36
-	case HashTypePkhSecp256k1:
-		return 36
-	case HashTypePkhP256:
-		return 36
-	case HashTypePkhNocurve:
+	case HashTypeId,
+		HashTypePkhEd25519,
+		HashTypePkhSecp256k1,
+		HashTypePkhP256,
+		HashTypePkhNocurve:
 		return 36
 	case HashTypePkhBlinded:
 		return 37
-	case HashTypeBlock:
+	case HashTypeBlock,
+		HashTypeOperation,
+		HashTypeProtocol:
 		return 51
-	case HashTypeOperation:
-		return 51
-	case HashTypeOperationList:
+	case HashTypeOperationList,
+		HashTypeContext:
 		return 52
-	case HashTypeOperationListList:
+	case HashTypeOperationListList,
+		HashTypeNonce,
+		HashTypeScalarSecp256k1:
 		return 53
-	case HashTypeProtocol:
-		return 51
-	case HashTypeContext:
-		return 52
-	case HashTypeSeedEd25519:
+	case HashTypeSeedEd25519,
+		HashTypePkEd25519,
+		HashTypeSkSecp256k1,
+		HashTypeSkP256,
+		HashTypeElementSecp256k1,
+		HashTypeScriptExpr:
 		return 54
-	case HashTypePkEd25519:
-		return 54
-	case HashTypeSkEd25519:
-		return 98
-	case HashTypePkSecp256k1:
+	case HashTypePkSecp256k1,
+		HashTypePkP256:
 		return 55
-	case HashTypeSkSecp256k1:
-		return 54
-	case HashTypePkP256:
-		return 55
-	case HashTypeSkP256:
-		return 54
-	case HashTypeScalarSecp256k1:
-		return 53
-	case HashTypeElementSecp256k1:
-		return 54
-	case HashTypeScriptExpr:
-		return 54
-	case HashTypeEncryptedSeedEd25519:
+	case HashTypeEncryptedSeedEd25519,
+		HashTypeEncryptedSkSecp256k1,
+		HashTypeEncryptedSkP256:
 		return 88
-	case HashTypeEncryptedSkSecp256k1:
-		return 88
-	case HashTypeEncryptedSkP256:
-		return 88
-	case HashTypeSigEd25519:
-		return 99
-	case HashTypeSigSecp256k1:
-		return 99
-	case HashTypeSigP256:
-		return 98
 	case HashTypeSigGeneric:
 		return 96
+	case HashTypeSkEd25519,
+		HashTypeSigP256:
+		return 98
+	case HashTypeSigEd25519,
+		HashTypeSigSecp256k1:
+		return 99
 	default:
 		return 0
 	}
@@ -464,6 +436,11 @@ func (h Hash) Clone() Hash {
 		Type: h.Type,
 		Hash: buf,
 	}
+}
+
+func (h *Hash) Reset() {
+	h.Type = HashTypeInvalid
+	h.Hash = nil
 }
 
 // String returns the string encoding of the hash.
@@ -516,6 +493,12 @@ func (h ChainIdHash) Clone() ChainIdHash {
 }
 
 func (h *ChainIdHash) UnmarshalText(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	if !strings.HasPrefix(string(data), CHAIN_ID_PREFIX) {
+		return fmt.Errorf("invalid prefix for chain id hash '%s'", string(data))
+	}
 	if err := h.Hash.UnmarshalText(data); err != nil {
 		return err
 	}
@@ -529,7 +512,7 @@ func (h *ChainIdHash) UnmarshalText(data []byte) error {
 }
 
 func (h *ChainIdHash) UnmarshalBinary(data []byte) error {
-	if len(data) != HashTypeChainId.Len() {
+	if l := len(data); l > 0 && l != HashTypeChainId.Len() {
 		return fmt.Errorf("invalid len %d for chain id hash", len(data))
 	}
 	h.Type = HashTypeChainId
@@ -574,6 +557,12 @@ func (h BlockHash) IsEqual(h2 BlockHash) bool {
 }
 
 func (h *BlockHash) UnmarshalText(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	if !strings.HasPrefix(string(data), BLOCK_HASH_PREFIX) {
+		return fmt.Errorf("invalid prefix for block hash '%s'", string(data))
+	}
 	if err := h.Hash.UnmarshalText(data); err != nil {
 		return err
 	}
@@ -587,7 +576,7 @@ func (h *BlockHash) UnmarshalText(data []byte) error {
 }
 
 func (h *BlockHash) UnmarshalBinary(data []byte) error {
-	if len(data) != HashTypeBlock.Len() {
+	if l := len(data); l > 0 && l != HashTypeBlock.Len() {
 		return fmt.Errorf("invalid len %d for block hash", len(data))
 	}
 	h.Type = HashTypeBlock
@@ -632,6 +621,12 @@ func (h ProtocolHash) IsEqual(h2 ProtocolHash) bool {
 }
 
 func (h *ProtocolHash) UnmarshalText(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	if !strings.HasPrefix(string(data), PROTOCOL_HASH_PREFIX) {
+		return fmt.Errorf("invalid prefix for protocol hash '%s'", string(data))
+	}
 	if err := h.Hash.UnmarshalText(data); err != nil {
 		return err
 	}
@@ -645,7 +640,7 @@ func (h *ProtocolHash) UnmarshalText(data []byte) error {
 }
 
 func (h *ProtocolHash) UnmarshalBinary(data []byte) error {
-	if len(data) != HashTypeProtocol.Len() {
+	if l := len(data); l > 0 && l != HashTypeProtocol.Len() {
 		return fmt.Errorf("invalid len %d for protocol hash", len(data))
 	}
 	h.Type = HashTypeProtocol
@@ -696,6 +691,12 @@ func (h OperationHash) IsEqual(h2 OperationHash) bool {
 }
 
 func (h *OperationHash) UnmarshalText(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	if !strings.HasPrefix(string(data), OPERATION_HASH_PREFIX) {
+		return fmt.Errorf("invalid prefix for operation hash '%s'", string(data))
+	}
 	if err := h.Hash.UnmarshalText(data); err != nil {
 		return err
 	}
@@ -709,7 +710,7 @@ func (h *OperationHash) UnmarshalText(data []byte) error {
 }
 
 func (h *OperationHash) UnmarshalBinary(data []byte) error {
-	if len(data) != HashTypeOperation.Len() {
+	if l := len(data); l > 0 && l != HashTypeOperation.Len() {
 		return fmt.Errorf("invalid len %d for operation hash", len(data))
 	}
 	h.Type = HashTypeOperation
@@ -754,6 +755,12 @@ func (h ExprHash) IsEqual(h2 ExprHash) bool {
 }
 
 func (h *ExprHash) UnmarshalText(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	if !strings.HasPrefix(string(data), SCRIPT_EXPR_HASH_PREFIX) {
+		return fmt.Errorf("invalid prefix for script expression hash '%s'", string(data))
+	}
 	if err := h.Hash.UnmarshalText(data); err != nil {
 		return err
 	}
@@ -767,7 +774,7 @@ func (h *ExprHash) UnmarshalText(data []byte) error {
 }
 
 func (h *ExprHash) UnmarshalBinary(data []byte) error {
-	if len(data) != HashTypeScriptExpr.Len() {
+	if l := len(data); l > 0 && l != HashTypeScriptExpr.Len() {
 		return fmt.Errorf("invalid len %d for script expression hash", len(data))
 	}
 	h.Type = HashTypeScriptExpr
@@ -792,6 +799,76 @@ func ParseExprHash(s string) (ExprHash, error) {
 	return h, nil
 }
 
+// NonceHash
+type NonceHash struct {
+	Hash
+}
+
+func NewNonceHash(buf []byte) NonceHash {
+	b := make([]byte, len(buf))
+	copy(b, buf)
+	return NonceHash{Hash: NewHash(HashTypeNonce, b)}
+}
+
+func (h NonceHash) Clone() NonceHash {
+	return NonceHash{h.Hash.Clone()}
+}
+
+func (h NonceHash) IsEqual(h2 NonceHash) bool {
+	return h.Hash.IsEqual(h2.Hash)
+}
+
+func (h *NonceHash) UnmarshalText(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	if !strings.HasPrefix(string(data), NONCE_HASH_PREFIX) {
+		return fmt.Errorf("invalid prefix for nonce hash '%s'", string(data))
+	}
+	if err := h.Hash.UnmarshalText(data); err != nil {
+		return err
+	}
+	if h.Type != HashTypeNonce {
+		return fmt.Errorf("invalid type %s for nonce hash '%s'", h.Type.Prefix(), string(data))
+	}
+	if len(h.Hash.Hash) != h.Type.Len() {
+		return fmt.Errorf("invalid len %d for nonce hash '%s'", len(h.Hash.Hash), string(data))
+	}
+	return nil
+}
+
+func (h *NonceHash) UnmarshalBinary(data []byte) error {
+	if l := len(data); l > 0 && l != HashTypeNonce.Len() {
+		return fmt.Errorf("invalid len %d for nonce hash '%s'", len(data), string(data))
+	}
+	h.Type = HashTypeNonce
+	h.Hash.Hash = make([]byte, HashTypeNonce.Len())
+	copy(h.Hash.Hash, data)
+	return nil
+}
+
+func ParseNonceHash(s string) (NonceHash, error) {
+	var h NonceHash
+	if err := h.UnmarshalText([]byte(s)); err != nil {
+		return h, err
+	}
+	return h, nil
+}
+
+func MustParseNonceHash(s string) NonceHash {
+	b, err := ParseNonceHash(s)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func ParseNonceHashSafe(s string) NonceHash {
+	var h NonceHash
+	h.UnmarshalText([]byte(s))
+	return h
+}
+
 func decodeHash(hstr string) (Hash, error) {
 	typ := ParseHashType(hstr)
 	if typ == HashTypeInvalid {
@@ -807,8 +884,8 @@ func decodeHash(hstr string) (Hash, error) {
 	if bytes.Compare(version, typ.PrefixBytes()) != 0 {
 		return Hash{}, fmt.Errorf("invalid prefix '%x' for decoded hash type '%s'", version, typ)
 	}
-	if len(decoded) != typ.Len() {
-		return Hash{}, fmt.Errorf("invalid length for decoded hash ")
+	if have, want := len(decoded), typ.Len(); have != want {
+		return Hash{}, fmt.Errorf("invalid length for decoded hash have=%d want=%d", have, want)
 	}
 	return Hash{
 		Type: typ,
@@ -820,8 +897,8 @@ func encodeHash(typ HashType, h []byte) (string, error) {
 	if typ == HashTypeInvalid {
 		return "", ErrUnknownHashType
 	}
-	if len(h) != typ.Len() {
-		return "", fmt.Errorf("invalid hash length")
+	if have, want := len(h), typ.Len(); have != want {
+		return "", fmt.Errorf("invalid hash length have=%d want=%d", have, want)
 	}
 	return base58.CheckEncode(h, typ.PrefixBytes()), nil
 }

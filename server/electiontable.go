@@ -98,10 +98,19 @@ func (e *Election) MarshalJSONVerbose() ([]byte, error) {
 		NoProposal:       e.NumProposals == 0,
 		VotingPeriodKind: chain.ToVotingPeriod(e.NumPeriods).String(),
 	}
+	if e.IsOpen {
+		p := e.ctx.Params
+		tm := e.ctx.Tip.BestTime
+		diff := 4*p.BlocksPerVotingPeriod - (e.ctx.Tip.BestHeight - e.StartHeight)
+		election.EndTime = util.UnixMilliNonZero(tm.Add(time.Duration(diff) * p.TimeBetweenBlocks[0]))
+		election.EndHeight = election.StartHeight + 4*p.BlocksPerVotingPeriod - 1
+	}
 	return json.Marshal(election)
 }
 
 func (e *Election) MarshalJSONBrief() ([]byte, error) {
+	p := e.ctx.Params
+	tm := e.ctx.Tip.BestTime
 	buf := make([]byte, 0, 2048)
 	buf = append(buf, '[')
 	for i, v := range e.columns {
@@ -121,11 +130,22 @@ func (e *Election) MarshalJSONBrief() ([]byte, error) {
 		case "start_time":
 			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(e.StartTime), 10)
 		case "end_time":
-			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(e.EndTime), 10)
+			if e.IsOpen {
+				diff := 4*p.BlocksPerVotingPeriod - (e.ctx.Tip.BestHeight - e.StartHeight)
+				endTime := tm.Add(time.Duration(diff) * p.TimeBetweenBlocks[0])
+				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(endTime), 10)
+			} else {
+				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(e.EndTime), 10)
+			}
 		case "start_height":
 			buf = strconv.AppendInt(buf, e.StartHeight, 10)
 		case "end_height":
-			buf = strconv.AppendInt(buf, e.EndHeight, 10)
+			if e.IsOpen {
+				endHeight := e.StartHeight + 4*p.BlocksPerVotingPeriod - 1
+				buf = strconv.AppendInt(buf, endHeight, 10)
+			} else {
+				buf = strconv.AppendInt(buf, e.EndHeight, 10)
+			}
 		case "is_empty":
 			if e.IsEmpty {
 				buf = append(buf, '1')
@@ -176,6 +196,8 @@ func (e *Election) MarshalJSONBrief() ([]byte, error) {
 }
 
 func (e *Election) MarshalCSV() ([]string, error) {
+	p := e.ctx.Params
+	tm := e.ctx.Tip.BestTime
 	res := make([]string, len(e.columns))
 	for i, v := range e.columns {
 		switch v {
@@ -194,11 +216,22 @@ func (e *Election) MarshalCSV() ([]string, error) {
 		case "start_time":
 			res[i] = strconv.Quote(e.StartTime.Format(time.RFC3339))
 		case "end_time":
-			res[i] = strconv.Quote(e.EndTime.Format(time.RFC3339))
+			if e.IsOpen {
+				diff := 4*p.BlocksPerVotingPeriod - (e.ctx.Tip.BestHeight - e.StartHeight)
+				endTime := tm.Add(time.Duration(diff) * p.TimeBetweenBlocks[0])
+				res[i] = strconv.Quote(endTime.Format(time.RFC3339))
+			} else {
+				res[i] = strconv.Quote(e.EndTime.Format(time.RFC3339))
+			}
 		case "start_height":
 			res[i] = strconv.FormatInt(e.StartHeight, 10)
 		case "end_height":
-			res[i] = strconv.FormatInt(e.EndHeight, 10)
+			if e.IsOpen {
+				endHeight := e.StartHeight + 4*p.BlocksPerVotingPeriod - 1
+				res[i] = strconv.FormatInt(endHeight, 10)
+			} else {
+				res[i] = strconv.FormatInt(e.EndHeight, 10)
+			}
 		case "is_empty":
 			res[i] = strconv.FormatBool(e.IsEmpty)
 		case "is_open":

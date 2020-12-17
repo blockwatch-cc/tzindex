@@ -40,7 +40,9 @@ func init() {
 
 	// add extra translations
 	incomeSourceNames["address"] = "A"
-	incomeAllAliases = append(incomeAllAliases, "address")
+	incomeSourceNames["start_time"] = "-"
+	incomeSourceNames["end_time"] = "-"
+	incomeAllAliases = append(incomeAllAliases, []string{"address", "start_time", "end_time"}...)
 }
 
 // configurable marshalling helper
@@ -62,45 +64,47 @@ func (r *Income) MarshalJSON() ([]byte, error) {
 
 func (c *Income) MarshalJSONVerbose() ([]byte, error) {
 	inc := struct {
-		RowId                  uint64  `json:"row_id"`
-		Cycle                  int64   `json:"cycle"`
-		AccountId              uint64  `json:"account_id"`
-		Address                string  `json:"address"`
-		Rolls                  int64   `json:"rolls"`
-		Balance                float64 `json:"balance"`
-		Delegated              float64 `json:"delegated"`
-		NDelegations           int64   `json:"n_delegations"`
-		NBakingRights          int64   `json:"n_baking_rights"`
-		NEndorsingRights       int64   `json:"n_endorsing_rights"`
-		Luck                   float64 `json:"luck"`
-		LuckPct                float64 `json:"luck_percent"`
-		ContributionPct        float64 `json:"contribution_percent"`
-		PerformancePct         float64 `json:"performance_percent"`
-		NBlocksBaked           int64   `json:"n_blocks_baked"`
-		NBlocksLost            int64   `json:"n_blocks_lost"`
-		NBlocksStolen          int64   `json:"n_blocks_stolen"`
-		NSlotsEndorsed         int64   `json:"n_slots_endorsed"`
-		NSlotsMissed           int64   `json:"n_slots_missed"`
-		NSeedsRevealed         int64   `json:"n_seeds_revealed"`
-		ExpectedIncome         float64 `json:"expected_income"`
-		ExpectedBonds          float64 `json:"expected_bonds"`
-		TotalIncome            float64 `json:"total_income"`
-		TotalBonds             float64 `json:"total_bonds"`
-		BakingIncome           float64 `json:"baking_income"`
-		EndorsingIncome        float64 `json:"endorsing_income"`
-		DoubleBakingIncome     float64 `json:"double_baking_income"`
-		DoubleEndorsingIncome  float64 `json:"double_endorsing_income"`
-		SeedIncome             float64 `json:"seed_income"`
-		FeesIncome             float64 `json:"fees_income"`
-		MissedBakingIncome     float64 `json:"missed_baking_income"`
-		MissedEndorsingIncome  float64 `json:"missed_endorsing_income"`
-		StolenBakingIncome     float64 `json:"stolen_baking_income"`
-		TotalLost              float64 `json:"total_lost"`
-		LostAccusationFees     float64 `json:"lost_accusation_fees"`
-		LostAccusationRewards  float64 `json:"lost_accusation_rewards"`
-		LostAccusationDeposits float64 `json:"lost_accusation_deposits"`
-		LostRevelationFees     float64 `json:"lost_revelation_fees"`
-		LostRevelationRewards  float64 `json:"lost_revelation_rewards"`
+		RowId                  uint64    `json:"row_id"`
+		Cycle                  int64     `json:"cycle"`
+		AccountId              uint64    `json:"account_id"`
+		Address                string    `json:"address"`
+		Rolls                  int64     `json:"rolls"`
+		Balance                float64   `json:"balance"`
+		Delegated              float64   `json:"delegated"`
+		NDelegations           int64     `json:"n_delegations"`
+		NBakingRights          int64     `json:"n_baking_rights"`
+		NEndorsingRights       int64     `json:"n_endorsing_rights"`
+		Luck                   float64   `json:"luck"`
+		LuckPct                float64   `json:"luck_percent"`
+		ContributionPct        float64   `json:"contribution_percent"`
+		PerformancePct         float64   `json:"performance_percent"`
+		NBlocksBaked           int64     `json:"n_blocks_baked"`
+		NBlocksLost            int64     `json:"n_blocks_lost"`
+		NBlocksStolen          int64     `json:"n_blocks_stolen"`
+		NSlotsEndorsed         int64     `json:"n_slots_endorsed"`
+		NSlotsMissed           int64     `json:"n_slots_missed"`
+		NSeedsRevealed         int64     `json:"n_seeds_revealed"`
+		ExpectedIncome         float64   `json:"expected_income"`
+		ExpectedBonds          float64   `json:"expected_bonds"`
+		TotalIncome            float64   `json:"total_income"`
+		TotalBonds             float64   `json:"total_bonds"`
+		BakingIncome           float64   `json:"baking_income"`
+		EndorsingIncome        float64   `json:"endorsing_income"`
+		DoubleBakingIncome     float64   `json:"double_baking_income"`
+		DoubleEndorsingIncome  float64   `json:"double_endorsing_income"`
+		SeedIncome             float64   `json:"seed_income"`
+		FeesIncome             float64   `json:"fees_income"`
+		MissedBakingIncome     float64   `json:"missed_baking_income"`
+		MissedEndorsingIncome  float64   `json:"missed_endorsing_income"`
+		StolenBakingIncome     float64   `json:"stolen_baking_income"`
+		TotalLost              float64   `json:"total_lost"`
+		LostAccusationFees     float64   `json:"lost_accusation_fees"`
+		LostAccusationRewards  float64   `json:"lost_accusation_rewards"`
+		LostAccusationDeposits float64   `json:"lost_accusation_deposits"`
+		LostRevelationFees     float64   `json:"lost_revelation_fees"`
+		LostRevelationRewards  float64   `json:"lost_revelation_rewards"`
+		StartTime              time.Time `json:"start_time"`
+		EndTime                time.Time `json:"end_time"`
 	}{
 		RowId:                  c.RowId,
 		Cycle:                  c.Cycle,
@@ -141,6 +145,8 @@ func (c *Income) MarshalJSONVerbose() ([]byte, error) {
 		LostAccusationDeposits: c.params.ConvertValue(c.LostAccusationDeposits),
 		LostRevelationFees:     c.params.ConvertValue(c.LostRevelationFees),
 		LostRevelationRewards:  c.params.ConvertValue(c.LostRevelationRewards),
+		StartTime:              c.ctx.Indexer.BlockTime(c.ctx.Context, c.params.CycleStartHeight(c.Cycle)),
+		EndTime:                c.ctx.Indexer.BlockTime(c.ctx.Context, c.params.CycleEndHeight(c.Cycle)),
 	}
 	return json.Marshal(inc)
 }
@@ -229,6 +235,10 @@ func (c *Income) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.LostRevelationFees), 'f', dec, 64)
 		case "lost_revelation_rewards":
 			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.LostRevelationRewards), 'f', dec, 64)
+		case "start_time":
+			buf = strconv.AppendInt(buf, c.ctx.Indexer.BlockTimeMs(c.ctx.Context, c.params.CycleStartHeight(c.Cycle)), 10)
+		case "end_time":
+			buf = strconv.AppendInt(buf, c.ctx.Indexer.BlockTimeMs(c.ctx.Context, c.params.CycleEndHeight(c.Cycle)), 10)
 		default:
 			continue
 		}
@@ -323,6 +333,10 @@ func (c *Income) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.LostRevelationFees), 'f', dec, 64)
 		case "lost_revelation_rewards":
 			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.LostRevelationRewards), 'f', dec, 64)
+		case "start_time":
+			res[i] = strconv.Quote(c.ctx.Indexer.BlockTime(c.ctx.Context, c.params.CycleStartHeight(c.Cycle)).Format(time.RFC3339))
+		case "end_time":
+			res[i] = strconv.Quote(c.ctx.Indexer.BlockTime(c.ctx.Context, c.params.CycleEndHeight(c.Cycle)).Format(time.RFC3339))
 		default:
 			continue
 		}
@@ -331,8 +345,8 @@ func (c *Income) MarshalCSV() ([]string, error) {
 }
 
 func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
-	// fetch chain params at current height
-	params := ctx.Crawler.ParamsByHeight(-1)
+	// use chain params at current height
+	params := ctx.Params
 
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
@@ -478,9 +492,31 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				switch prefix {
 				case "cycle":
 					if v == "head" {
-						currentCycle := params.CycleFromHeight(ctx.Crawler.Height())
+						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
 						v = strconv.FormatInt(int64(currentCycle), 10)
 					}
+
+				case "start_time", "end_time":
+					// convert time -> block -> cycle
+					if mode != pack.FilterModeEqual {
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode for column '%s'", prefix), nil))
+					}
+					tm, err := util.ParseTime(v)
+					if err != nil {
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", prefix, v), err))
+					}
+					cmode := pack.FilterModeLte
+					if prefix == "start_time" {
+						cmode = pack.FilterModeGte
+					}
+					q.Conditions = append(q.Conditions, pack.Condition{
+						Field: table.Fields().Find("c"), // cycle
+						Mode:  cmode,
+						Value: params.CycleFromHeight(ctx.Indexer.BlockHeightFromTime(ctx.Context, tm.Time())),
+						Raw:   v,
+					})
+					// skip further parsing
+					continue
 
 				case "luck_percent", "contribution_percent", "performance_percent":
 					fvals := make([]string, 0)

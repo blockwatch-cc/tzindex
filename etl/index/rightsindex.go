@@ -18,9 +18,9 @@ import (
 )
 
 var (
-	RightsPackSizeLog2    = 15 // 32k packs
+	RightsPackSizeLog2    = 15 // 32k packs ~3.6M
 	RightsJournalSizeLog2 = 16 // 65k - can be big, no search required
-	RightsCacheSize       = 2
+	RightsCacheSize       = 8  // ~30M
 	RightsFillLevel       = 100
 	RightsIndexKey        = "rights"
 	RightsTableKey        = "rights"
@@ -125,13 +125,14 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 				continue
 			}
 			// find and type-cast the seed nonce op
-			op, ok := block.GetRPCOp(v.OpN, v.OpC)
+			op, ok := block.GetRpcOp(v.OpL, v.OpP, v.OpC)
 			if !ok {
-				return fmt.Errorf("rights: missing seed nonce op [%d:%d]", v.OpN, v.OpC)
+				return fmt.Errorf("rights: missing seed nonce op [%d:%d]", v.OpL, v.OpP)
 			}
 			sop, ok := op.(*rpc.SeedNonceOp)
 			if !ok {
-				return fmt.Errorf("rights: seed nonce op [%d:%d]: unexpected type %T ", v.OpN, v.OpC, op)
+				return fmt.Errorf("rights: seed nonce op [%d:%d]: unexpected type %T ",
+					v.OpL, v.OpP, op)
 			}
 			// seed nonces are injected by the current block's baker, but may originate
 			// from another baker who was required to publish them as message into the
@@ -213,9 +214,9 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 	// insert all baking rights for a cycle, then all endorsing rights
 	ins := make([]pack.Item, 0, (64+32)*block.Params.BlocksPerCycle)
 	for _, v := range block.TZ.Baking {
-		acc, ok := builder.AccountByAddress(v.Delegate)
+		acc, ok := builder.AccountByAddress(v.Address())
 		if !ok {
-			return fmt.Errorf("rights: missing baker account %s", v.Delegate)
+			return fmt.Errorf("rights: missing baker account %s", v.Address())
 		}
 		ins = append(ins, &Right{
 			Type:      chain.RightTypeBaking,
@@ -238,9 +239,9 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 			erights = erights[:0]
 			height = v.Level
 		}
-		acc, ok := builder.AccountByAddress(v.Delegate)
+		acc, ok := builder.AccountByAddress(v.Address())
 		if !ok {
-			return fmt.Errorf("rights: missing endorser account %s", v.Delegate)
+			return fmt.Errorf("rights: missing endorser account %s", v.Address())
 		}
 		for _, slot := range sort.IntSlice(v.Slots) {
 			erights = append(erights, &Right{
@@ -270,13 +271,14 @@ func (idx *RightsIndex) DisconnectBlock(ctx context.Context, block *Block, build
 				continue
 			}
 			// find and type-cast the seed nonce op
-			op, ok := block.GetRPCOp(v.OpN, v.OpC)
+			op, ok := block.GetRpcOp(v.OpL, v.OpP, v.OpC)
 			if !ok {
-				return fmt.Errorf("rights: missing seed nonce op [%d:%d]", v.OpN, v.OpC)
+				return fmt.Errorf("rights: missing seed nonce op [%d:%d]", v.OpL, v.OpP)
 			}
 			sop, ok := op.(*rpc.SeedNonceOp)
 			if !ok {
-				return fmt.Errorf("rights: seed nonce op [%d:%d]: unexpected type %T ", v.OpN, v.OpC, op)
+				return fmt.Errorf("rights: seed nonce op [%d:%d]: unexpected type %T ",
+					v.OpL, v.OpP, op)
 			}
 			// seed nonces are injected by the current block's baker!
 			// we assume each baker has only one priority level per block

@@ -4,6 +4,7 @@
 package server
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -173,6 +174,7 @@ func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 		RichRank           int     `json:"rich_rank"`
 		FlowRank           int     `json:"flow_rank"`
 		TrafficRank        int     `json:"traffic_rank"`
+		CallStats          string  `json:"call_stats"`
 	}{
 		RowId:              a.RowId.Value(),
 		Address:            a.String(),
@@ -239,6 +241,7 @@ func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 		LastOutTime:        a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.LastOut),
 		DelegatedSinceTime: a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.DelegatedSince),
 		DelegateSinceTime:  a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.DelegateSince),
+		CallStats:          hex.EncodeToString(a.CallStats),
 	}
 	if a.ranking != nil {
 		if rank, ok := a.ranking.GetAccount(a.RowId); ok {
@@ -461,6 +464,8 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 			} else {
 				buf = append(buf, '0')
 			}
+		case "call_stats":
+			buf = strconv.AppendQuote(buf, hex.EncodeToString(a.CallStats))
 		default:
 			continue
 		}
@@ -630,6 +635,8 @@ func (a *Account) MarshalCSV() ([]string, error) {
 			} else {
 				res[i] = "0"
 			}
+		case "call_stats":
+			res[i] = strconv.Quote(hex.EncodeToString(a.CallStats))
 		default:
 			continue
 		}
@@ -638,8 +645,8 @@ func (a *Account) MarshalCSV() ([]string, error) {
 }
 
 func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
-	// fetch chain params at current height
-	params := ctx.Crawler.ParamsByHeight(-1)
+	// use chain params at current height
+	params := ctx.Params
 
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
@@ -672,6 +679,24 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 			case "address":
 				srcNames = append(srcNames, "H") // hash
 				srcNames = append(srcNames, "t") // type
+			case "first_seen_time":
+				srcNames = append(srcNames, "0") // first_seen
+			case "last_seen_time":
+				srcNames = append(srcNames, "l") // last_seen
+			case "first_in_time":
+				srcNames = append(srcNames, "i") // first_in
+			case "last_in_time":
+				srcNames = append(srcNames, "J") // last_in
+			case "first_out_time":
+				srcNames = append(srcNames, "o") // first_out
+			case "last_out_time":
+				srcNames = append(srcNames, "O") // last_out
+			case "delegated_since_time":
+				srcNames = append(srcNames, "+") // delegated_since
+			case "delegate_since_time":
+				srcNames = append(srcNames, "*") // delegate_since
+			case "delegate_until_time":
+				srcNames = append(srcNames, "/") // delegate_until
 			}
 			if args.Verbose {
 				needAccountT = true

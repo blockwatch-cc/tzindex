@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	SnapshotPackSizeLog2    = 15 // =32k packs
-	SnapshotJournalSizeLog2 = 17 // =128k entries
+	SnapshotPackSizeLog2    = 15 // =32k packs ~ 3M unpacked
+	SnapshotJournalSizeLog2 = 17 // =128k entries for busy blockchains
 	SnapshotCacheSize       = 2  // minimum
 	SnapshotFillLevel       = 100
 	SnapshotIndexKey        = "snapshot"
@@ -327,7 +327,6 @@ func (idx *SnapshotIndex) UpdateCycleSnapshot(ctx context.Context, block *Block)
 	if err := idx.table.Update(ctx, rows); err != nil {
 		return err
 	}
-
 	// FIXME: consider flushing the table for sorted results after update
 	// if this becomes a problem
 

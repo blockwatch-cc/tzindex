@@ -90,11 +90,11 @@ func (b *BigMapItem) MarshalJSONVerbose() ([]byte, error) {
 		Timestamp   int64  `json:"time"`
 		BigMapId    int64  `json:"bigmap_id"`
 		Action      string `json:"action"`
-		KeyHash     string `json:"key_hash"`
-		KeyType     string `json:"key_type"`
-		KeyEncoding string `json:"key_encoding"`
-		Key         string `json:"key"`
-		Value       string `json:"value"`
+		KeyHash     string `json:"key_hash,omitempty"`
+		KeyType     string `json:"key_type,omitempty"`
+		KeyEncoding string `json:"key_encoding,omitempty"`
+		Key         string `json:"key,omitempty"`
+		Value       string `json:"value,omitempty"`
 		IsReplaced  bool   `json:"is_replaced"`
 		IsDeleted   bool   `json:"is_deleted"`
 		IsCopied    bool   `json:"is_copied"`
@@ -119,17 +119,22 @@ func (b *BigMapItem) MarshalJSONVerbose() ([]byte, error) {
 		IsCopied:    b.IsCopied,
 	}
 	if len(b.Key) > 0 {
-		switch b.KeyEncoding {
-		case micheline.PrimInt:
-			var z micheline.Z
-			if err := z.UnmarshalBinary(b.Key); err != nil {
-				return nil, err
+		switch b.Action {
+		case micheline.BigMapDiffActionUpdate, micheline.BigMapDiffActionRemove:
+			switch b.KeyEncoding {
+			case micheline.PrimInt:
+				var z micheline.Z
+				if err := z.UnmarshalBinary(b.Key); err != nil {
+					return nil, err
+				}
+				bigmap.Key = z.Big().Text(10)
+			case micheline.PrimBytes:
+				bigmap.Key = hex.EncodeToString(b.Key)
+			case micheline.PrimString:
+				bigmap.Key = string(b.Key)
 			}
-			bigmap.Key = z.Big().Text(10)
-		case micheline.PrimBytes:
+		default:
 			bigmap.Key = hex.EncodeToString(b.Key)
-		case micheline.PrimString:
-			bigmap.Key = string(b.Key)
 		}
 	}
 	return json.Marshal(bigmap)
@@ -170,17 +175,22 @@ func (b *BigMapItem) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendQuote(buf, b.KeyEncoding.String())
 		case "key":
 			if len(b.Key) > 0 {
-				switch b.KeyEncoding {
-				case micheline.PrimInt:
-					var z micheline.Z
-					if err := z.UnmarshalBinary(b.Key); err != nil {
-						return nil, err
+				switch b.Action {
+				case micheline.BigMapDiffActionUpdate, micheline.BigMapDiffActionRemove:
+					switch b.KeyEncoding {
+					case micheline.PrimInt:
+						var z micheline.Z
+						if err := z.UnmarshalBinary(b.Key); err != nil {
+							return nil, err
+						}
+						buf = strconv.AppendQuote(buf, z.Big().Text(10))
+					case micheline.PrimBytes:
+						buf = strconv.AppendQuote(buf, hex.EncodeToString(b.Key))
+					case micheline.PrimString:
+						buf = strconv.AppendQuote(buf, string(b.Key))
 					}
-					buf = strconv.AppendQuote(buf, z.Big().Text(10))
-				case micheline.PrimBytes:
+				default:
 					buf = strconv.AppendQuote(buf, hex.EncodeToString(b.Key))
-				case micheline.PrimString:
-					buf = strconv.AppendQuote(buf, string(b.Key))
 				}
 			} else {
 				buf = strconv.AppendQuote(buf, "")
@@ -250,17 +260,22 @@ func (b *BigMapItem) MarshalCSV() ([]string, error) {
 			res[i] = strconv.Quote(b.KeyEncoding.String())
 		case "key":
 			if len(b.Key) > 0 {
-				switch b.KeyEncoding {
-				case micheline.PrimInt:
-					var z micheline.Z
-					if err := z.UnmarshalBinary(b.Key); err != nil {
-						return nil, err
+				switch b.Action {
+				case micheline.BigMapDiffActionUpdate, micheline.BigMapDiffActionRemove:
+					switch b.KeyEncoding {
+					case micheline.PrimInt:
+						var z micheline.Z
+						if err := z.UnmarshalBinary(b.Key); err != nil {
+							return nil, err
+						}
+						res[i] = strconv.Quote(z.Big().Text(10))
+					case micheline.PrimBytes:
+						res[i] = strconv.Quote(hex.EncodeToString(b.Key))
+					case micheline.PrimString:
+						res[i] = strconv.Quote(string(b.Key))
 					}
-					res[i] = strconv.Quote(z.Big().Text(10))
-				case micheline.PrimBytes:
+				default:
 					res[i] = strconv.Quote(hex.EncodeToString(b.Key))
-				case micheline.PrimString:
-					res[i] = strconv.Quote(string(b.Key))
 				}
 			} else {
 				res[i] = strconv.Quote("")

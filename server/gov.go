@@ -80,9 +80,9 @@ func NewExplorerVote(ctx *ApiContext, v *model.Vote) *ExplorerVote {
 	}
 	// estimate end time for open votes
 	if vote.IsOpen {
-		params := ctx.Crawler.ParamsByHeight(-1)
-		diff := params.BlocksPerVotingPeriod - (ctx.Crawler.Height() - v.StartHeight) - 1
-		vote.EndTime = ctx.Crawler.Time().Add(time.Duration(diff) * params.TimeBetweenBlocks[0])
+		params := ctx.Params
+		diff := params.BlocksPerVotingPeriod - (ctx.Tip.BestHeight - v.StartHeight) - 1
+		vote.EndTime = ctx.Tip.BestTime.Add(time.Duration(diff) * params.TimeBetweenBlocks[0])
 	}
 	return vote
 }
@@ -98,42 +98,6 @@ type ExplorerProposal struct {
 	Voters        int64               `json:"voters"`
 }
 
-func govLookupBlockHash(ctx *ApiContext, height int64) chain.BlockHash {
-	block, err := ctx.Indexer.BlockByHeight(ctx.Context, height)
-	if err != nil {
-		log.Errorf("explorer: cannot resolve block height %d: %v", height, err)
-		return chain.BlockHash{}
-	} else {
-		return block.Hash.Clone()
-	}
-}
-
-func govLookupOpHash(ctx *ApiContext, id model.OpID) chain.OperationHash {
-	if id == 0 {
-		return chain.OperationHash{}
-	}
-	ops, err := ctx.Indexer.LookupOpIds(ctx.Context, []uint64{id.Value()})
-	if err != nil || len(ops) == 0 {
-		log.Errorf("explorer: cannot resolve op id %d: %v", id, err)
-		return chain.OperationHash{}
-	} else {
-		return ops[0].Hash.Clone()
-	}
-}
-
-func govLookupProposalHash(ctx *ApiContext, id model.ProposalID) chain.ProtocolHash {
-	if id == 0 {
-		return chain.ProtocolHash{}
-	}
-	props, err := ctx.Indexer.LookupProposalIds(ctx.Context, []uint64{id.Value()})
-	if err != nil || len(props) == 0 {
-		log.Errorf("explorer: cannot resolve proposal id %d: %v", id, err)
-		return chain.ProtocolHash{}
-	} else {
-		return props[0].Hash.Clone()
-	}
-}
-
 func NewExplorerProposal(ctx *ApiContext, p *model.Proposal) *ExplorerProposal {
 	return &ExplorerProposal{
 		Hash:          p.Hash,
@@ -147,7 +111,35 @@ func NewExplorerProposal(ctx *ApiContext, p *model.Proposal) *ExplorerProposal {
 	}
 }
 
-var _ RESTful = (*ExplorerElection)(nil)
+type ExplorerBallot struct {
+	RowId            uint64                 `json:"row_id"`
+	Height           int64                  `json:"height"`
+	Timestamp        time.Time              `json:"time"`
+	ElectionId       int                    `json:"election_id"`
+	VotingPeriod     int64                  `json:"voting_period"`
+	VotingPeriodKind chain.VotingPeriodKind `json:"voting_period_kind"`
+	Proposal         chain.ProtocolHash     `json:"proposal"`
+	OpHash           chain.OperationHash    `json:"op"`
+	Ballot           chain.BallotVote       `json:"ballot"`
+	Rolls            int64                  `json:"rolls"`
+	Sender           string                 `json:"sender"`
+}
+
+func NewExplorerBallot(ctx *ApiContext, b *model.Ballot, p chain.ProtocolHash, o chain.OperationHash) *ExplorerBallot {
+	return &ExplorerBallot{
+		RowId:            b.RowId,
+		Height:           b.Height,
+		Timestamp:        b.Time,
+		ElectionId:       int(b.ElectionId),
+		VotingPeriod:     b.VotingPeriod,
+		VotingPeriodKind: b.VotingPeriodKind,
+		Proposal:         p,
+		OpHash:           o,
+		Ballot:           b.Ballot,
+		Rolls:            b.Rolls,
+		Sender:           lookupAddress(ctx, b.SourceId).String(),
+	}
+}
 
 type ExplorerElection struct {
 	Id                  int                    `json:"election_id"`
@@ -171,6 +163,8 @@ type ExplorerElection struct {
 	expires             time.Time              `json:"-"`
 }
 
+var _ RESTful = (*ExplorerElection)(nil)
+
 func NewExplorerElection(ctx *ApiContext, e *model.Election) *ExplorerElection {
 	election := &ExplorerElection{
 		Id:               int(e.RowId),
@@ -189,43 +183,20 @@ func NewExplorerElection(ctx *ApiContext, e *model.Election) *ExplorerElection {
 		VotingPeriodKind: chain.ToVotingPeriod(e.NumPeriods),
 	}
 	// estimate end time for open elections
+	p := ctx.Params
+	tm := ctx.Tip.BestTime
 	if election.IsOpen {
-		p := ctx.Crawler.ParamsByHeight(-1)
-		tm := ctx.Crawler.Time()
-		diff := 4*p.BlocksPerVotingPeriod - (ctx.Crawler.Height() - e.StartHeight)
+		diff := 4*p.BlocksPerVotingPeriod - (ctx.Tip.BestHeight - e.StartHeight)
 		election.EndTime = tm.Add(time.Duration(diff) * p.TimeBetweenBlocks[0])
 		election.EndHeight = election.StartHeight + 4*p.BlocksPerVotingPeriod - 1
 		election.expires = tm.Add(p.TimeBetweenBlocks[0])
+	} else {
+		height := ctx.Tip.BestHeight
+		if election.EndHeight >= height {
+			election.expires = tm.Add(p.TimeBetweenBlocks[0])
+		}
 	}
 	return election
-}
-
-type ExplorerBallot struct {
-	Height           int64                  `json:"height"`
-	Timestamp        time.Time              `json:"time"`
-	ElectionId       int                    `json:"election_id"`
-	VotingPeriod     int64                  `json:"voting_period"`
-	VotingPeriodKind chain.VotingPeriodKind `json:"voting_period_kind"`
-	Proposal         chain.ProtocolHash     `json:"proposal"`
-	OpHash           chain.OperationHash    `json:"op"`
-	Ballot           chain.BallotVote       `json:"ballot"`
-	Rolls            int64                  `json:"rolls"`
-	Sender           string                 `json:"sender"`
-}
-
-func NewExplorerBallot(ctx *ApiContext, b *model.Ballot, p chain.ProtocolHash, o chain.OperationHash) *ExplorerBallot {
-	return &ExplorerBallot{
-		Height:           b.Height,
-		Timestamp:        b.Time,
-		ElectionId:       int(b.ElectionId),
-		VotingPeriod:     b.VotingPeriod,
-		VotingPeriodKind: b.VotingPeriodKind,
-		Proposal:         p,
-		OpHash:           o,
-		Ballot:           b.Ballot,
-		Rolls:            b.Rolls,
-		Sender:           lookupAddress(ctx, b.SourceId).String(),
-	}
 }
 
 func (b ExplorerElection) LastModified() time.Time {
@@ -269,7 +240,7 @@ func loadElection(ctx *ApiContext) *model.Election {
 		)
 		switch true {
 		case id == "head":
-			election, err = ctx.Indexer.ElectionByHeight(ctx.Context, ctx.Crawler.Height())
+			election, err = ctx.Indexer.ElectionByHeight(ctx.Context, ctx.Tip.BestHeight)
 		case strings.HasPrefix(id, chain.HashTypeProtocol.Prefix()):
 			var p chain.ProtocolHash
 			p, err = chain.ParseProtocolHash(id)
@@ -361,4 +332,40 @@ func ReadElection(ctx *ApiContext) (interface{}, int) {
 		}
 	}
 	return ee, http.StatusOK
+}
+
+func govLookupBlockHash(ctx *ApiContext, height int64) chain.BlockHash {
+	block, err := ctx.Indexer.BlockByHeight(ctx.Context, height)
+	if err != nil {
+		log.Errorf("explorer: cannot resolve block height %d: %v", height, err)
+		return chain.BlockHash{}
+	} else {
+		return block.Hash.Clone()
+	}
+}
+
+func govLookupOpHash(ctx *ApiContext, id model.OpID) chain.OperationHash {
+	if id == 0 {
+		return chain.OperationHash{}
+	}
+	ops, err := ctx.Indexer.LookupOpIds(ctx.Context, []uint64{id.Value()})
+	if err != nil || len(ops) == 0 {
+		log.Errorf("explorer: cannot resolve op id %d: %v", id, err)
+		return chain.OperationHash{}
+	} else {
+		return ops[0].Hash.Clone()
+	}
+}
+
+func govLookupProposalHash(ctx *ApiContext, id model.ProposalID) chain.ProtocolHash {
+	if id == 0 {
+		return chain.ProtocolHash{}
+	}
+	props, err := ctx.Indexer.LookupProposalIds(ctx.Context, []uint64{id.Value()})
+	if err != nil || len(props) == 0 {
+		log.Errorf("explorer: cannot resolve proposal id %d: %v", id, err)
+		return chain.ProtocolHash{}
+	} else {
+		return props[0].Hash.Clone()
+	}
 }

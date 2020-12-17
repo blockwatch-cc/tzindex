@@ -45,3 +45,23 @@ func (t *ChainTip) AddDeployment(p *chain.Params) {
 		EndHeight:   p.EndHeight,
 	})
 }
+
+func (t *ChainTip) Clone() *ChainTip {
+	tip := &ChainTip{
+		Name:          t.Name,
+		Symbol:        t.Symbol,
+		ChainId:       t.ChainId.Clone(),
+		BestHash:      t.BestHash.Clone(),
+		BestId:        t.BestId,
+		BestHeight:    t.BestHeight,
+		BestTime:      t.BestTime,
+		GenesisTime:   t.GenesisTime,
+		NYEveBlocks:   make([]int64, len(t.NYEveBlocks)),
+		QuarterBlocks: make([]int64, len(t.QuarterBlocks)),
+		Deployments:   make([]Deployment, len(t.Deployments)),
+	}
+	copy(tip.NYEveBlocks, t.NYEveBlocks)
+	copy(tip.QuarterBlocks, t.QuarterBlocks)
+	copy(tip.Deployments, t.Deployments)
+	return tip
+}

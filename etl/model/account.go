@@ -4,6 +4,7 @@
 package model
 
 import (
+	"encoding/binary"
 	"fmt"
 	"sync"
 
@@ -21,17 +22,6 @@ type AccountID uint64
 func (id AccountID) Value() uint64 {
 	return uint64(id)
 }
-
-// we could differentiate rewards into
-// - baking
-// - endorsement
-// - denounciation
-// - revelation
-//
-// likewise we could differentiate burn into
-// - denounciation
-// - origination
-// - transaction (storage fees)
 
 // Account is an up-to-date snapshot of the current status. For history look at Flow (balance updates).
 type Account struct {
@@ -91,6 +81,7 @@ type Account struct {
 	TokenGenMin        int64             `pack:"g,snappy"    json:"token_gen_min"` // hops
 	TokenGenMax        int64             `pack:"G,snappy"    json:"token_gen_max"` // hops
 	GracePeriod        int64             `pack:"P,snappy"    json:"grace_period"`  // deactivation cycle
+	CallStats          []byte            `pack:"C,snappy"    json:"call_stats"`    // per entrypoint call statistics for contracts
 
 	// used during block processing, not stored in DB
 	IsNew      bool `pack:"-" json:"-"` // first seen this block
@@ -153,6 +144,7 @@ func (a *Account) ManagerContract() (*Contract, error) {
 	c.ManagerId = a.ManagerId
 	c.IsSpendable = a.IsSpendable
 	c.IsDelegatable = a.IsDelegatable
+	c.Height = a.FirstSeen
 	return c, nil
 }
 
@@ -238,10 +230,69 @@ func (a *Account) Reset() {
 	a.TokenGenMin = 0
 	a.TokenGenMax = 0
 	a.GracePeriod = 0
+	a.CallStats = nil
 	a.IsNew = false
 	a.WasFunded = false
 	a.IsDirty = false
 	a.MustDelete = false
+}
+
+func (a *Account) ListCallStats() []int {
+	res := make([]int, len(a.CallStats)>>2)
+	for i, _ := range res {
+		res[i] = int(binary.BigEndian.Uint32(a.CallStats[i*4:]))
+	}
+	return res
+}
+
+func (a *Account) NeedsBabylonUpgrade(p *chain.Params) bool {
+	isEligible := a.PubkeyType == chain.HashTypePkhNocurve && !a.IsContract
+	isEligible = isEligible && (a.IsSpendable || (!a.IsSpendable && a.IsDelegatable))
+	return isEligible && p.Version >= 5
+}
+
+func (a *Account) UpgradeToBabylon(p *chain.Params) {
+	if !a.NeedsBabylonUpgrade(p) {
+		return
+	}
+	a.IsDirty = true
+	a.IsContract = true
+
+	// extend call stats array by moving existing stats
+	offs := 1
+	if !a.IsSpendable && a.IsDelegatable {
+		offs++
+	}
+	newcs := make([]byte, offs+len(a.CallStats))
+	copy(newcs[offs:], a.CallStats)
+	a.CallStats = newcs
+}
+
+// stats are stored as uint32 in a byte slice limit entrypoint count to 255
+func (a *Account) IncCallStats(entrypoint byte, height int64, params *chain.Params) {
+	offs := int(entrypoint) * 4
+	if cap(a.CallStats) <= offs+4 {
+		// grow slice if necessary
+		buf := make([]byte, offs+4)
+		copy(buf, a.CallStats)
+		a.CallStats = buf
+	}
+	a.CallStats = a.CallStats[0:util.Max(len(a.CallStats), offs+4)]
+	val := binary.BigEndian.Uint32(a.CallStats[offs:])
+	binary.BigEndian.PutUint32(a.CallStats[offs:], val+1)
+}
+
+func (a *Account) DecCallStats(entrypoint byte, height int64, params *chain.Params) {
+	offs := int(entrypoint) * 4
+	if cap(a.CallStats) <= offs+4 {
+		// grow slice if necessary
+		buf := make([]byte, offs+4)
+		copy(buf, a.CallStats)
+		a.CallStats = buf
+	}
+	a.CallStats = a.CallStats[0:util.Max(len(a.CallStats), offs+4)]
+	val := binary.BigEndian.Uint32(a.CallStats[offs:])
+	binary.BigEndian.PutUint32(a.CallStats[offs:], val-1)
 }
 
 func (a *Account) UpdateBalanceN(flows []*Flow) error {
@@ -264,7 +315,9 @@ func (a *Account) UpdateBalance(f *Flow) error {
 		}
 		a.TotalRewardsEarned += f.AmountIn
 		a.FrozenRewards += f.AmountIn - f.AmountOut
-		if f.Operation == FlowTypeDenounciation {
+		a.TokenGenMin = 1
+		a.TokenGenMax = util.Max64(a.TokenGenMax, 1)
+		if f.Operation == FlowTypeDenunciation {
 			a.TotalLost += f.AmountOut
 			a.TotalRewardsEarned -= f.AmountOut
 		}
@@ -274,7 +327,7 @@ func (a *Account) UpdateBalance(f *Flow) error {
 				"outgoing amount %d", a.RowId, a, a.FrozenDeposits, f.AmountOut)
 		}
 		a.FrozenDeposits += f.AmountIn - f.AmountOut
-		if f.Operation == FlowTypeDenounciation {
+		if f.Operation == FlowTypeDenunciation {
 			a.TotalLost += f.AmountOut
 		}
 	case FlowCategoryFees:
@@ -285,7 +338,7 @@ func (a *Account) UpdateBalance(f *Flow) error {
 		if f.IsFrozen {
 			a.TotalFeesEarned += f.AmountIn
 		}
-		if f.Operation == FlowTypeDenounciation {
+		if f.Operation == FlowTypeDenunciation {
 			a.TotalLost += f.AmountOut
 		}
 		a.FrozenFees += f.AmountIn - f.AmountOut
@@ -301,7 +354,11 @@ func (a *Account) UpdateBalance(f *Flow) error {
 			a.TotalBurned += f.AmountOut
 		}
 		switch f.Operation {
-		case FlowTypeTransaction, FlowTypeOrigination, FlowTypeAirdrop:
+		case FlowTypeAirdrop, FlowTypeInvoice:
+			// update generation
+			a.TokenGenMax = util.Max64(a.TokenGenMax, 1)
+			a.TokenGenMin = util.NonZeroMin64(a.TokenGenMin, 1)
+		case FlowTypeTransaction, FlowTypeOrigination:
 			// both transactions and originations can send funds
 			// count send/received only for non-fee and non-burn flows
 			if !f.IsBurned && !f.IsFee {
@@ -319,6 +376,8 @@ func (a *Account) UpdateBalance(f *Flow) error {
 					"activated amount %d", a.RowId, a, a.UnclaimedBalance, f.AmountIn)
 			}
 			a.UnclaimedBalance -= f.AmountIn
+			a.TokenGenMin = 1
+			a.TokenGenMax = util.Max64(a.TokenGenMax, 1)
 		}
 		a.SpendableBalance += f.AmountIn - f.AmountOut
 
@@ -352,7 +411,9 @@ func (a *Account) UpdateBalance(f *Flow) error {
 
 	// reset token generation
 	if !a.IsFunded {
-		a.IsRevealed = false
+		if !a.IsDelegate {
+			a.IsRevealed = false
+		}
 		a.TokenGenMin = 0
 		a.TokenGenMax = 0
 	}
@@ -381,7 +442,7 @@ func (a *Account) RollbackBalance(f *Flow) error {
 		}
 		a.TotalRewardsEarned -= f.AmountIn
 		a.FrozenRewards -= f.AmountIn - f.AmountOut
-		if f.Operation == FlowTypeDenounciation {
+		if f.Operation == FlowTypeDenunciation {
 			a.TotalLost -= f.AmountOut
 			a.TotalRewardsEarned += f.AmountOut
 		}
@@ -392,7 +453,7 @@ func (a *Account) RollbackBalance(f *Flow) error {
 				"reversed incoming amount %d", a.RowId, a, a.FrozenDeposits, f.AmountIn)
 		}
 		a.FrozenDeposits -= f.AmountIn - f.AmountOut
-		if f.Operation == FlowTypeDenounciation {
+		if f.Operation == FlowTypeDenunciation {
 			a.TotalLost -= f.AmountOut
 		}
 
@@ -404,7 +465,7 @@ func (a *Account) RollbackBalance(f *Flow) error {
 		if f.IsFrozen {
 			a.TotalFeesEarned -= f.AmountIn
 		}
-		if f.Operation == FlowTypeDenounciation {
+		if f.Operation == FlowTypeDenunciation {
 			a.TotalLost -= f.AmountOut
 		}
 		a.FrozenFees -= f.AmountIn - f.AmountOut
@@ -420,6 +481,7 @@ func (a *Account) RollbackBalance(f *Flow) error {
 		if f.IsBurned {
 			a.TotalBurned -= f.AmountOut
 		}
+
 		switch f.Operation {
 		case FlowTypeTransaction, FlowTypeOrigination, FlowTypeAirdrop:
 			a.TotalReceived -= f.AmountIn

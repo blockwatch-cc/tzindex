@@ -15,12 +15,12 @@ import (
 )
 
 const (
-	BlockPackSizeLog2         = 15 // 16k packs
-	BlockJournalSizeLog2      = 15 // 16k - searched only on rollback and lookup
-	BlockCacheSize            = 8
+	BlockPackSizeLog2         = 15
+	BlockJournalSizeLog2      = 15
+	BlockCacheSize            = 8 // ~30M
 	BlockFillLevel            = 100
-	BlockIndexPackSizeLog2    = 15 // 16k packs (32k split size)
-	BlockIndexJournalSizeLog2 = 16 // 64k
+	BlockIndexPackSizeLog2    = 15 // 16k packs (32k split size) ~ 256k
+	BlockIndexJournalSizeLog2 = 15
 	BlockIndexCacheSize       = 64
 	BlockIndexFillLevel       = 90
 	BlockIndexKey             = "block"

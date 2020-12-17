@@ -56,7 +56,7 @@ type FlowType int
 
 const (
 	FlowTypeActivation      FlowType = iota // 0
-	FlowTypeDenounciation                   // 1
+	FlowTypeDenunciation                    // 1
 	FlowTypeTransaction                     // 2
 	FlowTypeOrigination                     // 3
 	FlowTypeDelegation                      // 4
@@ -76,8 +76,8 @@ func ParseFlowType(s string) FlowType {
 	switch s {
 	case "activation":
 		return FlowTypeActivation
-	case "denounciation":
-		return FlowTypeDenounciation
+	case "denunciation":
+		return FlowTypeDenunciation
 	case "transaction":
 		return FlowTypeTransaction
 	case "origination":
@@ -115,8 +115,8 @@ func (t FlowType) String() string {
 	switch t {
 	case FlowTypeActivation:
 		return "activation"
-	case FlowTypeDenounciation:
-		return "denounciation"
+	case FlowTypeDenunciation:
+		return "denunciation"
 	case FlowTypeTransaction:
 		return "transaction"
 	case FlowTypeOrigination:

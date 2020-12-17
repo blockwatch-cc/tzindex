@@ -96,73 +96,27 @@ type BigMapDiffElem struct {
 	Id        int64
 	SourceId  int64
 	DestId    int64
-	KeyType   OpCode // can be all Michelson types, but mapped to bytes in updates
 	KeyHash   chain.ExprHash
-	IntKey    *big.Int
-	StringKey string
-	BytesKey  []byte
+	Key       *Prim // can be any Michelson type incl Pair, mapped to bytes in updates
 	Value     *Prim
+	KeyType   *Prim // used on alloc/copy
 	ValueType *Prim
 }
 
 func (e *BigMapDiffElem) Encoding() PrimType {
-	return PrimTypeFromTypeCode(e.KeyType)
+	if e.Key != nil {
+		return PrimTypeFromTypeCode(e.Key.OpCode)
+	}
+	return PrimTypeFromTypeCode(e.KeyType.OpCode)
 }
 
-func (e *BigMapDiffElem) Key() *BigMapKey {
-	k, err := NewBigMapKey(e.KeyType, e.IntKey, e.StringKey, e.BytesKey, e.Value)
+func (e *BigMapDiffElem) MapKeyAs(typ *Prim) *BigMapKey {
+	k, err := NewBigMapKeyAs(typ, e.Key)
 	if err != nil {
 		log.Error(err)
 	}
+	k.Type = typ
 	return k
-}
-
-func (e *BigMapDiffElem) KeyAs(typ OpCode) *BigMapKey {
-	k, err := NewBigMapKey(typ, e.IntKey, e.StringKey, e.BytesKey, e.Value)
-	if err != nil {
-		log.Error(err)
-	}
-	return k
-}
-
-func (e *BigMapDiffElem) KeyString() string {
-	switch true {
-	case e.IntKey != nil:
-		return e.IntKey.Text(10)
-	case e.BytesKey != nil:
-		return hex.EncodeToString(e.BytesKey)
-	default:
-		return e.StringKey
-	}
-}
-
-func (e *BigMapDiffElem) KeyBytes() []byte {
-	switch true {
-	case e.IntKey != nil:
-		var z Z
-		z.Set(e.IntKey)
-		k, _ := z.MarshalBinary()
-		return k
-	case e.BytesKey != nil:
-		return e.BytesKey
-	default:
-		return []byte(e.StringKey)
-	}
-}
-
-func (e *BigMapDiffElem) DecodeKey(t PrimType, b []byte) error {
-	switch t {
-	case PrimString:
-		e.StringKey = string(b)
-	case PrimBytes:
-		e.BytesKey = make([]byte, len(b))
-		copy(e.BytesKey, b)
-	case PrimInt:
-		var z Z
-		_ = z.UnmarshalBinary(b)
-		e.IntKey = z.Big()
-	}
-	return nil
 }
 
 func (e *BigMapDiffElem) UnmarshalJSON(data []byte) error {
@@ -182,18 +136,15 @@ func (e *BigMapDiffElem) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	// unpack key type
 	switch val.Action {
 	case BigMapDiffActionUpdate, BigMapDiffActionRemove:
 		switch len(val.Key) {
 		case 0:
 			// EMPTY_BIG_MAP opcode emits a remove action without key
-			// e.Key = &Prim{
-			// 	Type:   PrimNullary,
-			// 	OpCode: I_EMPTY_BIG_MAP,
-			// }
-			e.KeyType = T_STRING
-			e.StringKey = ""
+			e.Key = &Prim{
+				Type:   PrimNullary,
+				OpCode: I_EMPTY_BIG_MAP,
+			}
 		case 1:
 			// scalar key
 			for n, v := range val.Key {
@@ -203,59 +154,56 @@ func (e *BigMapDiffElem) UnmarshalJSON(data []byte) error {
 				}
 				switch n {
 				case "int":
-					e.KeyType = T_INT
-					e.IntKey = big.NewInt(0)
-					if err := e.IntKey.UnmarshalText([]byte(vv)); err != nil {
+					p := &Prim{
+						Type: PrimInt,
+						Int:  big.NewInt(0),
+					}
+					if err := p.Int.UnmarshalText([]byte(vv)); err != nil {
 						return fmt.Errorf("micheline: decoding bigmap int key '%s': %v", v, err)
 					}
+					e.Key = p
 				case "bytes":
-					e.KeyType = T_BYTES
-					e.BytesKey, err = hex.DecodeString(vv)
+					p := &Prim{
+						Type: PrimBytes,
+					}
+					p.Bytes, err = hex.DecodeString(vv)
 					if err != nil {
 						return fmt.Errorf("micheline: decoding bigmap bytes key '%s': %v", v, err)
 					}
+					e.Key = p
 				case "string":
-					e.KeyType = T_STRING
-					e.StringKey = vv
+					e.Key = &Prim{
+						Type:   PrimString,
+						String: vv,
+					}
 				case "prim":
 					// bool or other nullary type
 					p := &Prim{}
 					if err := p.UnpackPrimitive(val.Key); err != nil {
 						return fmt.Errorf("micheline: decoding bigmap prim key: %v", err)
 					}
-					// store as bytes
-					// FIXME: need refactoring
-					e.KeyType = T_BYTES
-					e.BytesKey, err = p.MarshalBinary()
-					if err != nil {
-						return fmt.Errorf("micheline: repacking bigmap key: %v", err)
-					}
+					e.Key = p
 				default:
 					return fmt.Errorf("micheline: unsupported bigmap key type %s", n)
 				}
 			}
 		default:
-			// Pair key: for now we store it as binary data
-			// FIXME: need to refactor the entire bigmap index to support complex keys
+			// Pair key
 			p := &Prim{}
 			if err := p.UnpackPrimitive(val.Key); err != nil {
 				return fmt.Errorf("micheline: decoding bigmap pair key: %v", err)
 			}
-			e.KeyType = T_BYTES
-			e.BytesKey, err = p.MarshalBinary()
-			if err != nil {
-				return fmt.Errorf("micheline: packing complex bigmap key: %v", err)
-			}
+			e.Key = p
 		}
 		e.KeyHash = val.KeyHash
 		e.Value = val.Value
 
 	case BigMapDiffActionAlloc:
-		e.KeyType = val.KeyType.OpCode
-		if !e.KeyType.IsValid() {
+		if !val.KeyType.OpCode.IsValid() {
 			return fmt.Errorf("micheline: unsupported bigmap key type (opcode) %s [%d]",
-				val.KeyType.OpCode, val.KeyType.OpCode)
+				e.KeyType.OpCode, e.KeyType.OpCode)
 		}
+		e.KeyType = val.KeyType
 		e.ValueType = val.ValueType
 
 	case BigMapDiffActionCopy:
@@ -281,47 +229,53 @@ func (e BigMapDiffElem) MarshalJSON() ([]byte, error) {
 	case BigMapDiffActionUpdate, BigMapDiffActionRemove:
 		// set key, keyhash, value
 		val := struct {
-			Id      int64             `json:"big_map,string"`
-			Action  BigMapDiffAction  `json:"action"`
-			Key     map[string]string `json:"key"`
-			KeyHash chain.ExprHash    `json:"key_hash"`
-			Value   *Prim             `json:"value,omitempty"`
+			Id      int64                  `json:"big_map,string"`
+			Action  BigMapDiffAction       `json:"action"`
+			Key     map[string]interface{} `json:"key"`
+			KeyHash chain.ExprHash         `json:"key_hash"`
+			Value   *Prim                  `json:"value,omitempty"`
 		}{
 			Id:      e.Id,
 			Action:  e.Action,
-			Key:     make(map[string]string),
+			Key:     make(map[string]interface{}),
 			KeyHash: e.KeyHash,
 			Value:   e.Value,
 		}
-		switch e.KeyType {
-		case T_INT:
-			val.Key["int"] = e.IntKey.Text(10)
-		case T_BYTES:
-			val.Key["bytes"] = hex.EncodeToString(e.BytesKey)
-		case T_STRING:
-			val.Key["string"] = e.StringKey
+		switch e.Key.Type {
+		case PrimNullary:
+			// no key on empty bigmap
+		case PrimInt:
+			val.Key["int"] = e.Key.Int.Text(10)
+		case PrimBytes:
+			val.Key["bytes"] = hex.EncodeToString(e.Key.Bytes)
+		case PrimString:
+			val.Key["string"] = e.Key.String
+		case PrimBinary:
+			buf, err := e.Key.MarshalJSON()
+			if err != nil {
+				return nil, err
+			}
+			if err := json.Unmarshal(buf, &val.Key); err != nil {
+				return nil, err
+			}
 		}
 
-		// be API compatible
+		// be API compatible with Babylon
 		if e.Action == BigMapDiffActionRemove {
 			val.Value = nil
 		}
 		res = val
 
 	case BigMapDiffActionAlloc:
-		// set keytype, valuetype
 		res = struct {
 			Id        int64            `json:"big_map,string"`
 			Action    BigMapDiffAction `json:"action"`
 			KeyType   *Prim            `json:"key_type"`   // alloc, copy only
 			ValueType *Prim            `json:"value_type"` // alloc, copy only
 		}{
-			Id:     e.Id,
-			Action: e.Action,
-			KeyType: &Prim{
-				Type:   PrimNullary,
-				OpCode: e.KeyType,
-			},
+			Id:        e.Id,
+			Action:    e.Action,
+			KeyType:   e.KeyType,
 			ValueType: e.ValueType,
 		}
 
@@ -354,12 +308,7 @@ func (b BigMapDiff) MarshalBinary() ([]byte, error) {
 				Type:   PrimBinary,
 				OpCode: T_PAIR,
 				Args: []*Prim{
-					&Prim{
-						Type:   PrimTypeFromTypeCode(v.KeyType),
-						Int:    v.IntKey,
-						Bytes:  v.BytesKey,
-						String: v.StringKey,
-					},
+					v.Key,
 					&Prim{
 						Type:  PrimBytes,
 						Bytes: v.KeyHash.Hash.Hash,
@@ -379,21 +328,21 @@ func (b BigMapDiff) MarshalBinary() ([]byte, error) {
 				OpCode: T_PAIR,
 				Args:   []*Prim{key, val},
 			}
+			// log.Infof("%s key is %#v primtyp=%s opcode=%s",
+			// 	v.Action, v.Key, v.Key.Type, v.Key.OpCode)
 			if err := kvpair.EncodeBuffer(buf); err != nil {
 				return nil, err
 			}
 
 		case BigMapDiffActionAlloc:
 			// pair(key_type, value_type)
-			keytype := &Prim{
-				Type:   PrimNullary,
-				OpCode: v.KeyType,
-			}
 			kvpair := &Prim{
 				Type:   PrimBinary,
 				OpCode: T_PAIR,
-				Args:   []*Prim{keytype, v.ValueType},
+				Args:   []*Prim{v.KeyType, v.ValueType},
 			}
+			// log.Infof("Alloc key type is %#v primtyp=%s opcode=%s",
+			// 	v.KeyType, v.KeyType.Type, v.KeyType.OpCode)
 			if err := kvpair.EncodeBuffer(buf); err != nil {
 				return nil, err
 			}
@@ -426,8 +375,9 @@ func (b *BigMapDiff) UnmarshalBinary(data []byte) error {
 	buf := bytes.NewBuffer(data)
 	// unpack elements
 	for buf.Len() > 0 {
+		// temp bigmaps have negative numbers
 		elem := BigMapDiffElem{
-			Id:     int64(binary.BigEndian.Uint32(buf.Next(4))),
+			Id:     int64(int32(binary.BigEndian.Uint32(buf.Next(4)))),
 			Action: BigMapDiffAction(buf.Next(1)[0]),
 		}
 		prim := &Prim{}
@@ -451,19 +401,16 @@ func (b *BigMapDiff) UnmarshalBinary(data []byte) error {
 			if err := elem.KeyHash.UnmarshalBinary(prim.Args[0].Args[1].Bytes); err != nil {
 				return err
 			}
-			elem.KeyType = prim.Args[0].Args[0].Type.TypeCode()
-			elem.IntKey = prim.Args[0].Args[0].Int
-			elem.BytesKey = prim.Args[0].Args[0].Bytes
-			elem.StringKey = prim.Args[0].Args[0].String
+			elem.Key = prim.Args[0].Args[0]
 			elem.Value = prim.Args[1]
 			if elem.Action == BigMapDiffActionRemove {
 				elem.Value = nil
 			}
 		case BigMapDiffActionAlloc:
 			// encoded: pair(key_type, value_type)
-			elem.KeyType = prim.Args[0].OpCode
+			elem.KeyType = prim.Args[0]
 			elem.ValueType = prim.Args[1]
-			if !elem.KeyType.IsValid() {
+			if !elem.KeyType.OpCode.IsValid() {
 				return fmt.Errorf("micheline: invalid big_map_diff key type opcode %s [%d]",
 					prim.Args[0].OpCode, prim.Args[0].OpCode)
 			}
@@ -481,20 +428,16 @@ func (e BigMapDiffElem) Dump() string {
 	switch e.Action {
 	case BigMapDiffActionAlloc:
 		return fmt.Sprintf("BigMap action=%s keytype=%s (%s)",
-			e.Action, e.KeyType, PrimTypeFromTypeCode(e.KeyType))
+			e.Action, e.KeyType.OpCode, PrimTypeFromTypeCode(e.KeyType.OpCode))
 	case BigMapDiffActionCopy:
 		return fmt.Sprintf("BigMap action=%s src=%d dst=%d", e.Action, e.SourceId, e.DestId)
 	default:
-		var key string
-		switch e.KeyType {
-		case T_INT:
-			key = e.IntKey.Text(10)
-		case T_STRING:
-			key = e.StringKey
-		case T_BYTES:
-			key = hex.EncodeToString(e.BytesKey)
+		keystr := e.Key.Text()
+		if keystr == "" {
+			buf, _ := e.Key.MarshalJSON()
+			keystr = string(buf)
 		}
 		return fmt.Sprintf("BigMap action=%s keytype=%s (%s) key=%s hash=%s",
-			e.Action, e.KeyType, PrimTypeFromTypeCode(e.KeyType), key, e.KeyHash)
+			e.Action, e.KeyType.OpCode, PrimTypeFromTypeCode(e.KeyType.OpCode), keystr, e.KeyHash)
 	}
 }

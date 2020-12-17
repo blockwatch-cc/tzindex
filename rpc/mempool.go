@@ -25,3 +25,42 @@ func (c *Client) GetMempoolPendingOperations(ctx context.Context) (*MempoolOpera
 	}
 	return &ops, nil
 }
+
+/*
+OperationHeaderAlt is a named array encoded OperationHeader with hash as a
+first array member, i.e.
+	[
+		"...", // hash
+		{
+			"protocol": "...",
+			...
+		}
+	]
+instead of
+	{
+		"protocol": "...",
+		"hash": "...",
+		...
+	}
+*/
+type OperationHeaderAlt OperationHeader
+
+// UnmarshalJSON implements json.Unmarshaler
+func (o *OperationHeaderAlt) UnmarshalJSON(data []byte) error {
+	return unmarshalNamedJSONArray(data, &o.Hash, (*OperationHeader)(o))
+}
+
+// OperationHeaderWithError represents unsuccessful operation
+type OperationHeaderWithError struct {
+	OperationHeader
+	Error Errors `json:"error"`
+}
+
+// OperationHeaderWithErrorAlt is a named array encoded OperationWithError with hash as a first array member.
+// See OperationAltList for details
+type OperationHeaderWithErrorAlt OperationHeaderWithError
+
+// UnmarshalJSON implements json.Unmarshaler
+func (o *OperationHeaderWithErrorAlt) UnmarshalJSON(data []byte) error {
+	return unmarshalNamedJSONArray(data, &o.Hash, (*OperationHeaderWithError)(o))
+}

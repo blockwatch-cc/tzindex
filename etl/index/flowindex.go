@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	FlowPackSizeLog2    = 15 // 32k packs
-	FlowJournalSizeLog2 = 16 // 64k - searched for stats, so keep small
-	FlowCacheSize       = 4
+	FlowPackSizeLog2    = 15  // 32k packs ~4M
+	FlowJournalSizeLog2 = 16  // 64k - search for spending op, so keep small
+	FlowCacheSize       = 128 // 128=512MB
 	FlowFillLevel       = 100
 	FlowIndexKey        = "flow"
 	FlowTableKey        = "flow"
@@ -114,6 +114,7 @@ func (idx *FlowIndex) Close() error {
 func (idx *FlowIndex) ConnectBlock(ctx context.Context, block *Block, _ BlockBuilder) error {
 	flows := make([]pack.Item, 0, len(block.Flows))
 	for _, f := range block.Flows {
+		f.OpId, _ = block.GetOpId(f.OpN, f.OpC, f.OpI)
 		flows = append(flows, f)
 	}
 	return idx.table.Insert(ctx, flows)

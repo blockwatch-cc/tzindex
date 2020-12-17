@@ -53,9 +53,9 @@ type ExplorerBlock struct {
 	NProposal           int                    `json:"n_proposal"`
 	NBallot             int                    `json:"n_ballot"`
 	Volume              float64                `json:"volume"`
-	Fees                float64                `json:"fees"`
-	Rewards             float64                `json:"rewards"`
-	Deposits            float64                `json:"deposits"`
+	Fee                 float64                `json:"fee"`
+	Reward              float64                `json:"reward"`
+	Deposit             float64                `json:"deposit"`
 	UnfrozenFees        float64                `json:"unfrozen_fees"`
 	UnfrozenRewards     float64                `json:"unfrozen_rewards"`
 	UnfrozenDeposits    float64                `json:"unfrozen_deposits"`
@@ -74,12 +74,18 @@ type ExplorerBlock struct {
 	StorageSize         int64                  `json:"storage_size"`
 	TDD                 float64                `json:"days_destroyed"`
 	PctAccountsReused   float64                `json:"pct_account_reuse"`
+	NOpsImplicit        int                    `json:"n_ops_implicit"`
 	Ops                 *[]*ExplorerOp         `json:"ops,omitempty"`
 	Endorsers           []chain.Address        `json:"endorsers,omitempty"`
 	expires             time.Time              `json:"-"`
+	lastmod             time.Time              `json:"-"`
 }
 
-func NewExplorerBlock(ctx *ApiContext, block *model.Block, p *chain.Params) *ExplorerBlock {
+func NewExplorerBlock(ctx *ApiContext, block *model.Block) *ExplorerBlock {
+	p := ctx.Params
+	if !p.ContainsHeight(block.Height) {
+		p = ctx.Crawler.ParamsByHeight(block.Height)
+	}
 	b := &ExplorerBlock{
 		Hash:                block.Hash,
 		IsOrphan:            block.IsOrphan,
@@ -112,9 +118,9 @@ func NewExplorerBlock(ctx *ApiContext, block *model.Block, p *chain.Params) *Exp
 		NProposal:           block.NProposal,
 		NBallot:             block.NBallot,
 		Volume:              p.ConvertValue(block.Volume),
-		Fees:                p.ConvertValue(block.Fees),
-		Rewards:             p.ConvertValue(block.Rewards),
-		Deposits:            p.ConvertValue(block.Deposits),
+		Fee:                 p.ConvertValue(block.Fee),
+		Reward:              p.ConvertValue(block.Reward),
+		Deposit:             p.ConvertValue(block.Deposit),
 		UnfrozenFees:        p.ConvertValue(block.UnfrozenFees),
 		UnfrozenRewards:     p.ConvertValue(block.UnfrozenRewards),
 		UnfrozenDeposits:    p.ConvertValue(block.UnfrozenDeposits),
@@ -132,8 +138,9 @@ func NewExplorerBlock(ctx *ApiContext, block *model.Block, p *chain.Params) *Exp
 		GasPrice:            block.GasPrice,
 		StorageSize:         block.StorageSize,
 		TDD:                 block.TDD,
+		NOpsImplicit:        block.NOpsImplicit,
 	}
-	nowHeight := ctx.Crawler.Height()
+	nowHeight := ctx.Tip.BestHeight
 	if block.SeenAccounts > 0 {
 		b.PctAccountsReused = float64(block.SeenAccounts-block.NewAccounts) / float64(block.SeenAccounts) * 100
 	}
@@ -161,17 +168,19 @@ func NewExplorerBlock(ctx *ApiContext, block *model.Block, p *chain.Params) *Exp
 		}
 	}
 	if b.Height == nowHeight {
-		// cache most recent block only until next block
+		// cache most recent block only until next block and endorsements are due
 		b.expires = b.Timestamp.Add(p.TimeBetweenBlocks[0])
+		b.lastmod = b.Timestamp
 	} else if b.Height+chain.MaxBranchDepth >= nowHeight {
 		// cache blocks in the reorg safety zone only until next block is expected
-		b.expires = ctx.Crawler.Time().Add(p.TimeBetweenBlocks[0])
+		b.expires = ctx.Tip.BestTime.Add(p.TimeBetweenBlocks[0])
+		b.lastmod = b.Timestamp.Add(p.TimeBetweenBlocks[0])
 	}
 	return b
 }
 
 func (b ExplorerBlock) LastModified() time.Time {
-	return b.Timestamp
+	return b.lastmod
 }
 
 func (b ExplorerBlock) Expires() time.Time {
@@ -220,18 +229,24 @@ func loadBlock(ctx *ApiContext) *model.Block {
 }
 
 func ReadBlock(ctx *ApiContext) (interface{}, int) {
-	block := loadBlock(ctx)
-	params := ctx.Crawler.ParamsByHeight(block.Height)
-	return NewExplorerBlock(ctx, block, params), http.StatusOK
+	return NewExplorerBlock(ctx, loadBlock(ctx)), http.StatusOK
 }
 
 func ReadBlockOps(ctx *ApiContext) (interface{}, int) {
 	args := &ExplorerOpsRequest{}
 	ctx.ParseRequestArgs(args)
 	block := loadBlock(ctx)
-	params := ctx.Crawler.ParamsByHeight(block.Height)
-	b := NewExplorerBlock(ctx, block, params)
-	ops, err := ctx.Indexer.ListBlockOps(ctx, block.Height, args.Type, args.Offset, ctx.Cfg.ClampExplore(args.Limit))
+	b := NewExplorerBlock(ctx, block)
+	ops, err := ctx.Indexer.ListBlockOps(
+		ctx,
+		block.Height,
+		args.TypeMode,
+		args.TypeList,
+		args.Offset,
+		ctx.Cfg.ClampExplore(args.Limit),
+		args.Cursor,
+		args.Order,
+	)
 	if err != nil {
 		panic(EInternal(EC_DATABASE, "cannot read block operations", err))
 	}
@@ -239,7 +254,7 @@ func ReadBlockOps(ctx *ApiContext) (interface{}, int) {
 	// FIXME: collect account and op lookup into only two queries
 	eops := make([]*ExplorerOp, len(ops))
 	for i, v := range ops {
-		eops[i] = NewExplorerOp(ctx, v, block, nil, params, nil)
+		eops[i] = NewExplorerOp(ctx, v, block, nil, args)
 	}
 	b.Ops = &eops
 	return b, http.StatusOK

@@ -44,7 +44,7 @@ type BlockHeader struct {
 	Context          string             `json:"context"`
 	Priority         int                `json:"priority"`
 	ProofOfWorkNonce HexBytes           `json:"proof_of_work_nonce"`
-	SeedNonceHash    string             `json:"seed_nonce_hash"`
+	SeedNonceHash    *chain.NonceHash   `json:"seed_nonce_hash"`
 	Signature        string             `json:"signature"`
 	Content          *BlockContent      `json:"content,omitempty"`
 }
@@ -86,7 +86,7 @@ type BlockMetadata struct {
 	Baker                  chain.Address          `json:"baker"`
 	Level                  BlockLevel             `json:"level"`
 	VotingPeriodKind       chain.VotingPeriodKind `json:"voting_period_kind"`
-	NonceHash              string                 `json:"nonce_hash"`
+	NonceHash              *chain.NonceHash       `json:"nonce_hash"`
 	ConsumedGas            int64                  `json:"consumed_gas,string"`
 	Deactivated            []chain.Address        `json:"deactivated"`
 	BalanceUpdates         BalanceUpdates         `json:"balance_updates"`
@@ -188,7 +188,7 @@ func (c *Client) GetBlockPredHashes(ctx context.Context, blockID chain.BlockHash
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-chains-chain-id-invalid-blocks
 func (c *Client) GetInvalidBlocks(ctx context.Context) ([]*InvalidBlock, error) {
 	var invalidBlocks []*InvalidBlock
-	if err := c.Get(ctx, "/chains/"+c.ChainID+"/invalid_blocks", &invalidBlocks); err != nil {
+	if err := c.Get(ctx, "chains/"+c.ChainID+"/invalid_blocks", &invalidBlocks); err != nil {
 		return nil, err
 	}
 	return invalidBlocks, nil

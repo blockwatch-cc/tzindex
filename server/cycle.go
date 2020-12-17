@@ -80,13 +80,15 @@ type ExplorerCycle struct {
 
 func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 	// get latest params
-	p := ctx.Crawler.ParamsByHeight(-1)
+	p := ctx.Params
 
 	// get params that were or are active at cycle (future safe, will return latest)
-	p = ctx.Crawler.ParamsByHeight(p.CycleStartHeight(id))
+	if cycleStart := p.CycleStartHeight(id); !p.ContainsHeight(cycleStart) {
+		p = ctx.Crawler.ParamsByHeight(cycleStart)
+	}
 
 	// get current status
-	nowheight := ctx.Crawler.Height()
+	nowheight := ctx.Tip.BestHeight
 	nowcycle := p.CycleFromHeight(nowheight)
 
 	// this cycle start/end
@@ -112,7 +114,7 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 		ec.StartTime = ctx.Indexer.BlockTime(ctx.Context, start)
 		ec.EndTime = ctx.Indexer.BlockTime(ctx.Context, end)
 	} else {
-		nowtime := ctx.Crawler.Time()
+		nowtime := ctx.Tip.BestTime
 		ec.StartTime = ctx.Indexer.BlockTime(ctx.Context, start)
 		if ec.StartTime.IsZero() {
 			ec.StartTime = nowtime.Add(time.Duration(start-nowheight) * p.TimeBetweenBlocks[0])
@@ -131,21 +133,20 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 		worstEndorsements int = p.EndorsersPerBlock
 
 		maxEndorse int        // scaled to current blocks in cycle
-		maxSeeds   int        // scaled to current blocks in cycle
+		maxSeeds   int        // unscaled, full value (since requirement is from snapshot)
 		snapHeight int64 = -1 // selected or latest snapshot block
 	)
 
+	maxSeeds = int(p.BlocksPerCycle / p.BlocksPerCommitment)
 	if ec.IsComplete {
 		ec.Progress = 100
 		maxEndorse = p.EndorsersPerBlock * int(p.BlocksPerCycle)
-		maxSeeds = int(p.BlocksPerCycle / p.BlocksPerCommitment)
 		snapHeight = end
 	} else if ec.IsActive {
 		ec.Progress = float64(nowheight%p.BlocksPerCycle*100) / float64(p.BlocksPerCycle)
 		// latest block cannot have an endorsement yet, so we don't require it
 		// otherwise the formula would be (nowheight - start + 1)*p.EndorsersPerBlock
 		maxEndorse = int(nowheight-start) * p.EndorsersPerBlock
-		maxSeeds = int((nowheight - start) / p.BlocksPerCommitment)
 		snapHeight = nowheight - (nowheight % p.BlocksPerRollSnapshot)
 	}
 
@@ -340,9 +341,9 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 			ec.RollOwners = chain.RollOwners
 		}
 		if supply, err := ctx.Indexer.SupplyByHeight(ctx.Context, snapHeight); err == nil {
-			ec.StakingSupply = p.ConvertValue(supply.Staking)
+			ec.StakingSupply = p.ConvertValue(supply.ActiveStaking)
 			if supply.Total > 0 {
-				ec.StakingPercent = float64(supply.Staking*100) / float64(supply.Total)
+				ec.StakingPercent = float64(supply.ActiveStaking*100) / float64(supply.Total)
 			}
 		}
 	}
@@ -393,8 +394,8 @@ func parseCycle(ctx *ApiContext) int64 {
 	} else {
 		switch true {
 		case id == "head":
-			p := ctx.Crawler.ParamsByHeight(-1)
-			return p.CycleFromHeight(ctx.Crawler.Height())
+			p := ctx.Params
+			return p.CycleFromHeight(ctx.Tip.BestHeight)
 		default:
 			cycle, err := strconv.ParseInt(id, 10, 64)
 			if err != nil || cycle < 0 {
@@ -408,7 +409,7 @@ func parseCycle(ctx *ApiContext) int64 {
 
 func ReadCycle(ctx *ApiContext) (interface{}, int) {
 	id := parseCycle(ctx)
-	p := ctx.Crawler.ParamsByHeight(-1)
+	p := ctx.Params
 
 	// compose cycle data from N, N-7 and N+7
 	cycle := NewExplorerCycle(ctx, id)

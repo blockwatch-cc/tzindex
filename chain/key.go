@@ -200,10 +200,29 @@ func (k *Key) UnmarshalText(data []byte) error {
 }
 
 func (k Key) MarshalBinary() ([]byte, error) {
-	if !k.Type.IsValid() {
+	buf := k.Bytes()
+	if buf == nil {
 		return nil, ErrUnknownKeyType
 	}
-	return append([]byte{k.Type.Tag()}, k.Data...), nil
+	return buf, nil
+}
+
+func (k Key) Bytes() []byte {
+	if !k.Type.IsValid() {
+		return nil
+	}
+	return append([]byte{k.Type.Tag()}, k.Data...)
+}
+
+func DecodeKey(buf []byte) (Key, error) {
+	k := Key{}
+	if len(buf) == 0 {
+		return k, nil
+	}
+	if err := k.UnmarshalBinary(buf); err != nil {
+		return k, err
+	}
+	return k, nil
 }
 
 func (k *Key) UnmarshalBinary(b []byte) error {
@@ -227,12 +246,15 @@ func (k *Key) UnmarshalBinary(b []byte) error {
 
 func ParseKey(s string) (Key, error) {
 	k := Key{}
+	if len(s) == 0 {
+		return k, nil
+	}
 	decoded, version, err := base58.CheckDecode(s, 4, nil)
 	if err != nil {
 		if err == base58.ErrChecksum {
 			return k, ErrChecksumMismatch
 		}
-		return k, fmt.Errorf("unknown key format: %v", err.Error())
+		return k, fmt.Errorf("unknown format for key %s: %v", s, err.Error())
 	}
 	switch true {
 	case bytes.Compare(version, ED25519_PUBLIC_KEY_ID) == 0:
@@ -244,9 +266,9 @@ func ParseKey(s string) (Key, error) {
 	default:
 		return k, fmt.Errorf("unknown version %v for key %s", version, s)
 	}
-	if l := len(decoded); l < k.Type.Len() {
+	if l := len(decoded); l != k.Type.Len() {
 		return k, fmt.Errorf("invalid length %d for %s key data", l, k.Type.Prefix())
 	}
-	k.Data = decoded[:k.Type.Len()]
+	k.Data = decoded
 	return k, nil
 }

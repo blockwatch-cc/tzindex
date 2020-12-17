@@ -109,8 +109,8 @@ func (f *FlowSeries) MarshalCSV() ([]string, error) {
 }
 
 func StreamFlowSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
-	// fetch chain params at current height
-	params := ctx.Crawler.ParamsByHeight(-1)
+	// use chain params at current height
+	params := ctx.Params
 
 	// access table
 	table, err := ctx.Indexer.Table(args.Series)
@@ -173,9 +173,9 @@ func StreamFlowSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 			// skip these fields
 			continue
 
-		case "address", "origin":
+		case "address", "counterparty":
 			field := "A" // account
-			if prefix == "origin" {
+			if prefix == "counterparty" {
 				field = "R"
 			}
 			switch mode {

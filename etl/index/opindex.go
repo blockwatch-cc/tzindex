@@ -11,24 +11,26 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 
+	"blockwatch.cc/tzindex/chain"
 	. "blockwatch.cc/tzindex/etl/model"
 )
 
 const (
-	OpPackSizeLog2         = 15 // 32k packs
-	OpJournalSizeLog2      = 16 // 64k
-	OpCacheSize            = 4
+	OpPackSizeLog2         = 15  // 32k packs ~4M
+	OpJournalSizeLog2      = 16  // 64k - search for spending op, so keep small
+	OpCacheSize            = 128 // 128=512MB
 	OpFillLevel            = 100
-	OpIndexPackSizeLog2    = 15 // 16k packs (32k split size)
-	OpIndexJournalSizeLog2 = 16 // 64k
-	OpIndexCacheSize       = 128
+	OpIndexPackSizeLog2    = 15   // 16k packs (32k split size) ~256k
+	OpIndexJournalSizeLog2 = 16   // 64k
+	OpIndexCacheSize       = 1024 // ~256M
 	OpIndexFillLevel       = 90
 	OpIndexKey             = "op"
 	OpTableKey             = "op"
 )
 
 var (
-	ErrNoOpEntry = errors.New("op not indexed")
+	ErrNoOpEntry   = errors.New("op not indexed")
+	ErrInvalidOpID = errors.New("invalid op id")
 )
 
 type OpIndex struct {
@@ -143,6 +145,10 @@ func (idx *OpIndex) Close() error {
 func (idx *OpIndex) ConnectBlock(ctx context.Context, block *Block, _ BlockBuilder) error {
 	ops := make([]pack.Item, 0, len(block.Ops))
 	for _, op := range block.Ops {
+		// assign block fees to implicit baker operation
+		if op.Type == chain.OpTypeBake {
+			op.Fee = block.Fee
+		}
 		ops = append(ops, op)
 	}
 	return idx.table.Insert(ctx, ops)

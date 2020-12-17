@@ -13,19 +13,17 @@ const (
 	FieldAnnoPrefix = "@"
 )
 
-func (p *Prim) HasAnno() bool {
-	return len(p.Anno) > 0
+func (p *Prim) StripAnno(name string) {
+	for i := 0; i < len(p.Anno); i++ {
+		if p.Anno[i][1:] == name {
+			p.Anno = append(p.Anno[:i], p.Anno[i+1:]...)
+			i--
+		}
+	}
 }
 
-// prefers VarAnno, first anno otherwise
-func (p *Prim) GetAnno() string {
-	if len(p.Anno) > 0 {
-		if p.HasVarAnno() {
-			return p.GetVarAnno()
-		}
-		return p.Anno[0][1:]
-	}
-	return ""
+func (p *Prim) HasAnyAnno() bool {
+	return len(p.Anno) > 0
 }
 
 func (p *Prim) HasTypeAnno() bool {
@@ -42,6 +40,17 @@ func (p *Prim) GetTypeAnno() string {
 		if strings.HasPrefix(v, TypeAnnoPrefix) {
 			return v[1:]
 		}
+	}
+	return ""
+}
+
+// prefers TypeAnno, first anno otherwise
+func (p *Prim) GetTypeAnnoAny() string {
+	if len(p.Anno) > 0 {
+		if p.HasTypeAnno() {
+			return p.GetTypeAnno()
+		}
+		return p.Anno[0][1:]
 	}
 	return ""
 }
@@ -64,6 +73,17 @@ func (p *Prim) GetVarAnno() string {
 	return ""
 }
 
+// prefers VarAnno, first anno otherwise
+func (p *Prim) GetVarAnnoAny() string {
+	if len(p.Anno) > 0 {
+		if p.HasVarAnno() {
+			return p.GetVarAnno()
+		}
+		return p.Anno[0][1:]
+	}
+	return ""
+}
+
 func (p *Prim) HasFieldAnno() bool {
 	for _, v := range p.Anno {
 		if strings.HasPrefix(v, FieldAnnoPrefix) {
@@ -78,6 +98,17 @@ func (p *Prim) GetFieldAnno() string {
 		if strings.HasPrefix(v, FieldAnnoPrefix) {
 			return v[1:]
 		}
+	}
+	return ""
+}
+
+// prefers FieldAnno, first anno otherwise
+func (p *Prim) GetFieldAnnoAny() string {
+	if len(p.Anno) > 0 {
+		if p.HasFieldAnno() {
+			return p.GetFieldAnno()
+		}
+		return p.Anno[0][1:]
 	}
 	return ""
 }

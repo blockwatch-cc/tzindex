@@ -58,6 +58,9 @@ type Constants struct {
 	// Broken by v6
 	BlockReward_v1       int64 `json:"block_reward,string"` // default unmarshal
 	EndorsementReward_v1 int64 `json:"-"`
+
+	// New in v7
+	MaxAnonOpsPerBlock int `json:"max_anon_ops_per_block"` // was max_revelations_per_block
 }
 
 func (c Constants) HaveV6Rewards() bool {
@@ -84,8 +87,8 @@ type v1_const struct {
 }
 
 type v6_const struct {
-	BakingRewardPerEndorsement [2]string `json:"baking_reward_per_endorsement"`
-	EndorsementReward          [2]string `json:"endorsement_reward"`
+	BakingRewardPerEndorsement []string `json:"baking_reward_per_endorsement"`
+	EndorsementReward          []string `json:"endorsement_reward"`
 }
 
 func (c *Constants) UnmarshalJSON(buf []byte) error {
@@ -104,16 +107,14 @@ func (c *Constants) UnmarshalJSON(buf []byte) error {
 		for i, v := range v6.BakingRewardPerEndorsement {
 			val, err := strconv.ParseInt(v, 10, 64)
 			if err != nil {
-				return fmt.Errorf("parsing constants baking_reward_per_endorsement '%s': %v",
-					v, err)
+				return fmt.Errorf("parsing v6 constant baking_reward.. '%s': %v", string(buf), err)
 			}
 			cc.BakingRewardPerEndorsement_v6[i] = val
 		}
 		for i, v := range v6.EndorsementReward {
 			val, err := strconv.ParseInt(v, 10, 64)
 			if err != nil {
-				return fmt.Errorf("parsing constants endorsement_reward '%s': %v",
-					v, err)
+				return fmt.Errorf("parsing v6 constant endorsement_reward '%s': %v", string(buf), err)
 			}
 			cc.EndorsementReward_v6[i] = val
 		}
@@ -181,6 +182,7 @@ func (c Constants) MapToChainParams() *chain.Params {
 	p.MinProposalQuorum = c.MinProposalQuorum
 	p.QuorumMin = c.QuorumMin
 	p.QuorumMax = c.QuorumMax
+	p.MaxAnonOpsPerBlock = c.MaxAnonOpsPerBlock
 
 	for i, v := range c.TimeBetweenBlocks {
 		if i > 1 {

@@ -228,13 +228,13 @@ func (idx *IncomeIndex) BootstrapIncome(ctx context.Context, block *Block, build
 			if p.CycleFromHeight(v.Level) != cycle || v.Priority > 0 {
 				continue
 			}
-			acc, ok := builder.AccountByAddress(v.Delegate)
+			acc, ok := builder.AccountByAddress(v.Address())
 			if !ok {
-				return fmt.Errorf("income: missing bootstrap baker %s", v.Delegate)
+				return fmt.Errorf("income: missing bootstrap baker %s", v.Address())
 			}
 			ic, ok := incomeMap[acc.RowId]
 			if !ok {
-				return fmt.Errorf("income: missing bootstrap income data for baker %s %d", v.Delegate, acc.RowId)
+				return fmt.Errorf("income: missing bootstrap income data for baker %s %d", v.Address(), acc.RowId)
 			}
 			ic.NBakingRights++
 			ic.ExpectedIncome += blockReward
@@ -250,13 +250,13 @@ func (idx *IncomeIndex) BootstrapIncome(ctx context.Context, block *Block, build
 			if v.Level < endorseStartBlock || v.Level > endorseEndBlock {
 				continue
 			}
-			acc, ok := builder.AccountByAddress(v.Delegate)
+			acc, ok := builder.AccountByAddress(v.Address())
 			if !ok {
-				return fmt.Errorf("income: missing bootstrap endorser %s", v.Delegate)
+				return fmt.Errorf("income: missing bootstrap endorser %s", v.Address())
 			}
 			ic, ok := incomeMap[acc.RowId]
 			if !ok {
-				return fmt.Errorf("income: missing bootstrap income data for endorser %s %d", v.Delegate, acc.RowId)
+				return fmt.Errorf("income: missing bootstrap income data for endorser %s %d", v.Address(), acc.RowId)
 			}
 			ic.NEndorsingRights += int64(len(v.Slots))
 			ic.ExpectedIncome += endorseReward * int64(len(v.Slots))
@@ -313,6 +313,9 @@ func (idx *IncomeIndex) UpdateCycleIncome(ctx context.Context, block *Block, bui
 		return nil
 	}
 
+	blockDeposit, endorseDeposit := p.BlockSecurityDeposit, p.EndorsementSecurityDeposit
+	blockReward, endorseReward := p.BlockReward, p.EndorsementReward
+
 	for _, v := range updateCycles {
 		incomes := make([]*Income, 0)
 		var totalRolls int64
@@ -330,10 +333,8 @@ func (idx *IncomeIndex) UpdateCycleIncome(ctx context.Context, block *Block, bui
 			if err := r.Decode(in); err != nil {
 				return err
 			}
-			blockDeposit, endorseDeposit := p.BlockSecurityDeposit, p.EndorsementSecurityDeposit
-			blockReward, endorseReward := p.BlockReward, p.EndorsementReward
-			in.ExpectedIncome += blockReward * in.NBakingRights
-			in.ExpectedBonds += blockDeposit * in.NBakingRights
+			in.ExpectedIncome = blockReward * in.NBakingRights
+			in.ExpectedBonds = blockDeposit * in.NBakingRights
 			in.ExpectedIncome += endorseReward * in.NEndorsingRights
 			in.ExpectedBonds += endorseDeposit * in.NEndorsingRights
 			totalRolls += in.Rolls
@@ -451,14 +452,14 @@ func (idx *IncomeIndex) CreateCycleIncome(ctx context.Context, block *Block, bui
 		if v.Priority > 0 {
 			continue
 		}
-		acc, ok := builder.AccountByAddress(v.Delegate)
+		acc, ok := builder.AccountByAddress(v.Address())
 		if !ok {
-			return fmt.Errorf("income: missing baker %s", v.Delegate)
+			return fmt.Errorf("income: missing baker %s", v.Address())
 		}
 		ic, ok := incomeMap[acc.RowId]
 		if !ok {
 			return fmt.Errorf("income: missing snapshot data for baker %s [%d] at snapshot %d[%d]",
-				v.Delegate, acc.RowId, sn.Cycle, sn.RollSnapshot)
+				v.Address(), acc.RowId, sn.Cycle, sn.RollSnapshot)
 		}
 		ic.NBakingRights++
 		ic.ExpectedIncome += blockReward
@@ -476,14 +477,14 @@ func (idx *IncomeIndex) CreateCycleIncome(ctx context.Context, block *Block, bui
 			// log.Infof("Skipping end of cycle height %d > %d", v.Level, endorseEndBlock)
 			continue
 		}
-		acc, ok := builder.AccountByAddress(v.Delegate)
+		acc, ok := builder.AccountByAddress(v.Address())
 		if !ok {
-			return fmt.Errorf("income: missing endorser %s", v.Delegate)
+			return fmt.Errorf("income: missing endorser %s", v.Address())
 		}
 		ic, ok := incomeMap[acc.RowId]
 		if !ok {
 			return fmt.Errorf("income: missing income data for endorser %s %d at %d[%d]",
-				v.Delegate, acc.RowId, sn.Cycle, sn.RollSnapshot)
+				v.Address(), acc.RowId, sn.Cycle, sn.RollSnapshot)
 		}
 		ic.NEndorsingRights += int64(len(v.Slots))
 		ic.ExpectedIncome += endorseReward * int64(len(v.Slots))
@@ -545,9 +546,14 @@ func (idx *IncomeIndex) CreateCycleIncome(ctx context.Context, block *Block, bui
 		return err
 	}
 
-	// calculate luck and append for insert
 	inc := make([]*Income, 0, len(incomeMap))
 	for _, v := range incomeMap {
+		// set 100% performance when no rights are assigned (this will not update later)
+		if v.NBakingRights+v.NEndorsingRights == 0 {
+			v.ContributionPct = 10000
+			v.PerformancePct = 10000
+		}
+		// calculate luck and append for insert
 		v.UpdateLuck(totalRolls, p)
 		inc = append(inc, v)
 	}
@@ -571,7 +577,11 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 	if isRollback {
 		mul = -1
 	}
-	blockReward := block.BlockReward(p)
+
+	// ideal rewards assume priority 0 blocks with all endorsements
+	// in v005 block reward depends on priority and contained endorsements
+	// in v006 reward calc changed again
+	idealBlockReward, idealEndorseReward := p.BlockReward, p.EndorsementReward
 
 	// handle flows from (baking, endorsing, seed nonce, double baking, double endorsement)
 	for _, f := range block.Flows {
@@ -615,7 +625,7 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 							}
 							incomeMap[loser.AccountId] = loser
 						}
-						loser.MissedBakingIncome += blockReward * mul
+						loser.MissedBakingIncome += idealBlockReward * mul
 					}
 				}
 			}
@@ -637,7 +647,7 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 				}
 			}
 
-		case FlowTypeDenounciation:
+		case FlowTypeDenunciation:
 			// there's only one flow type here, so we cannot split 2bake and 2endorse
 			// income (will be handled using ops below), but we debit the offender
 
@@ -742,7 +752,8 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 				}
 				incomeMap[in.AccountId] = in
 			}
-			in.DoubleBakingIncome += op.Reward * mul
+			in.DoubleBakingIncome += op.Volume * mul
+			in.TotalIncome += op.Volume * mul
 
 			// offender is debited above
 
@@ -756,16 +767,16 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 				}
 				incomeMap[in.AccountId] = in
 			}
-			in.DoubleEndorsingIncome += op.Reward * mul
+			in.DoubleEndorsingIncome += op.Volume * mul
+			in.TotalIncome += op.Volume * mul
 
 			// offender is debited above
 		}
 	}
 
 	// missed endorsements require an idea about how much an endorsement is worth
-	endorseReward := p.EndorsementReward
 	if block.Cycle < p.NoRewardCycles {
-		endorseReward = 0
+		idealEndorseReward = 0
 	}
 
 	// handle missed endorsements
@@ -782,7 +793,7 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 				}
 				incomeMap[in.AccountId] = in
 			}
-			in.MissedEndorsingIncome += endorseReward * mul
+			in.MissedEndorsingIncome += idealEndorseReward * mul
 			in.NSlotsMissed += mul
 		}
 	}
@@ -800,6 +811,8 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 		totalGain := v.TotalIncome - v.TotalLost - v.ExpectedIncome
 		if v.ExpectedIncome > 0 {
 			v.PerformancePct = 10000 + totalGain*10000/v.ExpectedIncome
+		} else {
+			v.PerformancePct = 10000
 		}
 		// contribution performance base calculation on rights
 		totalRights := v.NBakingRights + v.NEndorsingRights
@@ -807,6 +820,8 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 		totalGain = totalWork - totalRights
 		if totalRights > 0 {
 			v.ContributionPct = 10000 + totalGain*10000/totalRights
+		} else {
+			v.ContributionPct = 10000
 		}
 		upd = append(upd, v)
 	}
@@ -844,7 +859,7 @@ func (idx *IncomeIndex) UpdateNonceRevelations(ctx context.Context, block *Block
 		case FlowCategoryRewards:
 			in.LostRevelationRewards += f.AmountOut * mul
 		case FlowCategoryFees:
-			in.LostRevelationFees += block.Fees * mul
+			in.LostRevelationFees += block.Fee * mul
 		}
 	}
 

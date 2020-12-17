@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"strconv"
 	"strings"
 	"time"
 
@@ -122,7 +123,54 @@ type Prim struct {
 }
 
 func (p Prim) Name() string {
-	return p.GetAnno()
+	return p.GetVarAnnoAny()
+}
+
+func (p Prim) Clone() *Prim {
+	clone := &Prim{
+		Type:      p.Type,
+		OpCode:    p.OpCode,
+		String:    p.String,
+		WasPacked: p.WasPacked,
+	}
+	if p.Args != nil {
+		clone.Args = make([]*Prim, len(p.Args))
+		for i, arg := range p.Args {
+			clone.Args[i] = arg.Clone()
+		}
+	}
+	if p.Anno != nil {
+		clone.Anno = make([]string, len(p.Anno))
+		for i, anno := range p.Anno {
+			clone.Anno[i] = anno
+		}
+	}
+	if p.Int != nil {
+		clone.Int = big.NewInt(0)
+		clone.Int.Set(p.Int)
+	}
+	if p.Bytes != nil {
+		clone.Bytes = make([]byte, len(p.Bytes))
+		copy(clone.Bytes, p.Bytes)
+	}
+	return clone
+}
+
+type PrimWalker func(p *Prim) error
+
+func (p *Prim) Walk(f PrimWalker) error {
+	if p == nil {
+		return nil
+	}
+	if err := f(p); err != nil {
+		return err
+	}
+	for _, v := range p.Args {
+		if err := v.Walk(f); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // returns true when the prim can be expressed as a single value
@@ -159,7 +207,8 @@ func (p Prim) Text() string {
 	case PrimBytes:
 		return hex.EncodeToString(p.Bytes)
 	default:
-		return ""
+		v, _ := p.Value(p.OpCode).(string)
+		return v
 	}
 }
 
@@ -181,6 +230,14 @@ func (p Prim) Unpack() (*Prim, error) {
 	pp := &Prim{WasPacked: true}
 	if err := pp.UnmarshalBinary(p.Bytes[1:]); err != nil {
 		return nil, err
+	}
+	// handle recursive packed data
+	if pp.IsPackedAny() {
+		up, err := pp.UnpackAny()
+		if err != nil {
+			return nil, err
+		}
+		pp = up
 	}
 	return pp, nil
 }
@@ -224,7 +281,11 @@ func (p Prim) Value(as OpCode) interface{} {
 	case PrimInt:
 		switch as {
 		case T_TIMESTAMP:
-			return time.Unix(p.Int.Int64(), 0).UTC()
+			tm := time.Unix(p.Int.Int64(), 0).UTC()
+			if y := tm.Year(); y < 0 || y >= 10000 {
+				return p.Int.Text(10)
+			}
+			return tm
 		default:
 			return p.Int.Text(10)
 		}
@@ -232,11 +293,10 @@ func (p Prim) Value(as OpCode) interface{} {
 	case PrimString:
 		switch as {
 		case T_TIMESTAMP:
-			t, err := time.Parse(time.RFC3339, p.String)
-			if err != nil {
-				return time.Unix(0, 0).UTC()
+			if t, err := time.Parse(time.RFC3339, p.String); err == nil {
+				return t
 			}
-			return t
+			return p.String
 		default:
 			return p.String
 		}
@@ -270,12 +330,13 @@ func (p Prim) Value(as OpCode) interface{} {
 			if err := s.UnmarshalBinary(p.Bytes); err == nil {
 				return s
 			} else {
-				log.Errorf("Rendering prim type %s as %s: %v", p.Type, as, err)
+				log.Errorf("Rendering prim type %s as %s: %v // %#v", p.Type, as, err, p.Bytes)
+				panic(err)
 			}
 
 		case T_CHAIN_ID:
 			if len(p.Bytes) == chain.HashTypeChainId.Len() {
-				return chain.NewChainIdHash(p.Bytes)
+				return chain.NewChainIdHash(p.Bytes).String()
 			}
 
 		default:
@@ -300,11 +361,9 @@ func (p Prim) Value(as OpCode) interface{} {
 	case PrimNullary, PrimNullaryAnno:
 		switch p.OpCode {
 		case D_FALSE:
-			return false
+			return strconv.FormatBool(false)
 		case D_TRUE:
-			return true
-		case D_NONE, D_UNIT:
-			return nil
+			return strconv.FormatBool(true)
 		default:
 			return p.OpCode.String()
 		}
@@ -312,7 +371,6 @@ func (p Prim) Value(as OpCode) interface{} {
 	case PrimBinary, PrimBinaryAnno:
 		switch p.OpCode {
 		case D_PAIR:
-			// FIXME: recurse into Pair tree
 			// mangle pair contents into string, used when rendering complex keys
 			return fmt.Sprintf("%s#%s",
 				p.Args[0].Value(p.Args[0].OpCode),
@@ -332,9 +390,9 @@ func (p Prim) Value(as OpCode) interface{} {
 		switch as {
 		case T_BOOL:
 			if p.OpCode == D_TRUE {
-				return true
+				return strconv.FormatBool(true)
 			} else if p.OpCode == D_FALSE {
-				return false
+				return strconv.FormatBool(false)
 			}
 		case T_OPERATION:
 			return p.OpCode.String()
@@ -873,13 +931,14 @@ func (p *Prim) BuildType() *Prim {
 			t.Type = PrimBinary
 			t.Args = []*Prim{
 				p.Args[0].Args[0].BuildType(), // key type
-				p.Args[0].Args[1].BuildType(), // value type
+				p.Args[0].Args[1].BuildType(), // value type, breaks on polymorph types
 			}
 		} else if len(p.Args) > 0 && p.Args[0].OpCode.Type() == T_OPERATION {
 			// sequences can be T_LIST, T_LAMBDA (if T_OPERATION is included)
 			t.Type = PrimNullary // we don't know in/out types
 			t.OpCode = T_LAMBDA
 		} else {
+			// how to represent inner types?
 			t.OpCode = T_LIST
 			if len(p.Args) > 0 {
 				t.Type = PrimUnary
@@ -918,7 +977,7 @@ func (p *Prim) BuildType() *Prim {
 			t.Type = PrimBinary
 			t.Args = []*Prim{
 				p.Args[0].BuildType(),
-				p.Args[1].BuildType(),
+				p.Args[1].BuildType(), // FIXME: breaks on polymorph types
 			}
 		} else {
 			// probably a regular pair
@@ -926,12 +985,12 @@ func (p *Prim) BuildType() *Prim {
 			t.OpCode = p.OpCode.Type()
 			t.Args = []*Prim{
 				p.Args[0].BuildType(),
-				p.Args[1].BuildType(),
+				p.Args[1].BuildType(), // FIXME: breaks on polymorph types
 			}
 		}
 
 	case PrimVariadicAnno:
-		// probably an operation
+		// ? probably an operation
 		t.Type = PrimNullary
 		t.OpCode = p.OpCode.Type()
 	}

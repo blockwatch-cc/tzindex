@@ -21,3 +21,7 @@ type EndorsementOpMetadata struct {
 	Delegate       chain.Address  `json:"delegate"`
 	Slots          []int          `json:"slots"`
 }
+
+func (m EndorsementOpMetadata) Address() chain.Address {
+	return m.Delegate
+}

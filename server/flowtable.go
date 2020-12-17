@@ -18,6 +18,7 @@ import (
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 )
@@ -41,18 +42,21 @@ func init() {
 
 	// add extra translations
 	flowSourceNames["address"] = "A"
-	flowSourceNames["origin"] = "R"
+	flowSourceNames["counterparty"] = "R"
+	flowSourceNames["op"] = "D"
 	flowAllAliases = append(flowAllAliases, "address")
-	flowAllAliases = append(flowAllAliases, "origin")
+	flowAllAliases = append(flowAllAliases, "counterparty")
+	flowAllAliases = append(flowAllAliases, "op")
 }
 
 // configurable marshalling helper
 type Flow struct {
 	model.Flow
-	verbose bool                              `csv:"-" pack:"-"` // cond. marshal
-	columns util.StringList                   `csv:"-" pack:"-"` // cond. cols & order when brief
-	params  *chain.Params                     `csv:"-" pack:"-"` // blockchain amount conversion
-	addrs   map[model.AccountID]chain.Address `csv:"-" pack:"-"` // address map
+	verbose bool                               `csv:"-" pack:"-"` // cond. marshal
+	columns util.StringList                    `csv:"-" pack:"-"` // cond. cols & order when brief
+	params  *chain.Params                      `csv:"-" pack:"-"` // blockchain amount conversion
+	addrs   map[model.AccountID]chain.Address  `csv:"-" pack:"-"` // address map
+	ops     map[model.OpID]chain.OperationHash `csv:"-" pack:"-"` // op map
 }
 
 func (f *Flow) MarshalJSON() ([]byte, error) {
@@ -65,47 +69,61 @@ func (f *Flow) MarshalJSON() ([]byte, error) {
 
 func (f *Flow) MarshalJSONVerbose() ([]byte, error) {
 	flow := struct {
-		RowId       uint64  `json:"row_id"`
-		Height      int64   `json:"height"`
-		Cycle       int64   `json:"cycle"`
-		Timestamp   int64   `json:"time"`
-		AccountId   uint64  `json:"account_id"`
-		Account     string  `json:"address"`
-		AccountType string  `json:"address_type"`
-		Origin      string  `json:"origin"`
-		OriginId    uint64  `json:"origin_id"`
-		Category    string  `json:"category"`
-		Operation   string  `json:"operation"`
-		AmountIn    float64 `json:"amount_in"`
-		AmountOut   float64 `json:"amount_out"`
-		IsFee       bool    `json:"is_fee"`
-		IsBurned    bool    `json:"is_burned"`
-		IsFrozen    bool    `json:"is_frozen"`
-		IsUnfrozen  bool    `json:"is_unfrozen"`
-		TokenGenMin int64   `json:"token_gen_min"`
-		TokenGenMax int64   `json:"token_gen_max"`
-		TokenAge    int64   `json:"token_age"`
+		RowId          uint64  `json:"row_id"`
+		Height         int64   `json:"height"`
+		Cycle          int64   `json:"cycle"`
+		Timestamp      int64   `json:"time"`
+		OpId           uint64  `json:"op_id"`
+		Op             string  `json:"op"`
+		OpN            int     `json:"op_n"`
+		OpC            int     `json:"op_c"`
+		OpI            int     `json:"op_i"`
+		OpL            int     `json:"op_l"`
+		OpP            int     `json:"op_p"`
+		AccountId      uint64  `json:"account_id"`
+		Account        string  `json:"address"`
+		AccountType    string  `json:"address_type"`
+		CounterParty   string  `json:"counterparty"`
+		CounterPartyId uint64  `json:"counterparty_id"`
+		Category       string  `json:"category"`
+		Operation      string  `json:"operation"`
+		AmountIn       float64 `json:"amount_in"`
+		AmountOut      float64 `json:"amount_out"`
+		IsFee          bool    `json:"is_fee"`
+		IsBurned       bool    `json:"is_burned"`
+		IsFrozen       bool    `json:"is_frozen"`
+		IsUnfrozen     bool    `json:"is_unfrozen"`
+		TokenGenMin    int64   `json:"token_gen_min"`
+		TokenGenMax    int64   `json:"token_gen_max"`
+		TokenAge       int64   `json:"token_age"`
 	}{
-		RowId:       f.RowId,
-		Height:      f.Height,
-		Cycle:       f.Cycle,
-		Timestamp:   util.UnixMilliNonZero(f.Timestamp),
-		AccountId:   f.AccountId.Value(),
-		Account:     f.addrs[f.AccountId].String(),
-		AccountType: f.AddressType.String(),
-		OriginId:    f.OriginId.Value(),
-		Origin:      f.addrs[f.OriginId].String(),
-		Category:    f.Category.String(),
-		Operation:   f.Operation.String(),
-		AmountIn:    f.params.ConvertValue(f.AmountIn),
-		AmountOut:   f.params.ConvertValue(f.AmountOut),
-		IsFee:       f.IsFee,
-		IsBurned:    f.IsBurned,
-		IsFrozen:    f.IsFrozen,
-		IsUnfrozen:  f.IsUnfrozen,
-		TokenGenMin: f.TokenGenMin,
-		TokenGenMax: f.TokenGenMax,
-		TokenAge:    f.TokenAge,
+		RowId:          f.RowId,
+		Height:         f.Height,
+		Cycle:          f.Cycle,
+		Timestamp:      util.UnixMilliNonZero(f.Timestamp),
+		OpId:           f.OpId.Value(),
+		Op:             f.ops[f.OpId].String(),
+		OpN:            f.OpN,
+		OpC:            f.OpC,
+		OpI:            f.OpI,
+		OpL:            f.OpL,
+		OpP:            f.OpP,
+		AccountId:      f.AccountId.Value(),
+		Account:        f.addrs[f.AccountId].String(),
+		AccountType:    f.AddressType.String(),
+		CounterPartyId: f.CounterPartyId.Value(),
+		CounterParty:   f.addrs[f.CounterPartyId].String(),
+		Category:       f.Category.String(),
+		Operation:      f.Operation.String(),
+		AmountIn:       f.params.ConvertValue(f.AmountIn),
+		AmountOut:      f.params.ConvertValue(f.AmountOut),
+		IsFee:          f.IsFee,
+		IsBurned:       f.IsBurned,
+		IsFrozen:       f.IsFrozen,
+		IsUnfrozen:     f.IsUnfrozen,
+		TokenGenMin:    f.TokenGenMin,
+		TokenGenMax:    f.TokenGenMax,
+		TokenAge:       f.TokenAge,
 	}
 	return json.Marshal(flow)
 }
@@ -124,16 +142,30 @@ func (f *Flow) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, f.Cycle, 10)
 		case "time":
 			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(f.Timestamp), 10)
+		case "op_id":
+			buf = strconv.AppendUint(buf, f.OpId.Value(), 10)
+		case "op":
+			buf = strconv.AppendQuote(buf, f.ops[f.OpId].String())
+		case "op_n":
+			buf = strconv.AppendInt(buf, int64(f.OpN), 10)
+		case "op_c":
+			buf = strconv.AppendInt(buf, int64(f.OpC), 10)
+		case "op_i":
+			buf = strconv.AppendInt(buf, int64(f.OpI), 10)
+		case "op_l":
+			buf = strconv.AppendInt(buf, int64(f.OpL), 10)
+		case "op_p":
+			buf = strconv.AppendInt(buf, int64(f.OpP), 10)
 		case "account_id":
 			buf = strconv.AppendUint(buf, f.AccountId.Value(), 10)
 		case "address":
 			buf = strconv.AppendQuote(buf, f.addrs[f.AccountId].String())
 		case "address_type":
 			buf = strconv.AppendQuote(buf, f.AddressType.String())
-		case "origin_id":
-			buf = strconv.AppendUint(buf, f.OriginId.Value(), 10)
-		case "origin":
-			buf = strconv.AppendQuote(buf, f.addrs[f.OriginId].String())
+		case "counterparty_id":
+			buf = strconv.AppendUint(buf, f.CounterPartyId.Value(), 10)
+		case "counterparty":
+			buf = strconv.AppendQuote(buf, f.addrs[f.CounterPartyId].String())
 		case "category":
 			buf = strconv.AppendQuote(buf, f.Category.String())
 		case "operation":
@@ -196,16 +228,30 @@ func (f *Flow) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(f.Cycle, 10)
 		case "time":
 			res[i] = strconv.Quote(f.Timestamp.Format(time.RFC3339))
+		case "op_id":
+			res[i] = strconv.FormatUint(f.OpId.Value(), 10)
+		case "op":
+			res[i] = strconv.Quote(f.ops[f.OpId].String())
+		case "op_n":
+			res[i] = strconv.Itoa(f.OpN)
+		case "op_c":
+			res[i] = strconv.Itoa(f.OpC)
+		case "op_i":
+			res[i] = strconv.Itoa(f.OpI)
+		case "op_l":
+			res[i] = strconv.Itoa(f.OpL)
+		case "op_p":
+			res[i] = strconv.Itoa(f.OpP)
 		case "account_id":
 			res[i] = strconv.FormatUint(f.AccountId.Value(), 10)
 		case "address":
 			res[i] = strconv.Quote(f.addrs[f.AccountId].String())
 		case "address_type":
 			res[i] = strconv.Quote(f.AddressType.String())
-		case "origin_id":
-			res[i] = strconv.FormatUint(f.OriginId.Value(), 10)
-		case "origin":
-			res[i] = strconv.Quote(f.addrs[f.OriginId].String())
+		case "counterparty_id":
+			res[i] = strconv.FormatUint(f.CounterPartyId.Value(), 10)
+		case "counterparty":
+			res[i] = strconv.Quote(f.addrs[f.CounterPartyId].String())
 		case "category":
 			res[i] = strconv.Quote(f.Category.String())
 		case "operation":
@@ -236,8 +282,8 @@ func (f *Flow) MarshalCSV() ([]string, error) {
 }
 
 func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
-	// fetch chain params at current height
-	params := ctx.Crawler.ParamsByHeight(-1)
+	// use chain params at current height
+	params := ctx.Params
 
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
@@ -248,10 +294,17 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	if err != nil {
 		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", index.AccountTableKey), err))
 	}
+	opT, err := ctx.Indexer.Table(index.OpTableKey)
+	if err != nil {
+		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", index.OpTableKey), err))
+	}
 
 	// translate long column names to short names used in pack tables
-	var needAccountT bool
-	var srcNames []string
+	var (
+		needAccountT bool
+		needOpT      bool
+		srcNames     []string
+	)
 	if len(args.Columns) > 0 {
 		// resolve short column names
 		srcNames = make([]string, 0, len(args.Columns))
@@ -263,8 +316,11 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			if n != "-" {
 				srcNames = append(srcNames, n)
 			}
-			if args.Verbose || v == "address" || v == "origin" {
+			if args.Verbose || v == "address" || v == "counterparty" {
 				needAccountT = true
+			}
+			if args.Verbose || v == "op" {
+				needOpT = true
 			}
 		}
 	} else {
@@ -272,6 +328,7 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		srcNames = table.Fields().Names()
 		args.Columns = flowAllAliases
 		needAccountT = true
+		needOpT = true
 	}
 
 	// build table query
@@ -282,6 +339,8 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		Conditions: make(pack.ConditionList, 0),
 		Order:      args.Order,
 	}
+	accMap := make(map[model.AccountID]chain.Address)
+	opMap := make(map[model.OpID]chain.OperationHash)
 
 	// build dynamic filter conditions from query (will panic on error)
 	for key, val := range ctx.Request.URL.Query() {
@@ -314,9 +373,9 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				Raw:   val[0], // debugging aid
 			})
 
-		case "address", "origin":
+		case "address", "counterparty":
 			field := "A" // account
-			if prefix == "origin" {
+			if prefix == "counterparty" {
 				field = "R"
 			}
 			switch mode {
@@ -377,6 +436,88 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			default:
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
+		case "op":
+			// parse op hash and lookup id
+			// valid filter modes: eq, in
+			// 1 resolve op_id from op table
+			// 2 add eq/in cond: op_id
+			// 3 cache result in map (for output)
+			switch mode {
+			case pack.FilterModeEqual, pack.FilterModeNotEqual:
+				if val[0] == "" {
+					// empty op matches id 0 (== missing baker)
+					q.Conditions = append(q.Conditions, pack.Condition{
+						Field: table.Fields().Find("D"), // op id
+						Mode:  mode,
+						Value: uint64(0),
+						Raw:   val[0], // debugging aid
+					})
+				} else {
+					// single-op lookup and compile condition
+					op, err := ctx.Indexer.LookupOp(ctx, val[0])
+					if err != nil {
+						switch err {
+						case index.ErrNoOpEntry:
+							// expected
+						case etl.ErrInvalidHash:
+							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid op hash '%s'", val[0]), err))
+						default:
+							panic(err)
+						}
+					}
+					// Note: when not found we insert an always false condition
+					if op == nil || len(op) == 0 {
+						q.Conditions = append(q.Conditions, pack.Condition{
+							Field: table.Fields().Find("D"), // op id
+							Mode:  mode,
+							Value: uint64(math.MaxUint64),
+							Raw:   "op not found", // debugging aid
+						})
+					} else {
+						opMap[op[0].RowId] = op[0].Hash.Clone()
+						q.Conditions = append(q.Conditions, pack.Condition{
+							Field: table.Fields().Find("D"), // op id
+							Mode:  mode,
+							Value: op[0].RowId.Value(), // op slice may contain internal ops
+							Raw:   val[0],              // debugging aid
+						})
+					}
+				}
+			case pack.FilterModeIn, pack.FilterModeNotIn:
+				// multi-address lookup and compile condition
+				ids := make([]uint64, 0)
+				for _, v := range strings.Split(val[0], ",") {
+					op, err := ctx.Indexer.LookupOp(ctx, v)
+					if err != nil {
+						switch err {
+						case index.ErrNoOpEntry:
+							// expected
+						case etl.ErrInvalidHash:
+							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid op hash '%s'", v), err))
+						default:
+							panic(err)
+						}
+					}
+					// skip not found ops
+					if op == nil || len(op) == 0 {
+						continue
+					}
+					// collect list of op ids (use first slice balue only since
+					// we're looking for ballots which are always single-op)
+					opMap[op[0].RowId] = op[0].Hash.Clone()
+					ids = append(ids, op[0].RowId.Value())
+				}
+				// Note: when list is empty (no ops were found, the match will
+				//       always be false and return no result as expected)
+				q.Conditions = append(q.Conditions, pack.Condition{
+					Field: table.Fields().Find("D"), // op id
+					Mode:  mode,
+					Value: ids,
+					Raw:   val[0], // debugging aid
+				})
+			default:
+				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
+			}
 		default:
 			// translate long column name used in query to short column name used in packs
 			if short, ok := flowSourceNames[prefix]; !ok {
@@ -392,7 +533,7 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				switch prefix {
 				case "cycle":
 					if v == "head" {
-						currentCycle := params.CycleFromHeight(ctx.Crawler.Height())
+						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
 						v = strconv.FormatInt(int64(currentCycle), 10)
 					}
 				case "amount_in", "amount_out":
@@ -480,7 +621,6 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	defer res.Close()
 
 	// Step 2: resolve accounts using lookup (when requested)
-	accMap := make(map[model.AccountID]chain.Address)
 	if needAccountT && res.Rows() > 0 {
 		// get a unique copy of account and origin id columns (clip on request limit)
 		acol, _ := res.Uint64Column("A")
@@ -518,12 +658,60 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		}
 	}
 
+	// Step 3: resolve ops using lookup (when requested)
+	if needOpT && res.Rows() > 0 {
+		// get a unique copy of op id column (clip on request limit)
+		ucol, _ := res.Uint64Column("D")
+		find := vec.UniqueUint64Slice(ucol[:util.Min(len(ucol), int(args.Limit))])
+
+		// filter already known ops
+		var n int
+		for _, v := range find {
+			if _, ok := opMap[model.OpID(v)]; !ok {
+				find[n] = v
+				n++
+			}
+		}
+		find = find[:n]
+
+		if len(find) > 0 {
+			// lookup ops from id
+			q := pack.Query{
+				Name:   ctx.RequestID + ".flow_op_lookup",
+				Fields: opT.Fields().Select("I", "H"),
+				Conditions: pack.ConditionList{pack.Condition{
+					Field: accountT.Fields().Find("I"),
+					Mode:  pack.FilterModeIn,
+					Value: find,
+				}},
+			}
+			ctx.Log.Tracef("Looking up %d ops", len(find))
+			type XOp struct {
+				Id   model.OpID          `pack:"I,pk"`
+				Hash chain.OperationHash `pack:"H"`
+			}
+			op := &XOp{}
+			err := opT.Stream(ctx, q, func(r pack.Row) error {
+				if err := r.Decode(op); err != nil {
+					return err
+				}
+				opMap[op.Id] = op.Hash.Clone()
+				return nil
+			})
+			if err != nil {
+				// non-fatal error
+				ctx.Log.Errorf("Op lookup failed: %v", err)
+			}
+		}
+	}
+
 	// prepare return type marshalling
 	flow := &Flow{
 		verbose: args.Verbose,
 		columns: util.StringList(args.Columns),
 		params:  params,
 		addrs:   accMap,
+		ops:     opMap,
 	}
 
 	// prepare response stream

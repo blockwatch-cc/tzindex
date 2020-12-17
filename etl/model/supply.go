@@ -60,13 +60,16 @@ func (s *Supply) Update(b *Block, delegates map[AccountID]*Account) {
 	s.Height = b.Height
 	s.Cycle = b.Cycle
 	s.Timestamp = b.Timestamp
-	s.Total += b.Rewards - b.BurnedSupply
-	s.Minted += b.Rewards
+
+	// baking rewards
+	s.Total += b.Reward - b.BurnedSupply
+	s.Minted += b.Reward
+	s.FrozenDeposits += b.Deposit - b.UnfrozenDeposits
+	s.FrozenRewards += b.Reward - b.UnfrozenRewards
+	s.FrozenFees += b.Fee - b.UnfrozenFees
+
+	// overall burn this block
 	s.Burned += b.BurnedSupply
-	s.FrozenDeposits += b.Deposits - b.UnfrozenDeposits
-	s.FrozenRewards += b.Rewards - b.UnfrozenRewards
-	s.FrozenFees += b.Fees - b.UnfrozenFees
-	s.Frozen = s.FrozenDeposits + s.FrozenFees + s.FrozenRewards
 
 	// activated/unclaimed, vested/unvested, invoice/airdrop from flows
 	for _, f := range b.Flows {
@@ -78,9 +81,9 @@ func (s *Supply) Update(b *Block, delegates map[AccountID]*Account) {
 			s.Vested += f.AmountIn
 			s.Unvested -= f.AmountIn
 		case FlowTypeNonceRevelation:
-			// adjust different supply types because block.BurnedSupply contains
-			// seed burn already, but it comes from frozen supply and not from
-			// circulating supply
+			// adjust frozen bucket types to reflect seed burn; note that
+			// block.BurnedSupply already contains the sum of all seed burns, so don't
+			// double apply
 			if f.IsBurned {
 				s.BurnedSeedMiss += f.AmountOut
 				s.Frozen -= f.AmountOut
@@ -95,24 +98,49 @@ func (s *Supply) Update(b *Block, delegates map[AccountID]*Account) {
 			s.Total += f.AmountIn
 			s.MintedAirdrop += f.AmountIn
 			s.Minted += f.AmountIn
+		case FlowTypeDenunciation:
+			// moves frozen coins between buckets and owners, burn is already accounted for
+			// in block.BurnedSupply, so don't double apply
+			switch f.Category {
+			case FlowCategoryDeposits:
+				s.FrozenDeposits -= f.AmountOut // offender lost deposits
+			case FlowCategoryRewards:
+				s.FrozenRewards -= f.AmountOut // offender lost rewards
+				s.FrozenRewards += f.AmountIn  // accuser reward
+			case FlowCategoryFees:
+				s.FrozenFees -= f.AmountOut // offender lost fees
+			}
 		}
 	}
 
-	// use ops to update bake and burn details
+	// use ops to update non-baking deposits/rewards and individual burn details
 	for _, op := range b.Ops {
 		switch op.Type {
 		case chain.OpTypeSeedNonceRevelation:
 			s.MintedSeeding += op.Reward
+			s.Total += op.Reward
+			s.Minted += op.Reward
+			s.FrozenRewards += op.Reward
+
 		case chain.OpTypeEndorsement:
 			s.MintedEndorsing += op.Reward
+			s.Total += op.Reward
+			s.Minted += op.Reward
+			s.FrozenDeposits += op.Deposit
+			s.FrozenRewards += op.Reward
+
 		case chain.OpTypeDoubleBakingEvidence:
 			s.BurnedDoubleBaking += op.Burned
+
 		case chain.OpTypeDoubleEndorsementEvidence:
 			s.BurnedDoubleEndorse += op.Burned
+
 		case chain.OpTypeOrigination:
 			s.BurnedOrigination += op.Burned
+
 		case chain.OpTypeTransaction:
 			s.BurnedImplicit += op.Burned
+			// TODO: storage burn
 		}
 	}
 	// update supply totals across all delegates
@@ -134,6 +162,9 @@ func (s *Supply) Update(b *Block, delegates map[AccountID]*Account) {
 			s.InactiveDelegated += db
 		}
 	}
+
+	// reconceil frozen coins
+	s.Frozen = s.FrozenDeposits + s.FrozenFees + s.FrozenRewards
 
 	// we don't explicitly count baking and there's also no explicit op, but
 	// we can calculate total baking rewards as difference to total rewards

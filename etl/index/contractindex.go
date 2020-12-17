@@ -22,7 +22,7 @@ const (
 	ContractCacheSize            = 2  // minimum
 	ContractFillLevel            = 100
 	ContractIndexPackSizeLog2    = 15 // 16k packs (32k split size) ~256k
-	ContractIndexJournalSizeLog2 = 15 // 32k
+	ContractIndexJournalSizeLog2 = 16 // 64k
 	ContractIndexCacheSize       = 2  // minimum
 	ContractIndexFillLevel       = 90
 	ContractIndexKey             = "contract"
@@ -154,15 +154,15 @@ func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *Block, builde
 		if !op.IsContract {
 			continue
 		}
-		// load rpc origination or transaction op
-		o, ok := block.GetRPCOp(op.OpN, op.OpC)
+		// load rpc origination op
+		o, ok := block.GetRpcOp(op.OpL, op.OpP, op.OpC)
 		if !ok {
-			return fmt.Errorf("missing contract origination op [%d:%d]", op.OpN, op.OpC)
+			return fmt.Errorf("contract: missing %s op [%d:%d]", o.OpKind(), op.OpL, op.OpP)
 		}
 		// load corresponding account
 		acc, ok := builder.AccountById(op.ReceiverId)
 		if !ok {
-			return fmt.Errorf("missing contract account %d", op.ReceiverId)
+			return fmt.Errorf("contract: missing account %d in %s op", op.ReceiverId, op.Type)
 		}
 		// skip when contract is not new (unlikely because every origination creates a
 		// new account, but need to check invariant here)
@@ -173,16 +173,18 @@ func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *Block, builde
 			// on internal originations, find corresponding internal op
 			top, ok := o.(*rpc.TransactionOp)
 			if !ok {
-				return fmt.Errorf("internal contract origination op [%d:%d]: unexpected type %T ", op.OpN, op.OpC, o)
+				return fmt.Errorf("contract: internal %s op [%d:%d]: unexpected type %T ",
+					o.OpKind(), op.OpL, op.OpP, o)
 			}
 			iop := top.Metadata.InternalResults[op.OpI]
-			ct = append(ct, NewInternalContract(acc, iop))
+			ct = append(ct, NewInternalContract(acc, iop, op.OpL, op.OpP, op.OpI))
 		} else {
 			oop, ok := o.(*rpc.OriginationOp)
 			if !ok {
-				return fmt.Errorf("contract origination op [%d:%d]: unexpected type %T ", op.OpN, op.OpC, o)
+				return fmt.Errorf("contract: %s op [%d:%d]: unexpected type %T ",
+					o.OpKind(), op.OpL, op.OpP, o)
 			}
-			ct = append(ct, NewContract(acc, oop))
+			ct = append(ct, NewContract(acc, oop, op.OpL, op.OpP))
 		}
 	}
 	// insert, will generate unique row ids

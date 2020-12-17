@@ -1,4 +1,4 @@
-// Copyright (c) 2018 KIDTSUNAMI
+// Copyright (c) 2018 - 2020 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -24,7 +24,9 @@ import (
 
 	logpkg "github.com/echa/log"
 
+	"blockwatch.cc/tzindex/chain"
 	"blockwatch.cc/tzindex/etl"
+	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
 )
 
@@ -52,6 +54,8 @@ type ApiContext struct {
 	Crawler        *etl.Crawler
 	Indexer        *etl.Indexer
 	Client         *rpc.Client
+	Tip            *model.ChainTip
+	Params         *chain.Params
 
 	// QoS and Debugging
 	RequestID string
@@ -106,6 +110,8 @@ func NewContext(ctx context.Context, r *http.Request, w http.ResponseWriter, f A
 		Crawler:        srv.cfg.Crawler,
 		Indexer:        srv.cfg.Indexer,
 		Client:         srv.cfg.Client,
+		Tip:            srv.cfg.Crawler.Tip(),
+		Params:         srv.cfg.Crawler.ParamsByHeight(-1),
 		Request:        r,
 		ResponseWriter: w,
 		RemoteIP:       net.ParseIP(host),
@@ -119,9 +125,7 @@ func NewContext(ctx context.Context, r *http.Request, w http.ResponseWriter, f A
 
 // GET/POST/PATCH/PATCH load data or fail
 func (api *ApiContext) ParseRequestArgs(args interface{}) {
-
 	r := api.Request
-
 	if r.Method == http.MethodGet {
 		if err := schemaDecoder.Decode(args, r.URL.Query()); err != nil {
 			panic(EBadRequest(EC_BAD_URL_QUERY, err.Error(), nil))
@@ -141,6 +145,9 @@ func (api *ApiContext) ParseRequestArgs(args interface{}) {
 				panic(EBadRequest(EC_DEMARSHAL_FAILED, err.Error(), nil))
 			}
 		}
+	}
+	if req, ok := args.(ParsableRequest); ok {
+		req.Parse(api)
 	}
 }
 
@@ -257,9 +264,17 @@ func (api *ApiContext) sendResponse() {
 
 		err := api.err
 		if err.Cause != nil {
-			api.Log.Errorf("%d (%d) %s - %s failed (%s): %v", api.status, err.Code, path, err.Scope, err.Detail, err.Cause)
+			if api.status == 499 {
+				api.Log.Debugf("%d (%d) %s - %s failed (%s): %v", api.status, err.Code, path, err.Scope, err.Detail, err.Cause)
+			} else {
+				api.Log.Errorf("%d (%d) %s - %s failed (%s): %v", api.status, err.Code, path, err.Scope, err.Detail, err.Cause)
+			}
 		} else {
-			api.Log.Errorf("%d (%d) %s - %s failed (%s)", api.status, err.Code, path, err.Scope, err.Detail)
+			if api.status == 499 {
+				api.Log.Debugf("%d (%d) %s - %s failed (%s)", api.status, err.Code, path, err.Scope, err.Detail)
+			} else {
+				api.Log.Errorf("%d (%d) %s - %s failed (%s)", api.status, err.Code, path, err.Scope, err.Detail)
+			}
 		}
 
 		// return error response when connection is still alive
@@ -292,7 +307,11 @@ func (api *ApiContext) StreamTrailer(cursor string, count int, err error) {
 			api.Request.RequestURI,
 			api.Request.Proto,
 		}, " ")
-		api.Log.Errorf("streaming %d (%d) %s - %s failed (%s): %v", api.status, api.err.Code, path, api.err.Scope, api.err.Detail, api.err.Cause)
+		if api.status == 499 {
+			api.Log.Debugf("streaming %d (%d) %s - %s failed (%s): %v", api.status, api.err.Code, path, api.err.Scope, api.err.Detail, api.err.Cause)
+		} else {
+			api.Log.Errorf("streaming %d (%d) %s - %s failed (%s): %v", api.status, api.err.Code, path, api.err.Scope, api.err.Detail, api.err.Cause)
+		}
 		h.Set(trailerError, api.err.String())
 	}
 	api.Performance.WriteResponseTrailer(api.ResponseWriter)
@@ -310,7 +329,7 @@ func (api *ApiContext) writeResponseHeaders(contentType, trailers string) {
 	h.Set("X-Request-Id", api.RequestID)
 
 	// add blockchain info
-	tip := api.Crawler.Tip()
+	tip := api.Tip
 	h.Set("X-Network-Id", tip.ChainId.String())
 	if l := len(tip.Deployments); l > 0 {
 		h.Set("X-Protocol-Hash", tip.Deployments[l-1].Protocol.String())
@@ -400,7 +419,12 @@ func (api *ApiContext) writeResponseBody() {
 		default:
 			// marshal and write the result to the HTTP body
 			if b, err := json.MarshalIndent(api.result, "", "  "); err != nil {
-				api.Log.Errorf("Error sending response: %v in struct %#v", err, api.result)
+				path := strings.Join([]string{
+					api.Request.Method,
+					api.Request.RequestURI,
+					api.Request.Proto,
+				}, " ")
+				api.Log.Errorf("Response Error %s: %v in struct %T", path, err, api.result)
 				e := EInternal(EC_MARSHAL_FAILED, "cannot marshal response", err).(*Error)
 				e.SetScope(api.name)
 				if api.isStreamed {

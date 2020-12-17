@@ -53,6 +53,7 @@ func (t SystemRequest) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/flush", C(FlushDatabases)).Methods("PUT")
 	r.HandleFunc("/flush_journal", C(FlushJournals)).Methods("PUT")
 	r.HandleFunc("/gc", C(GcDatabases)).Methods("PUT")
+	r.HandleFunc("/rollback", C(RollbackDatabases)).Methods("PUT")
 	r.HandleFunc("/log/{subsystem}/{level}", C(UpdateLog)).Methods("PUT")
 	return nil
 }

@@ -31,7 +31,7 @@ func init() {
 
 // Block contains extracted and translated data describing a Tezos block. Block also
 // contains raw data and translations for related types such as operations, chain totals
-// rights, etc. that is used by indexers
+// rights, etc. that is used by indexers and reporters
 type Block struct {
 	RowId               uint64                 `pack:"I,pk,snappy"   json:"row_id"`                         // internal: id, not height!
 	ParentId            uint64                 `pack:"P,snappy"      json:"parent_id"`                      // internal: parent block id
@@ -66,9 +66,9 @@ type Block struct {
 	NProposal           int                    `pack:"y,snappy"      json:"n_proposal"`                     // stats: number of Proposals operations
 	NBallot             int                    `pack:"z,snappy"      json:"n_ballot"`                       // stats: number of Ballots operations
 	Volume              int64                  `pack:"V,snappy"      json:"volume"`                         // stats: sum of transacted amount
-	Fees                int64                  `pack:"F,snappy"      json:"fees"`                           // stats: sum of transaction fees
-	Rewards             int64                  `pack:"R,snappy"      json:"rewards"`                        // stats: baking and endorsement rewards
-	Deposits            int64                  `pack:"D,snappy"      json:"deposits"`                       // stats: bond deposits for baking and endorsement
+	Fee                 int64                  `pack:"F,snappy"      json:"fee"`                            // stats: sum of transaction fees
+	Reward              int64                  `pack:"R,snappy"      json:"reward"`                         // stats: baking and endorsement rewards
+	Deposit             int64                  `pack:"D,snappy"      json:"deposit"`                        // stats: bond deposits for baking and endorsement
 	UnfrozenFees        int64                  `pack:"u,snappy"      json:"unfrozen_fees"`                  // stats: total unfrozen fees
 	UnfrozenRewards     int64                  `pack:"U,snappy"      json:"unfrozen_rewards"`               // stats: total unfrozen rewards
 	UnfrozenDeposits    int64                  `pack:"X,snappy"      json:"unfrozen_deposits"`              // stats: total unfrozen deposits
@@ -86,6 +86,7 @@ type Block struct {
 	GasPrice            float64                `pack:"g,convert,precision=5,snappy"      json:"gas_price"`  // stats: gas price in tezos per unit gas
 	StorageSize         int64                  `pack:"Y,snappy"      json:"storage_size"`                   // stats: total new storage size allocated
 	TDD                 float64                `pack:"t,convert,precision=6,snappy"  json:"days_destroyed"` // stats: token days destroyed (from last-in time to spend)
+	NOpsImplicit        int                    `pack:"j,snappy"      json:"n_ops_implicit"`                 // stats: number of implicit operations
 
 	// other tz or extracted/translated data for processing
 	TZ     *Bundle       `pack:"-" json:"-"`
@@ -243,19 +244,35 @@ func (b *Block) IsProtocolUpgrade() bool {
 	return !b.Parent.TZ.Block.Metadata.Protocol.IsEqual(b.TZ.Block.Metadata.Protocol)
 }
 
-func (b *Block) GetRPCOp(opn, opc int) (rpc.Operation, bool) {
-	for _, ol := range b.TZ.Block.Operations {
-		for _, o := range ol {
-			if opn == 0 {
-				if len(o.Contents) > opc {
-					return o.Contents[opc], true
-				}
-				return nil, false
-			}
-			opn--
-		}
+func (b *Block) GetRpcOp(l, p, c int) (rpc.Operation, bool) {
+	if len(b.TZ.Block.Operations) < l ||
+		len(b.TZ.Block.Operations[l]) < p ||
+		len(b.TZ.Block.Operations[l][p].Contents) < c {
+		return nil, false
 	}
-	return nil, false
+	return b.TZ.Block.Operations[l][p].Contents[c], true
+}
+
+func (b *Block) GetRpcOpHeader(l, p int) (*rpc.OperationHeader, bool) {
+	if len(b.TZ.Block.Operations) < l ||
+		len(b.TZ.Block.Operations[l]) < p {
+		return nil, false
+	}
+	return b.TZ.Block.Operations[l][p], true
+}
+
+func (b *Block) GetOpId(opn, opc, opi int) (OpID, bool) {
+	if opn < 0 {
+		return 0, false
+	}
+	for _, o := range b.Ops {
+		// ops are ordered
+		if o.OpN < opn || o.OpC < opc || o.OpI < opi {
+			continue
+		}
+		return o.RowId, true
+	}
+	return 0, false
 }
 
 func (b *Block) Age(height int64) int64 {
@@ -280,7 +297,7 @@ func (b *Block) BlockReward(p *chain.Params) int64 {
 		if op.Type != chain.OpTypeEndorsement {
 			continue
 		}
-		eop, _ := b.GetRPCOp(op.OpN, op.OpC)
+		eop, _ := b.GetRpcOp(op.OpL, op.OpP, op.OpC)
 		nEndorsements += len(eop.(*rpc.EndorsementOp).Metadata.Slots)
 	}
 
@@ -314,7 +331,7 @@ func (b *Block) Free() {
 func (b *Block) Reset() {
 	b.RowId = 0
 	b.ParentId = 0
-	b.Hash = chain.BlockHash{chain.ZeroHash}
+	b.Hash = chain.BlockHash{chain.InvalidHash}
 	b.IsOrphan = false
 	b.Height = 0
 	b.Cycle = 0
@@ -345,9 +362,9 @@ func (b *Block) Reset() {
 	b.NProposal = 0
 	b.NBallot = 0
 	b.Volume = 0
-	b.Fees = 0
-	b.Rewards = 0
-	b.Deposits = 0
+	b.Fee = 0
+	b.Reward = 0
+	b.Deposit = 0
 	b.UnfrozenFees = 0
 	b.UnfrozenRewards = 0
 	b.UnfrozenDeposits = 0
@@ -365,6 +382,7 @@ func (b *Block) Reset() {
 	b.GasPrice = 0
 	b.StorageSize = 0
 	b.TDD = 0
+	b.NOpsImplicit = 0
 	b.TZ = nil
 	b.Params = nil
 	b.Chain = nil
@@ -402,9 +420,9 @@ func (b *Block) Update(accounts, delegates map[AccountID]*Account) {
 	b.NProposal = 0
 	b.NBallot = 0
 	b.Volume = 0
-	b.Fees = 0
-	b.Rewards = 0
-	b.Deposits = 0
+	b.Fee = 0
+	b.Reward = 0
+	b.Deposit = 0
 	b.UnfrozenFees = 0
 	b.UnfrozenRewards = 0
 	b.UnfrozenDeposits = 0
@@ -422,16 +440,11 @@ func (b *Block) Update(accounts, delegates map[AccountID]*Account) {
 	b.GasPrice = 0
 	b.StorageSize = 0
 	b.TDD = 0
+	b.NOpsImplicit = 0
 
 	var slotsEndorsed uint32
 
 	for _, op := range b.Ops {
-		if op.IsSuccess {
-			b.Volume += op.Volume
-		}
-		b.Fees += op.Fee
-		b.Rewards += op.Reward
-		b.Deposits += op.Deposit
 		b.BurnedSupply += op.Burned
 		b.TDD += op.TDD
 		b.GasLimit += op.GasLimit
@@ -444,33 +457,60 @@ func (b *Block) Update(accounts, delegates map[AccountID]*Account) {
 		if !op.IsSuccess {
 			b.NOpsFailed++
 		}
+		if op.IsImplicit {
+			b.NOpsImplicit++
+		}
 		switch op.Type {
 		case chain.OpTypeActivateAccount:
+			b.NOps++
 			b.NActivation++
-			b.ActivatedSupply += op.Volume
+			if op.IsSuccess {
+				b.ActivatedSupply += op.Volume
+				b.Volume += op.Volume
+			}
 		case chain.OpTypeDoubleBakingEvidence:
+			b.NOps++
 			b.N2Baking++
 		case chain.OpTypeDoubleEndorsementEvidence:
+			b.NOps++
 			b.N2Endorsement++
 		case chain.OpTypeSeedNonceRevelation:
+			b.NOps++
 			b.NSeedNonce++
 		case chain.OpTypeTransaction:
+			b.NOps++
 			b.NTx++
+			b.Fee += op.Fee
+			if op.IsSuccess {
+				b.Volume += op.Volume
+			}
 		case chain.OpTypeOrigination:
+			b.NOps++
 			b.NOrigination++
+			b.Fee += op.Fee
+			if op.IsSuccess {
+				b.Volume += op.Volume
+			}
 		case chain.OpTypeDelegation:
+			b.NOps++
 			b.NDelegation++
+			b.Fee += op.Fee
 		case chain.OpTypeReveal:
+			b.NOps++
 			b.NReveal++
+			b.Fee += op.Fee
 		case chain.OpTypeEndorsement:
+			b.NOps++
 			b.NEndorsement++
-			eop, _ := b.GetRPCOp(op.OpN, op.OpC)
+			eop, _ := b.GetRpcOp(op.OpL, op.OpP, op.OpC)
 			for _, v := range eop.(*rpc.EndorsementOp).Metadata.Slots {
 				slotsEndorsed |= 1 << uint(v)
 			}
 		case chain.OpTypeProposals:
+			b.NOps++
 			b.NProposal++
 		case chain.OpTypeBallot:
+			b.NOps++
 			b.NBallot++
 		}
 	}
@@ -480,9 +520,9 @@ func (b *Block) Update(accounts, delegates map[AccountID]*Account) {
 		b.Parent.NSlotsEndorsed = bits.OnesCount32(slotsEndorsed)
 	}
 
-	b.NOps = len(b.Ops)
-	if b.GasUsed > 0 && b.Fees > 0 {
-		b.GasPrice = float64(b.Fees) / float64(b.GasUsed)
+	// mean gas price for this block
+	if b.GasUsed > 0 && b.Fee > 0 {
+		b.GasPrice = float64(b.Fee) / float64(b.GasUsed)
 	}
 
 	// some updates are not reflected in operations (e.g. baking, airdrops) so we
@@ -492,9 +532,9 @@ func (b *Block) Update(accounts, delegates map[AccountID]*Account) {
 		case FlowTypeBaking:
 			switch f.Category {
 			case FlowCategoryRewards:
-				b.Rewards += f.AmountIn
+				b.Reward += f.AmountIn
 			case FlowCategoryDeposits:
-				b.Deposits += f.AmountIn
+				b.Deposit += f.AmountIn
 			}
 		case FlowTypeInternal:
 			if f.IsUnfrozen {

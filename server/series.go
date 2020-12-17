@@ -60,9 +60,6 @@ func (t SeriesRequest) RegisterRoutes(r *mux.Router) error {
 }
 
 func (r *SeriesRequest) Parse(ctx *ApiContext) {
-	// read schema args
-	ctx.ParseRequestArgs(r)
-
 	// prevent duplicate columns
 	if len(r.Columns) > 0 {
 		seen := make(map[string]struct{})
@@ -139,7 +136,7 @@ func (r *SeriesRequest) Parse(ctx *ApiContext) {
 
 func StreamSeries(ctx *ApiContext) (interface{}, int) {
 	args := &SeriesRequest{}
-	args.Parse(ctx)
+	ctx.ParseRequestArgs(args)
 	switch args.Series {
 	case "block":
 		return StreamBlockSeries(ctx, args)
@@ -147,6 +144,10 @@ func StreamSeries(ctx *ApiContext) (interface{}, int) {
 		return StreamOpSeries(ctx, args)
 	case "flow":
 		return StreamFlowSeries(ctx, args)
+	case "chain":
+		return StreamChainSeries(ctx, args)
+	case "supply":
+		return StreamSupplySeries(ctx, args)
 	default:
 		panic(ENotFound(EC_RESOURCE_NOTFOUND, fmt.Sprintf("no such series '%s'", args.Series), nil))
 		return nil, -1

@@ -24,7 +24,7 @@ import (
 var (
 	blockSeriesNames = util.StringList([]string{
 		"time",
-		"n_slots_endorsed",
+		"n_endorsed_slots",
 		"n_ops",
 		"n_ops_failed",
 		"n_ops_contract",
@@ -40,9 +40,9 @@ var (
 		"n_proposal",
 		"n_ballot",
 		"volume",
-		"fees",
-		"rewards",
-		"deposits",
+		"fee",
+		"reward",
+		"deposit",
 		"unfrozen_fees",
 		"unfrozen_rewards",
 		"unfrozen_deposits",
@@ -57,6 +57,7 @@ var (
 		"gas_used",
 		"storage_size",
 		"days_destroyed",
+		"n_ops_implicit",
 	})
 )
 
@@ -64,7 +65,7 @@ var (
 // configurable marshalling helper
 type BlockSeries struct {
 	Timestamp           time.Time `json:"time"`
-	NSlotsEndorsed      int64     `json:"n_slots_endorsed"`
+	NSlotsEndorsed      int64     `json:"n_endorsed_slots"`
 	NOps                int64     `json:"n_ops"`
 	NOpsFailed          int64     `json:"n_ops_failed"`
 	NOpsContract        int64     `json:"n_ops_contract"`
@@ -80,9 +81,9 @@ type BlockSeries struct {
 	NProposal           int64     `json:"n_proposal"`
 	NBallot             int64     `json:"n_ballot"`
 	Volume              int64     `json:"volume"`
-	Fees                int64     `json:"fees"`
-	Rewards             int64     `json:"rewards"`
-	Deposits            int64     `json:"deposits"`
+	Fee                 int64     `json:"fee"`
+	Reward              int64     `json:"reward"`
+	Deposit             int64     `json:"deposit"`
 	UnfrozenFees        int64     `json:"unfrozen_fees"`
 	UnfrozenRewards     int64     `json:"unfrozen_rewards"`
 	UnfrozenDeposits    int64     `json:"unfrozen_deposits"`
@@ -97,6 +98,7 @@ type BlockSeries struct {
 	GasUsed             int64     `json:"gas_used"`
 	StorageSize         int64     `json:"storage_size"`
 	TDD                 float64   `json:"days_destroyed"`
+	NOpsImplicit        int64     `json:"n_ops_implicit"`
 
 	columns util.StringList `csv:"-" pack:"-"` // cond. cols & order when brief
 	params  *chain.Params   `csv:"-" pack:"-"`
@@ -120,9 +122,9 @@ func (s *BlockSeries) Add(b *model.Block) {
 	s.NProposal += int64(b.NProposal)
 	s.NBallot += int64(b.NBallot)
 	s.Volume += int64(b.Volume)
-	s.Fees += int64(b.Fees)
-	s.Rewards += int64(b.Rewards)
-	s.Deposits += int64(b.Deposits)
+	s.Fee += int64(b.Fee)
+	s.Reward += int64(b.Reward)
+	s.Deposit += int64(b.Deposit)
 	s.UnfrozenFees += int64(b.UnfrozenFees)
 	s.UnfrozenRewards += int64(b.UnfrozenRewards)
 	s.UnfrozenDeposits += int64(b.UnfrozenDeposits)
@@ -137,6 +139,7 @@ func (s *BlockSeries) Add(b *model.Block) {
 	s.GasUsed += int64(b.GasUsed)
 	s.StorageSize += int64(b.StorageSize)
 	s.TDD += b.TDD
+	s.NOpsImplicit += int64(b.NOpsImplicit)
 }
 
 func (s *BlockSeries) Reset() {
@@ -157,9 +160,9 @@ func (s *BlockSeries) Reset() {
 	s.NProposal = 0
 	s.NBallot = 0
 	s.Volume = 0
-	s.Fees = 0
-	s.Rewards = 0
-	s.Deposits = 0
+	s.Fee = 0
+	s.Reward = 0
+	s.Deposit = 0
 	s.UnfrozenFees = 0
 	s.UnfrozenRewards = 0
 	s.UnfrozenDeposits = 0
@@ -174,6 +177,7 @@ func (s *BlockSeries) Reset() {
 	s.GasUsed = 0
 	s.StorageSize = 0
 	s.TDD = 0
+	s.NOpsImplicit = 0
 }
 
 func (s *BlockSeries) MarshalJSON() ([]byte, error) {
@@ -203,9 +207,9 @@ func (b *BlockSeries) MarshalJSONVerbose() ([]byte, error) {
 		NProposal           int64     `json:"n_proposal"`
 		NBallot             int64     `json:"n_ballot"`
 		Volume              float64   `json:"volume"`
-		Fees                float64   `json:"fees"`
-		Rewards             float64   `json:"rewards"`
-		Deposits            float64   `json:"deposits"`
+		Fee                 float64   `json:"fee"`
+		Reward              float64   `json:"reward"`
+		Deposit             float64   `json:"deposit"`
 		UnfrozenFees        float64   `json:"unfrozen_fees"`
 		UnfrozenRewards     float64   `json:"unfrozen_rewards"`
 		UnfrozenDeposits    float64   `json:"unfrozen_deposits"`
@@ -220,6 +224,7 @@ func (b *BlockSeries) MarshalJSONVerbose() ([]byte, error) {
 		GasUsed             int64     `json:"gas_used"`
 		StorageSize         int64     `json:"storage_size"`
 		TDD                 float64   `json:"days_destroyed"`
+		NOpsImplicit        int64     `json:"n_ops_implicit"`
 	}{
 		Timestamp:           b.Timestamp,
 		NSlotsEndorsed:      b.NSlotsEndorsed,
@@ -238,9 +243,9 @@ func (b *BlockSeries) MarshalJSONVerbose() ([]byte, error) {
 		NProposal:           b.NProposal,
 		NBallot:             b.NBallot,
 		Volume:              b.params.ConvertValue(b.Volume),
-		Fees:                b.params.ConvertValue(b.Fees),
-		Rewards:             b.params.ConvertValue(b.Rewards),
-		Deposits:            b.params.ConvertValue(b.Deposits),
+		Fee:                 b.params.ConvertValue(b.Fee),
+		Reward:              b.params.ConvertValue(b.Reward),
+		Deposit:             b.params.ConvertValue(b.Deposit),
 		UnfrozenFees:        b.params.ConvertValue(b.UnfrozenFees),
 		UnfrozenRewards:     b.params.ConvertValue(b.UnfrozenRewards),
 		UnfrozenDeposits:    b.params.ConvertValue(b.UnfrozenDeposits),
@@ -255,6 +260,7 @@ func (b *BlockSeries) MarshalJSONVerbose() ([]byte, error) {
 		GasUsed:             b.GasUsed,
 		StorageSize:         b.StorageSize,
 		TDD:                 b.TDD,
+		NOpsImplicit:        b.NOpsImplicit,
 	}
 	return json.Marshal(block)
 }
@@ -299,12 +305,12 @@ func (b *BlockSeries) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, int64(b.NBallot), 10)
 		case "volume":
 			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Volume), 'f', dec, 64)
-		case "fees":
-			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Fees), 'f', dec, 64)
-		case "rewards":
-			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Rewards), 'f', dec, 64)
-		case "deposits":
-			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Deposits), 'f', dec, 64)
+		case "fee":
+			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Fee), 'f', dec, 64)
+		case "reward":
+			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Reward), 'f', dec, 64)
+		case "deposit":
+			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Deposit), 'f', dec, 64)
 		case "unfrozen_fees":
 			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.UnfrozenFees), 'f', dec, 64)
 		case "unfrozen_rewards":
@@ -333,6 +339,8 @@ func (b *BlockSeries) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, b.StorageSize, 10)
 		case "days_destroyed":
 			buf = strconv.AppendFloat(buf, b.TDD, 'f', -1, 64)
+		case "n_ops_implicit":
+			buf = strconv.AppendInt(buf, int64(b.NOpsImplicit), 10)
 		default:
 			continue
 		}
@@ -383,12 +391,12 @@ func (b *BlockSeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(int64(b.NBallot), 10)
 		case "volume":
 			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Volume), 'f', dec, 64)
-		case "fees":
-			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Fees), 'f', dec, 64)
-		case "rewards":
-			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Rewards), 'f', dec, 64)
-		case "deposits":
-			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Deposits), 'f', dec, 64)
+		case "fee":
+			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Fee), 'f', dec, 64)
+		case "reward":
+			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Reward), 'f', dec, 64)
+		case "deposit":
+			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Deposit), 'f', dec, 64)
 		case "unfrozen_fees":
 			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.UnfrozenFees), 'f', dec, 64)
 		case "unfrozen_rewards":
@@ -417,6 +425,8 @@ func (b *BlockSeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(b.StorageSize, 10)
 		case "days_destroyed":
 			res[i] = strconv.FormatFloat(b.TDD, 'f', -1, 64)
+		case "n_ops_implicit":
+			res[i] = strconv.FormatInt(int64(b.NOpsImplicit), 10)
 		default:
 			continue
 		}
@@ -425,8 +435,8 @@ func (b *BlockSeries) MarshalCSV() ([]string, error) {
 }
 
 func StreamBlockSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
-	// fetch chain params at current height
-	params := ctx.Crawler.ParamsByHeight(-1)
+	// use chain params at current height
+	params := ctx.Params
 
 	// access table
 	table, err := ctx.Indexer.Table(args.Series)
@@ -589,7 +599,7 @@ func StreamBlockSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) 
 			for _, v := range val {
 				// convert amounts from float to int64
 				switch prefix {
-				case "volume", "rewards", "fees", "deposits", "burned_supply",
+				case "volume", "reward", "fee", "deposit", "burned_supply",
 					"unfrozen_fees", "unfrozen_rewards", "unfrozen_deposits",
 					"activated_supply":
 					fval, err := strconv.ParseFloat(v, 64)

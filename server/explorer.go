@@ -55,8 +55,10 @@ func (b Explorer) RegisterRoutes(r *mux.Router) error {
 
 // generic list request
 type ExplorerListRequest struct {
-	Limit  uint `schema:"limit"`
-	Offset uint `schema:"offset"`
+	Limit  uint           `schema:"limit"`
+	Offset uint           `schema:"offset"`
+	Cursor uint64         `schema:"cursor"`
+	Order  pack.OrderType `schema:"order"`
 }
 
 func GetStatus(ctx *ApiContext) (interface{}, int) {
@@ -98,7 +100,7 @@ type BlockchainTip struct {
 }
 
 func GetBlockchainTip(ctx *ApiContext) (interface{}, int) {
-	tip := buildBlockchainTip(ctx, ctx.Crawler.Tip())
+	tip := buildBlockchainTip(ctx, ctx.Tip)
 	return tip, http.StatusOK
 }
 
@@ -112,7 +114,7 @@ func (t BlockchainTip) Expires() time.Time {
 
 func buildBlockchainTip(ctx *ApiContext, tip *model.ChainTip) *BlockchainTip {
 	oneDay := 24 * time.Hour
-	params := ctx.Crawler.ParamsByHeight(-1)
+	params := ctx.Params
 	// most recent chain data (medium expensive)
 	ch, err := ctx.Indexer.ChainByHeight(ctx.Context, tip.BestHeight)
 	if err != nil {
@@ -200,42 +202,45 @@ type BlockchainConfig struct {
 	EndHeight   int64              `json:"end_height"`
 
 	// fixed
-	NoRewardCycles              int64 `json:"no_reward_cycles"`
-	SecurityDepositRampUpCycles int64 `json:"security_deposit_ramp_up_cycles"`
+	NoRewardCycles              int64 `json:"no_reward_cycles"`                // from mainnet genesis
+	SecurityDepositRampUpCycles int64 `json:"security_deposit_ramp_up_cycles"` // increase 1/64th each cycle
 	Decimals                    int   `json:"decimals"`
-	Token                       int64 `json:"units"`
+	Token                       int64 `json:"units"` // atomic units per token
 
 	// may change with protocol updates
-	BlockReward                  float64 `json:"block_reward"`
-	BlockSecurityDeposit         float64 `json:"block_security_deposit"`
-	BlocksPerCommitment          int64   `json:"blocks_per_commitment"`
-	BlocksPerCycle               int64   `json:"blocks_per_cycle"`
-	BlocksPerRollSnapshot        int64   `json:"blocks_per_roll_snapshot"`
-	BlocksPerVotingPeriod        int64   `json:"blocks_per_voting_period"`
-	CostPerByte                  int64   `json:"cost_per_byte"`
-	EndorsementReward            float64 `json:"endorsement_reward"`
-	EndorsementSecurityDeposit   float64 `json:"endorsement_security_deposit"`
-	EndorsersPerBlock            int     `json:"endorsers_per_block"`
-	HardGasLimitPerBlock         int64   `json:"hard_gas_limit_per_block"`
-	HardGasLimitPerOperation     int64   `json:"hard_gas_limit_per_operation"`
-	HardStorageLimitPerOperation int64   `json:"hard_storage_limit_per_operation"`
-	MaxOperationDataLength       int     `json:"max_operation_data_length"`
-	MaxProposalsPerDelegate      int     `json:"max_proposals_per_delegate"`
-	MaxRevelationsPerBlock       int     `json:"max_revelations_per_block"`
-	MichelsonMaximumTypeSize     int     `json:"michelson_maximum_type_size"`
-	NonceLength                  int     `json:"nonce_length"`
-	OriginationBurn              float64 `json:"origination_burn"`
-	OriginationSize              int64   `json:"origination_size"`
-	PreservedCycles              int64   `json:"preserved_cycles"`
-	ProofOfWorkNonceSize         int     `json:"proof_of_work_nonce_size"`
-	ProofOfWorkThreshold         int64   `json:"proof_of_work_threshold"`
-	SeedNonceRevelationTip       float64 `json:"seed_nonce_revelation_tip"`
-	TimeBetweenBlocks            [2]int  `json:"time_between_blocks"`
-	TokensPerRoll                float64 `json:"tokens_per_roll"`
-	TestChainDuration            int64   `json:"test_chain_duration"`
-	MinProposalQuorum            int64   `json:"min_proposal_quorum"`
-	QuorumMin                    int64   `json:"quorum_min"`
-	QuorumMax                    int64   `json:"quorum_max"`
+	BlockReward                  float64    `json:"block_reward"`
+	BlockSecurityDeposit         float64    `json:"block_security_deposit"`
+	BlocksPerCommitment          int64      `json:"blocks_per_commitment"`
+	BlocksPerCycle               int64      `json:"blocks_per_cycle"`
+	BlocksPerRollSnapshot        int64      `json:"blocks_per_roll_snapshot"`
+	BlocksPerVotingPeriod        int64      `json:"blocks_per_voting_period"`
+	CostPerByte                  int64      `json:"cost_per_byte"`
+	EndorsementReward            float64    `json:"endorsement_reward"`
+	EndorsementSecurityDeposit   float64    `json:"endorsement_security_deposit"`
+	EndorsersPerBlock            int        `json:"endorsers_per_block"`
+	HardGasLimitPerBlock         int64      `json:"hard_gas_limit_per_block"`
+	HardGasLimitPerOperation     int64      `json:"hard_gas_limit_per_operation"`
+	HardStorageLimitPerOperation int64      `json:"hard_storage_limit_per_operation"`
+	MaxOperationDataLength       int        `json:"max_operation_data_length"`
+	MaxProposalsPerDelegate      int        `json:"max_proposals_per_delegate"`
+	MaxRevelationsPerBlock       int        `json:"max_revelations_per_block"`
+	MichelsonMaximumTypeSize     int        `json:"michelson_maximum_type_size"`
+	NonceLength                  int        `json:"nonce_length"`
+	OriginationBurn              float64    `json:"origination_burn"`
+	OriginationSize              int64      `json:"origination_size"`
+	PreservedCycles              int64      `json:"preserved_cycles"`
+	ProofOfWorkNonceSize         int        `json:"proof_of_work_nonce_size"`
+	ProofOfWorkThreshold         int64      `json:"proof_of_work_threshold"`
+	SeedNonceRevelationTip       float64    `json:"seed_nonce_revelation_tip"`
+	TimeBetweenBlocks            [2]int     `json:"time_between_blocks"`
+	TokensPerRoll                float64    `json:"tokens_per_roll"`
+	TestChainDuration            int64      `json:"test_chain_duration"`
+	MinProposalQuorum            int64      `json:"min_proposal_quorum"`
+	QuorumMin                    int64      `json:"quorum_min"`
+	QuorumMax                    int64      `json:"quorum_max"`
+	BlockRewardV6                [2]float64 `json:"block_rewards_v6"`
+	EndorsementRewardV6          [2]float64 `json:"endorsement_rewards_v6"`
+	MaxAnonOpsPerBlock           int        `json:"max_anon_ops_per_block"`
 
 	timestamp time.Time `json:"-"`
 	expires   time.Time `json:"-"`
@@ -256,7 +261,7 @@ func GetBlockchainConfig(ctx *ApiContext) (interface{}, int) {
 		height, err = strconv.ParseInt(s, 10, 64)
 		switch true {
 		case s == "head":
-			height = ctx.Crawler.Height()
+			height = ctx.Tip.BestHeight
 		case err != nil:
 			panic(EBadRequest(EC_PARAM_INVALID, "invalid height", err))
 		}
@@ -309,8 +314,17 @@ func GetBlockchainConfig(ctx *ApiContext) (interface{}, int) {
 		MinProposalQuorum: p.MinProposalQuorum,
 		QuorumMin:         p.QuorumMin,
 		QuorumMax:         p.QuorumMax,
-		timestamp:         ctx.Crawler.Time(),
-		expires:           ctx.Crawler.Time().Add(p.TimeBetweenBlocks[0]),
+		BlockRewardV6: [2]float64{
+			p.ConvertValue(p.BlockRewardV6[0]),
+			p.ConvertValue(p.BlockRewardV6[1]),
+		},
+		EndorsementRewardV6: [2]float64{
+			p.ConvertValue(p.EndorsementRewardV6[0]),
+			p.ConvertValue(p.EndorsementRewardV6[1]),
+		},
+		MaxAnonOpsPerBlock: p.MaxAnonOpsPerBlock,
+		timestamp:          ctx.Tip.BestTime,
+		expires:            ctx.Tip.BestTime.Add(p.TimeBetweenBlocks[0]),
 	}
 	return cfg, http.StatusOK
 }
@@ -329,8 +343,8 @@ func GetBlockchainConfig(ctx *ApiContext) (interface{}, int) {
 // Decay function: x^(1/n)
 //
 func estimateHealth(ctx *ApiContext, height, history int64) int {
-	nowheight := ctx.Crawler.Height()
-	params := ctx.Crawler.ParamsByHeight(-1)
+	nowheight := ctx.Tip.BestHeight
+	params := ctx.Params
 	isSync := ctx.Crawler.Status().Status == etl.STATE_SYNCHRONIZED
 	health := 100.0
 	const (
@@ -391,7 +405,7 @@ func estimateHealth(ctx *ApiContext, height, history int64) int {
 
 	// check if next block is past due and estimate expected priority
 	if height == nowheight && isSync {
-		delay := ctx.Now.Sub(ctx.Crawler.Time())
+		delay := ctx.Now.Sub(ctx.Tip.BestTime)
 		t1 := params.TimeBetweenBlocks[0]
 		t2 := params.TimeBetweenBlocks[1]
 		if t2 == 0 {

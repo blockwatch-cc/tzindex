@@ -8,7 +8,7 @@ All-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resour
 
 - indexes and cross-checks full on-chain state
 - feature-rich [REST API](https://tzstats.com/docs/api/index.html) with objects, bulk tables and time-series
-- supports protocols up to Carthage 2.0 (v006)
+- supports protocols up to Delphi 2.0 (v007)
 - auto-detects and locks Tezos network (never mixes data from different networks)
 - indexes all accounts and smart-contracts (including genesis data)
 - follows chain reorgs as they are resolved
@@ -37,8 +37,8 @@ All-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resour
 
 ### Requirements
 
-- Storage: 2.4GB (full Mainnet index, Jan 2020)
-- RAM:  4-16GB (configurable, use more memory for better query latency)
+- Storage: 5.5GB (full Mainnet index, Nov 2020)
+- RAM:  4-24GB (configurable, use more memory for better query latency)
 - CPU:  2+ cores (configurable, use more for better query parallelism)
 - Tezos node in archive mode
 
@@ -167,7 +167,7 @@ The following table may help you pick the right license for your intended use-ca
 
 | | MIT | PRO |
 |-|---------------|----------------|
-| Costs | Free | Per Major Version |
+| Costs | Free | Subscription |
 | Type | Perpetual | Perpetual |
 | Use | Any | Commercial Use |
 | Limitations | - | See Agreement |

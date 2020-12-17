@@ -257,7 +257,7 @@ func (m *Indexer) BuildAccountRanking(ctx context.Context, now time.Time) (*Acco
 		sort.Stable(ranks.traffic)
 		rank := 1
 		var last int64
-		for _, v := range ranks.rich {
+		for _, v := range ranks.traffic {
 			if v.TxTraffic24h == 0 {
 				continue
 			}

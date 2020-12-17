@@ -29,9 +29,11 @@ type Op struct {
 	Cycle        int64               `pack:"c,snappy"      json:"cycle"`                          // bc: block cycle (tezos specific)
 	Hash         chain.OperationHash `pack:"H"             json:"hash"`                           // bc: unique op_id (op hash)
 	Counter      int64               `pack:"j,snappy"      json:"counter"`                        // bc: counter
-	OpN          int                 `pack:"n,snappy"      json:"op_n"`                           // bc: position in block (block.Operations.([][]*OperationHeader) list position)
+	OpN          int                 `pack:"n,snappy"      json:"op_n"`                           // bc: gobal position in block (block.Operations.([][]*OperationHeader) list position)
 	OpC          int                 `pack:"o,snappy"      json:"op_c"`                           // bc: position in OperationHeader.Contents.([]Operation) list
 	OpI          int                 `pack:"i,snappy"      json:"op_i"`                           // bc: position in internal operation result list
+	OpL          int                 `pack:"L,snappy"      json:"op_l"`                           // bc: operation list (i.e. 0 for endorsements, etc corresponding to validation pass)
+	OpP          int                 `pack:"P,snappy"      json:"op_p"`                           // bc: operation list position (use in combination with op_l to lookup op on RPC)
 	Type         chain.OpType        `pack:"t,snappy"      json:"type"`                           // stats: operation type as defined byprotocol
 	Status       chain.OpStatus      `pack:"?,snappy"      json:"status"`                         // stats: operation status
 	IsSuccess    bool                `pack:"!,snappy"      json:"is_success"`                     // bc: operation succesful flag
@@ -51,7 +53,7 @@ type Op struct {
 	ReceiverId   AccountID           `pack:"R,snappy"      json:"receiver_id"`                    // internal: op receiver
 	ManagerId    AccountID           `pack:"M,snappy"      json:"manager_id"`                     // internal: op manager for originations
 	DelegateId   AccountID           `pack:"D,snappy"      json:"delegate_id"`                    // internal: op delegate for originations and delegations
-	IsInternal   bool                `pack:"N,snappy"      json:"is_internal"`                    // bc: internal chain/funds management
+	IsInternal   bool                `pack:"N,snappy"      json:"is_internal"`                    // bc: internal from contract call
 	HasData      bool                `pack:"w,snappy"      json:"has_data"`                       // internal: flag to signal if data is available
 	Data         string              `pack:"a,snappy"      json:"data"`                           // bc: extra op data
 	Parameters   []byte              `pack:"p,snappy"      json:"parameters"`                     // bc: input params
@@ -62,6 +64,9 @@ type Op struct {
 	BranchId     uint64              `pack:"X,snappy"      json:"branch_id"`                      // bc: branch block the op is based on
 	BranchHeight int64               `pack:"#,snappy"      json:"branch_height"`                  // bc: height of the branch block
 	BranchDepth  int64               `pack:"<,snappy"      json:"branch_depth"`                   // stats: diff between branch block and current block
+	IsImplicit   bool                `pack:"m,snappy"      json:"is_implicit"`                    // bc: implicit operation not published on chain
+	Entrypoint   int                 `pack:"E,snappy"      json:"entrypoint_id"`                  // entrypoint sequence id
+	IsOrphan     bool                `pack:"O,snappy"      json:"is_orphan"`
 }
 
 // Ensure Op implements the pack.Item interface.
@@ -71,7 +76,7 @@ func AllocOp() *Op {
 	return opPool.Get().(*Op)
 }
 
-func NewOp(block, branch *Block, head *rpc.OperationHeader, op_n, op_c, op_i int) *Op {
+func NewOp(block, branch *Block, head *rpc.OperationHeader, op_n, op_l, op_p, op_c, op_i int) *Op {
 	o := AllocOp()
 	o.RowId = 0
 	o.Timestamp = block.Timestamp
@@ -79,6 +84,8 @@ func NewOp(block, branch *Block, head *rpc.OperationHeader, op_n, op_c, op_i int
 	o.Cycle = block.Cycle
 	o.Hash = head.Hash
 	o.OpN = op_n
+	o.OpL = op_l
+	o.OpP = op_p
 	o.OpC = op_c
 	o.OpI = op_i
 	o.Type = head.Contents[op_c].OpKind()
@@ -88,6 +95,23 @@ func NewOp(block, branch *Block, head *rpc.OperationHeader, op_n, op_c, op_i int
 		o.BranchDepth = block.Height - branch.Height
 	}
 	// other fields are type specific and will be set by builder
+	return o
+}
+
+func NewImplicitOp(block *Block, recv AccountID, typ chain.OpType, op_n, op_l, op_p int) *Op {
+	o := AllocOp()
+	o.RowId = 0
+	o.ReceiverId = recv
+	o.Timestamp = block.Timestamp
+	o.Height = block.Height
+	o.Cycle = block.Cycle
+	o.OpN = op_n
+	o.OpL = op_l
+	o.OpP = op_p
+	o.Type = typ
+	o.IsSuccess = true
+	o.Status = chain.OpStatusApplied
+	o.IsImplicit = true
 	return o
 }
 
@@ -109,10 +133,12 @@ func (o *Op) Reset() {
 	o.Timestamp = time.Time{}
 	o.Height = 0
 	o.Cycle = 0
-	o.Hash = chain.OperationHash{chain.ZeroHash}
+	o.Hash = chain.OperationHash{chain.InvalidHash}
 	o.OpN = 0
 	o.OpC = 0
 	o.OpI = 0
+	o.OpL = 0
+	o.OpP = 0
 	o.Counter = 0
 	o.Type = 0
 	o.Status = 0
@@ -144,4 +170,7 @@ func (o *Op) Reset() {
 	o.BranchId = 0
 	o.BranchHeight = 0
 	o.BranchDepth = 0
+	o.IsImplicit = false
+	o.Entrypoint = 0
+	o.IsOrphan = false
 }

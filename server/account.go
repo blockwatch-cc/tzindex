@@ -6,28 +6,63 @@ package server
 import (
 	"github.com/gorilla/mux"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzindex/chain"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 )
 
+// keep a cache of addresses to avoid expensive database lookups id->hash
+type (
+	addrMap map[model.AccountID]chain.Address
+)
+
+var (
+	addrMapStore atomic.Value
+	addrMutex    sync.Mutex
+)
+
+func init() {
+	addrMapStore.Store(make(addrMap))
+}
+
+func purgeAddrStore() {
+	addrMutex.Lock()
+	defer addrMutex.Unlock()
+	addrMapStore.Store(make(addrMap))
+}
+
 func lookupAddress(ctx *ApiContext, id model.AccountID) chain.Address {
 	if id == 0 {
 		return chain.Address{}
 	}
-	addr, err := ctx.Indexer.LookupAccountId(ctx.Context, id)
-	if err != nil {
-		log.Errorf("explorer: cannot resolve account id %d: %v", id, err)
-		return chain.Address{}
-	} else {
-		return chain.Address{
-			Type: addr.Type,
-			Hash: addr.Hash,
+	m := addrMapStore.Load().(addrMap)
+	a, ok := m[id]
+	if !ok {
+		addrMutex.Lock()
+		defer addrMutex.Unlock()
+		addr, err := ctx.Indexer.LookupAccountId(ctx.Context, id)
+		if err != nil {
+			log.Errorf("explorer: cannot resolve account id %d: %v", id, err)
+		} else {
+			a = chain.Address{
+				Type: addr.Type,
+				Hash: addr.Hash,
+			}
+			m2 := make(addrMap) // create a new map
+			for k, v := range m {
+				m2[k] = v // copy all data
+			}
+			m2[id] = a // add new address
+			addrMapStore.Store(m2)
 		}
 	}
+	return a
 }
 
 func init() {
@@ -121,9 +156,11 @@ type ExplorerAccount struct {
 	Ops                *[]*ExplorerOp     `json:"ops,omitempty"`
 	Ballots            *[]*ExplorerBallot `json:"ballots,omitempty"`
 	expires            time.Time          `json:"-"`
+	lastmod            time.Time          `json:"-"`
 }
 
-func NewExplorerAccount(ctx *ApiContext, a *model.Account, p *chain.Params, details bool) *ExplorerAccount {
+func NewExplorerAccount(ctx *ApiContext, a *model.Account, details bool) *ExplorerAccount {
+	p := ctx.Params
 	acc := &ExplorerAccount{
 		Address:            a.String(),
 		Type:               a.Type.String(),
@@ -178,7 +215,7 @@ func NewExplorerAccount(ctx *ApiContext, a *model.Account, p *chain.Params, deta
 		TokenGenMin:        a.TokenGenMin,
 		TokenGenMax:        a.TokenGenMax,
 		GracePeriod:        a.GracePeriod,
-		expires:            ctx.Crawler.Time().Add(p.TimeBetweenBlocks[0]),
+		expires:            ctx.Tip.BestTime.Add(p.TimeBetweenBlocks[0]),
 	}
 
 	// resolve block times
@@ -227,7 +264,7 @@ func NewExplorerAccount(ctx *ApiContext, a *model.Account, p *chain.Params, deta
 		}
 
 		if details && a.IsActiveDelegate {
-			tip := ctx.Crawler.Tip()
+			tip := ctx.Tip
 			// from rights table
 			if r, err := ctx.Indexer.LookupNextRight(ctx, a, tip.BestHeight, chain.RightTypeBaking, 0); err == nil {
 				acc.NextBakeHeight = r.Height
@@ -256,22 +293,29 @@ func NewExplorerAccount(ctx *ApiContext, a *model.Account, p *chain.Params, deta
 		for _, xcc := range xc {
 			if xcc.RowId == a.ManagerId {
 				acc.Manager = xcc.String()
-				acc.ManagerAcc = NewExplorerAccount(ctx, xcc, p, false)
+				acc.ManagerAcc = NewExplorerAccount(ctx, xcc, false)
 			}
 			if xcc.RowId == a.DelegateId {
 				acc.Delegate = xcc.String()
-				acc.DelegateAcc = NewExplorerAccount(ctx, xcc, p, false)
+				acc.DelegateAcc = NewExplorerAccount(ctx, xcc, false)
 			}
 		}
 	} else {
 		acc.Manager = lookupAddress(ctx, a.ManagerId).String()
 		acc.Delegate = lookupAddress(ctx, a.DelegateId).String()
 	}
+
+	// update last-modified header at least once per cycle to reflect closed baker decay
+	acc.lastmod = acc.LastSeenTime
+	if cc := p.CycleFromHeight(ctx.Tip.BestHeight); p.CycleFromHeight(acc.LastSeen) < cc {
+		acc.lastmod = ctx.Indexer.BlockTime(ctx.Context, p.CycleStartHeight(cc))
+	}
+
 	return acc
 }
 
 func (a ExplorerAccount) LastModified() time.Time {
-	return a.LastSeenTime
+	return a.lastmod
 }
 
 func (a ExplorerAccount) Expires() time.Time {
@@ -334,7 +378,7 @@ func loadAccount(ctx *ApiContext) *model.Account {
 }
 
 func ReadAccount(ctx *ApiContext) (interface{}, int) {
-	return NewExplorerAccount(ctx, loadAccount(ctx), ctx.Crawler.ParamsByHeight(-1), true), http.StatusOK
+	return NewExplorerAccount(ctx, loadAccount(ctx), true), http.StatusOK
 }
 
 func ReadManagedAccounts(ctx *ApiContext) (interface{}, int) {
@@ -347,9 +391,8 @@ func ReadManagedAccounts(ctx *ApiContext) (interface{}, int) {
 		panic(EInternal(EC_DATABASE, "cannot read managed accounts", err))
 	}
 	resp := make([]*ExplorerAccount, 0, len(m))
-	params := ctx.Crawler.ParamsByHeight(-1)
 	for _, v := range m {
-		resp = append(resp, NewExplorerAccount(ctx, v, params, false))
+		resp = append(resp, NewExplorerAccount(ctx, v, false))
 	}
 	return resp, http.StatusOK
 }
@@ -357,18 +400,18 @@ func ReadManagedAccounts(ctx *ApiContext) (interface{}, int) {
 func ReadAccountOps(ctx *ApiContext) (interface{}, int) {
 	args := &ExplorerOpsRequest{}
 	ctx.ParseRequestArgs(args)
-	args.ParseBlockIdent(ctx)
 	acc := loadAccount(ctx)
-	params := ctx.Crawler.ParamsByHeight(-1)
-	a := NewExplorerAccount(ctx, acc, params, false)
+	a := NewExplorerAccount(ctx, acc, false)
 	ops, err := ctx.Indexer.ListAccountOps(
 		ctx,
 		acc.RowId,
-		args.Type,
-		args.SinceHeight,
-		args.BlockHeight,
+		args.TypeMode,
+		args.TypeList,
+		util.Max64(args.SinceHeight, acc.FirstSeen-1),
+		util.Min64(args.BlockHeight, acc.LastSeen),
 		args.Offset,
 		ctx.Cfg.ClampExplore(args.Limit),
+		args.Cursor,
 		args.Order,
 	)
 	if err != nil {
@@ -378,7 +421,7 @@ func ReadAccountOps(ctx *ApiContext) (interface{}, int) {
 	// FIXME: collect account and op lookup into only two queries
 	eops := make([]*ExplorerOp, len(ops))
 	for i, v := range ops {
-		eops[i] = NewExplorerOp(ctx, v, nil, nil, params, nil)
+		eops[i] = NewExplorerOp(ctx, v, nil, nil, args)
 	}
 	a.Ops = &eops
 	return a, http.StatusOK
@@ -388,11 +431,19 @@ func ReadAccountBallots(ctx *ApiContext) (interface{}, int) {
 	args := &ExplorerListRequest{}
 	ctx.ParseRequestArgs(args)
 	acc := loadAccount(ctx)
-	params := ctx.Crawler.ParamsByHeight(-1)
-	a := NewExplorerAccount(ctx, acc, params, false)
+	a := NewExplorerAccount(ctx, acc, false)
 
 	// fetch ballots
-	ballots, err := ctx.Indexer.ListAccountBallots(ctx, acc.RowId, args.Offset, ctx.Cfg.ClampExplore(args.Limit))
+	ballots, err := ctx.Indexer.ListAccountBallots(
+		ctx,
+		acc.RowId,
+		acc.FirstSeen-1,
+		acc.LastSeen,
+		args.Offset,
+		ctx.Cfg.ClampExplore(args.Limit),
+		args.Cursor,
+		args.Order,
+	)
 	if err != nil {
 		panic(EInternal(EC_DATABASE, "cannot read account ballots", err))
 	}

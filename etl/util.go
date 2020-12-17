@@ -6,6 +6,10 @@ package etl
 import (
 	"fmt"
 
+	"github.com/cespare/xxhash"
+
+	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/micheline"
 )
 
@@ -26,4 +30,19 @@ func GetVestingBalance(prim *micheline.Prim) (int64, error) {
 		return 0, fmt.Errorf("unexpected prim type %s for vesting contract balance", prim.Type)
 	}
 	return prim.Int.Int64(), nil
+}
+
+func hashKey(typ chain.AddressType, h []byte) uint64 {
+	var buf [21]byte
+	buf[0] = byte(typ)
+	copy(buf[1:], h)
+	return xxhash.Sum64(buf[:])
+}
+
+func accountHashKey(a *model.Account) uint64 {
+	return hashKey(a.Type, a.Hash)
+}
+
+func addressHashKey(a chain.Address) uint64 {
+	return hashKey(a.Type, a.Hash)
 }

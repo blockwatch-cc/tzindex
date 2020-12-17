@@ -66,7 +66,7 @@ func (r *Right) MarshalJSON() ([]byte, error) {
 
 func (r *Right) TimestampMs() int64 {
 	if diff := r.Height - r.height; diff > 0 {
-		return r.ctx.Crawler.Time().Add(time.Duration(diff)*r.params.TimeBetweenBlocks[0]).Unix() * 1000
+		return r.ctx.Tip.BestTime.Add(time.Duration(diff)*r.params.TimeBetweenBlocks[0]).Unix() * 1000
 	}
 	// blocktime cache is lazy initialzed on first use by querying block table
 	return r.ctx.Indexer.BlockTimeMs(context.Background(), r.Height)
@@ -74,7 +74,7 @@ func (r *Right) TimestampMs() int64 {
 
 func (r *Right) Timestamp() time.Time {
 	if diff := r.Height - r.height; diff > 0 {
-		return r.ctx.Crawler.Time().Add(time.Duration(diff) * r.params.TimeBetweenBlocks[0])
+		return r.ctx.Tip.BestTime.Add(time.Duration(diff) * r.params.TimeBetweenBlocks[0])
 	}
 	// blocktime cache is lazy initialzed on first use by querying block table
 	return r.ctx.Indexer.BlockTime(context.Background(), r.Height)
@@ -213,8 +213,8 @@ func (r *Right) MarshalCSV() ([]string, error) {
 }
 
 func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
-	// fetch chain params at current height
-	params := ctx.Crawler.ParamsByHeight(-1)
+	// use chain params at current height
+	params := ctx.Params
 
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
@@ -283,8 +283,8 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			})
 		case "time":
 			// translate time into height, use val[0] only
-			bestTime := ctx.Crawler.Time()
-			bestHeight := ctx.Crawler.Height()
+			bestTime := ctx.Tip.BestTime
+			bestHeight := ctx.Tip.BestHeight
 			cond, err := pack.ParseCondition(key, val[0], pack.FieldList{
 				pack.Field{
 					Name: "time",
@@ -446,7 +446,7 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				switch prefix {
 				case "cycle":
 					if v == "head" {
-						currentCycle := params.CycleFromHeight(ctx.Crawler.Height())
+						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
 						v = strconv.FormatInt(int64(currentCycle), 10)
 					}
 				}
@@ -474,8 +474,8 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	right := &Right{
 		verbose: args.Verbose,
 		columns: util.StringList(args.Columns),
-		params:  ctx.Crawler.ParamsByHeight(-1),
-		height:  ctx.Crawler.Height(),
+		params:  ctx.Params,
+		height:  ctx.Tip.BestHeight,
 		ctx:     ctx,
 	}
 

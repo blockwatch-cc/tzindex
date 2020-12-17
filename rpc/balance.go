@@ -13,6 +13,8 @@ import (
 // BalanceUpdate is a variable structure depending on the Kind field
 type BalanceUpdate interface {
 	BalanceUpdateKind() string
+	Address() chain.Address
+	Amount() int64
 }
 
 // GenericBalanceUpdate holds the common values among all BalanceUpdatesType variants
@@ -26,10 +28,22 @@ func (g *GenericBalanceUpdate) BalanceUpdateKind() string {
 	return g.Kind
 }
 
+func (g *GenericBalanceUpdate) Address() chain.Address {
+	return chain.Address{}
+}
+
+func (g *GenericBalanceUpdate) Amount() int64 {
+	return g.Change
+}
+
 // ContractBalanceUpdate is a BalanceUpdatesType variant for Kind=contract
 type ContractBalanceUpdate struct {
 	GenericBalanceUpdate
 	Contract chain.Address `json:"contract"`
+}
+
+func (c *ContractBalanceUpdate) Address() chain.Address {
+	return c.Contract
 }
 
 // FreezerBalanceUpdate is a BalanceUpdatesType variant for Kind=freezer
@@ -39,6 +53,10 @@ type FreezerBalanceUpdate struct {
 	Delegate chain.Address `json:"delegate"`
 	Level_   int64         `json:"level"` // wrongly called level, it's cycle
 	Cycle_   int64         `json:"cycle"` // v4 fix
+}
+
+func (c *FreezerBalanceUpdate) Address() chain.Address {
+	return c.Delegate
 }
 
 func (b *FreezerBalanceUpdate) Cycle() int64 {

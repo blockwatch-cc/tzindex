@@ -84,9 +84,11 @@ type Crawler struct {
 	indexer *Indexer
 	queue   chan *Bundle
 	plog    *BlockProgressLogger
-	params  *chain.Params
-	tip     *ChainTip
 	bchead  *rpc.BlockHeader
+	chainId chain.ChainIdHash
+
+	// read-mostly thread-safe access
+	tip *ChainTip
 
 	// coordinated shutdown
 	quit   chan struct{}
@@ -111,22 +113,51 @@ func NewCrawler(cfg CrawlerConfig) *Crawler {
 		builder:       NewBuilder(cfg.Indexer),
 		indexer:       cfg.Indexer,
 		queue:         make(chan *Bundle, cfg.Queue),
-		params:        chain.NewParams(),
 		plog:          NewBlockProgressLogger("Processed"),
 		quit:          make(chan struct{}),
 	}
 }
 
 func (c *Crawler) Tip() *ChainTip {
+	c.RLock()
+	defer c.RUnlock()
 	return c.tip
 }
 
 func (c *Crawler) Height() int64 {
-	return c.tip.BestHeight
+	tip := c.Tip()
+	return tip.BestHeight
 }
 
 func (c *Crawler) Time() time.Time {
-	return c.tip.BestTime
+	tip := c.Tip()
+	return tip.BestTime
+}
+
+func (c *Crawler) updateTip(tip *ChainTip) {
+	c.Lock()
+	defer c.Unlock()
+	c.tip = tip
+}
+
+func (c *Crawler) setState(state State, args ...string) {
+	isMonActive := c.useMonitor
+	if state == STATE_SYNCHRONIZED {
+		if c.enableMonitor {
+			if !isMonActive {
+				logStr := "Fully synchronized. Switching to monitor mode."
+				if len(args) > 0 {
+					logStr = args[0]
+				}
+				log.Info(logStr)
+			}
+			isMonActive = true
+		}
+	}
+	c.Lock()
+	c.state = state
+	c.useMonitor = isMonActive
+	c.Unlock()
 }
 
 func (c *Crawler) ParamsByHeight(height int64) *chain.Params {
@@ -187,8 +218,7 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 	// init chain state
 	err := c.db.View(func(dbTx store.Tx) error {
 		// read chain tip
-		var err error
-		c.tip, err = dbLoadChainTip(dbTx)
+		tip, err := dbLoadChainTip(dbTx)
 		firstRun = err == ErrNoChainTip
 		if firstRun {
 			return nil
@@ -196,6 +226,8 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 		if err != nil {
 			return err
 		}
+		c.updateTip(tip)
+		c.chainId = c.tip.ChainId.Clone()
 		// check manifest, allow empty
 		mft, err := dbTx.Manifest()
 		if err != nil {
@@ -207,7 +239,7 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 		if have, want := mft.Version, stateDBSchemaVersion; have != want {
 			return fmt.Errorf("invalid state DB schema version %d (expected version %d)", have, want)
 		}
-		if have, want := mft.Label, c.params.Symbol; have != want {
+		if have, want := mft.Label, chain.Symbol; have != want {
 			return fmt.Errorf("invalid state DB label %s (expected %s)", have, want)
 		}
 		return nil
@@ -218,17 +250,18 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 	if firstRun {
 		// create initial state
 		log.Info("Creating blockchain storage.")
-		c.tip = &ChainTip{
+		tip := &ChainTip{
 			BestHeight: -1,
-			Name:       c.params.Name,
-			Symbol:     c.params.Symbol,
+			Name:       chain.Name,
+			Symbol:     chain.Symbol,
 		}
+		c.updateTip(tip)
 		err = c.db.Update(func(dbTx store.Tx) error {
 			// indexer manifest
 			err := dbTx.SetManifest(store.Manifest{
 				Name:    stateDBKey,
 				Version: stateDBSchemaVersion,
-				Label:   c.params.Symbol,
+				Label:   chain.Symbol,
 			})
 			if err != nil {
 				return err
@@ -243,35 +276,33 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 		}
 	}
 
-	tip := c.Tip()
-
 	// init table manager (this will init all registered indexers in order)
 	if c.indexer != nil {
 		// open databases and tables
-		if err = c.indexer.Init(ctx, tip); err != nil {
+		if err = c.indexer.Init(ctx, c.Tip()); err != nil {
 			return err
 		}
 	}
 
 	// skip RPC init if not required
 	if c.rpc == nil || mode == MODE_INFO {
-		c.state = STATE_STOPPED
+		c.setState(STATE_STOPPED)
 		return nil
 	}
 
 	// wait for RPC to become ready
-	c.state = STATE_CONNECTING
+	c.setState(STATE_CONNECTING)
 	log.Info("Connecting to RPC server.")
 	for {
 		if err := c.fetchBlockchainInfo(ctx); err != nil {
 			if err == context.Canceled {
-				c.state = STATE_STOPPED
+				c.setState(STATE_STOPPED)
 				return err
 			}
 			log.Errorf("Connection failed: %v", err)
 			select {
 			case <-ctx.Done():
-				c.state = STATE_STOPPED
+				c.setState(STATE_STOPPED)
 				return ctx.Err()
 			case <-time.After(5 * time.Second):
 			}
@@ -285,14 +316,14 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 		log.Info("Fetching genesis block.")
 		tzblock, err := c.fetchBlockByHeight(ctx, 0)
 		if err != nil {
-			c.state = STATE_FAILED
+			c.setState(STATE_FAILED)
 			return err
 		}
 
 		// build a new genesis block from rpc.Block
 		genesis, err := c.builder.Build(ctx, tzblock)
 		if err != nil {
-			c.state = STATE_FAILED
+			c.setState(STATE_FAILED)
 			return err
 		}
 		log.Infof("Crawling %s %s.", genesis.Params.Name, genesis.Params.Network)
@@ -306,34 +337,37 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 
 			// add to all indexes
 			if err := c.indexer.ConnectBlock(ctx, genesis, c.builder); err != nil {
-				c.state = STATE_FAILED
+				c.setState(STATE_FAILED)
 				return err
 			}
 			// keep as best block
-			c.tip.BestHash = genesis.Hash
-			c.tip.BestHeight = genesis.Height
-			c.tip.BestId = genesis.RowId
-			c.tip.BestTime = genesis.Timestamp
-			c.tip.GenesisTime = genesis.Timestamp
-			c.tip.ChainId = genesis.Params.ChainId
-			c.tip.AddDeployment(genesis.Params)
+			newTip := c.Tip().Clone()
+			newTip.BestHash = genesis.Hash
+			newTip.BestHeight = genesis.Height
+			newTip.BestId = genesis.RowId
+			newTip.BestTime = genesis.Timestamp
+			newTip.GenesisTime = genesis.Timestamp
+			newTip.ChainId = genesis.Params.ChainId
+			newTip.AddDeployment(genesis.Params)
+			c.updateTip(newTip)
+			c.chainId = genesis.Params.ChainId.Clone()
 		}
 
 		c.builder.Clean()
 
 	} else {
-		p := c.ParamsByHeight(0).ForNetwork(c.tip.ChainId)
+		p := c.ParamsByHeight(0).ForNetwork(c.chainId)
 		log.Infof("Crawling %s %s.", p.Name, p.Network)
 
 		// init block builder state
-		if err = c.builder.Init(ctx, tip, c.rpc); err != nil {
+		if err = c.builder.Init(ctx, c.Tip(), c.rpc); err != nil {
 			return err
 		}
 
 		if mode == MODE_SYNC {
 			// retry database snapshot in case it failed last time
 			if err := c.MaybeSnapshot(ctx); err != nil {
-				c.state = STATE_FAILED
+				c.setState(STATE_FAILED)
 				return fmt.Errorf("Snapshot failed at block %d: %v", c.Height(), err)
 			}
 		}
@@ -394,7 +428,7 @@ func (c *Crawler) Stop(ctx context.Context) {
 	// wait for done channel to become readable or closed,
 	// meaning all goroutines have exited by now
 	<-done
-	c.state = STATE_STOPPED
+	c.setState(STATE_STOPPED)
 	log.Info("Stopped blockchain crawler.")
 }
 
@@ -508,9 +542,17 @@ func (c *Crawler) runIngest(next chan chain.BlockHash) {
 	}()
 
 	for {
+		var (
+			state  State
+			useMon bool
+		)
 		select {
 		case <-tick.C:
-			if !c.useMonitor {
+			c.RLock()
+			useMon = c.useMonitor
+			state = c.state
+			c.RUnlock()
+			if !useMon {
 				// this helps survive a broken monitoring channel
 				if err := c.fetchBlockchainInfo(c.ctx); err != nil {
 					c.bchead = nil
@@ -528,29 +570,23 @@ func (c *Crawler) runIngest(next chan chain.BlockHash) {
 			log.Infof("Context cancelled. Stopping blockchain ingest.")
 			return
 		case nextHash = <-next:
-			// process next block
-			if !nextHash.IsValid() {
-				c.Lock()
-				// on startup, check if we're already synchronized even
-				// without having processed a block
-				if c.state == STATE_CONNECTING && c.bchead != nil && c.tip != nil {
-					if c.tip.BestHeight == c.bchead.Level {
-						c.state = STATE_SYNCHRONIZED
-						if c.enableMonitor {
-							c.useMonitor = true
-							log.Info("Already synchronized. Starting in monitor mode.")
-						}
-					}
+			c.RLock()
+			useMon = c.useMonitor
+			state = c.state
+			c.RUnlock()
+			// on startup, check if we're already synchronized even
+			// without having processed a block
+			if !nextHash.IsValid() && state == STATE_CONNECTING {
+				if c.bchead != nil && c.Height() == c.bchead.Level {
+					c.setState(STATE_SYNCHRONIZED, "Already synchronized. Starting in monitor mode.")
 				}
-				c.Unlock()
 			}
+			// process next block
 		}
 
 		// on missing bchead, wait and retry
 		if c.bchead == nil {
-			c.Lock()
-			c.state = STATE_CONNECTING
-			c.Unlock()
+			c.setState(STATE_CONNECTING)
 			log.Warn("Broken RPC connection. Trying again in 5s...")
 			// keep going
 			select {
@@ -629,19 +665,15 @@ func (c *Crawler) runIngest(next chan chain.BlockHash) {
 					continue
 				}
 				// reset last block
-				lastblock = c.Tip().BestHeight
+				lastblock = c.Height()
 
 				// handle RPC errors (wait and retry)
 				switch e := err.(type) {
 				case rpc.RPCError:
 					log.Warnf("RPC: %s", e.Error())
-					c.Lock()
-					c.state = STATE_WAITING
-					c.Unlock()
+					c.setState(STATE_WAITING)
 				default:
-					c.Lock()
-					c.state = STATE_CONNECTING
-					c.Unlock()
+					c.setState(STATE_CONNECTING)
 					log.Warnf("RPC connection error: %v", err)
 				}
 				time.Sleep(5 * time.Second)
@@ -742,7 +774,7 @@ func (c *Crawler) syncBlockchain() {
 			buf, _ := json.Marshal(js)
 			log.Error(string(buf))
 			log.Infof("Stopping blockchain sync at height %d.", tip.BestHeight)
-			c.state = STATE_FAILED
+			c.setState(STATE_FAILED)
 		}
 
 		// flush indexer journals on failure (may take some time)
@@ -766,15 +798,11 @@ func (c *Crawler) syncBlockchain() {
 	for {
 		select {
 		case <-c.quit:
-			c.Lock()
-			c.state = STATE_STOPPING
-			c.Unlock()
+			c.setState(STATE_STOPPING)
 			log.Infof("Stopping blockchain sync at height %d.", tip.BestHeight)
 			return
 		case <-ctx.Done():
-			c.Lock()
-			c.state = STATE_STOPPING
-			c.Unlock()
+			c.setState(STATE_STOPPING)
 			log.Infof("Context aborted. Stopping blockchain sync at height %d.", tip.BestHeight)
 			return
 		case tzblock = <-c.queue:
@@ -782,18 +810,14 @@ func (c *Crawler) syncBlockchain() {
 				log.Infof("Stopping blockchain sync at height %d.", tip.BestHeight)
 				return
 			}
-			c.Lock()
-			c.state = STATE_SYNCHRONIZING
-			c.Unlock()
+			c.setState(STATE_SYNCHRONIZING)
 			log.Tracef("Processing block %d %s", tzblock.Height(), tzblock.Hash())
 		}
 
 	again:
 		if errCount > 1 {
 			log.Infof("Stopping blockchain sync due to too many errors at %d.", tip.BestHeight)
-			c.Lock()
-			c.state = STATE_FAILED
-			c.Unlock()
+			c.setState(STATE_FAILED)
 			return
 		}
 
@@ -916,40 +940,29 @@ func (c *Crawler) syncBlockchain() {
 		}
 
 		// update chainstate with new version
-		c.Lock()
-		c.params = block.Params
-		c.tip = newTip
+		c.updateTip(newTip)
 		tip = newTip
-		c.Unlock()
 
 		// trace progress
-		log.Tracef("block %d ts=%s tx=%d/%d acc=%d/%d vol=%d rwd=%d fee=%d burn=%d q=%d\n",
-			block.Height,
-			block.Timestamp.Format(time.RFC3339),
-			block.NOps,
-			block.Chain.TotalOps,
-			block.SeenAccounts,
-			block.Chain.TotalAccounts,
-			block.Volume,
-			block.Rewards,
-			block.Fees,
-			block.BurnedSupply,
-			len(c.queue),
-		)
+		// log.Tracef("block %d ts=%s tx=%d/%d acc=%d/%d vol=%d rwd=%d fee=%d burn=%d q=%d\n",
+		// 	block.Height,
+		// 	block.Timestamp.Format(time.RFC3339),
+		// 	block.NOps,
+		// 	block.Chain.TotalOps,
+		// 	block.SeenAccounts,
+		// 	block.Chain.TotalAccounts,
+		// 	block.Volume,
+		// 	block.Reward,
+		// 	block.Fee,
+		// 	block.BurnedSupply,
+		// 	len(c.queue),
+		// )
 
 		// current block may be ahead of bcinfo by one
-		c.Lock()
 		if c.bchead != nil && block.Height >= c.bchead.Level {
-			c.state = STATE_SYNCHRONIZED
-			if c.enableMonitor {
-				if !c.useMonitor {
-					log.Info("Fully synchronized. Switching to monitor mode.")
-				}
-				c.useMonitor = true
-			}
+			c.setState(STATE_SYNCHRONIZED)
 		}
 		state := c.state
-		c.Unlock()
 
 		// flush journals every block when synchronized
 		if state == STATE_SYNCHRONIZED {
@@ -973,9 +986,7 @@ func (c *Crawler) syncBlockchain() {
 			})
 			if err != nil {
 				log.Errorf("Updating state database for block %d: %v", tip.BestHeight, err)
-				c.Lock()
-				c.state = STATE_FAILED
-				c.Unlock()
+				c.setState(STATE_FAILED)
 				return
 			}
 		}
@@ -985,9 +996,7 @@ func (c *Crawler) syncBlockchain() {
 			log.Errorf("Snapshot failed at block %d: %v", tip.BestHeight, err)
 			// only fail on configured snapshot blocks
 			if c.snap != nil && (len(c.snap.Blocks) > 0 || c.snap.BlockInterval > 0) {
-				c.Lock()
-				c.state = STATE_FAILED
-				c.Unlock()
+				c.setState(STATE_FAILED)
 				return
 			}
 		}
@@ -1003,40 +1012,54 @@ func (c *Crawler) syncBlockchain() {
 	}
 }
 
-func (c *Crawler) fetchBlockByHash(ctx context.Context, blockID chain.BlockHash) (*Bundle, error) {
-	b := &Bundle{}
-	var err error
-	if b.Block, err = c.rpc.GetBlock(ctx, blockID); err != nil {
-		return nil, err
-	}
-	if c.tip.ChainId.IsValid() && !c.tip.ChainId.IsEqual(b.Block.ChainId) {
-		return nil, fmt.Errorf("block init: invalid chain %s (expected %s)",
-			b.Block.ChainId, c.tip.ChainId)
-	}
-	height := b.Block.Header.Level
-	b.Params, err = c.indexer.reg.GetParams(b.Block.Protocol)
-	needUpdate := b.Params != nil && b.Params.IsCycleStart(height)
-	if err != nil || needUpdate {
+func (c *Crawler) fetchParamsForBlock(ctx context.Context, block *rpc.Block) (*chain.Params, error) {
+	height := block.Header.Level
+	params, _ := c.indexer.reg.GetParams(block.Protocol)
+	needUpdate := params == nil || params.IsCycleStart(height)
+	if needUpdate {
+		// save deployment start height
+		start := height
+		if params != nil {
+			start = params.StartHeight
+		}
 		// fetch params from chain
 		if height > 0 {
 			cons, err := c.rpc.GetConstantsHeight(ctx, height)
 			if err != nil {
 				return nil, fmt.Errorf("block init: %v", err)
 			}
-			b.Params = cons.MapToChainParams()
+			params = cons.MapToChainParams()
 		} else {
-			b.Params = chain.NewParams()
+			params = chain.NewParams()
 		}
 		// changes will be updated during build
-		b.Params = b.Params.
-			ForProtocol(b.Block.Protocol).
-			ForNetwork(b.Block.ChainId)
-		b.Params.Deployment = b.Block.Header.Proto
+		params = params.ForProtocol(block.Protocol).ForNetwork(block.ChainId)
+		params.Deployment = block.Header.Proto
+		params.StartHeight = start
 		// adjust deployment number for genesis & bootstrap blocks
 		if height <= 1 {
-			b.Params.Deployment--
+			params.Deployment--
 		}
 	}
+	return params, nil
+}
+
+func (c *Crawler) fetchBlockByHash(ctx context.Context, blockID chain.BlockHash) (*Bundle, error) {
+	b := &Bundle{}
+	var err error
+	if b.Block, err = c.rpc.GetBlock(ctx, blockID); err != nil {
+		return nil, err
+	}
+	if c.chainId.IsValid() && !c.chainId.IsEqual(b.Block.ChainId) {
+		return nil, fmt.Errorf("block init: invalid chain %s (expected %s)",
+			b.Block.ChainId, c.chainId)
+	}
+	b.Params, err = c.fetchParamsForBlock(ctx, b.Block)
+	if err != nil {
+		return nil, err
+	}
+
+	height := b.Block.Header.Level
 	b.Cycle = b.Params.CycleFromHeight(height)
 
 	// in monitor mode we are live, so we don't have to check for early cycles
@@ -1068,32 +1091,13 @@ func (c *Crawler) fetchBlockByHeight(ctx context.Context, height int64) (*Bundle
 	if b.Block, err = c.rpc.GetBlockHeight(ctx, height); err != nil {
 		return nil, err
 	}
-	if c.tip.ChainId.IsValid() && !c.tip.ChainId.IsEqual(b.Block.ChainId) {
+	if c.chainId.IsValid() && !c.chainId.IsEqual(b.Block.ChainId) {
 		return nil, fmt.Errorf("block init: invalid chain %s (expected %s)",
-			b.Block.ChainId, c.tip.ChainId)
+			b.Block.ChainId, c.chainId)
 	}
-	b.Params, err = c.indexer.reg.GetParams(b.Block.Protocol)
-	needUpdate := b.Params != nil && b.Params.IsCycleStart(height)
-	if err != nil || needUpdate {
-		// fetch params from chain
-		if height > 0 {
-			cons, err := c.rpc.GetConstantsHeight(ctx, height)
-			if err != nil {
-				return nil, fmt.Errorf("block init: %v", err)
-			}
-			b.Params = cons.MapToChainParams()
-		} else {
-			b.Params = chain.NewParams()
-		}
-		// changes will be updated during build
-		b.Params = b.Params.
-			ForProtocol(b.Block.Protocol).
-			ForNetwork(b.Block.ChainId)
-		b.Params.Deployment = b.Block.Header.Proto
-		// adjust deployment number for genesis & bootstrap blocks
-		if height <= 1 {
-			b.Params.Deployment--
-		}
+	b.Params, err = c.fetchParamsForBlock(ctx, b.Block)
+	if err != nil {
+		return nil, err
 	}
 	b.Cycle = b.Params.CycleFromHeight(height)
 

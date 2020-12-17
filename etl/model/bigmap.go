@@ -4,6 +4,7 @@
 package model
 
 import (
+	"errors"
 	"sync"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	"blockwatch.cc/tzindex/chain"
 	"blockwatch.cc/tzindex/micheline"
 )
+
+var ENoBigMapAlloc = errors.New("bigmap item is not an allocation")
 
 var bigmapPool = &sync.Pool{
 	New: func() interface{} { return new(BigMapItem) },
@@ -54,12 +57,34 @@ func AllocBigMapItem() *BigMapItem {
 	return bigmapPool.Get().(*BigMapItem)
 }
 
-func (b *BigMapItem) GetKey() (*micheline.BigMapKey, error) {
-	return micheline.DecodeBigMapKey(b.KeyType, b.KeyEncoding, b.Key)
+func (b *BigMapItem) GetKeyAs(typ *micheline.Prim) (*micheline.BigMapKey, error) {
+	return micheline.DecodeBigMapKey(typ, b.Key)
+}
+
+func (b *BigMapItem) GetKeyType() (*micheline.Prim, error) {
+	if b.Action != micheline.BigMapDiffActionAlloc {
+		return nil, ENoBigMapAlloc
+	}
+	p := &micheline.Prim{}
+	if err := p.UnmarshalBinary(b.Key); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func (b *BigMapItem) GetValueType() (*micheline.Prim, error) {
+	if b.Action != micheline.BigMapDiffActionAlloc {
+		return nil, ENoBigMapAlloc
+	}
+	p := &micheline.Prim{}
+	if err := p.UnmarshalBinary(b.Value); err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
 // assuming BigMapDiffElem.Action is update or remove (copy & alloc are handled below)
-func NewBigMapItem(o *Op, cc *Contract, b micheline.BigMapDiffElem, prev uint64, keytype micheline.OpCode, counter, nkeys int64) *BigMapItem {
+func NewBigMapItem(o *Op, cc *Contract, b micheline.BigMapDiffElem, keyType micheline.OpCode, prev uint64, counter, nkeys int64) *BigMapItem {
 	m := AllocBigMapItem()
 	m.PrevId = prev
 	m.AccountId = cc.AccountId
@@ -75,17 +100,17 @@ func NewBigMapItem(o *Op, cc *Contract, b micheline.BigMapDiffElem, prev uint64,
 	switch b.Action {
 	case micheline.BigMapDiffActionUpdate, micheline.BigMapDiffActionRemove:
 		m.KeyHash = b.KeyHash.Hash.Hash
-		m.KeyType = keytype // from allocated bigmap type
+		m.KeyType = keyType
 		m.KeyEncoding = b.Encoding()
-		m.Key = b.KeyBytes()
+		m.Key, _ = b.Key.MarshalBinary()
 		m.IsDeleted = b.Action == micheline.BigMapDiffActionRemove
 		if !m.IsDeleted {
 			m.Value, _ = b.Value.MarshalBinary()
 		}
 
 	case micheline.BigMapDiffActionAlloc:
-		// real key type (opcode) is in the bigmap update
-		m.KeyType = b.KeyType
+		m.Key, _ = b.KeyType.MarshalBinary()
+		m.KeyType = b.KeyType.OpCode
 		m.KeyEncoding = b.Encoding()
 		m.Value, _ = b.ValueType.MarshalBinary()
 
@@ -95,7 +120,7 @@ func NewBigMapItem(o *Op, cc *Contract, b micheline.BigMapDiffElem, prev uint64,
 	return m
 }
 
-// assuming BigMapDiffElem.Action is copy
+// assuming BigMapDiffElem.Action is alloc
 func CopyBigMapAlloc(b *BigMapItem, o *Op, cc *Contract, dst, counter, nkeys int64) *BigMapItem {
 	m := AllocBigMapItem()
 	m.PrevId = b.RowId
@@ -154,15 +179,16 @@ func (m *BigMapItem) BigMapDiff() micheline.BigMapDiffElem {
 	switch m.Action {
 	case micheline.BigMapDiffActionUpdate, micheline.BigMapDiffActionRemove:
 		d.KeyHash = chain.NewExprHash(m.KeyHash)
-		d.KeyType = m.KeyEncoding.TypeCode()
-		_ = d.DecodeKey(m.KeyEncoding, m.Key)
+		d.Key = &micheline.Prim{}
+		_ = d.Key.UnmarshalBinary(m.Key)
 		if m.Action != micheline.BigMapDiffActionRemove {
 			d.Value = &micheline.Prim{}
 			_ = d.Value.UnmarshalBinary(m.Value)
 		}
 
 	case micheline.BigMapDiffActionAlloc:
-		d.KeyType = m.KeyType
+		d.KeyType = &micheline.Prim{}
+		_ = d.KeyType.UnmarshalBinary(m.Key) // encoded prim is stored as []byte
 		d.ValueType = &micheline.Prim{}
 		_ = d.ValueType.UnmarshalBinary(m.Value)
 

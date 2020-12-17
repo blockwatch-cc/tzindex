@@ -8,8 +8,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cespare/xxhash"
-
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/packdb/vec"
@@ -21,27 +19,13 @@ import (
 	"blockwatch.cc/tzindex/rpc"
 )
 
-func hashKey(typ chain.AddressType, h []byte) uint64 {
-	var buf [21]byte
-	buf[0] = byte(typ)
-	copy(buf[1:], h)
-	return xxhash.Sum64(buf[:])
-}
-
-func accountHashKey(a *Account) uint64 {
-	return hashKey(a.Type, a.Hash)
-}
-
-func addressHashKey(a chain.Address) uint64 {
-	return hashKey(a.Type, a.Hash)
-}
-
 type Builder struct {
-	idx        *Indexer               // storage reference
-	accHashMap map[uint64]*Account    // hash(acc_hash) -> *Account (both known and new accounts)
-	accMap     map[AccountID]*Account // id -> *Account (both known and new accounts)
-	dlgHashMap map[uint64]*Account    // delegates by hash
-	dlgMap     map[AccountID]*Account // delegates by id
+	idx        *Indexer                // storage reference
+	accHashMap map[uint64]*Account     // hash(acc_hash) -> *Account (both known and new accounts)
+	accMap     map[AccountID]*Account  // id -> *Account (both known and new accounts)
+	dlgHashMap map[uint64]*Account     // delegates by hash
+	dlgMap     map[AccountID]*Account  // delegates by id
+	conMap     map[AccountID]*Contract // smart contracts by account id
 
 	// build state
 	block     *Block
@@ -58,24 +42,46 @@ func NewBuilder(idx *Indexer) *Builder {
 		accMap:     make(map[AccountID]*Account),
 		dlgMap:     make(map[AccountID]*Account),
 		dlgHashMap: make(map[uint64]*Account),
+		conMap:     make(map[AccountID]*Contract),
 		baking:     make([]Right, 0, 64),
 		endorsing:  make([]Right, 0, 32),
 		branches:   make(map[string]*Block, 128), // more than max of 64
 	}
 }
 
-func (b *Builder) RegisterDelegate(acc *Account) {
+func (b *Builder) Params(height int64) *chain.Params {
+	return b.idx.ParamsByHeight(height)
+}
+
+func (b *Builder) RegisterDelegate(acc *Account, activate bool) {
+	// remove from regular account maps
+	hashkey := accountHashKey(acc)
+	delete(b.accMap, acc.RowId)
+	delete(b.accHashMap, hashkey)
+
+	// update state
 	acc.IsDelegate = true
 	acc.LastSeen = b.block.Height
 	acc.DelegateSince = b.block.Height
 	acc.InitGracePeriod(b.block.Cycle, b.block.Params)
 	acc.IsDirty = true
-	b.ActivateDelegate(acc)
-	hashkey := accountHashKey(acc)
+
+	isMagic := v001MagicDelegateSet.Contains(acc.Address())
+
+	// only activate when explicitly requested
+	if activate || isMagic {
+		acc.DelegateId = acc.RowId
+		b.ActivateDelegate(acc)
+		if isMagic {
+			// inject an implicit baker registration
+			acc.DelegateId = acc.RowId
+			b.AppendMagicBakerRegistrationOp(context.Background(), acc, 0)
+		}
+	}
+
+	// add to delegate map
 	b.dlgMap[acc.RowId] = acc
 	b.dlgHashMap[hashkey] = acc
-	delete(b.accMap, acc.RowId)
-	delete(b.accHashMap, hashkey)
 }
 
 // only called ofrom rollback and bug fix code
@@ -103,6 +109,7 @@ func (b *Builder) ActivateDelegate(acc *Account) {
 
 func (b *Builder) DeactivateDelegate(acc *Account) {
 	acc.IsActiveDelegate = false
+	// acc.DelegateUntil = b.block.Height
 	acc.IsDirty = true
 }
 
@@ -131,6 +138,25 @@ func (b *Builder) AccountById(id AccountID) (*Account, bool) {
 	return acc, ok
 }
 
+func (b *Builder) ContractById(id AccountID) (*Contract, bool) {
+	// lookup regular accounts second
+	con, ok := b.conMap[id]
+	return con, ok
+}
+
+func (b *Builder) LoadContractByAccountId(ctx context.Context, id AccountID) (*Contract, error) {
+	if con, ok := b.conMap[id]; ok {
+		return con, nil
+	}
+	// try loading from index
+	con, err := b.idx.LookupContractId(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	b.conMap[id] = con
+	return con, nil
+}
+
 func (b *Builder) BranchByHash(h chain.BlockHash) (*Block, bool) {
 	branch, ok := b.branches[h.String()]
 	return branch, ok
@@ -142,6 +168,10 @@ func (b *Builder) Accounts() map[AccountID]*Account {
 
 func (b *Builder) Delegates() map[AccountID]*Account {
 	return b.dlgMap
+}
+
+func (b *Builder) Contracts() map[AccountID]*Contract {
+	return b.conMap
 }
 
 func (b *Builder) Rights(typ chain.RightType) []Right {
@@ -211,6 +241,11 @@ func (b *Builder) Init(ctx context.Context, tip *ChainTip, c *rpc.Client) error 
 		}
 	}
 
+	// add inital block baker
+	if acc, ok := b.dlgMap[b.block.BakerId]; ok {
+		b.block.Baker = acc
+	}
+
 	return nil
 }
 
@@ -271,6 +306,7 @@ func (b *Builder) Clean() {
 	// clear build state
 	b.accHashMap = make(map[uint64]*Account)
 	b.accMap = make(map[AccountID]*Account)
+	b.conMap = make(map[AccountID]*Contract)
 	b.baking = b.baking[:0]
 	b.endorsing = b.endorsing[:0]
 
@@ -302,6 +338,7 @@ func (b *Builder) Purge() {
 	// clear delegate state
 	b.dlgHashMap = make(map[uint64]*Account)
 	b.dlgMap = make(map[AccountID]*Account)
+	b.conMap = make(map[AccountID]*Contract)
 
 	// clear branches (keep most recent 64 blocks only)
 	for _, v := range b.branches {
@@ -368,6 +405,7 @@ func (b *Builder) CleanReorg() {
 	// clear build state
 	b.accHashMap = make(map[uint64]*Account)
 	b.accMap = make(map[AccountID]*Account)
+	b.conMap = make(map[AccountID]*Contract)
 	b.baking = b.baking[:0]
 	b.endorsing = b.endorsing[:0]
 
@@ -406,14 +444,7 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 
 	// guard against unknown deactivated delegates
 	for _, v := range b.block.TZ.Block.Metadata.BalanceUpdates {
-		var addr chain.Address
-		switch v.BalanceUpdateKind() {
-		case "contract":
-			addr = v.(*rpc.ContractBalanceUpdate).Contract
-
-		case "freezer":
-			addr = v.(*rpc.FreezerBalanceUpdate).Delegate
-		}
+		addr := v.Address()
 		if _, ok := b.AccountByAddress(addr); !ok && addr.IsValid() {
 			addresses.AddUnique(addr.String())
 		}
@@ -779,22 +810,13 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 		// this is idempotent
 		if b.block.Params.IsCycleStart(b.block.Height) && b.block.Height > 0 {
 			// deactivate based on grace period
-			var count int
 			for _, dlg := range b.dlgMap {
 				if dlg.IsActiveDelegate && dlg.GracePeriod < b.block.Cycle {
-					count++
 					if rollback {
 						b.ActivateDelegate(dlg)
 					} else {
 						b.DeactivateDelegate(dlg)
 					}
-				}
-			}
-			if count > 0 {
-				if rollback {
-					log.Debugf("Rollback-reactivated %d delegates at %d cycle %d", count, b.block.Height-1, b.block.Cycle-1)
-				} else {
-					log.Debugf("Deactivated %d delegates at %d cycle %d", count, b.block.Height-1, b.block.Cycle-1)
 				}
 			}
 
@@ -810,7 +832,9 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 					}
 				} else {
 					if acc.IsActiveDelegate {
-						return fmt.Errorf("deactivate: found non-deactivated delegate %s", v)
+						log.Warnf("Delegate %s forcefully deactivated with grace period %d at cycle %d",
+							acc, acc.GracePeriod, b.block.Cycle-1)
+						b.DeactivateDelegate(acc)
 					}
 				}
 			}
@@ -872,12 +896,21 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 		}
 		b.block.Baker = baker
 		b.block.BakerId = baker.RowId
+
+		// // update version from block nonce
+		// var nonce [8]byte
+		// binary.BigEndian.PutUint64(nonce[:], b.block.Nonce)
+		// if bytes.Compare(baker.BakerVersion, nonce[:4]) != 0 {
+		// 	baker.BakerVersion = nonce[:4]
+		// }
+
+		// handle grace period
 		if baker.IsActiveDelegate {
-			// extend grace period
 			baker.UpdateGracePeriod(b.block.Cycle, b.block.Params)
 		} else {
-			// reset inactivity
+			// reset after inactivity
 			baker.IsActiveDelegate = true
+			// baker.DelegateUntil = 0
 			baker.InitGracePeriod(b.block.Cycle, b.block.Params)
 		}
 		if !rollback {
@@ -922,11 +955,10 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 			}
 		}
 
-		// collect data from header balance updates, note this is no explicit 'operation'
-		// in Tezos (i.e. it has no op hash and will not be stored in the op table)
-		// also handles baker payments and unfreeze of payouts
-		_, err := b.NewBakerFlows()
-		if err != nil {
+		// collect data from header balance updates, note these are no explicit 'operations'
+		// in Tezos (i.e. no op hash exists); handles baker rewards, deposits, unfreeze
+		// and seed nonce slashing
+		if err := b.AppendImplicitOps(ctx); err != nil {
 			return err
 		}
 	}
@@ -936,59 +968,56 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 	// - init/update accounts
 	// - sum op volume, fees, rewards, deposits
 	// - attach extra data if defined
-	var op_n int
-	for _, ol := range b.block.TZ.Block.Operations {
-		for _, oh := range ol {
-			// rpc.OperationHeader
+	for op_l, ol := range b.block.TZ.Block.Operations {
+		for op_p, oh := range ol {
 			for op_c, o := range oh.Contents {
 				switch kind := o.OpKind(); kind {
 				case chain.OpTypeActivateAccount:
-					if err := b.NewActivationOp(ctx, oh, op_n, op_c, rollback); err != nil {
+					if err := b.AppendActivationOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
 				case chain.OpTypeBallot:
-					if err := b.NewBallotOp(ctx, oh, op_n, op_c, rollback); err != nil {
+					if err := b.AppendBallotOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
 				case chain.OpTypeDelegation:
-					if err := b.NewDelegationOp(ctx, oh, op_n, op_c, rollback); err != nil {
+					if err := b.AppendDelegationOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
 				case chain.OpTypeDoubleBakingEvidence:
-					if err := b.NewDoubleBakingOp(ctx, oh, op_n, op_c, rollback); err != nil {
+					if err := b.AppendDoubleBakingOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
 				case chain.OpTypeDoubleEndorsementEvidence:
-					if err := b.NewDoubleEndorsingOp(ctx, oh, op_n, op_c, rollback); err != nil {
+					if err := b.AppendDoubleEndorsingOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
 				case chain.OpTypeEndorsement:
-					if err := b.NewEndorsementOp(ctx, oh, op_n, op_c, rollback); err != nil {
+					if err := b.AppendEndorsementOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
 				case chain.OpTypeOrigination:
-					if err := b.NewOriginationOp(ctx, oh, op_n, op_c, rollback); err != nil {
+					if err := b.AppendOriginationOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
 				case chain.OpTypeProposals:
-					if err := b.NewProposalsOp(ctx, oh, op_n, op_c, rollback); err != nil {
+					if err := b.AppendProposalsOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
 				case chain.OpTypeReveal:
-					if err := b.NewRevealOp(ctx, oh, op_n, op_c, rollback); err != nil {
+					if err := b.AppendRevealOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
 				case chain.OpTypeSeedNonceRevelation:
-					if err := b.NewSeedNonceOp(ctx, oh, op_n, op_c, rollback); err != nil {
+					if err := b.AppendSeedNonceOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
 				case chain.OpTypeTransaction:
-					if err := b.NewTransactionOp(ctx, oh, op_n, op_c, rollback); err != nil {
+					if err := b.AppendTransactionOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
 				}
 			}
-			op_n++
 		}
 	}
 
@@ -996,6 +1025,7 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 }
 
 func (b *Builder) ApplyInvoices(ctx context.Context) error {
+	var count int
 	for n, v := range b.block.Params.Invoices {
 		addr, err := chain.ParseAddress(n)
 		if err != nil {
@@ -1008,13 +1038,17 @@ func (b *Builder) ApplyInvoices(ctx context.Context) error {
 		acc.IsDirty = true
 		acc.LastIn = b.block.Height
 		acc.LastSeen = b.block.Height
-		b.block.Flows = append(b.block.Flows, b.NewInvoiceFlow(acc, v))
+		if err := b.AppendInvoiceOp(ctx, acc, v, count); err != nil {
+			return err
+		}
 		log.Debugf("invoice: %s %f", acc, b.block.Params.ConvertValue(v))
+		count++
 	}
 	return nil
 }
 
 func (b *Builder) RollbackInvoices(ctx context.Context) error {
+	var count int
 	for n, v := range b.block.Params.Invoices {
 		addr, err := chain.ParseAddress(n)
 		if err != nil {
@@ -1024,10 +1058,13 @@ func (b *Builder) RollbackInvoices(ctx context.Context) error {
 		if !ok {
 			return fmt.Errorf("rollback invoice: unknown invoice account %s", n, err)
 		}
-		b.block.Flows = append(b.block.Flows, b.NewInvoiceFlow(acc, v))
+		if err := b.AppendInvoiceOp(ctx, acc, v, count); err != nil {
+			return err
+		}
 		if acc.FirstSeen == b.block.Height {
 			acc.MustDelete = true
 		}
+		count++
 	}
 	return nil
 }
@@ -1036,10 +1073,10 @@ func (b *Builder) RollbackInvoices(ctx context.Context) error {
 func (b *Builder) UpdateStats(ctx context.Context) error {
 	// init pre-funded state
 	for _, acc := range b.accMap {
-		acc.WasFunded = (acc.FrozenBalance() + acc.SpendableBalance) > 0
+		acc.WasFunded = acc.Balance() > 0
 	}
 	for _, acc := range b.dlgMap {
-		acc.WasFunded = (acc.FrozenBalance() + acc.SpendableBalance) > 0
+		acc.WasFunded = acc.Balance() > 0
 	}
 
 	// apply pure in-flows
@@ -1112,7 +1149,7 @@ func (b *Builder) UpdateStats(ctx context.Context) error {
 		if op.Type != chain.OpTypeEndorsement {
 			continue
 		}
-		o, _ := b.block.GetRPCOp(op.OpN, op.OpC)
+		o, _ := b.block.GetRpcOp(op.OpL, op.OpP, op.OpC)
 		eop := o.(*rpc.EndorsementOp)
 		acc, _ := b.AccountByAddress(eop.Metadata.Delegate)
 		num, _ := erights[acc.RowId]
@@ -1143,10 +1180,10 @@ func (b *Builder) UpdateStats(ctx context.Context) error {
 func (b *Builder) RollbackStats(ctx context.Context) error {
 	// init pre-funded state (at the end of block processing using current state)
 	for _, acc := range b.accMap {
-		acc.WasFunded = (acc.FrozenBalance() + acc.SpendableBalance) > 0
+		acc.WasFunded = acc.Balance() > 0
 	}
 	for _, acc := range b.dlgMap {
-		acc.WasFunded = (acc.FrozenBalance() + acc.SpendableBalance) > 0
+		acc.WasFunded = acc.Balance() > 0
 	}
 
 	// reverse apply out-flows and in/out-flows
@@ -1222,8 +1259,11 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*Block, error) {
 	accounts := make([]pack.Item, 0)
 	contracts := make([]pack.Item, 0)
 
+	opCounter := 1
+	flowCounter := 1
+
 	// process foundation bakers and early backer accounts (activate right away)
-	for _, v := range gen.Accounts {
+	for i, v := range gen.Accounts {
 		// we use hard coded row ids for registrations
 		acc := NewAccount(v.Addr)
 		acc.RowId = AccountID(len(accounts) + 1)
@@ -1243,7 +1283,8 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*Block, error) {
 			acc.DelegateSince = b.block.Height
 			acc.DelegateId = acc.RowId
 			b.block.NDelegation++
-			b.RegisterDelegate(acc)
+			b.RegisterDelegate(acc, true)
+			b.AppendMagicBakerRegistrationOp(ctx, acc, i)
 			log.Debugf("1 BOOT REG SELF %d %s -> %d bal=%d",
 				acc.RowId, acc, acc.ActiveDelegations, acc.Balance())
 		} else {
@@ -1259,11 +1300,20 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*Block, error) {
 		b.block.ActivatedSupply += v.Value
 
 		// register activation flows (will not be applied, just saved!)
-		f := NewFlow(b.block, acc, acc)
+		f := NewFlow(b.block, acc, nil, opCounter, OPL_PROTOCOL_UPGRADE, flowCounter, 0, 0)
 		f.Category = FlowCategoryBalance
 		f.Operation = FlowTypeActivation
 		f.AmountIn = acc.SpendableBalance
 		b.block.Flows = append(b.block.Flows, f)
+		flowCounter++
+
+		// register implicit activation ops
+		op := NewImplicitOp(b.block, 0, chain.OpTypeActivateAccount, opCounter, OPL_PROTOCOL_UPGRADE, opCounter)
+		op.SenderId = acc.RowId
+		op.Counter = int64(opCounter)
+		op.Volume = acc.SpendableBalance
+		b.block.Ops = append(b.block.Ops, op)
+		opCounter++
 
 		// prepare for insert
 		accounts = append(accounts, acc)
@@ -1292,6 +1342,7 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*Block, error) {
 		// we use hard coded row ids for registrations
 		acc := NewAccount(v.Addr)
 		acc.RowId = AccountID(len(accounts) + 1)
+		acc.ManagerId = acc.RowId // satisfy invariant
 		acc.FirstSeen = b.block.Height
 		acc.LastSeen = b.block.Height
 		acc.IsVesting = true
@@ -1307,24 +1358,32 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*Block, error) {
 		b.block.Supply.Unvested += acc.UnclaimedBalance
 
 		// link to and update delegate
-		if v.Delegate.IsValid() {
-			dlg, _ := b.AccountByAddress(v.Delegate)
-			acc.IsDelegated = true
-			acc.DelegateId = dlg.RowId
-			acc.DelegatedSince = b.block.Height
-			dlg.TotalDelegations++
-			dlg.ActiveDelegations++
-			dlg.DelegatedBalance += acc.Balance() // this includes unvested
-			log.Debugf("1 BOOT ADD delegation %d %s -> %d (%d %s) bal=%d",
-				dlg.RowId, dlg, dlg.ActiveDelegations, acc.RowId, acc, acc.Balance())
-			// register delegation flows (will not be applied, just saved!)
-			f := NewFlow(b.block, dlg, acc)
-			f.Category = FlowCategoryDelegation
-			f.Operation = FlowTypeDelegation
-			f.AmountIn = acc.Balance()
-			b.block.Flows = append(b.block.Flows, f)
-		}
+		dlg, _ := b.AccountByAddress(v.Delegate)
+		acc.IsDelegated = true
+		acc.DelegateId = dlg.RowId
+		acc.DelegatedSince = b.block.Height
+		dlg.TotalDelegations++
+		dlg.ActiveDelegations++
+		dlg.DelegatedBalance += acc.Balance() // this includes unvested
+		log.Debugf("1 BOOT ADD delegation %d %s -> %d (%d %s) bal=%d",
+			dlg.RowId, dlg, dlg.ActiveDelegations, acc.RowId, acc, acc.Balance())
+		// register delegation flows (will not be applied, just saved!)
+		f := NewFlow(b.block, dlg, acc, opCounter, OPL_PROTOCOL_UPGRADE, flowCounter, 0, 0)
+		f.Category = FlowCategoryDelegation
+		f.Operation = FlowTypeDelegation
+		f.AmountIn = acc.Balance()
+		b.block.Flows = append(b.block.Flows, f)
+		flowCounter++
 
+		// register implicit delegation ops
+		op := NewImplicitOp(b.block, 0, chain.OpTypeDelegation, opCounter, OPL_PROTOCOL_UPGRADE, opCounter)
+		op.SenderId = acc.RowId
+		op.DelegateId = dlg.RowId
+		op.Counter = int64(opCounter)
+		op.Volume = acc.UnclaimedBalance
+		b.block.Ops = append(b.block.Ops, op)
+
+		// put in cache
 		b.accMap[acc.RowId] = acc
 		b.accHashMap[accountHashKey(acc)] = acc
 
@@ -1337,7 +1396,13 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*Block, error) {
 		cc.AccountId = acc.RowId
 		cc.Height = acc.FirstSeen
 		cc.Script, _ = v.Script.MarshalBinary()
+		cc.InterfaceHash = v.Script.InterfaceHash()
+		ep, _ := v.Script.Entrypoints(false)
+		acc.CallStats = make([]byte, 4*len(ep))
+		cc.OpL = OPL_PROTOCOL_UPGRADE
+		cc.OpP = opCounter
 		contracts = append(contracts, cc)
+		opCounter++
 
 		log.Debug(newLogClosure(func() string {
 			var as, vs, ds, rs string
@@ -1409,6 +1474,7 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*Block, error) {
 
 	// adjust total supply on init and cross-check
 	b.block.Supply.Total += b.block.Supply.Activated + b.block.Supply.Unvested + b.block.Supply.Unclaimed
+	b.block.Supply.Circulating = b.block.Supply.Total - b.block.Supply.Unvested
 
 	if genesisSupply := gen.Supply(); b.block.Supply.Total != genesisSupply {
 		return nil, fmt.Errorf("Genesis supply mismatch exp=%d got=%d (active=%d unvested=%d unclaimed=%d)",
@@ -1433,12 +1499,210 @@ func (b *Builder) FixUpgradeBugs(ctx context.Context, prevparams, nextparams *ch
 
 	// babylon airdrop
 	if nextparams.Protocol.IsEqual(chain.ProtoV005_2) && nextparams.ChainId.IsEqual(chain.Mainnet) {
+		// airdrop 1 mutez to managers
 		if err := b.RunBabylonAirdrop(ctx, nextparams); err != nil {
+			return err
+		}
+		// upgrade KT1 contracts without code
+		if err := b.RunBabylonUpgrade(ctx, nextparams); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// Bakers implicitly activated by a bug in v001 (called magic delegates by us)
+//
+// Sadly, there is no documentation about broken baker activation rules.
+// Core devs are unable or unwilling to answer questions regarding this issue.
+// Our previous implementation resulted in many false positives which in turn
+// resulted in excess total rolls and in turn in wrong luck and payout
+// share calculations.
+//
+var v001MagicDelegates = []chain.Address{
+	chain.MustParseAddress("tz1T7NFTcJQULn4GVoEEcod8v5f7fRJwF2JJ"),
+	chain.MustParseAddress("tz1LGdjnU54XLWBTb3jeqoYdxwdzfbtLDikY"),
+	chain.MustParseAddress("tz1aMdq4MVVcNAinaLbBbz1RaiEYDAj32gLM"),
+	chain.MustParseAddress("tz1fahTqRiZ88aozjxt593aqEyGhXzPMPqp6"),
+	chain.MustParseAddress("tz1XkALkYAQ2KFA8NqK2tJ8HBtRXqeSX14aS"),
+	chain.MustParseAddress("tz1e6ousJm7xbVUudCCrijZbaMfk2sjv3C91"),
+	chain.MustParseAddress("tz1b3SaPHFSw51r92ARcV5mGyYbSSsdFd5Gz"),
+	chain.MustParseAddress("tz1eU1Xb57o9cgHymUYJ45VYm1uLvwBFQA9N"),
+	chain.MustParseAddress("tz1PtbtUpKHF9KrCZjeKDzk1xuzGFkmXdYMk"),
+	chain.MustParseAddress("tz1Kra1CK3zxgpfb6fHDMuant4kAxgakmPxV"),
+	chain.MustParseAddress("tz1e17nNMNs9wfkUuPivXg2XWaMkvcqdyWje"),
+	chain.MustParseAddress("tz1Mvef6LM2sqmGWHyxq5wWRRfkA3nCeNqUB"),
+	chain.MustParseAddress("tz1NLTAX47PdGCdz3F46qoj9kokEx2dBnoo8"),
+	// needed for snapshot on cycle 4 and 5, but has no rolls in cycle 2
+	// since v002 migration happens in cycle 6 we need to add it here,
+	// otherwise income table entries are missing
+	chain.MustParseAddress("tz1UcuaXouNppYnbJr3JWGV31Fa2fnzesmJ4"),
+}
+
+// hash table for lookup
+var v001MagicDelegateSet = chain.NewAddressSet(v001MagicDelegates...)
+
+// activated by v002 migration (list compiled from research about roll
+// distributions and babylon airdrop)
+var v002MagicDelegates = []chain.Address{
+	chain.MustParseAddress("tz1a8jxLZv6M8cDjmNYwAXweQiKUnXgFWVQN"),
+	chain.MustParseAddress("tz1ajpiR5wkPXghYDdT4tizu3BG8iy4WJLz4"),
+	chain.MustParseAddress("tz1aR3E7CGyceYDa2BHBde8AL1RvWbS1ZgYJ"),
+	chain.MustParseAddress("tz1azWX5Ux5Hizb3qj1vHF5LZwwCMFA8b4mZ"),
+	chain.MustParseAddress("tz1bcx82twLzuDHRM9i7B4Jjnp7NMAUSMQFN"),
+	chain.MustParseAddress("tz1bg9WkHYxigQ7J4n2sufKWcPn955UrF3Kb"),
+	chain.MustParseAddress("tz1bh296rrEb5yRtpg87j3TVfcsFL4NxoDdj"),
+	chain.MustParseAddress("tz1bkhnnvrtmwcryKzHGbKp48yS2qNMRDehA"),
+	chain.MustParseAddress("tz1bQofEmH6iF5DwNzfPkuMkSoPJfgFYFJYd"),
+	chain.MustParseAddress("tz1bVXGLBa8qhHaymZ3yEwgHjiAE7MDom13K"),
+	chain.MustParseAddress("tz1bxz1kjYmnE4fsWFQKyU2NWzyiTG2YjhGV"),
+	chain.MustParseAddress("tz1cP3XjgyQ4xY3kCJbxXLbq2QzkeMFUFBoh"),
+	chain.MustParseAddress("tz1cQM6iWcptjU68FGfy1b7TNLr6aKUTQbTT"),
+	chain.MustParseAddress("tz1cs4Q98YbsUfNpch7ijQHtEgMqvdzTvnhW"),
+	chain.MustParseAddress("tz1dFhaP5bWLgBswYtBxpTFEXec7mmzBskNw"),
+	chain.MustParseAddress("tz1dhMmmUA1k3AoF2thLk9rvfd8yDxXxEGun"),
+	chain.MustParseAddress("tz1djECaHtJXhYP1kbK4KgJ2EHpgCVjvANnQ"),
+	chain.MustParseAddress("tz1duEr8qA9y2PUkRYnA7qE2nwmUpunANcQg"),
+	chain.MustParseAddress("tz1dWokQy9hhBCj1bZnJVjjfc61JxW2qCG92"),
+	chain.MustParseAddress("tz1e1BgVt3DZgA1AuTMTRGS2cgS2vGP3hMRE"),
+	chain.MustParseAddress("tz1e5NtW8mi6F6U8DfKaMwSeRaiPjrxKxT3V"),
+	chain.MustParseAddress("tz1e9jBy9dEGER2dKrtzcWtCpDfbbLNPTQab"),
+	chain.MustParseAddress("tz1ei6WjcQWCttFQtpqw4zaZrpb3XJUVfGem"),
+	chain.MustParseAddress("tz1eMKUnpTfS7ypTH9SRTRXBW4RBE8EEszsD"),
+	chain.MustParseAddress("tz1eNUaSdwY7RJfb3aVXFwPc3tiG6HeCADnq"),
+	chain.MustParseAddress("tz1eRPe6QWnsB6mp8wqbNBDB4VuufS5bcv5e"),
+	chain.MustParseAddress("tz1ewpKn61gGEyvvpgWSTTsZvWVGA2t7fK7i"),
+	chain.MustParseAddress("tz1f4U4NUdnMgP8rkPHvUBVznZsgUG636nhz"),
+	chain.MustParseAddress("tz1fc7jqJ4YuJx9Diyb8b4iiWAto34p7pqRT"),
+	chain.MustParseAddress("tz1ffqW9CQ6aCD8zwcq5CLs8Gth335LWAEDJ"),
+	chain.MustParseAddress("tz1fntgFVaRT3jxaMyHaxVua7w2TaNcPKeZP"),
+	chain.MustParseAddress("tz1foqx9ArpckkTvwbPiV4kjoYsxnbQdSE3o"),
+	chain.MustParseAddress("tz1fR6dVH7fS58y2EdDGtM24ZcBuwDnaiTBA"),
+	chain.MustParseAddress("tz1fuPAGNKQVktnvVHiGR6RNwf2TXSTwZn9T"),
+	chain.MustParseAddress("tz1g7ZuJf8m1G2PUXhwQDB9AEXyPp2zNK6GB"),
+	chain.MustParseAddress("tz1g9e5poiqG2V2SC7aya93MTKJt6pbyWrEk"),
+	chain.MustParseAddress("tz1g9EpsbjJBjC7h5cd1crpnxY7FqzGWFpLw"),
+	chain.MustParseAddress("tz1gAiP5zzKdh56evj1bxrXw27moCuPdAX5W"),
+	chain.MustParseAddress("tz1gFjEVbJjEmCWUa274oX6yjRxkrf4mgPU2"),
+	chain.MustParseAddress("tz1gftALWAg7Ui7Tb5tkdbw1g97BRHUQZevA"),
+	chain.MustParseAddress("tz1gJvShTiuxoaZtjcwMv3LHcGU2QFqx5dsE"),
+	chain.MustParseAddress("tz1gkWnVtzqzavL8PJNsDTVYyP8mLhdwqF45"),
+	chain.MustParseAddress("tz1gthtquS9XUKQnzV72AQKqMjpNJEMgoRJU"),
+	chain.MustParseAddress("tz1gwHTJH5UPRyF1fq2uGYyL5ZtCYxe8oyW7"),
+	chain.MustParseAddress("tz1hbQBiAccFQCWhxetrmXceRWxUW2noVoLU"),
+	chain.MustParseAddress("tz1hE2bwMvNAJJuSnTLjxfLCdLbkuZwRumsW"),
+	chain.MustParseAddress("tz1hoFUMWpvRWy4fMUgLGZjwe3i5xxtN1Qci"),
+	chain.MustParseAddress("tz1hqDpNW9hVHautPpe5n2umNcrdMKZkjpkX"),
+	chain.MustParseAddress("tz1i3fUf3HdAmHAYrFkiBiYDbX2xoLuQQcDP"),
+	chain.MustParseAddress("tz1iDNPdZiKzLDQYQMwn4opK5gK5b7S9rXnE"),
+	chain.MustParseAddress("tz1iGjJkxZjHEh9t7XSJf1fURbGPYjBvLB5z"),
+	chain.MustParseAddress("tz1ihTyGCkQUPCf2QGz5vxxYMTwLmbnjT6WP"),
+	chain.MustParseAddress("tz1iUKcomroMTdQvhMkuY6TDxAwoMb2M6Ryx"),
+	chain.MustParseAddress("tz1KgWEWyAFqGD2i5iKA3E64ABkaybWr3TBG"),
+	chain.MustParseAddress("tz1Knoe8doKmD8b364hh94hSZZ6Au46uBLgU"),
+	chain.MustParseAddress("tz1Kvszu74tzrfjZRYW9d1r7ePK81rHxsZUB"),
+	chain.MustParseAddress("tz1KxJeKFKZj2AGzdefoCxgWRYySewxqptcu"),
+	chain.MustParseAddress("tz1L6a3SsVqzvcxESxzqvEJpAcU8Hs4SSHEF"),
+	chain.MustParseAddress("tz1LHFqnoQnmqTQd79DvxdRMXfVFTSk8XeUt"),
+	chain.MustParseAddress("tz1LkWA74w264oHvmuQUVEFM2c7w19EMDsv9"),
+	chain.MustParseAddress("tz1LmJsZuRyxswNV4YghF3q5fmLLxrKST3gp"),
+	chain.MustParseAddress("tz1LpfwGyyfYCGfsUqjXmo1ZaCNBtCm1HJ3e"),
+	chain.MustParseAddress("tz1LQBPXnV2rWd9pL5dhZZ9iNZCx6D6wJexj"),
+	chain.MustParseAddress("tz1LrFegiq14oByxgcS7vGFnorj9uYBed6bD"),
+	chain.MustParseAddress("tz1LS6oGf95DV7c2mSZ17C6RsuoEiD9EwGWc"),
+	chain.MustParseAddress("tz1LUWkTyB62ZFpvn8ZrqbaVDPekXzcVMuFd"),
+	chain.MustParseAddress("tz1LVHUSTmfNHn1NpDa8Mz8vq1Sh5CCMXX4V"),
+	chain.MustParseAddress("tz1MGrrhm1vabnAJRBEQxVHYcEC1adqiziRs"),
+	chain.MustParseAddress("tz1MK15cQnc6snngNWw7YfjowkCZw2JNNmbU"),
+	chain.MustParseAddress("tz1MPzCt4xgE74D1fwHFrmjabb1sZvgQNSDF"),
+	chain.MustParseAddress("tz1MRHkVE9zxbAgho7uNuqAcmct17d3Ej9VS"),
+	chain.MustParseAddress("tz1MYMR3dySgoe14L4nEPycFFBwD9dnmSdHm"),
+	chain.MustParseAddress("tz1Mz7ZZu5Rgg2LamJmu2dzozZ2KZ8Jb2rLP"),
+	chain.MustParseAddress("tz1NaujomKqcKKacopVcQtqh32DTNaLAdcNb"),
+	chain.MustParseAddress("tz1NC7TTSyNwB5N7bQWXmafvJbCVrPKGNPcS"),
+	chain.MustParseAddress("tz1NEV1TPAeF68AiyLBUG7CPBFNJ1txVYqu1"),
+	chain.MustParseAddress("tz1NgGYS3RiesowW19n9TZpd4gnrHH1Ckkhn"),
+	chain.MustParseAddress("tz1NHGYDZj1EkNo2ZqE5nCxTJosGw4PBedch"),
+	chain.MustParseAddress("tz1NLQyBAjbgG9tk1rcVgXL2ArwBoH9jJxKo"),
+	chain.MustParseAddress("tz1NqYMDAR4dDxsgxV4WDcVNGfXAKakpdTeR"),
+	chain.MustParseAddress("tz1Nthwqk6zjHei1tEGdj228Awt7VsN86c6b"),
+	chain.MustParseAddress("tz1NuXPd1qePQeMzsMTZQAqy8a8DSkqYUVcb"),
+	chain.MustParseAddress("tz1P4CZSLSmD6VVUm9dqNFpy9eV3ZU1LwwbQ"),
+	chain.MustParseAddress("tz1P6GGbfN6EGVpgYHHbFpMAkBmGjhAqsEWJ"),
+	chain.MustParseAddress("tz1P6nfhyAx8uUapcZSuFmYtBzv4RmwF6qvg"),
+	chain.MustParseAddress("tz1PAcQy7L3EqKLaYZjpJ7sUNRXWe4NNnmEc"),
+	chain.MustParseAddress("tz1PCPMQ7WC62WqGxgHB1G48wVUCmvTbmoAE"),
+	chain.MustParseAddress("tz1Pk341z4zeN8rRTX1HwWXMfbzSsn6dwEYo"),
+	chain.MustParseAddress("tz1PPVuUuJR258nGtdHEsUSmBHHsvFeLrRTW"),
+	chain.MustParseAddress("tz1PS6NW7jeVrQEik1F8pguKR8tKQZbiT8fC"),
+	chain.MustParseAddress("tz1PygG8dRGV5vev2DALRAqmdYAqReTD8987"),
+	chain.MustParseAddress("tz1Q3fqvAJmijgABnHbbNm1ou81rvFcmBipM"),
+	chain.MustParseAddress("tz1QJVCDbrGkfEjcdWD1eXy71fXYtbNg93Gp"),
+	chain.MustParseAddress("tz1Qk2Q8Ju3YCSqPv9QxCEafSYZM1ZwTTcCn"),
+	chain.MustParseAddress("tz1QRKeabUMA4dExyk1y12v1MwqibWoczoZU"),
+	chain.MustParseAddress("tz1QRz9FBkKwtmP6nv6WhHVbnbGkFG5mNjwS"),
+	chain.MustParseAddress("tz1Qsa82diwpvMbsyi3t57KVyV6dGZX5zkSg"),
+	chain.MustParseAddress("tz1QWLv49qn15Vq7cCR2LnzWNrD8HtkwAeNd"),
+	chain.MustParseAddress("tz1R4MPhiReS2ujzj9RzVuvmrAZiTx1s1URX"),
+	chain.MustParseAddress("tz1RCpatyxtpTEzXYqQjsz6r2VrhMeF3pCY6"),
+	chain.MustParseAddress("tz1Rctu7qNj3RyAyz7kdyJjYkbYxeTpNFQRF"),
+	chain.MustParseAddress("tz1Rf4CBpave59kipUeSwUSvNjacnVPSpsoP"),
+	chain.MustParseAddress("tz1RQMjZjF2hg4ySfMCuZH5hAzNLziqTkazH"),
+	chain.MustParseAddress("tz1RQRJtR9xBKCPk6XBxVZo6Z5bjASYrDRtN"),
+	chain.MustParseAddress("tz1S3ucpKQrtkp8Bz7mw4LJ1zPVqmWufC5aS"),
+	chain.MustParseAddress("tz1S8ocaHL58fSrneqJeF6Ure4LSjarPcDDx"),
+	chain.MustParseAddress("tz1SQ3fSVjscp2vjmVSiyWQL9Yapt3y6FZHJ"),
+	chain.MustParseAddress("tz1SYSLhuc8woqw68isT2zFvkRgksyJReMTm"),
+	chain.MustParseAddress("tz1Szcfqv3iTVSsTb11X8YCCnxRsFP6uK3v5"),
+	chain.MustParseAddress("tz1TJY3ouYwqdcyPQFWU9DEy5q4Y5qEusPqY"),
+	chain.MustParseAddress("tz1TKzBHiEh1KrcYckcSiNWRRKjfowKw2GH3"),
+	chain.MustParseAddress("tz1TuY6PkTDL6LKL3jFjMBPst728uhGdQ6c6"),
+	chain.MustParseAddress("tz1TWQmJTfosQPFGUXjbXUzV6Tj23s8zbXUs"),
+	chain.MustParseAddress("tz1TwzoBefS8PEbe91h3eTkYsA4QAQEBMcVL"),
+	chain.MustParseAddress("tz1Ua95YukXAmcMbfUv67gEhxiJx1n9djMiU"),
+	chain.MustParseAddress("tz1UHQ7YYDaxSV4dY8boJRhUfmU7jKprEsZw"),
+	chain.MustParseAddress("tz1UrBsKAUybPbqZHKaNp8ru4F8NcW2e1inG"),
+	chain.MustParseAddress("tz1UVB4Yt8raLZq8AH9k386aqr7CG7qSMMjU"),
+	chain.MustParseAddress("tz1VayoLunKK13JkS6ZpLfHvB193VaZLnU3N"),
+	chain.MustParseAddress("tz1VDn5stQhZzeyPiMMNGwRpXZC9MP9AnAt6"),
+	chain.MustParseAddress("tz1VDRt5NL44SEECAW7Qft8nSCjhDWvhYPrb"),
+	chain.MustParseAddress("tz1VdUYXimk7JCvZawMtsZgd6gwj8XdpQHF1"),
+	chain.MustParseAddress("tz1VJDAEFypQPtU3t23ZFiVxPQDV8zamkvgZ"),
+	chain.MustParseAddress("tz1VpBoHR8MHD33kbzN5VHM5b6dBtp35LoZp"),
+	chain.MustParseAddress("tz1VqbLLmk7WVxStGh22wMQwpnspahivg7QT"),
+	chain.MustParseAddress("tz1VQuud7J1kmBCrhcKYsYHU1FX5nkFjtLpu"),
+	chain.MustParseAddress("tz1VuiTbm9gJa1HoYQqZxvggdBaB9DB4mM8z"),
+	chain.MustParseAddress("tz1VUunMWp6tfK7T7QQQTBcsrnp713CmCDYi"),
+	chain.MustParseAddress("tz1VuWhc9ZvbXgmnwAcYdYAkZQscuVZyrdba"),
+	chain.MustParseAddress("tz1W7roMZucBCjh8QgwwgJsjEazW2YgA7sJ5"),
+	chain.MustParseAddress("tz1WAvs7bK5EYscH3xBf1LbJCoMMXBpjgK5F"),
+	chain.MustParseAddress("tz1WeuWTkfMaViHypSX7joYjWX8NApHHC2sq"),
+	chain.MustParseAddress("tz1WtkJEkKjHX3bMDYwJoDVC4gPksNPUa3v7"),
+	chain.MustParseAddress("tz1WtUtJcKEEp8ixYDEqkHEUYLyS2U4qWpzJ"),
+	chain.MustParseAddress("tz1WUVANirUcv3rSNNWxcv8GwMUAnH9mDnjn"),
+	chain.MustParseAddress("tz1X1T8PQWFoVzRS8WLDTYs9HWUVNTe3FNv5"),
+	chain.MustParseAddress("tz1X4C6KvSAkavFAexxCJNpdyYtP8bftRcoe"),
+	chain.MustParseAddress("tz1XB7RRogXyqoDPVcRLd9LS2kJoQRGT4Eje"),
+	chain.MustParseAddress("tz1Xbr2W9JAjfSa8P2LZut3kAUGwfN5Gb1B8"),
+	chain.MustParseAddress("tz1XkRTJT7gn41VczW8dx1KQjPFxWYVei8Cs"),
+	chain.MustParseAddress("tz1XWPzj88rcMfFAbwe9MPYQQ3wJi64HVWCp"),
+	chain.MustParseAddress("tz1XymQfBfSJMDoeCAMmseR5SiHKMXCWMaNy"),
+	chain.MustParseAddress("tz1XzPWgr4vYMKXJ64MwpfD2EWXKvnpcmFgi"),
+	chain.MustParseAddress("tz1YJPm9wxbGrX9gC8ExdqFQqtGCVMRhoJ43"),
+	chain.MustParseAddress("tz1YKEF6GHFkkHxmpn11ongpYtmA3tCL7ZXv"),
+	chain.MustParseAddress("tz1YptCde7YGdZt5Hyefi84LkQ6g23rPUzuh"),
+	chain.MustParseAddress("tz1YRDGSE2DDyLdVDn6tXm2gGqTSF5FXTGhB"),
+	chain.MustParseAddress("tz1Yua1wMkSaggN3pkFF157jfXTELAVExuxM"),
+	chain.MustParseAddress("tz1YVWh2g8Lne3RrJukx7bESXKWzryiXvyyV"),
+	chain.MustParseAddress("tz1Z2YY9D5piNsiPwe9KrvqBam4vqhvyLboD"),
+	chain.MustParseAddress("tz1ZSr8MfNZsFQJ2Gt67rJfNFeJks2P7cgwr"),
+	chain.MustParseAddress("tz1NRxCpNaQuYpTvqCTq6Qns6gm25ApRwg4Q"),
+	chain.MustParseAddress("tz1hG79KtHTkfJuCedpayNhuDwbFnbQL6tCG"),
+	chain.MustParseAddress("tz1U8xtmSRzu9RWP62YQMSev6Q3XG1KhHqRz"),
+	chain.MustParseAddress("tz1TW1Ncg3BPHLbmy83R9c6xoGE6WaTQE5bL"),
+	chain.MustParseAddress("tz1U8xtmSRzu9RWP62YQMSev6Q3XG1KhHqRz"),
+	chain.MustParseAddress("tz1MXj88Yeq7jW3Y6GpeV8GcPqySB4Y2grZR"),
 }
 
 // v002 fixed an 'origination bug'
@@ -1464,29 +1728,71 @@ func (b *Builder) FixUpgradeBugs(ctx context.Context, prevparams, nextparams *ch
 //   IsDelegate == true && DelegateId == 0
 //
 func (b *Builder) FixOriginationBug(ctx context.Context, params *chain.Params) error {
-	drop := make([]*Account, 0)
+	// only run on mainnet
+	if !params.ChainId.IsEqual(chain.Mainnet) {
+		return nil
+	}
+
 	var count int
+	var err error
+	for i, addr := range v002MagicDelegates {
+		dlg, ok := b.AccountByAddress(addr)
+		if !ok {
+			dlg, err = b.idx.LookupAccount(ctx, addr)
+			if err != nil {
+				return fmt.Errorf("Upgrade v%03d: missing account %s", params.Version, addr)
+			}
+		}
+
+		// skip properly registered bakers
+		if dlg.DelegateId > 0 {
+			continue
+		}
+
+		// activate magic bakers
+		dlg.DelegateId = dlg.RowId
+		b.RegisterDelegate(dlg, true)
+		count++
+
+		// inject an implicit baker registration
+		b.AppendMagicBakerRegistrationOp(ctx, dlg, i)
+	}
+	log.Infof("Upgrade to v%03d: registered %d extra bakers", params.Version, count)
+
+	// reset grace period for v001 magic bakers
+	count = 0
+	for _, addr := range v001MagicDelegates {
+		dlg, ok := b.AccountByAddress(addr)
+		if !ok {
+			dlg, err = b.idx.LookupAccount(ctx, addr)
+			if err != nil {
+				return fmt.Errorf("Upgrade v%03d: missing baker account %s", params.Version, addr)
+			}
+		}
+
+		// bump grace period if smaller than cycle + preserved + 2
+		// - tz1b3SaPHFSw51r92ARcV5mGyYbSSsdFd5Gz has 14 (stays at 14)
+		// - tz1fahTqRiZ88aozjxt593aqEyGhXzPMPqp6 has 17 (reinit to 6 + 11)
+		// - tz1UcuaXouNppYnbJr3JWGV31Fa2fnzesmJ4 has 17 (reinit to 6 + 11)
+		if dlg.GracePeriod <= b.block.Cycle+b.block.Params.PreservedCycles+2 {
+			dlg.InitGracePeriod(b.block.Cycle, b.block.Params)
+			count++
+		}
+	}
+	log.Infof("Upgrade to v%03d: updated %d extra bakers", params.Version, count)
+
+	// unregister non-baker accounts
+	drop := make([]*Account, 0)
 	for _, dlg := range b.dlgMap {
 		if dlg.DelegateId > 0 {
 			continue
 		}
-		if dlg.Balance() > 0 {
-			dlg.DelegateId = dlg.RowId
-			dlg.InitGracePeriod(b.block.Cycle, params)
-			dlg.IsDirty = true
-			dlg.IsActiveDelegate = true
-			count++
-		} else {
-			drop = append(drop, dlg)
-		}
+		drop = append(drop, dlg)
 	}
-	log.Infof("Upgrade to v%03d: registered %d buggy delegates", params.Version, count)
-
-	// unregister empty accounts
 	for _, v := range drop {
 		b.UnregisterDelegate(v)
 	}
-	log.Infof("Upgrade to v%03d: dropped %d empty delegates", params.Version, len(drop))
+	log.Infof("Upgrade to v%03d: dropped %d non-bakers", params.Version, len(drop))
 	return nil
 }
 
@@ -1497,106 +1803,18 @@ func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *chain.Params) e
 	if err != nil {
 		return err
 	}
+
 	// The rules are:
 	// - process all originated accounts (KT1)
 	// - if it has code and is spendable allocate the manager contract (implicit account)
 	// - if it has code and is delegatble allocate the manager contract (implicit account)
 	// - if it has no code (delegation KT1) allocate the manager contract (implicit account)
-	// - (extra side condition) implicit account is not registered as delegate
+	// - (extra side condition) implicait account is not registered as delegate
 	//
 	// The above three cases are the cases where the manager contract (implicit account) is
 	// able to interact through the KT1 that it manages. For example, if the originated
 	// account has code but is neither spendable nor delegatable then the manager contract
 	// cannot act on behalf of the originated contract.
-
-	// HACK due to improperly documented v002 upgrade (i.e. origination bug fix),
-	// we do not precisely know which accounts are delegates and which are not;
-	// a manual QA inspection revealed that on mainnet there are 78 accounts
-	// that were not airdropped because they are delegates, so we exclude them
-	// here too
-	excludeList := make(map[string]struct{})
-	for _, v := range []string{
-		"tz1ajpiR5wkPXghYDdT4tizu3BG8iy4WJLz4",
-		"tz1NC7TTSyNwB5N7bQWXmafvJbCVrPKGNPcS",
-		"tz1hoFUMWpvRWy4fMUgLGZjwe3i5xxtN1Qci",
-		"tz1ZSr8MfNZsFQJ2Gt67rJfNFeJks2P7cgwr",
-		"tz1f4U4NUdnMgP8rkPHvUBVznZsgUG636nhz",
-		"tz1fntgFVaRT3jxaMyHaxVua7w2TaNcPKeZP",
-		"tz1RCpatyxtpTEzXYqQjsz6r2VrhMeF3pCY6",
-		"tz1TwzoBefS8PEbe91h3eTkYsA4QAQEBMcVL",
-		"tz1bVXGLBa8qhHaymZ3yEwgHjiAE7MDom13K",
-		"tz1S8ocaHL58fSrneqJeF6Ure4LSjarPcDDx",
-		"tz1XB7RRogXyqoDPVcRLd9LS2kJoQRGT4Eje",
-		"tz1LUWkTyB62ZFpvn8ZrqbaVDPekXzcVMuFd",
-		"tz1Ua95YukXAmcMbfUv67gEhxiJx1n9djMiU",
-		"tz1L6a3SsVqzvcxESxzqvEJpAcU8Hs4SSHEF",
-		"tz1QRKeabUMA4dExyk1y12v1MwqibWoczoZU",
-		"tz1Nthwqk6zjHei1tEGdj228Awt7VsN86c6b",
-		"tz1X4C6KvSAkavFAexxCJNpdyYtP8bftRcoe",
-		"tz1UVB4Yt8raLZq8AH9k386aqr7CG7qSMMjU",
-		"tz1Q3fqvAJmijgABnHbbNm1ou81rvFcmBipM",
-		"tz1cs4Q98YbsUfNpch7ijQHtEgMqvdzTvnhW",
-		"tz1LVHUSTmfNHn1NpDa8Mz8vq1Sh5CCMXX4V",
-		"tz1PPVuUuJR258nGtdHEsUSmBHHsvFeLrRTW",
-		"tz1PygG8dRGV5vev2DALRAqmdYAqReTD8987",
-		"tz1RQMjZjF2hg4ySfMCuZH5hAzNLziqTkazH",
-		"tz1UHQ7YYDaxSV4dY8boJRhUfmU7jKprEsZw",
-		"tz1cP3XjgyQ4xY3kCJbxXLbq2QzkeMFUFBoh",
-		"tz1NEV1TPAeF68AiyLBUG7CPBFNJ1txVYqu1",
-		"tz1XkRTJT7gn41VczW8dx1KQjPFxWYVei8Cs",
-		"tz1gJvShTiuxoaZtjcwMv3LHcGU2QFqx5dsE",
-		"tz1LmJsZuRyxswNV4YghF3q5fmLLxrKST3gp",
-		"tz1VayoLunKK13JkS6ZpLfHvB193VaZLnU3N",
-		"tz1W7roMZucBCjh8QgwwgJsjEazW2YgA7sJ5",
-		"tz1MRHkVE9zxbAgho7uNuqAcmct17d3Ej9VS",
-		"tz1QJVCDbrGkfEjcdWD1eXy71fXYtbNg93Gp",
-		"tz1Mz7ZZu5Rgg2LamJmu2dzozZ2KZ8Jb2rLP",
-		"tz1e9jBy9dEGER2dKrtzcWtCpDfbbLNPTQab",
-		"tz1UrBsKAUybPbqZHKaNp8ru4F8NcW2e1inG",
-		"tz1VDRt5NL44SEECAW7Qft8nSCjhDWvhYPrb",
-		"tz1VUunMWp6tfK7T7QQQTBcsrnp713CmCDYi",
-		"tz1eNUaSdwY7RJfb3aVXFwPc3tiG6HeCADnq",
-		"tz1duEr8qA9y2PUkRYnA7qE2nwmUpunANcQg",
-		"tz1dFhaP5bWLgBswYtBxpTFEXec7mmzBskNw",
-		"tz1NaujomKqcKKacopVcQtqh32DTNaLAdcNb",
-		"tz1PCPMQ7WC62WqGxgHB1G48wVUCmvTbmoAE",
-		"tz1foqx9ArpckkTvwbPiV4kjoYsxnbQdSE3o",
-		"tz1S3ucpKQrtkp8Bz7mw4LJ1zPVqmWufC5aS",
-		"tz1YVWh2g8Lne3RrJukx7bESXKWzryiXvyyV",
-		"tz1g9e5poiqG2V2SC7aya93MTKJt6pbyWrEk",
-		"tz1UcuaXouNppYnbJr3JWGV31Fa2fnzesmJ4",
-		"tz1P4CZSLSmD6VVUm9dqNFpy9eV3ZU1LwwbQ",
-		"tz1TJY3ouYwqdcyPQFWU9DEy5q4Y5qEusPqY",
-		"tz1e5NtW8mi6F6U8DfKaMwSeRaiPjrxKxT3V",
-		"tz1hE2bwMvNAJJuSnTLjxfLCdLbkuZwRumsW",
-		"tz1SQ3fSVjscp2vjmVSiyWQL9Yapt3y6FZHJ",
-		"tz1gkWnVtzqzavL8PJNsDTVYyP8mLhdwqF45",
-		"tz1fc7jqJ4YuJx9Diyb8b4iiWAto34p7pqRT",
-		"tz1Kvszu74tzrfjZRYW9d1r7ePK81rHxsZUB",
-		"tz1azWX5Ux5Hizb3qj1vHF5LZwwCMFA8b4mZ",
-		"tz1XymQfBfSJMDoeCAMmseR5SiHKMXCWMaNy",
-		"tz1P6nfhyAx8uUapcZSuFmYtBzv4RmwF6qvg",
-		"tz1Pk341z4zeN8rRTX1HwWXMfbzSsn6dwEYo",
-		"tz1LrFegiq14oByxgcS7vGFnorj9uYBed6bD",
-		"tz1bkhnnvrtmwcryKzHGbKp48yS2qNMRDehA",
-		"tz1NuXPd1qePQeMzsMTZQAqy8a8DSkqYUVcb",
-		"tz1Rctu7qNj3RyAyz7kdyJjYkbYxeTpNFQRF",
-		"tz1LS6oGf95DV7c2mSZ17C6RsuoEiD9EwGWc",
-		"tz1TWQmJTfosQPFGUXjbXUzV6Tj23s8zbXUs",
-		"tz1ffqW9CQ6aCD8zwcq5CLs8Gth335LWAEDJ",
-		"tz1Qsa82diwpvMbsyi3t57KVyV6dGZX5zkSg",
-		"tz1VQuud7J1kmBCrhcKYsYHU1FX5nkFjtLpu",
-		"tz1e1BgVt3DZgA1AuTMTRGS2cgS2vGP3hMRE",
-		"tz1Szcfqv3iTVSsTb11X8YCCnxRsFP6uK3v5",
-		"tz1bg9WkHYxigQ7J4n2sufKWcPn955UrF3Kb",
-		"tz1cQM6iWcptjU68FGfy1b7TNLr6aKUTQbTT",
-		"tz1Qk2Q8Ju3YCSqPv9QxCEafSYZM1ZwTTcCn",
-		"tz1WeuWTkfMaViHypSX7joYjWX8NApHHC2sq",
-		"tz1djECaHtJXhYP1kbK4KgJ2EHpgCVjvANnQ",
-		"tz1PAcQy7L3EqKLaYZjpJ7sUNRXWe4NNnmEc",
-	} {
-		excludeList[v] = struct{}{}
-	}
 
 	// find eligible KT1 contracts where we need to check the manager
 	q := pack.Query{
@@ -1628,12 +1846,17 @@ func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *chain.Params) e
 		return err
 	}
 
-	// find unfunded managers
+	// find unfunded managers who are not reqistered as delegates
 	q = pack.Query{
 		Name: "etl.addr.babylon_airdrop",
 		Conditions: pack.ConditionList{
 			pack.Condition{
 				Field: table.Fields().Find("f"), // is_funded
+				Mode:  pack.FilterModeEqual,
+				Value: false,
+			},
+			pack.Condition{
+				Field: table.Fields().Find("d"), // is_delegate
 				Mode:  pack.FilterModeEqual,
 				Value: false,
 			},
@@ -1651,26 +1874,12 @@ func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *chain.Params) e
 			acc.Free()
 			return err
 		}
-
-		// HACK: skip registered delegates unless they are v002 origination bug delegates
-		if acc.IsDelegate && !(acc.DelegateSince < 28083 && acc.NDelegation == 0) {
-			log.Debugf("airdrop: skipping delegate %s", acc)
-			return nil
+		// airdrop 1 mutez
+		if err := b.AppendAirdropOp(ctx, acc, 1, count); err != nil {
+			return err
 		}
-
-		// HACK; skip by address
-		if _, ok := excludeList[acc.String()]; ok {
-			log.Debugf("airdrop: skipping v002 delegate %s", acc)
-			return nil
-		}
-
-		flow := NewFlow(b.block, acc, nil)
-		flow.Category = FlowCategoryBalance
-		flow.Operation = FlowTypeAirdrop
-		flow.AmountIn = 1
-		b.block.Flows = append(b.block.Flows, flow)
 		count++
-		log.Debugf("airdrop: %s %f", acc, params.ConvertValue(flow.AmountIn))
+		// log.Debugf("airdrop: %s %f", acc, params.ConvertValue(1))
 		// add account to builder map if not exist
 		if _, ok := b.accMap[acc.RowId]; !ok {
 			b.accMap[acc.RowId] = acc
@@ -1683,6 +1892,56 @@ func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *chain.Params) e
 		return err
 	}
 	log.Infof("Upgrade to v%03d: executed %d airdrops", params.Version, count)
+	return nil
+}
+
+func (b *Builder) RunBabylonUpgrade(ctx context.Context, params *chain.Params) error {
+	// collect all eligible addresses and inject airdrop flows
+	table, err := b.idx.Table(index.AccountTableKey)
+	if err != nil {
+		return err
+	}
+	// find eligible KT1 accounts that are not yet contracts
+	// Note: these are KT1 accounts distinct from the tz1/2/3 airdrop
+	// accounts above
+	q := pack.Query{
+		Name: "etl.addr.babylon_upgrade_eligible",
+		Conditions: pack.ConditionList{
+			pack.Condition{
+				Field: table.Fields().Find("t"), // type
+				Mode:  pack.FilterModeEqual,
+				Value: int64(chain.AddressTypeContract),
+			},
+			pack.Condition{
+				Field: table.Fields().Find("c"), // is_contract
+				Mode:  pack.FilterModeEqual,
+				Value: false,
+			},
+		},
+	}
+	err = table.Stream(ctx, q, func(r pack.Row) error {
+		acc := &Account{}
+		if err := r.Decode(acc); err != nil {
+			return err
+		}
+		// not all such KT1's are eleigible for upgrade, just ones
+		// that are either spendable or delegatable
+		if !acc.NeedsBabylonUpgrade(params) {
+			return nil
+		}
+		// upgrade note:
+		// - this does not add contract code to the contract table!
+		// - this does not change parameters for existing operations
+		log.Debugf("upgrade: %s to smart contract", acc)
+		acc.UpgradeToBabylon(params)
+
+		// add account to builder map, account index will write back to db
+		b.accMap[acc.RowId] = acc
+		return nil
+	})
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1708,8 +1967,6 @@ func (b *Builder) PatchBigMapDiff(ctx context.Context, diff micheline.BigMapDiff
 			return nil, nil
 		}
 	}
-
-	// log.Infof("Patching bigmap for account %d at height %d", accId, b.block.Height)
 
 	// load contract
 	contract, err := b.idx.LookupContractId(ctx, accId)
@@ -1763,13 +2020,12 @@ func (b *Builder) PatchBigMapDiff(ctx context.Context, diff micheline.BigMapDiff
 			// create alloc for new bigmaps
 			alloc := micheline.BigMapDiffElem{
 				Action:    micheline.BigMapDiffActionAlloc,
-				Id:        id,                 // alloc new id
-				KeyType:   typ.Args[0].OpCode, // (Left) == key_type
-				ValueType: typ.Args[1],        // (Right) == value_type
+				Id:        id,          // alloc new id
+				KeyType:   typ.Args[0], // (Left) == key_type
+				ValueType: typ.Args[1], // (Right) == value_type
 			}
 			// prepend
 			diff = append([]micheline.BigMapDiffElem{alloc}, diff...)
-			// log.Infof("Alloc bigmap %d for account %d at height %d", id, accId, b.block.Height)
 
 			// set id on all items
 			for i := range diff {
@@ -1780,7 +2036,6 @@ func (b *Builder) PatchBigMapDiff(ctx context.Context, diff micheline.BigMapDiff
 		}
 	} else {
 		// patch id for existing bigmap
-		// log.Infof("Patching bigmap: patch id to %d", foundid)
 		for i := range diff {
 			diff[i].Id = id
 		}

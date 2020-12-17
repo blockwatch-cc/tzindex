@@ -185,21 +185,25 @@ func (s Signature) MarshalBinary() ([]byte, error) {
 }
 
 func (s *Signature) UnmarshalBinary(b []byte) error {
-	l := len(b)
-	if l < 65 {
-		return fmt.Errorf("invalid binary signature length %d", l)
+	switch len(b) {
+	case 64:
+		s.Type = SignatureTypeGeneric
+	case 65:
+		if typ := ParseSignatureTag(b[0]); !typ.IsValid() {
+			return fmt.Errorf("invalid binary signature type %x", b[0])
+		} else {
+			s.Type = typ
+		}
+		b = b[1:]
+	default:
+		return fmt.Errorf("invalid binary signature length %d", len(b))
 	}
-	if typ := ParseSignatureTag(b[0]); !typ.IsValid() {
-		return fmt.Errorf("invalid binary signature type %x", b[0])
+	if cap(s.Data) < s.Type.Len() {
+		s.Data = make([]byte, s.Type.Len())
 	} else {
-		s.Type = typ
+		s.Data = s.Data[:s.Type.Len()]
 	}
-	if cap(s.Data) < l-1 {
-		s.Data = make([]byte, l-1)
-	} else {
-		s.Data = s.Data[:l-1]
-	}
-	copy(s.Data, b)
+	copy(s.Data, b[1:])
 	return nil
 }
 
@@ -224,7 +228,7 @@ func ParseSignature(s string) (Signature, error) {
 
 	case strings.HasPrefix(s, GENERIC_SIGNATURE_PREFIX):
 		dec, ver, err = base58.CheckDecode(s, 3, nil)
-		typ = SignatureTypeInvalid
+		typ = SignatureTypeGeneric
 
 	default:
 		return Signature{}, fmt.Errorf("unknown signature prefix %s", s)

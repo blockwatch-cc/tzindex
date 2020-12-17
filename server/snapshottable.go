@@ -231,8 +231,8 @@ func (s *Snapshot) MarshalCSV() ([]string, error) {
 }
 
 func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
-	// fetch chain params at current height
-	params := ctx.Crawler.ParamsByHeight(-1)
+	// use chain params at current height
+	params := ctx.Params
 
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
@@ -395,8 +395,8 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 
 		case "since_time":
 			// translate time into height, use val[0] only
-			bestTime := ctx.Crawler.Time()
-			bestHeight := ctx.Crawler.Height()
+			bestTime := ctx.Tip.BestTime
+			bestHeight := ctx.Tip.BestHeight
 			cond, err := pack.ParseCondition(key, val[0], pack.FieldList{
 				pack.Field{
 					Name: "since_time",
@@ -482,7 +482,7 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				switch prefix {
 				case "cycle":
 					if v == "head" {
-						currentCycle := params.CycleFromHeight(ctx.Crawler.Height())
+						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
 						v = strconv.FormatInt(int64(currentCycle), 10)
 					}
 				case "balance", "delegated":

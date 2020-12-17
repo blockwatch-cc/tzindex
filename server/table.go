@@ -64,8 +64,6 @@ func (t TableRequest) RegisterRoutes(r *mux.Router) error {
 }
 
 func (t *TableRequest) Parse(ctx *ApiContext) {
-	// read schema args
-	ctx.ParseRequestArgs(t)
 	t.Limit = ctx.Cfg.ClampList(t.Limit)
 
 	// prevent duplicate columns
@@ -98,7 +96,7 @@ func (t *TableRequest) Parse(ctx *ApiContext) {
 
 func StreamTable(ctx *ApiContext) (interface{}, int) {
 	args := &TableRequest{}
-	args.Parse(ctx)
+	ctx.ParseRequestArgs(args)
 	switch args.Table {
 	case "block":
 		return StreamBlockTable(ctx, args)

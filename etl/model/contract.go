@@ -33,13 +33,17 @@ type Contract struct {
 	Script        []byte    `pack:"S,snappy"      json:"script"`
 	IsSpendable   bool      `pack:"p,snappy"      json:"is_spendable"`   // manager can move funds without running any code
 	IsDelegatable bool      `pack:"d,snappy"      json:"is_delegatable"` // manager can delegate funds
+	OpL           int       `pack:"L,snappy"      json:"op_l"`
+	OpP           int       `pack:"P,snappy"      json:"op_p"`
+	OpI           int       `pack:"i,snappy"      json:"op_i"`
+	InterfaceHash []byte    `pack:"F,snappy"      json:"iface_hash"`
 }
 
 // Ensure Account implements the pack.Item interface.
 var _ pack.Item = (*Contract)(nil)
 
 // assuming the op was successful!
-func NewContract(acc *Account, oop *rpc.OriginationOp) *Contract {
+func NewContract(acc *Account, oop *rpc.OriginationOp, l, p int) *Contract {
 	c := AllocContract()
 	c.Hash = acc.Hash
 	c.AccountId = acc.RowId
@@ -57,13 +61,19 @@ func NewContract(acc *Account, oop *rpc.OriginationOp) *Contract {
 	c.StoragePaid = res.PaidStorageSizeDiff
 	if oop.Script != nil {
 		c.Script, _ = oop.Script.MarshalBinary()
+		c.InterfaceHash = oop.Script.InterfaceHash()
+		ep, _ := oop.Script.Entrypoints(false)
+		acc.CallStats = make([]byte, 4*len(ep))
 	}
 	c.IsSpendable = acc.IsSpendable
 	c.IsDelegatable = acc.IsDelegatable
+	c.OpL = l
+	c.OpP = p
+	c.OpI = 0
 	return c
 }
 
-func NewInternalContract(acc *Account, iop *rpc.InternalResult) *Contract {
+func NewInternalContract(acc *Account, iop *rpc.InternalResult, l, p, i int) *Contract {
 	c := AllocContract()
 	c.Hash = acc.Hash
 	c.AccountId = acc.RowId
@@ -75,7 +85,13 @@ func NewInternalContract(acc *Account, iop *rpc.InternalResult) *Contract {
 	c.StoragePaid = res.PaidStorageSizeDiff
 	if iop.Script != nil {
 		c.Script, _ = iop.Script.MarshalBinary()
+		c.InterfaceHash = iop.Script.InterfaceHash()
+		ep, _ := iop.Script.Entrypoints(false)
+		acc.CallStats = make([]byte, 4*len(ep))
 	}
+	c.OpL = l
+	c.OpP = p
+	c.OpI = i
 	return c
 }
 
@@ -101,6 +117,11 @@ func (c Contract) String() string {
 	return s
 }
 
+// origination operation must exist and code must be available
+func (c Contract) IsNonExist() bool {
+	return len(c.Script) == 0 && c.OpL == 0 && !c.IsDelegatable && !c.IsSpendable
+}
+
 func (c *Contract) Reset() {
 	c.RowId = 0
 	c.Hash = nil
@@ -116,6 +137,18 @@ func (c *Contract) Reset() {
 	c.Script = nil
 	c.IsSpendable = false
 	c.IsDelegatable = false
+	c.OpL = 0
+	c.OpP = 0
+	c.OpI = 0
+	c.InterfaceHash = nil
+}
+
+func (c *Contract) NeedsBabylonUpgrade(p *chain.Params, height int64) bool {
+	// babylon activation
+	isEligible := p.ChainId.IsEqual(chain.Mainnet) && p.Version >= 5 && height < 655361
+	// contract upgrade criteria
+	isEligible = isEligible && (c.IsSpendable || (!c.IsSpendable && c.IsDelegatable))
+	return isEligible
 }
 
 // loads script and upgrades to babylon on-the-fly if originated earlier
@@ -125,11 +158,10 @@ func (c *Contract) LoadScript(tip *ChainTip, height int64, manager []byte) (*mic
 	// patch empty manager.tz
 	if len(c.Script) == 0 {
 		if tip.ChainId.IsEqual(chain.Mainnet) && height >= 655361 && c.Height < 655361 {
-			script, err := micheline.MakeManagerScript(manager)
-			return script, err
+			return micheline.MakeManagerScript(manager)
 		}
 		// empty script before Babylon
-		return script, nil
+		return nil, nil
 	}
 
 	// unmarshal script
@@ -144,9 +176,9 @@ func (c *Contract) LoadScript(tip *ChainTip, height int64, manager []byte) (*mic
 	if tip.ChainId.IsEqual(chain.Mainnet) && height >= 655361 && c.Height < 655361 {
 		switch true {
 		case c.IsSpendable:
-			script.MigrateToBabylonAddDo()
+			script.MigrateToBabylonAddDo(manager)
 		case !c.IsSpendable && c.IsDelegatable:
-			script.MigrateToBabylonSetDelegate()
+			script.MigrateToBabylonSetDelegate(manager)
 		}
 	}
 	return script, nil

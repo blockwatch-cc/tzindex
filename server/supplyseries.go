@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"blockwatch.cc/packdb/encoding/csv"
@@ -20,12 +19,8 @@ import (
 )
 
 var (
-	// long -> short form
-	supplySourceNames map[string]string
-	// short -> long form
-	supplyAliasNames map[string]string
-	// all aliases as list
-	supplyAllAliases []string
+	// all series field names as list
+	supplySeriesNames util.StringList
 )
 
 func init() {
@@ -33,19 +28,23 @@ func init() {
 	if err != nil {
 		log.Fatalf("supply field type error: %v\n", err)
 	}
-	supplySourceNames = fields.NameMapReverse()
-	supplyAllAliases = fields.Aliases()
+	// strip row_id (first field)
+	supplySeriesNames = util.StringList(fields.Aliases()[1:])
 }
 
 // configurable marshalling helper
-type Supply struct {
+type SupplySeries struct {
 	model.Supply
 	verbose bool            `csv:"-" pack:"-"` // cond. marshal
 	columns util.StringList `csv:"-" pack:"-"` // cond. cols & order when brief
 	params  *chain.Params   `csv:"-" pack:"-"` // blockchain amount conversion
 }
 
-func (s *Supply) MarshalJSON() ([]byte, error) {
+func (s *SupplySeries) Reset() {
+	s.Supply.Timestamp = time.Time{}
+}
+
+func (s *SupplySeries) MarshalJSON() ([]byte, error) {
 	if s.verbose {
 		return s.MarshalJSONVerbose()
 	} else {
@@ -53,9 +52,8 @@ func (s *Supply) MarshalJSON() ([]byte, error) {
 	}
 }
 
-func (s *Supply) MarshalJSONVerbose() ([]byte, error) {
+func (s *SupplySeries) MarshalJSONVerbose() ([]byte, error) {
 	supply := struct {
-		RowId               uint64    `json:"row_id"`
 		Height              int64     `json:"height"`
 		Cycle               int64     `json:"cycle"`
 		Timestamp           time.Time `json:"time"`
@@ -87,7 +85,6 @@ func (s *Supply) MarshalJSONVerbose() ([]byte, error) {
 		FrozenRewards       float64   `json:"frozen_rewards"`
 		FrozenFees          float64   `json:"frozen_fees"`
 	}{
-		RowId:               s.RowId,
 		Height:              s.Height,
 		Cycle:               s.Cycle,
 		Timestamp:           s.Timestamp,
@@ -122,14 +119,12 @@ func (s *Supply) MarshalJSONVerbose() ([]byte, error) {
 	return json.Marshal(supply)
 }
 
-func (s *Supply) MarshalJSONBrief() ([]byte, error) {
+func (s *SupplySeries) MarshalJSONBrief() ([]byte, error) {
 	dec := s.params.Decimals
 	buf := make([]byte, 0, 2048)
 	buf = append(buf, '[')
 	for i, v := range s.columns {
 		switch v {
-		case "row_id":
-			buf = strconv.AppendUint(buf, s.RowId, 10)
 		case "height":
 			buf = strconv.AppendInt(buf, s.Height, 10)
 		case "cycle":
@@ -201,13 +196,11 @@ func (s *Supply) MarshalJSONBrief() ([]byte, error) {
 	return buf, nil
 }
 
-func (s *Supply) MarshalCSV() ([]string, error) {
+func (s *SupplySeries) MarshalCSV() ([]string, error) {
 	dec := s.params.Decimals
 	res := make([]string, len(s.columns))
 	for i, v := range s.columns {
 		switch v {
-		case "row_id":
-			res[i] = strconv.FormatUint(s.RowId, 10)
 		case "height":
 			res[i] = strconv.FormatInt(s.Height, 10)
 		case "cycle":
@@ -275,132 +268,70 @@ func (s *Supply) MarshalCSV() ([]string, error) {
 	return res, nil
 }
 
-func StreamSupplyTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
+func StreamSupplySeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 	// use chain params at current height
 	params := ctx.Params
 
 	// access table
-	table, err := ctx.Indexer.Table(args.Table)
+	table, err := ctx.Indexer.Table(args.Series)
 	if err != nil {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", args.Table), err))
+		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access series source table '%s'", args.Series), err))
 	}
 
 	// translate long column names to short names used in pack tables
 	var srcNames []string
-	if len(args.Columns) > 0 {
-		// resolve short column names
-		srcNames = make([]string, 0, len(args.Columns))
-		for _, v := range args.Columns {
-			n, ok := supplySourceNames[v]
-			if !ok {
-				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("unknown column '%s'", v), nil))
-			}
-			if n != "-" {
-				srcNames = append(srcNames, n)
-			}
+	// time is auto-added from parser
+	if len(args.Columns) == 1 {
+		// use all series columns
+		args.Columns = supplySeriesNames
+	}
+	// resolve short column names
+	srcNames = make([]string, 0, len(args.Columns))
+	for _, v := range args.Columns {
+		// ignore non-series columns
+		if !supplySeriesNames.Contains(v) {
+			panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid time-series column '%s'", v), nil))
 		}
-	} else {
-		// use all table columns in order and reverse lookup their long names
-		srcNames = table.Fields().Names()
-		args.Columns = supplyAllAliases
+		n, ok := supplySourceNames[v]
+		if !ok {
+			panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("unknown column '%s'", v), nil))
+		}
+		if n != "-" {
+			srcNames = append(srcNames, n)
+		}
 	}
 
-	// build table query
+	// build table query, no dynamic filter conditions
 	q := pack.Query{
-		Name:       ctx.RequestID,
-		Fields:     table.Fields().Select(srcNames...),
-		Limit:      int(args.Limit),
-		Conditions: make(pack.ConditionList, 0),
-		Order:      args.Order,
+		Name:   ctx.RequestID,
+		Fields: table.Fields().Select(srcNames...),
+		Order:  args.Order,
+		Conditions: pack.ConditionList{
+			pack.Condition{
+				Field: table.Fields().Find("T"), // time
+				Mode:  pack.FilterModeRange,
+				From:  args.From.Time(),
+				To:    args.To.Time(),
+				Raw:   args.From.String() + " - " + args.To.String(), // debugging aid
+			},
+		},
 	}
 
-	// build dynamic filter conditions from query (will panic on error)
-	for key, val := range ctx.Request.URL.Query() {
-		keys := strings.Split(key, ".")
-		prefix := keys[0]
-		mode := pack.FilterModeEqual
-		if len(keys) > 1 {
-			mode = pack.ParseFilterMode(keys[1])
-			if !mode.IsValid() {
-				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s'", keys[1]), nil))
-			}
-		}
-		switch prefix {
-		case "columns", "limit", "order", "verbose":
-			// skip these fields
-		case "cursor":
-			// add row id condition: id > cursor (new cursor == last row id)
-			id, err := strconv.ParseUint(val[0], 10, 64)
-			if err != nil {
-				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid cursor value '%s'", val), err))
-			}
-			cursorMode := pack.FilterModeGt
-			if args.Order == pack.OrderDesc {
-				cursorMode = pack.FilterModeLt
-			}
-			q.Conditions = append(q.Conditions, pack.Condition{
-				Field: table.Fields().Pk(),
-				Mode:  cursorMode,
-				Value: id,
-				Raw:   val[0], // debugging aid
-			})
-		default:
-			// translate long column name used in query to short column name used in packs
-			if short, ok := supplySourceNames[prefix]; !ok {
-				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("unknown column '%s'", prefix), nil))
-			} else {
-				key = strings.Replace(key, prefix, short, 1)
-			}
-
-			// the same field name may appear multiple times, in which case conditions
-			// are combined like any other condition with logical AND
-			for _, v := range val {
-
-				switch prefix {
-				case "cycle":
-					if v == "head" {
-						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
-						v = strconv.FormatInt(int64(currentCycle), 10)
-					}
-				case "height", "time":
-					// need no conversion
-				default:
-					fvals := make([]string, 0)
-					for _, vv := range strings.Split(v, ",") {
-						fval, err := strconv.ParseFloat(vv, 64)
-						if err != nil {
-							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, vv), err))
-						}
-						fvals = append(fvals, strconv.FormatInt(params.ConvertAmount(fval), 10))
-					}
-					v = strings.Join(fvals, ",")
-				}
-
-				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
-					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
-				} else {
-					q.Conditions = append(q.Conditions, cond)
-				}
-			}
-		}
-	}
-
-	var (
-		count  int
-		lastId uint64
-	)
-
+	var count int
 	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
+	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Series)
 	defer func() {
 		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
 	}()
 
-	// prepare return type marshalling
-	supply := &Supply{
-		verbose: args.Verbose,
-		columns: util.StringList(args.Columns),
-		params:  params,
+	// prepare for source and return type marshalling
+	ss := &SupplySeries{params: params, verbose: args.Verbose, columns: args.Columns}
+	sm := &model.Supply{}
+	window := args.Collapse.Duration()
+	nextBucketTime := args.From.Add(window).Time()
+	mul := 1
+	if args.Order == pack.OrderDesc {
+		mul = 0
 	}
 
 	// prepare response stream
@@ -424,25 +355,55 @@ func StreamSupplyTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 
 		// run query and stream results
 		var needComma bool
+
+		// stream from database, result is assumed to be in timestamp order
 		err = table.Stream(ctx, q, func(r pack.Row) error {
-			if needComma {
-				io.WriteString(ctx.ResponseWriter, ",")
-			} else {
-				needComma = true
-			}
-			if err := r.Decode(supply); err != nil {
+			if err := r.Decode(sm); err != nil {
 				return err
 			}
-			if err := enc.Encode(supply); err != nil {
-				return err
+
+			// output SupplySeries when valid and time has crossed next boundary
+			if !ss.Timestamp.IsZero() && (sm.Timestamp.Before(nextBucketTime) != (mul == 1)) {
+				// output current data
+				if needComma {
+					io.WriteString(ctx.ResponseWriter, ",")
+				} else {
+					needComma = true
+				}
+				if err := enc.Encode(ss); err != nil {
+					return err
+				}
+				count++
+				if args.Limit > 0 && count == int(args.Limit) {
+					return io.EOF
+				}
+				ss.Reset()
 			}
-			count++
-			lastId = supply.RowId
-			if args.Limit > 0 && count == int(args.Limit) {
-				return io.EOF
+
+			// init next time window from data
+			if ss.Timestamp.IsZero() {
+				ss.Timestamp = sm.Timestamp.Truncate(window)
+				nextBucketTime = ss.Timestamp.Add(window * time.Duration(mul))
 			}
+
+			// keep latest data
+			ss.Supply = *sm
 			return nil
 		})
+		// don't handle error here, will be picked up by trailer
+		if err == nil {
+			// output last series element
+			if !ss.Timestamp.IsZero() {
+				if needComma {
+					io.WriteString(ctx.ResponseWriter, ",")
+				}
+				err = enc.Encode(ss)
+				if err == nil {
+					count++
+				}
+			}
+		}
+
 		// close JSON bracket
 		io.WriteString(ctx.ResponseWriter, "]")
 		ctx.Log.Tracef("JSON encoded %d rows", count)
@@ -454,33 +415,50 @@ func StreamSupplyTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			err = enc.EncodeHeader(args.Columns, nil)
 		}
 		if err == nil {
-			// run query and stream results
+			// stream from database, result order is assumed to be in timestamp order
 			err = table.Stream(ctx, q, func(r pack.Row) error {
-				if err := r.Decode(supply); err != nil {
+				if err := r.Decode(sm); err != nil {
 					return err
 				}
-				if err := enc.EncodeRecord(supply); err != nil {
-					return err
+
+				// output SupplySeries when valid and time has crossed next boundary
+				if !ss.Timestamp.IsZero() && (sm.Timestamp.Before(nextBucketTime) != (mul == 1)) {
+					// output accumulated data
+					if err := enc.EncodeRecord(ss); err != nil {
+						return err
+					}
+					count++
+					if args.Limit > 0 && count == int(args.Limit) {
+						return io.EOF
+					}
+					ss.Reset()
 				}
-				count++
-				lastId = supply.RowId
-				if args.Limit > 0 && count == int(args.Limit) {
-					return io.EOF
+
+				// init next time window from data
+				if ss.Timestamp.IsZero() {
+					ss.Timestamp = sm.Timestamp.Truncate(window)
+					nextBucketTime = ss.Timestamp.Add(window * time.Duration(mul))
 				}
+
+				// keep latest data
+				ss.Supply = *sm
 				return nil
 			})
+			if err == nil {
+				// output last series element
+				if !ss.Timestamp.IsZero() {
+					err = enc.EncodeRecord(ss)
+					if err == nil {
+						count++
+					}
+				}
+			}
 		}
 		ctx.Log.Tracef("CSV Encoded %d rows", count)
 	}
 
-	// without new records, cursor remains the same as input (may be empty)
-	cursor := args.Cursor
-	if lastId > 0 {
-		cursor = strconv.FormatUint(lastId, 10)
-	}
-
 	// write error (except EOF), cursor and count as http trailer
-	ctx.StreamTrailer(cursor, count, err)
+	ctx.StreamTrailer("", count, err)
 
 	// streaming return
 	return nil, -1

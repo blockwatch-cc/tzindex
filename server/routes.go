@@ -15,6 +15,16 @@ var (
 	schemaDecoder = schema.NewDecoder()
 )
 
+type ParsableRequest interface {
+	Parse(ctx *ApiContext)
+}
+
+type ContractArg interface {
+	WithPrim() bool
+	WithUnpack() bool
+	WithHeight() int64
+}
+
 type Resource interface {
 	LastModified() time.Time
 	Expires() time.Time

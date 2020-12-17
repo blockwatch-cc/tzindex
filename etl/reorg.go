@@ -1,4 +1,4 @@
-// Copyright (c) 2018 KIDTSUNAMI
+// Copyright (c) 2018 - 2020 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -157,10 +157,8 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 			}
 
 			// update chain tip
-			c.Lock()
-			c.tip = newTip
+			c.updateTip(newTip)
 			tip = newTip
-			c.Unlock()
 
 			// cleanup, do not touch parent because we need it during next iteration
 			c.builder.CleanReorg()
@@ -251,10 +249,8 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 		}
 
 		// update chainstate with new version
-		c.Lock()
-		c.tip = newTip
+		c.updateTip(newTip)
 		tip = newTip
-		c.Unlock()
 
 		// cleanup and prepare for next block (forward attach keeps parent relation in builder)
 		c.builder.Clean()
@@ -272,7 +268,7 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 	return nil
 }
 
-// getReorganizeBlocks finds the fork point between the main chain and the previous
+// getReorganizeNodes finds the fork point between the main chain and the previous
 // tip and returns a list of blocks that would need to be detached from
 // the main chain and a list of blocks that would need to be attached to
 // the fork point (which will be the end of the main chain after detaching the
@@ -290,7 +286,7 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 //
 // This function MUST be called with the chain state lock held (for reads).
 func (c *Crawler) getReorganizeBlocks(ctx context.Context, tip *Block, best *Block, rollbackOnly bool) (*Block, *list.List, *list.List, error) {
-	// Nothing to detach or attach if there is no block.
+	// Nothing to detach or attach if there is no node.
 	attachBlocks := list.New()
 	detachBlocks := list.New()
 	if tip == nil || best == nil {
@@ -299,6 +295,7 @@ func (c *Crawler) getReorganizeBlocks(ctx context.Context, tip *Block, best *Blo
 	}
 
 	log.Infof("REORGANIZE: searching fork point side=%s main=%s", tip.Hash, best.Hash)
+	// identify fork point
 	maxreorg := 100
 	sidechain, err := c.rpc.GetTips(ctx, maxreorg, tip.Hash)
 	if err != nil || len(sidechain) == 0 {

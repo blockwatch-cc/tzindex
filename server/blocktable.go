@@ -99,9 +99,9 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		NProposal           int                    `json:"n_proposal"`
 		NBallot             int                    `json:"n_ballot"`
 		Volume              float64                `json:"volume"`
-		Fees                float64                `json:"fees"`
-		Rewards             float64                `json:"rewards"`
-		Deposits            float64                `json:"deposits"`
+		Fee                 float64                `json:"fee"`
+		Reward              float64                `json:"reward"`
+		Deposit             float64                `json:"deposit"`
 		UnfrozenFees        float64                `json:"unfrozen_fees"`
 		UnfrozenRewards     float64                `json:"unfrozen_rewards"`
 		UnfrozenDeposits    float64                `json:"unfrozen_deposits"`
@@ -120,6 +120,7 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		StorageSize         int64                  `json:"storage_size"`
 		TDD                 float64                `json:"days_destroyed"`
 		PctAccountsReused   float64                `json:"pct_account_reuse"`
+		NOpsImplicit        int                    `json:"n_ops_implicit"`
 	}{
 		RowId:               b.RowId,
 		ParentId:            b.ParentId,
@@ -155,9 +156,9 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		NProposal:           b.NProposal,
 		NBallot:             b.NBallot,
 		Volume:              b.params.ConvertValue(b.Volume),
-		Fees:                b.params.ConvertValue(b.Fees),
-		Rewards:             b.params.ConvertValue(b.Rewards),
-		Deposits:            b.params.ConvertValue(b.Deposits),
+		Fee:                 b.params.ConvertValue(b.Fee),
+		Reward:              b.params.ConvertValue(b.Reward),
+		Deposit:             b.params.ConvertValue(b.Deposit),
 		UnfrozenFees:        b.params.ConvertValue(b.UnfrozenFees),
 		UnfrozenRewards:     b.params.ConvertValue(b.UnfrozenRewards),
 		UnfrozenDeposits:    b.params.ConvertValue(b.UnfrozenDeposits),
@@ -175,6 +176,7 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		GasPrice:            b.GasPrice,
 		StorageSize:         b.StorageSize,
 		TDD:                 b.TDD,
+		NOpsImplicit:        b.NOpsImplicit,
 	}
 	if b.SeenAccounts > 0 {
 		block.PctAccountsReused = float64(b.SeenAccounts-b.NewAccounts) / float64(b.SeenAccounts) * 100
@@ -264,12 +266,12 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, int64(b.NBallot), 10)
 		case "volume":
 			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Volume), 'f', dec, 64)
-		case "fees":
-			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Fees), 'f', dec, 64)
-		case "rewards":
-			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Rewards), 'f', dec, 64)
-		case "deposits":
-			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Deposits), 'f', dec, 64)
+		case "fee":
+			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Fee), 'f', dec, 64)
+		case "reward":
+			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Reward), 'f', dec, 64)
+		case "deposit":
+			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Deposit), 'f', dec, 64)
 		case "unfrozen_fees":
 			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.UnfrozenFees), 'f', dec, 64)
 		case "unfrozen_rewards":
@@ -303,13 +305,15 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 		case "storage_size":
 			buf = strconv.AppendInt(buf, b.StorageSize, 10)
 		case "days_destroyed":
-			buf = strconv.AppendFloat(buf, b.TDD, 'f', -1, 64)
+			buf = strconv.AppendFloat(buf, b.TDD, 'f', 6, 64)
 		case "pct_account_reuse":
 			var reuse float64
 			if b.SeenAccounts > 0 {
 				reuse = float64(b.SeenAccounts-b.NewAccounts) / float64(b.SeenAccounts) * 100
 			}
-			buf = strconv.AppendFloat(buf, reuse, 'f', -1, 64)
+			buf = strconv.AppendFloat(buf, reuse, 'f', 6, 64)
+		case "n_ops_implicit":
+			buf = strconv.AppendInt(buf, int64(b.NOpsImplicit), 10)
 		default:
 			continue
 		}
@@ -394,12 +398,12 @@ func (b *Block) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(int64(b.NBallot), 10)
 		case "volume":
 			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Volume), 'f', dec, 64)
-		case "fees":
-			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Fees), 'f', dec, 64)
-		case "rewards":
-			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Rewards), 'f', dec, 64)
-		case "deposits":
-			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Deposits), 'f', dec, 64)
+		case "fee":
+			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Fee), 'f', dec, 64)
+		case "reward":
+			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Reward), 'f', dec, 64)
+		case "deposit":
+			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Deposit), 'f', dec, 64)
 		case "unfrozen_fees":
 			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.UnfrozenFees), 'f', dec, 64)
 		case "unfrozen_rewards":
@@ -440,6 +444,8 @@ func (b *Block) MarshalCSV() ([]string, error) {
 				reuse = float64(b.SeenAccounts-b.NewAccounts) / float64(b.SeenAccounts) * 100
 			}
 			res[i] = strconv.FormatFloat(reuse, 'f', -1, 64)
+		case "n_ops_implict":
+			res[i] = strconv.FormatInt(int64(b.NOpsImplicit), 10)
 		default:
 			continue
 		}
@@ -449,7 +455,7 @@ func (b *Block) MarshalCSV() ([]string, error) {
 
 func StreamBlockTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	// fetch chain params at current height
-	params := ctx.Crawler.ParamsByHeight(-1)
+	params := ctx.Params
 
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
@@ -635,10 +641,10 @@ func StreamBlockTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				switch prefix {
 				case "cycle":
 					if v == "head" {
-						currentCycle := params.CycleFromHeight(ctx.Crawler.Height())
+						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
 						v = strconv.FormatInt(int64(currentCycle), 10)
 					}
-				case "volume", "rewards", "fees", "deposits", "burned_supply",
+				case "volume", "reward", "fee", "deposit", "burned_supply",
 					"unfrozen_fees", "unfrozen_rewards", "unfrozen_deposits",
 					"activated_supply":
 					fvals := make([]string, 0)

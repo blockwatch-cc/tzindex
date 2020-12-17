@@ -71,7 +71,7 @@ func (t OpStatus) String() string {
 type OpType int
 
 const (
-	OpTypeInvalid                   OpType = iota // 0
+	OpTypeBake                      OpType = iota // 0
 	OpTypeActivateAccount                         // 1
 	OpTypeDoubleBakingEvidence                    // 2
 	OpTypeDoubleEndorsementEvidence               // 3
@@ -83,6 +83,11 @@ const (
 	OpTypeEndorsement                             // 9
 	OpTypeProposals                               // 10
 	OpTypeBallot                                  // 11
+	OpTypeUnfreeze                                // 12
+	OpTypeInvoice                                 // 13
+	OpTypeAirdrop                                 // 14
+	OpTypeSeedSlash                               // 15
+	OpTypeInvalid                   = 255
 )
 
 func (t OpType) IsValid() bool {
@@ -104,6 +109,8 @@ func (t *OpType) MarshalText() ([]byte, error) {
 
 func ParseOpType(s string) OpType {
 	switch s {
+	case "bake":
+		return OpTypeBake
 	case "activate_account":
 		return OpTypeActivateAccount
 	case "double_baking_evidence":
@@ -126,6 +133,14 @@ func ParseOpType(s string) OpType {
 		return OpTypeProposals
 	case "ballot":
 		return OpTypeBallot
+	case "unfreeze":
+		return OpTypeUnfreeze
+	case "invoice":
+		return OpTypeInvoice
+	case "airdrop":
+		return OpTypeAirdrop
+	case "seed_slash":
+		return OpTypeSeedSlash
 	default:
 		return OpTypeInvalid
 	}
@@ -133,6 +148,8 @@ func ParseOpType(s string) OpType {
 
 func (t OpType) String() string {
 	switch t {
+	case OpTypeBake:
+		return "bake"
 	case OpTypeActivateAccount:
 		return "activate_account"
 	case OpTypeDoubleBakingEvidence:
@@ -155,6 +172,14 @@ func (t OpType) String() string {
 		return "proposals"
 	case OpTypeBallot:
 		return "ballot"
+	case OpTypeUnfreeze:
+		return "unfreeze"
+	case OpTypeInvoice:
+		return "invoice"
+	case OpTypeAirdrop:
+		return "airdrop"
+	case OpTypeSeedSlash:
+		return "seed_slash"
 	default:
 		return ""
 	}
@@ -174,6 +199,11 @@ var (
 		OpTypeTransaction:               8,
 		OpTypeOrigination:               9,
 		OpTypeDelegation:                10,
+		OpTypeBake:                      255, // invalid tag, not part of protocol
+		OpTypeUnfreeze:                  255, // invalid tag, not part of protocol
+		OpTypeInvoice:                   255, // invalid tag, not part of protocol
+		OpTypeAirdrop:                   255, // invalid tag, not part of protocol
+		OpTypeSeedSlash:                 255, // invalid tag, not part of protocol
 	}
 	// Babylon v005 and up
 	opTagV2 = map[OpType]byte{
@@ -188,6 +218,11 @@ var (
 		OpTypeTransaction:               108,
 		OpTypeOrigination:               109,
 		OpTypeDelegation:                110,
+		OpTypeBake:                      255, // invalid tag, not part of protocol
+		OpTypeUnfreeze:                  255, // invalid tag, not part of protocol
+		OpTypeInvoice:                   255, // invalid tag, not part of protocol
+		OpTypeAirdrop:                   255, // invalid tag, not part of protocol
+		OpTypeSeedSlash:                 255, // invalid tag, not part of protocol
 	}
 )
 

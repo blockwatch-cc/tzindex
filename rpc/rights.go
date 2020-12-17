@@ -20,12 +20,20 @@ type BakingRight struct {
 	EstimatedTime time.Time     `json:"estimated_time"`
 }
 
+func (r BakingRight) Address() chain.Address {
+	return r.Delegate
+}
+
 // EndorsingRight holds information about the right to endorse a specific Tezos block
 type EndorsingRight struct {
 	Delegate      chain.Address `json:"delegate"`
 	Level         int64         `json:"level"`
 	EstimatedTime time.Time     `json:"estimated_time"`
 	Slots         []int         `json:"slots"`
+}
+
+func (r EndorsingRight) Address() chain.Address {
+	return r.Delegate
 }
 
 type SnapshotIndex struct {

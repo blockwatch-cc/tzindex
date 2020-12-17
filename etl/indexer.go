@@ -5,7 +5,6 @@ package etl
 
 import (
 	"context"
-	// "fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -144,10 +143,14 @@ func (m *Indexer) Close() error {
 }
 
 func (m *Indexer) ConnectProtocol(ctx context.Context, params *chain.Params) error {
+	// update previous protocol end
 	prev := m.reg.GetParamsLatest()
+	// if prev != nil && prev.Version >= params.Version {
+	// 	return fmt.Errorf("new protocol %s version mismatch: latest v%d, new v%d",
+	// 		params.Protocol, prev.Version, params.Version)
+	// }
 	err := m.statedb.Update(func(dbTx store.Tx) error {
 		if prev != nil {
-			// update previous protocol end height
 			prev.EndHeight = params.StartHeight - 1
 			if err := dbStoreDeployment(dbTx, prev); err != nil {
 				return err
@@ -167,6 +170,7 @@ func (m *Indexer) ConnectBlock(ctx context.Context, block *Block, builder BlockB
 		return err
 	}
 
+	// insert data
 	for _, t := range m.indexes {
 		key := t.Key()
 		tip, ok := m.tips[string(key)]
@@ -278,9 +282,10 @@ func (m *Indexer) storeTip(key string) error {
 	})
 }
 
-// FIXME: uint32 overflows in year 2083
+// FIXME: simple read-mostly cache for block height ->> unix seconds (uint32)
 // - first timestamp is actual time in unix secs, remainder are offsets in seconds
 // - each entry uses 4 bytes per block, safe until June 2017 + 66 years;
+//   by then Tezos may have reached 34M blocks and the cache is 132MB in size
 func (m *Indexer) buildBlockTimes(ctx context.Context) ([]uint32, error) {
 	times := make([]uint32, 0, 1<<20)
 	blocks, err := m.Table(index.BlockTableKey)
@@ -294,11 +299,18 @@ func (m *Indexer) buildBlockTimes(ctx context.Context) ([]uint32, error) {
 		Name:    "init.block_time",
 		NoCache: true,
 		Fields:  blocks.Fields().Select("T"),
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: blocks.Fields().Find("h"), // all blocks with h >= 0
-			Mode:  pack.FilterModeGte,
-			Value: int64(0),
-		}},
+		Conditions: pack.ConditionList{
+			pack.Condition{
+				Field: blocks.Fields().Find("h"), // all blocks with h >= 0
+				Mode:  pack.FilterModeGte,
+				Value: int64(0),
+			},
+			pack.Condition{
+				Field: blocks.Fields().Find("Z"), // non-orphan blocks only
+				Mode:  pack.FilterModeEqual,
+				Value: false,
+			},
+		},
 	}
 	b := XBlock{}
 	err = blocks.Stream(ctx, q, func(r pack.Row) error {

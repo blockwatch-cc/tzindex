@@ -15,8 +15,8 @@ import (
 )
 
 var (
-	SupplyPackSizeLog2    = 15 // 32k packs
-	SupplyJournalSizeLog2 = 16 // 65k - can be big
+	SupplyPackSizeLog2    = 15 // 32k packs ~3.6M
+	SupplyJournalSizeLog2 = 16 // 65k - can be big, no search required
 	SupplyCacheSize       = 2
 	SupplyFillLevel       = 100
 	SupplyIndexKey        = "supply"

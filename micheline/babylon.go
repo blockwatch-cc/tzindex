@@ -37,8 +37,12 @@ func MakeManagerScript(managerHash []byte) (*Script, error) {
 	return script, nil
 }
 
+func (p *Prim) MigrateToBabylonStorage(managerHash []byte) *Prim {
+	return code(T_PAIR, pbytes(managerHash), p)
+}
+
 // Patch params, storage and code
-func (s *Script) MigrateToBabylonAddDo() {
+func (s *Script) MigrateToBabylonAddDo(managerHash []byte) {
 	// add default entrypoint annotation
 	s.Code.Param.Args[0].Anno = append([]string{"%default"}, s.Code.Param.Args[0].Anno...)
 
@@ -74,9 +78,12 @@ func (s *Script) MigrateToBabylonAddDo() {
 			),
 		),
 	)
+
+	// migrate storage
+	s.Storage = s.Storage.MigrateToBabylonStorage(managerHash)
 }
 
-func (s *Script) MigrateToBabylonSetDelegate() {
+func (s *Script) MigrateToBabylonSetDelegate(managerHash []byte) {
 	// add default entrypoint annotation
 	s.Code.Param.Args[0].Anno = append([]string{"%default"}, s.Code.Param.Args[0].Anno...)
 
@@ -115,6 +122,9 @@ func (s *Script) MigrateToBabylonSetDelegate() {
 			),
 		),
 	)
+
+	// migrate storage
+	s.Storage = s.Storage.MigrateToBabylonStorage(managerHash)
 }
 
 func code(c OpCode, args ...*Prim) *Prim {

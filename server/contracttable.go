@@ -82,10 +82,14 @@ func (c *Contract) MarshalJSONVerbose() ([]byte, error) {
 		Script        string  `json:"script"`
 		IsSpendable   bool    `json:"is_spendable"`
 		IsDelegatable bool    `json:"is_delegatable"`
+		OpL           int     `json:"op_l"`
+		OpP           int     `json:"op_p"`
+		OpI           int     `json:"op_i"`
+		InterfaceHash string  `json:"iface_hash"`
 	}{
 		RowId:         c.RowId,
 		AccountId:     c.AccountId.Value(),
-		Account:       chain.NewAddress(chain.AddressTypeContract, c.Hash).String(),
+		Account:       c.String(),
 		ManagerId:     c.ManagerId.Value(),
 		Manager:       c.addrs[c.ManagerId].String(),
 		Height:        c.Height,
@@ -99,8 +103,11 @@ func (c *Contract) MarshalJSONVerbose() ([]byte, error) {
 		Script:        hex.EncodeToString(c.Script),
 		IsSpendable:   c.IsSpendable,
 		IsDelegatable: c.IsDelegatable,
+		OpL:           c.OpL,
+		OpP:           c.OpP,
+		OpI:           c.OpI,
+		InterfaceHash: hex.EncodeToString(c.InterfaceHash),
 	}
-
 	return json.Marshal(contract)
 }
 
@@ -114,8 +121,7 @@ func (c *Contract) MarshalJSONBrief() ([]byte, error) {
 		case "account_id":
 			buf = strconv.AppendUint(buf, c.AccountId.Value(), 10)
 		case "address":
-			addr := chain.NewAddress(chain.AddressTypeContract, c.Hash)
-			buf = strconv.AppendQuote(buf, addr.String())
+			buf = strconv.AppendQuote(buf, c.String())
 		case "manager_id":
 			buf = strconv.AppendUint(buf, c.ManagerId.Value(), 10)
 		case "manager":
@@ -155,6 +161,18 @@ func (c *Contract) MarshalJSONBrief() ([]byte, error) {
 			} else {
 				buf = append(buf, '0')
 			}
+		case "op_l":
+			buf = strconv.AppendInt(buf, int64(c.OpL), 10)
+		case "op_p":
+			buf = strconv.AppendInt(buf, int64(c.OpP), 10)
+		case "op_i":
+			buf = strconv.AppendInt(buf, int64(c.OpI), 10)
+		case "iface_hash":
+			if c.InterfaceHash != nil {
+				buf = strconv.AppendQuote(buf, hex.EncodeToString(c.InterfaceHash))
+			} else {
+				buf = append(buf, "null"...)
+			}
 		default:
 			continue
 		}
@@ -175,8 +193,7 @@ func (c *Contract) MarshalCSV() ([]string, error) {
 		case "account_id":
 			res[i] = strconv.FormatUint(c.AccountId.Value(), 10)
 		case "address":
-			addr := chain.NewAddress(chain.AddressTypeContract, c.Hash)
-			res[i] = strconv.Quote(addr.String())
+			res[i] = strconv.Quote(c.String())
 		case "manager_id":
 			res[i] = strconv.FormatUint(c.ManagerId.Value(), 10)
 		case "manager":
@@ -203,6 +220,14 @@ func (c *Contract) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatBool(c.IsSpendable)
 		case "is_delegatable":
 			res[i] = strconv.FormatBool(c.IsDelegatable)
+		case "op_l":
+			res[i] = strconv.Itoa(c.OpL)
+		case "op_p":
+			res[i] = strconv.Itoa(c.OpP)
+		case "op_i":
+			res[i] = strconv.Itoa(c.OpI)
+		case "iface_hash":
+			res[i] = strconv.Quote(hex.EncodeToString(c.InterfaceHash))
 		default:
 			continue
 		}
@@ -211,8 +236,8 @@ func (c *Contract) MarshalCSV() ([]string, error) {
 }
 
 func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
-	// fetch chain params at current height
-	params := ctx.Crawler.ParamsByHeight(-1)
+	// use chain params at current height
+	params := ctx.Params
 
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
@@ -393,6 +418,40 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			default:
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
+		case "iface_hash":
+			switch mode {
+			case pack.FilterModeEqual, pack.FilterModeNotEqual:
+				// single-address lookup and compile condition
+				buf, err := hex.DecodeString(val[0])
+				if err != nil {
+					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid interface hash '%s'", val[0]), err))
+				}
+				q.Conditions = append(q.Conditions, pack.Condition{
+					Field: table.Fields().Find("F"),
+					Mode:  mode,
+					Value: buf,
+					Raw:   val[0], // debugging aid
+				})
+			case pack.FilterModeIn, pack.FilterModeNotIn:
+				// multi-hash lookup
+				hashes := make([][]byte, 0)
+				for _, v := range strings.Split(val[0], ",") {
+					buf, err := hex.DecodeString(v)
+					if err != nil {
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid interface hash '%s'", v), err))
+					}
+					hashes = append(hashes, buf)
+				}
+				q.Conditions = append(q.Conditions, pack.Condition{
+					Field: table.Fields().Find("F"),
+					Mode:  mode,
+					Value: hashes,
+					Raw:   val[0], // debugging aid
+				})
+			default:
+				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
+			}
+
 		default:
 			// translate long column name used in query to short column name used in packs
 			if short, ok := contractSourceNames[prefix]; !ok {

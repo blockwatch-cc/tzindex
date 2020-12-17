@@ -15,8 +15,8 @@ var (
 	APP_NAMESPACE        = "cc.blockwatch"
 	ORG_NAME             = "Blockwatch"
 	APP_NAME             = "tzindex"
-	API_VERSION          = "v006-2020-01-06"
-	VERSION       string = "v6.0.0"
+	API_VERSION          = "v007-2020-06-01"
+	VERSION       string = "v7.0.0"
 	GITCOMMIT     string = "dev"
 	ENV_PREFIX           = "TZ"
 )
@@ -45,7 +45,7 @@ var versionCmd = &cobra.Command{
 	Short: "Print the version number of " + APP_NAME,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("%s tzindex %s -- %s\n", ORG_NAME, VERSION, GITCOMMIT)
-		fmt.Printf("(c) Copyright 2020 -- %s\n", COMPANY_NAME)
+		fmt.Printf("(c) Copyright 2018-2020 -- %s\n", COMPANY_NAME)
 		fmt.Printf("Go version (client): %s\n", runtime.Version())
 	},
 }

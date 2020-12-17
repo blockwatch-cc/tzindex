@@ -184,8 +184,8 @@ func (o *OpSeries) MarshalCSV() ([]string, error) {
 }
 
 func StreamOpSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
-	// fetch chain params at current height
-	params := ctx.Crawler.ParamsByHeight(-1)
+	// use chain params at current height
+	params := ctx.Params
 
 	// access table
 	table, err := ctx.Indexer.Table(args.Series)
@@ -222,6 +222,11 @@ func StreamOpSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 		Fields: table.Fields().Select(srcNames...),
 		Order:  args.Order,
 		Conditions: pack.ConditionList{
+			pack.Condition{
+				Field: table.Fields().Find("O"), // is_orphan
+				Mode:  pack.FilterModeEqual,
+				Value: false,
+			},
 			pack.Condition{
 				Field: table.Fields().Find("T"), // time
 				Mode:  pack.FilterModeRange,

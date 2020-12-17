@@ -4,7 +4,6 @@
 package chain
 
 import (
-	"github.com/ericlagergren/decimal"
 	"time"
 )
 
@@ -59,6 +58,9 @@ type Params struct {
 	QuorumMin         int64 `json:"quorum_min"`
 	QuorumMax         int64 `json:"quorum_max"`
 
+	// New in Delphi v007
+	MaxAnonOpsPerBlock int `json:"max_anon_ops_per_block"` // was max_revelations_per_block
+
 	// hidden invoice feature
 	Invoices map[string]int64 `json:"invoices,omitempty"`
 
@@ -83,13 +85,19 @@ func NewParams() *Params {
 
 // convertAmount converts a floating point number, which may or may not be representable
 // as an integer, to an integer type by rounding to the nearest integer.
-// This is performed consistent with the General Decimal Arithmetic spec as
-// implemented by github.com/ericlagergren/decimal instead of simply by adding or
-// subtracting 0.5 depending on the sign, and relying on integer truncation to round
-// the value to the nearest Amount.
-func (p *Params) ConvertAmount(f float64) int64 {
-	var big = decimal.New(0, p.Decimals)
-	i, _ := big.SetFloat64(f * float64(p.Token)).RoundToInt().Int64()
+// This is performed consistent with the General Decimal Arithmetic spec
+// and according to IEEE 754-2008 roundTiesToEven
+func (p *Params) ConvertAmount(value float64) int64 {
+	sign := int64(1)
+	if value < 0 {
+		sign = -1
+	}
+	f := value * float64(p.Token)
+	i := int64(f)
+	rem := (f - float64(i)) * float64(sign)
+	if rem > 0.5 || rem == 0.5 && i*sign%2 == 1 {
+		i += sign
+	}
 	return i
 }
 
@@ -121,8 +129,7 @@ func (p *Params) CycleEndHeight(cycle int64) int64 {
 }
 
 func (p *Params) SnapshotBlock(cycle, index int64) int64 {
-	// no snapshot before cycle 7
-	if cycle < 7 {
+	if cycle < p.PreservedCycles+2 {
 		return 0
 	}
 	return p.CycleStartHeight(cycle-(p.PreservedCycles+2)) + (index+1)*p.BlocksPerRollSnapshot - 1
@@ -140,4 +147,10 @@ func (p *Params) IsVoteStart(height int64) bool {
 
 func (p *Params) IsVoteEnd(height int64) bool {
 	return height > 0 && height%p.BlocksPerVotingPeriod == 0
+}
+
+func (p *Params) ContainsHeight(height int64) bool {
+	// treat -1 as special hight query that matches open interval params only
+	return (height < 0 && p.EndHeight < 0) ||
+		(p.StartHeight <= height && (p.EndHeight < 0 || p.EndHeight >= height))
 }
