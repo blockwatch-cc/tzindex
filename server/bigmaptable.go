@@ -120,7 +120,7 @@ func (b *BigMapItem) MarshalJSONVerbose() ([]byte, error) {
 	}
 	if len(b.Key) > 0 {
 		switch b.Action {
-		case micheline.BigMapDiffActionUpdate, micheline.BigMapDiffActionRemove:
+		case micheline.DiffActionUpdate, micheline.DiffActionRemove:
 			switch b.KeyEncoding {
 			case micheline.PrimInt:
 				var z micheline.Z
@@ -176,7 +176,7 @@ func (b *BigMapItem) MarshalJSONBrief() ([]byte, error) {
 		case "key":
 			if len(b.Key) > 0 {
 				switch b.Action {
-				case micheline.BigMapDiffActionUpdate, micheline.BigMapDiffActionRemove:
+				case micheline.DiffActionUpdate, micheline.DiffActionRemove:
 					switch b.KeyEncoding {
 					case micheline.PrimInt:
 						var z micheline.Z
@@ -261,7 +261,7 @@ func (b *BigMapItem) MarshalCSV() ([]string, error) {
 		case "key":
 			if len(b.Key) > 0 {
 				switch b.Action {
-				case micheline.BigMapDiffActionUpdate, micheline.BigMapDiffActionRemove:
+				case micheline.DiffActionUpdate, micheline.DiffActionRemove:
 					switch b.KeyEncoding {
 					case micheline.PrimInt:
 						var z micheline.Z
@@ -569,7 +569,7 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				// single-action
-				action, err := micheline.ParseBigMapDiffAction(val[0])
+				action, err := micheline.ParseDiffAction(val[0])
 				if err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid action '%s'", val[0]), err))
 				}
@@ -583,7 +583,7 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 				// multi-action
 				actions := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					action, err := micheline.ParseBigMapDiffAction(v)
+					action, err := micheline.ParseDiffAction(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid action '%s'", v), err))
 					}

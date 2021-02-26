@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -341,7 +341,7 @@ func (idx *GovIndex) DeleteBlock(ctx context.Context, height int64) error {
 func (idx *GovIndex) openElection(ctx context.Context, block *Block, builder BlockBuilder) error {
 	election := &Election{
 		NumPeriods:   1,
-		VotingPeriod: block.TZ.Block.Metadata.Level.VotingPeriod,
+		VotingPeriod: block.TZ.Block.GetVotingPeriod(),
 		StartTime:    block.Timestamp,
 		EndTime:      time.Time{}.UTC(), // set on close
 		StartHeight:  block.Height,
@@ -395,14 +395,7 @@ func (idx *GovIndex) openVote(ctx context.Context, block *Block, builder BlockBu
 	}
 
 	// update election
-	switch block.VotingPeriodKind {
-	case chain.VotingPeriodTestingVote:
-		election.NumPeriods = 2
-	case chain.VotingPeriodTesting:
-		election.NumPeriods = 3
-	case chain.VotingPeriodPromotionVote:
-		election.NumPeriods = 4
-	}
+	election.NumPeriods = block.VotingPeriodKind.Num()
 
 	// Note: this adjusts end height of first cycle (we run this func at height 2 instead of 0)
 	//       otherwise the formula could be simpler
@@ -412,7 +405,7 @@ func (idx *GovIndex) openVote(ctx context.Context, block *Block, builder BlockBu
 	vote := &Vote{
 		ElectionId:       election.RowId,
 		ProposalId:       election.ProposalId, // voted proposal, zero in first voting period
-		VotingPeriod:     block.TZ.Block.Metadata.Level.VotingPeriod,
+		VotingPeriod:     block.TZ.Block.GetVotingPeriod(),
 		VotingPeriodKind: block.VotingPeriodKind,
 		StartTime:        block.Timestamp,
 		EndTime:          time.Time{}.UTC(), // set on close
@@ -431,7 +424,7 @@ func (idx *GovIndex) openVote(ctx context.Context, block *Block, builder BlockBu
 	case chain.VotingPeriodProposal:
 		// fixed min proposal quorum as defined by protocol
 		vote.QuorumPct = p.MinProposalQuorum
-	case chain.VotingPeriodTesting:
+	case chain.VotingPeriodTesting, chain.VotingPeriodAdoption:
 		// no quorum
 		vote.QuorumPct = 0
 	case chain.VotingPeriodTestingVote, chain.VotingPeriodPromotionVote:
@@ -520,7 +513,7 @@ func (idx *GovIndex) closeVote(ctx context.Context, block *Block, builder BlockB
 		vote.NoMajority = vote.YayRolls < (vote.YayRolls+vote.NayRolls)*8/10
 		vote.IsFailed = vote.NoQuorum || vote.NoMajority
 
-	case chain.VotingPeriodTesting:
+	case chain.VotingPeriodTesting, chain.VotingPeriodAdoption:
 		// empty, cannot fail
 	}
 
@@ -635,7 +628,10 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *Block, builder
 			return fmt.Errorf("missing account %s in proposal op [%d:%d]", pop.Source, op.OpL, op.OpP)
 		}
 		// load account rolls at snapshot block (i.e. at current voting period start - 1)
-		rolls, err := idx.rollsByHeight(ctx, acc.RowId, vote.StartHeight-1, builder)
+		// using params that were active at that block (after protocol upgrades that change
+		// rolls size like Athens is is essential)
+		rollParams := builder.Params(vote.StartHeight - 1)
+		rolls, err := idx.rollsByHeight(ctx, acc.RowId, vote.StartHeight-1, builder, rollParams)
 		if err != nil {
 			return fmt.Errorf("missing roll snapshot for %s in vote period %d (%s) start %d",
 				acc, vote.VotingPeriod, vote.VotingPeriodKind, vote.StartHeight)
@@ -795,7 +791,8 @@ func (idx *GovIndex) processBallots(ctx context.Context, block *Block, builder B
 			return fmt.Errorf("missing account %s in proposal op [%d:%d]", bop.Source, op.OpL, op.OpP)
 		}
 		// load account rolls at snapshot block (i.e. at current voting period start - 1)
-		rolls, err := idx.rollsByHeight(ctx, acc.RowId, vote.StartHeight-1, builder)
+		rollParams := builder.Params(vote.StartHeight - 1)
+		rolls, err := idx.rollsByHeight(ctx, acc.RowId, vote.StartHeight-1, builder, rollParams)
 		if err != nil {
 			return fmt.Errorf("missing roll snapshot for %s in vote period %d (%s) start %d",
 				acc, vote.VotingPeriod, vote.VotingPeriodKind, vote.StartHeight)
@@ -962,7 +959,7 @@ func (idx *GovIndex) ballotsByVote(ctx context.Context, period int64) ([]*Ballot
 	return ballots, nil
 }
 
-func (idx *GovIndex) rollsByHeight(ctx context.Context, aid AccountID, height int64, builder BlockBuilder) (int64, error) {
+func (idx *GovIndex) rollsByHeight(ctx context.Context, aid AccountID, height int64, builder BlockBuilder, params *chain.Params) (int64, error) {
 	table, err := builder.Table(SnapshotTableKey)
 	if err != nil {
 		return 0, err
@@ -970,7 +967,7 @@ func (idx *GovIndex) rollsByHeight(ctx context.Context, aid AccountID, height in
 	q := pack.Query{
 		Name:    "find_rolls",
 		NoCache: true,
-		Fields:  table.Fields().Select("r"),
+		Fields:  table.Fields().Select("B", "D"),
 		Conditions: pack.ConditionList{
 			pack.Condition{
 				Field: table.Fields().Find("h"), // height
@@ -985,13 +982,14 @@ func (idx *GovIndex) rollsByHeight(ctx context.Context, aid AccountID, height in
 		},
 	}
 	type XSnapshot struct {
-		Rolls int64 `pack:"r,snappy"`
+		Balance   int64 `pack:"B"`
+		Delegated int64 `pack:"D"`
 	}
 	var count int
-	xr := &XSnapshot{}
+	xs := &XSnapshot{}
 	err = table.Stream(ctx, q, func(r pack.Row) error {
 		count++
-		return r.Decode(xr)
+		return r.Decode(xs)
 	})
 	if err != nil {
 		return 0, err
@@ -999,7 +997,61 @@ func (idx *GovIndex) rollsByHeight(ctx context.Context, aid AccountID, height in
 	if count != 1 {
 		log.Warnf("govindex: roll snapshot for account %d at height %d returned %d results", aid, height, count)
 	}
-	return xr.Rolls, nil
+
+	// adjust rolls up since this snapshot is always index 15 which means rewards are
+	// not yet unfrozen, but for voting snapshot rewards are unfrozen
+	table, err = builder.Table(FlowTableKey)
+	if err != nil {
+		return 0, err
+	}
+	q = pack.Query{
+		Name:    "gov_find_unfreeze",
+		NoCache: true,
+		Fields:  table.Fields().Select("o"),
+		Conditions: pack.ConditionList{
+			pack.Condition{
+				Field: table.Fields().Find("h"), // height
+				Mode:  pack.FilterModeEqual,
+				Value: height,
+			},
+			pack.Condition{
+				Field: table.Fields().Find("A"), // account id
+				Mode:  pack.FilterModeEqual,
+				Value: aid.Value(),
+			},
+			pack.Condition{
+				Field: table.Fields().Find("C"), // category
+				Mode:  pack.FilterModeEqual,
+				Value: FlowCategoryRewards,
+			},
+			pack.Condition{
+				Field: table.Fields().Find("O"), // operation
+				Mode:  pack.FilterModeEqual,
+				Value: FlowTypeInternal,
+			},
+		},
+	}
+	type XFlow struct {
+		AmountOut int64 `pack:"o"`
+	}
+	xf := &XFlow{}
+	err = table.Stream(ctx, q, func(r pack.Row) error {
+		count++
+		return r.Decode(xf)
+	})
+	if count != 2 {
+		log.Debugf("govindex: no unfreeze flow for account %d at height %d (expected for new bakers)", aid, height)
+	}
+
+	// calculate rolls
+	stakingBalance := xs.Balance + xs.Delegated + xf.AmountOut
+	rolls := stakingBalance / params.TokensPerRoll
+
+	if rolls == 0 {
+		log.Errorf("govindex: zero rolls for account %d at height %d with balance own=%f delegated=%f corrected=%f",
+			aid, height, params.ConvertValue(xs.Balance), params.ConvertValue(xs.Delegated), params.ConvertValue(xf.AmountOut))
+	}
+	return rolls, nil
 }
 
 // quorums adjust at the end of each exploration & promotion voting period

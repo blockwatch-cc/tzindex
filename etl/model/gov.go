@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package model
@@ -154,4 +154,14 @@ func (b *Ballot) ID() uint64 {
 
 func (b *Ballot) SetID(id uint64) {
 	b.RowId = id
+}
+
+type Voter struct {
+	RowId     AccountID
+	Rolls     int64
+	Stake     int64
+	Ballot    chain.BallotVote
+	HasVoted  bool
+	Time      time.Time
+	Proposals []ProposalID
 }

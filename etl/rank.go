@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -46,16 +46,28 @@ func NewAccountRanking() *AccountRanking {
 	}
 }
 
-func (h *AccountRanking) TopRich(n int) []*AccountRankingEntry {
-	return h.rich[:util.Min(n, len(h.flow))]
+func (h *AccountRanking) TopRich(n, o int) []*AccountRankingEntry {
+	l := len(h.rich)
+	if o > l {
+		return nil
+	}
+	return h.rich[o:util.Min(o+n, l)]
 }
 
-func (h *AccountRanking) TopTraffic(n int) []*AccountRankingEntry {
-	return h.traffic[:util.Min(n, len(h.flow))]
+func (h *AccountRanking) TopTraffic(n, o int) []*AccountRankingEntry {
+	l := len(h.traffic)
+	if o > l {
+		return nil
+	}
+	return h.traffic[o:util.Min(o+n, l)]
 }
 
-func (h *AccountRanking) TopFlows(n int) []*AccountRankingEntry {
-	return h.flow[:util.Min(n, len(h.flow))]
+func (h *AccountRanking) TopFlows(n, o int) []*AccountRankingEntry {
+	l := len(h.flow)
+	if o > l {
+		return nil
+	}
+	return h.flow[o:util.Min(o+n, l)]
 }
 
 func (h *AccountRanking) GetAccount(id model.AccountID) (*AccountRankingEntry, bool) {

@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -13,23 +13,21 @@ import (
 	"blockwatch.cc/tzindex/micheline"
 )
 
-// Smart Contract Storage Access
-var vestingContractBalancePath = []int{1, 0, 0, 0}
+const vestingContractBalancePath = "RLLL"
 
+// Smart Contract Storage Access
 func GetVestingBalance(prim *micheline.Prim) (int64, error) {
 	if prim == nil {
 		return 0, nil
 	}
-	for i, v := range vestingContractBalancePath {
-		if len(prim.Args) < v+1 {
-			return 0, fmt.Errorf("non existing path at %v in vesting contract storage", vestingContractBalancePath[:i])
-		}
-		prim = prim.Args[v]
+	p, err := prim.GetPathString(vestingContractBalancePath)
+	if err != nil {
+		return 0, err
 	}
-	if prim.Type != micheline.PrimInt {
-		return 0, fmt.Errorf("unexpected prim type %s for vesting contract balance", prim.Type)
+	if p.Type != micheline.PrimInt {
+		return 0, fmt.Errorf("unexpected prim type %s for vesting contract balance", p.Type)
 	}
-	return prim.Int.Int64(), nil
+	return p.Int.Int64(), nil
 }
 
 func hashKey(typ chain.AddressType, h []byte) uint64 {

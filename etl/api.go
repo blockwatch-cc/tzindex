@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -67,7 +67,8 @@ func (m *Indexer) ChainByHeight(ctx context.Context, height int64) (*model.Chain
 		return nil, err
 	}
 	res, err := table.Query(ctx, pack.Query{
-		Name: "api.search_chain_height",
+		Name:  "api.search_chain_height",
+		Limit: 1,
 		Conditions: pack.ConditionList{pack.Condition{
 			Field: table.Fields().Find("h"), // search for block height
 			Mode:  pack.FilterModeEqual,
@@ -95,7 +96,8 @@ func (m *Indexer) SupplyByHeight(ctx context.Context, height int64) (*model.Supp
 		return nil, err
 	}
 	q := pack.Query{
-		Name: "api.search_supply_height",
+		Name:  "api.search_supply_height",
+		Limit: 1,
 		Conditions: pack.ConditionList{pack.Condition{
 			Field: table.Fields().Find("h"), // search for block height
 			Mode:  pack.FilterModeEqual,
@@ -125,7 +127,8 @@ func (m *Indexer) SupplyByTime(ctx context.Context, t time.Time) (*model.Supply,
 		from, to = to, from
 	}
 	q := pack.Query{
-		Name: "api.search_supply_time",
+		Name:  "api.search_supply_time",
+		Limit: 1,
 		Conditions: pack.ConditionList{
 			pack.Condition{
 				Field: table.Fields().Find("T"), // search for timestamp
@@ -138,7 +141,6 @@ func (m *Indexer) SupplyByTime(ctx context.Context, t time.Time) (*model.Supply,
 				Mode:  pack.FilterModeGte,
 				Value: int64(1),
 			}},
-		Limit: 1,
 	}
 
 	var count int
@@ -207,6 +209,14 @@ func (m *Indexer) GrowthByDuration(ctx context.Context, to time.Time, d time.Dur
 		return nil, err
 	}
 	return g, nil
+}
+
+func (m *Indexer) NilBlockTime(ctx context.Context, height int64) *time.Time {
+	if height == 0 {
+		return nil
+	}
+	t := m.BlockTime(ctx, height)
+	return &t
 }
 
 // called concurrently from API consumers, uses read-mostly cache
@@ -446,7 +456,7 @@ func (m *Indexer) BlockByHeight(ctx context.Context, height int64) (*model.Block
 	return b, nil
 }
 
-func (m *Indexer) BlockByHash(ctx context.Context, h chain.BlockHash) (*model.Block, error) {
+func (m *Indexer) BlockByHash(ctx context.Context, h chain.BlockHash, from, to int64) (*model.Block, error) {
 	if !h.IsValid() {
 		return nil, fmt.Errorf("invalid block hash %s", h)
 	}
@@ -454,15 +464,35 @@ func (m *Indexer) BlockByHash(ctx context.Context, h chain.BlockHash) (*model.Bl
 	if err != nil {
 		return nil, err
 	}
+	q := pack.Query{
+		Name:       "api.search_block_hash",
+		Conditions: make(pack.ConditionList, 0),
+		Order:      pack.OrderDesc,
+		Limit:      1,
+	}
+	if from > 0 {
+		q.Conditions = append(q.Conditions, pack.Condition{
+			Field: blocks.Fields().Find("h"), // search for block height
+			Mode:  pack.FilterModeGte,
+			Value: from,
+		})
+	}
+	if to > 0 {
+		q.Conditions = append(q.Conditions, pack.Condition{
+			Field: blocks.Fields().Find("h"), // search for block height
+			Mode:  pack.FilterModeLte,
+			Value: to,
+		})
+	}
+	// most expensive condition last
+	q.Conditions = append(q.Conditions, pack.Condition{
+		Field: blocks.Fields().Find("H"), // search for block hash
+		Mode:  pack.FilterModeEqual,
+		Value: h.Hash.Hash[:],
+	})
+
 	b := model.AllocBlock()
-	err = blocks.Stream(ctx, pack.Query{
-		Name: "api.search_block_hash",
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: blocks.Fields().Find("H"), // search for block hash
-			Mode:  pack.FilterModeEqual,
-			Value: h.Hash.Hash[:],
-		}},
-	}, func(r pack.Row) error {
+	err = blocks.Stream(ctx, q, func(r pack.Row) error {
 		return r.Decode(b)
 	})
 	if err != nil {
@@ -492,7 +522,7 @@ func (m *Indexer) LookupBlock(ctx context.Context, blockIdent string) (*model.Bl
 		if err != nil {
 			return nil, index.ErrInvalidBlockHash
 		}
-		b, err = m.BlockByHash(ctx, blockHash)
+		b, err = m.BlockByHash(ctx, blockHash, 0, 0)
 	default:
 		// try parsing as height
 		var blockHeight int64
@@ -630,6 +660,74 @@ func (m *Indexer) LookupNextRight(ctx context.Context, a *model.Account, height 
 		return nil, index.ErrNoRightsEntry
 	}
 	return right, nil
+}
+
+func (m *Indexer) NextRights(ctx context.Context, a model.AccountID, height int64) (int64, int64) {
+	cache, err := m.GetRights(ctx, height)
+	if err != nil {
+		// ignore this error, can only happen in --light mode
+		return 0, 0
+	}
+	return cache.Lookup(a, height)
+}
+
+// assuming the lock is more expensive than streaming/decoding results
+func (m *Indexer) LookupNextRights(ctx context.Context, a *model.Account, height int64) (bakeright, endorseright model.Right, rerr error) {
+	rights, err := m.Table(index.RightsTableKey)
+	if err != nil {
+		rerr = err
+		return
+	}
+	q := pack.Query{
+		Name:   "api.search_next_baking",
+		Fields: rights.Fields().Select("h", "t", "A", "p"),
+		Conditions: pack.ConditionList{pack.Condition{
+			Field: rights.Fields().Find("h"), // from block height
+			Mode:  pack.FilterModeGt,
+			Value: height,
+		}, pack.Condition{
+			Field: rights.Fields().Find("A"), // delegate id
+			Mode:  pack.FilterModeEqual,
+			Value: a.RowId.Value(),
+		}, pack.Condition{
+			Field: rights.Fields().Find("p"), // priority for bake & endorse
+			Mode:  pack.FilterModeLte,
+			Value: 31,
+		}},
+	}
+	right := &model.Right{}
+	err = rights.Stream(ctx, q, func(r pack.Row) error {
+		if err := r.Decode(right); err != nil {
+			return err
+		}
+		switch right.Type {
+		case chain.RightTypeBaking:
+			if right.Priority > 0 {
+				return nil
+			}
+			if bakeright.RowId > 0 {
+				if endorseright.RowId > 0 {
+					return io.EOF
+				}
+				return nil
+			}
+			bakeright = *right
+		case chain.RightTypeEndorsing:
+			if endorseright.RowId > 0 {
+				if bakeright.RowId > 0 {
+					return io.EOF
+				}
+				return nil
+			}
+			endorseright = *right
+		}
+		return nil
+	})
+	if err != nil && err != io.EOF {
+		rerr = err
+		return
+	}
+	return
 }
 
 func (m *Indexer) ListBlockEndorsingRights(ctx context.Context, height int64) ([]model.Right, error) {
@@ -995,9 +1093,9 @@ func (m *Indexer) FindActivatedAccount(ctx context.Context, addr chain.Address) 
 		return nil, err
 	}
 	type Xop struct {
-		SenderId  model.AccountID `pack:"S,snappy"`
-		ManagerId model.AccountID `pack:"M,snappy"`
-		Data      string          `pack:"a,snappy"`
+		SenderId  model.AccountID `pack:"S"`
+		ManagerId model.AccountID `pack:"M"`
+		Data      string          `pack:"a"`
 	}
 	q := pack.Query{
 		Name:    "api.search_activation",
@@ -1226,11 +1324,10 @@ func (m *Indexer) ListBlockOps(ctx context.Context, height int64, mode pack.Filt
 }
 
 // Note:
-// - OR queries are not supported by pack table yet!
 // - order is defined by funding or spending operation
 // - offset and limit counts in ops
 // - high traffic addresses may have many, so we use query limits
-func (m *Indexer) ListAccountOps(ctx context.Context, accId model.AccountID, mode pack.FilterMode, typs []int64, since, until int64, offset, limit uint, cursor uint64, order pack.OrderType) ([]*model.Op, error) {
+func (m *Indexer) ListAccountOps(ctx context.Context, acc *model.Account, mode pack.FilterMode, typs []int64, since, until int64, offset, limit uint, cursor uint64, order pack.OrderType) ([]*model.Op, error) {
 	table, err := m.Table(index.OpTableKey)
 	if err != nil {
 		return nil, err
@@ -1239,168 +1336,27 @@ func (m *Indexer) ListAccountOps(ctx context.Context, accId model.AccountID, mod
 	if cursor > 0 {
 		offset = 0
 	}
+
+	// clamp time range to account lifetime
+	since = util.Max64(since, acc.FirstSeen-1)
+	until = util.NonZeroMin64(until, acc.LastSeen)
+
 	// list all ops where this address is any of
 	// - sender
 	// - receiver
 	// - delegate
-	q := pack.Query{
-		Name:   "api.list_account_ops_sent",
-		Order:  order,
-		Fields: table.Fields(),
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: table.Fields().Find("S"), // search for sender account id
-			Mode:  pack.FilterModeEqual,
-			Value: accId.Value(),
-		}},
-		Limit: int(offset + limit),
-	}
-	if cursor > 0 {
-		cursorMode := pack.FilterModeGt
-		if order == pack.OrderDesc {
-			cursorMode = pack.FilterModeLt
-		}
-		q.Conditions = append(q.Conditions, pack.Condition{
-			Field: table.Fields().Find("I"), // pk
-			Mode:  cursorMode,
-			Value: cursor,
-		})
-	}
-	if since > 0 {
-		q.Conditions = append(q.Conditions, pack.Condition{
-			Field: table.Fields().Find("h"), // height
-			Mode:  pack.FilterModeGt,
-			Value: since,
-		})
-	}
-	if until > 0 {
-		q.Conditions = append(q.Conditions, pack.Condition{
-			Field: table.Fields().Find("h"), // height
-			Mode:  pack.FilterModeLte,
-			Value: until,
-		})
-	}
-	if len(typs) > 0 && mode.IsValid() {
-		cond := pack.Condition{
-			Field: table.Fields().Find("t"), // search op type
-			Mode:  mode,
-		}
-		if mode.IsScalar() {
-			cond.Value = typs[0] // must be int64 type
-		} else {
-			cond.Value = typs // must be []int64 type
-		}
-		q.Conditions = append(q.Conditions, cond)
-	}
 	ops := make([]*model.Op, 0, util.NonZero(2*int(offset+limit), 512))
-	err = table.Stream(ctx, q, func(r pack.Row) error {
-		op := model.AllocOp()
-		if err := r.Decode(op); err != nil {
-			op.Free()
-			return err
-		}
-		ops = append(ops, op)
-		if len(ops) == int(limit+offset) {
-			return io.EOF
-		}
-		if len(ops)%512 == 0 {
-			if util.InterruptRequested(ctx) {
-				return ctx.Err()
-			}
-		}
-		return nil
-	})
-	if err != nil && err != io.EOF {
-		return nil, err
-	}
-	// same for receivers
-	q = pack.Query{
-		Name:   "api.list_account_ops_recv",
-		Fields: table.Fields(),
-		Order:  order,
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: table.Fields().Find("R"), // search for receiver account id
-			Mode:  pack.FilterModeEqual,
-			Value: accId.Value(),
-		}},
-		Limit: int(offset + limit),
-	}
-	if cursor > 0 {
-		cursorMode := pack.FilterModeGt
-		if order == pack.OrderDesc {
-			cursorMode = pack.FilterModeLt
-		}
-		q.Conditions = append(q.Conditions, pack.Condition{
-			Field: table.Fields().Find("I"), // pk
-			Mode:  cursorMode,
-			Value: cursor,
-		})
-	}
-	if since > 0 {
-		q.Conditions = append(q.Conditions, pack.Condition{
-			Field: table.Fields().Find("h"), // height
-			Mode:  pack.FilterModeGt,
-			Value: since,
-		})
-	}
-	if until > 0 {
-		q.Conditions = append(q.Conditions, pack.Condition{
-			Field: table.Fields().Find("h"), // height
-			Mode:  pack.FilterModeLte,
-			Value: until,
-		})
-	}
-	if len(typs) > 0 && mode.IsValid() {
-		cond := pack.Condition{
-			Field: table.Fields().Find("t"), // search op type
-			Mode:  mode,
-		}
-		if mode.IsScalar() {
-			cond.Value = typs[0] // must be int64 type
-		} else {
-			cond.Value = typs // must be []int64 type
-		}
-		q.Conditions = append(q.Conditions, cond)
-	}
-	err = table.Stream(ctx, q, func(r pack.Row) error {
-		op := model.AllocOp()
-		if err := r.Decode(op); err != nil {
-			op.Free()
-			return err
-		}
-		ops = append(ops, op)
-		if len(ops) == 2*int(limit+offset) {
-			return io.EOF
-		}
-		if len(ops)%512 == 0 {
-			if util.InterruptRequested(ctx) {
-				return ctx.Err()
-			}
-		}
-		return nil
-	})
-	if err != nil && err != io.EOF {
-		return nil, err
-	}
-	// same for delegate if delegation op is requested
-	needDelegation := len(typs) == 0
-	for _, v := range typs {
-		if v != int64(chain.OpTypeDelegation) {
-			continue
-		}
-		if mode == pack.FilterModeEqual || mode == pack.FilterModeIn {
-			needDelegation = true
-			break
-		}
-	}
-	if needDelegation {
-		q = pack.Query{
-			Name:   "api.list_account_ops_delegate",
-			Fields: table.Fields(),
+
+	// for senders
+	if acc.FirstOut > 0 {
+		q := pack.Query{
+			Name:   "api.list_account_ops_sent",
 			Order:  order,
+			Fields: table.Fields(),
 			Conditions: pack.ConditionList{pack.Condition{
-				Field: table.Fields().Find("D"), // search for delegate account id
+				Field: table.Fields().Find("S"), // search for sender account id
 				Mode:  pack.FilterModeEqual,
-				Value: accId.Value(),
+				Value: acc.RowId.Value(),
 			}},
 			Limit: int(offset + limit),
 		}
@@ -1415,19 +1371,103 @@ func (m *Indexer) ListAccountOps(ctx context.Context, accId model.AccountID, mod
 				Value: cursor,
 			})
 		}
-		if since > 0 {
+		if since > 0 || acc.FirstOut > 0 {
 			q.Conditions = append(q.Conditions, pack.Condition{
 				Field: table.Fields().Find("h"), // height
 				Mode:  pack.FilterModeGt,
-				Value: since,
+				Value: util.Max64(since, acc.FirstOut-1),
+			})
+		}
+		if until > 0 || acc.LastOut > 0 {
+			q.Conditions = append(q.Conditions, pack.Condition{
+				Field: table.Fields().Find("h"), // height
+				Mode:  pack.FilterModeLte,
+				Value: util.NonZeroMin64(until, acc.LastOut),
+			})
+		}
+		if len(typs) > 0 && mode.IsValid() {
+			cond := pack.Condition{
+				Field: table.Fields().Find("t"), // search op type
+				Mode:  mode,
+			}
+			if mode.IsScalar() {
+				cond.Value = typs[0] // must be int64 type
+			} else {
+				cond.Value = typs // must be []int64 type
+			}
+			q.Conditions = append(q.Conditions, cond)
+		}
+		ops := make([]*model.Op, 0, util.NonZero(2*int(offset+limit), 512))
+		err = table.Stream(ctx, q, func(r pack.Row) error {
+			op := model.AllocOp()
+			if err := r.Decode(op); err != nil {
+				op.Free()
+				return err
+			}
+			ops = append(ops, op)
+			if len(ops) == int(limit+offset) {
+				return io.EOF
+			}
+			if len(ops)%512 == 0 {
+				if util.InterruptRequested(ctx) {
+					return ctx.Err()
+				}
+			}
+			return nil
+		})
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
+	}
+	// same for receivers
+	if acc.FirstIn > 0 {
+		q := pack.Query{
+			Name:   "api.list_account_ops_recv",
+			Fields: table.Fields(),
+			Order:  order,
+			Conditions: pack.ConditionList{pack.Condition{
+				Field: table.Fields().Find("R"), // search for receiver account id
+				Mode:  pack.FilterModeEqual,
+				Value: acc.RowId.Value(),
+			}},
+			Limit: int(offset + limit),
+		}
+		if cursor > 0 {
+			cursorMode := pack.FilterModeGt
+			if order == pack.OrderDesc {
+				cursorMode = pack.FilterModeLt
+			}
+			q.Conditions = append(q.Conditions, pack.Condition{
+				Field: table.Fields().Find("I"), // pk
+				Mode:  cursorMode,
+				Value: cursor,
+			})
+		}
+		if since > 0 || acc.FirstIn > 0 {
+			q.Conditions = append(q.Conditions, pack.Condition{
+				Field: table.Fields().Find("h"), // height
+				Mode:  pack.FilterModeGt,
+				Value: util.Max64(since, acc.FirstIn-1),
 			})
 		}
 		if until > 0 {
 			q.Conditions = append(q.Conditions, pack.Condition{
 				Field: table.Fields().Find("h"), // height
 				Mode:  pack.FilterModeLte,
-				Value: until,
+				Value: util.NonZeroMin64(until, acc.LastIn),
 			})
+		}
+		if len(typs) > 0 && mode.IsValid() {
+			cond := pack.Condition{
+				Field: table.Fields().Find("t"), // search op type
+				Mode:  mode,
+			}
+			if mode.IsScalar() {
+				cond.Value = typs[0] // must be int64 type
+			} else {
+				cond.Value = typs // must be []int64 type
+			}
+			q.Conditions = append(q.Conditions, cond)
 		}
 		err = table.Stream(ctx, q, func(r pack.Row) error {
 			op := model.AllocOp()
@@ -1450,6 +1490,78 @@ func (m *Indexer) ListAccountOps(ctx context.Context, accId model.AccountID, mod
 			return nil, err
 		}
 	}
+	// same for bakers if delegation op is requested
+	if acc.IsDelegate {
+		needDelegation := len(typs) == 0
+		for _, v := range typs {
+			if v != int64(chain.OpTypeDelegation) {
+				continue
+			}
+			if mode == pack.FilterModeEqual || mode == pack.FilterModeIn {
+				needDelegation = true
+				break
+			}
+		}
+		if needDelegation {
+			q := pack.Query{
+				Name:   "api.list_account_ops_delegate",
+				Fields: table.Fields(),
+				Order:  order,
+				Conditions: pack.ConditionList{pack.Condition{
+					Field: table.Fields().Find("D"), // search for delegate account id
+					Mode:  pack.FilterModeEqual,
+					Value: acc.RowId.Value(),
+				}},
+				Limit: int(offset + limit),
+			}
+			if cursor > 0 {
+				cursorMode := pack.FilterModeGt
+				if order == pack.OrderDesc {
+					cursorMode = pack.FilterModeLt
+				}
+				q.Conditions = append(q.Conditions, pack.Condition{
+					Field: table.Fields().Find("I"), // pk
+					Mode:  cursorMode,
+					Value: cursor,
+				})
+			}
+			if since > 0 || acc.DelegateSince > 0 {
+				q.Conditions = append(q.Conditions, pack.Condition{
+					Field: table.Fields().Find("h"), // height
+					Mode:  pack.FilterModeGt,
+					Value: util.Max64(since, acc.DelegateSince-1),
+				})
+			}
+			if until > 0 {
+				q.Conditions = append(q.Conditions, pack.Condition{
+					Field: table.Fields().Find("h"), // height
+					Mode:  pack.FilterModeLte,
+					Value: until,
+				})
+			}
+			err = table.Stream(ctx, q, func(r pack.Row) error {
+				op := model.AllocOp()
+				if err := r.Decode(op); err != nil {
+					op.Free()
+					return err
+				}
+				ops = append(ops, op)
+				if len(ops) == 2*int(limit+offset) {
+					return io.EOF
+				}
+				if len(ops)%512 == 0 {
+					if util.InterruptRequested(ctx) {
+						return ctx.Err()
+					}
+				}
+				return nil
+			})
+			if err != nil && err != io.EOF {
+				return nil, err
+			}
+		}
+	}
+
 	// sort
 	if order == pack.OrderAsc {
 		sort.Slice(ops, func(i, j int) bool { return ops[i].RowId < ops[j].RowId })
@@ -1494,12 +1606,6 @@ func (m *Indexer) ListContractCalls(ctx context.Context, accId model.AccountID, 
 				Mode:  pack.FilterModeEqual,
 				Value: accId.Value(),
 			},
-			// include originations and non-param transactions
-			// pack.Condition{
-			// 	Field: table.Fields().Find("w"), // must have data to be a call
-			// 	Mode:  pack.FilterModeEqual,
-			// 	Value: true,
-			// },
 		},
 		Limit: int(offset + limit),
 	}
@@ -1737,7 +1843,7 @@ func (m *Indexer) ListContractBigMapIds(ctx context.Context, acc model.AccountID
 			pack.Condition{
 				Field: table.Fields().Find("a"), // action
 				Mode:  pack.FilterModeEqual,
-				Value: uint64(micheline.BigMapDiffActionAlloc), // byte -> uint
+				Value: uint64(micheline.DiffActionAlloc), // byte -> uint
 			},
 		},
 	}
@@ -1911,6 +2017,195 @@ func (m *Indexer) VotesByElection(ctx context.Context, eid model.ElectionID) ([]
 	return votes, nil
 }
 
+func (m *Indexer) ListVoters(ctx context.Context, height, period int64, offset, limit uint, cursor uint64, order pack.OrderType) ([]*model.Voter, error) {
+	// use params from one cycle before the vote started (necessary during protocol upgrades)
+	params := m.ParamsByHeight(height - 1)
+
+	// cursor and offset are mutually exclusive
+	if cursor > 0 {
+		offset = 0
+	}
+	queryLimit := limit
+	if offset > 0 && limit > 0 {
+		queryLimit = offset + limit
+	}
+
+	// Step 1
+	// collect eligible voters from previous roll snapshot
+	//
+	// Note this is not entirely correct because we don't collect a gov
+	// snapshot but instead create a virtual gov snapshot from an existing roll
+	// snapshot at the end of the previous cycle. The differences are
+	//
+	// - some bakers may have been deactivated right after the roll snapshot
+	//   and before the gov snapshot (we express this in the snapshot by setting
+	//   is_active = false)
+	// - the roll snapshot does not contain unfrozen rewards, but the
+	//   governance snapshot should include this
+	//
+	snapshotTable, err := m.Table(index.SnapshotTableKey)
+	if err != nil {
+		return nil, err
+	}
+	q := pack.Query{
+		Name:   "api.list_voters",
+		Limit:  int(queryLimit),
+		Fields: snapshotTable.Fields(),
+		Conditions: pack.ConditionList{
+			pack.Condition{
+				Field: snapshotTable.Fields().Find("h"), // height
+				Mode:  pack.FilterModeEqual,
+				Value: height - 1, // end of previous cycle snapshot
+			},
+			pack.Condition{
+				Field: snapshotTable.Fields().Find("v"), // is_active
+				Mode:  pack.FilterModeEqual,
+				Value: true,
+			},
+		},
+	}
+	if cursor > 0 {
+		cursorMode := pack.FilterModeGt
+		if order == pack.OrderDesc {
+			cursorMode = pack.FilterModeLt
+		}
+		q.Conditions = append(q.Conditions, pack.Condition{
+			Field: snapshotTable.Fields().Find("I"), // pk
+			Mode:  cursorMode,
+			Value: cursor,
+		})
+	}
+	voters := make(map[model.AccountID]*model.Voter)
+	snap := &model.Snapshot{}
+	err = snapshotTable.Stream(ctx, q, func(r pack.Row) error {
+		if offset > 0 {
+			offset--
+			return nil
+		}
+		if err := r.Decode(snap); err != nil {
+			return err
+		}
+		voters[snap.AccountId] = &model.Voter{
+			RowId: snap.AccountId,
+			Rolls: snap.Rolls,
+			Stake: snap.Balance + snap.Delegated,
+		}
+		if len(voters) == int(limit) {
+			return io.EOF
+		}
+		if len(voters)%512 == 0 {
+			if util.InterruptRequested(ctx) {
+				return ctx.Err()
+			}
+		}
+		return nil
+	})
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+
+	// Step 2
+	// adjust rolls up by unfrozen rewards which are applied after the roll snapshot
+	// roll snapshot after last block of previous cycle, unfreeze at first block
+	flowTable, err := m.Table(index.FlowTableKey)
+	if err != nil {
+		return nil, err
+	}
+	q = pack.Query{
+		Name:   "api.list_voters",
+		Fields: flowTable.Fields().Select("o", "A"),
+		Conditions: pack.ConditionList{
+			pack.Condition{
+				Field: flowTable.Fields().Find("h"), // height
+				Mode:  pack.FilterModeEqual,
+				Value: height,
+			},
+			pack.Condition{
+				Field: flowTable.Fields().Find("C"), // category
+				Mode:  pack.FilterModeEqual,
+				Value: int64(model.FlowCategoryRewards),
+			},
+			pack.Condition{
+				Field: flowTable.Fields().Find("O"), // operation
+				Mode:  pack.FilterModeEqual,
+				Value: int64(model.FlowTypeInternal),
+			},
+		},
+	}
+	type XFlow struct {
+		AccountId model.AccountID `pack:"A"`
+		AmountOut int64           `pack:"o"`
+	}
+	xf := &XFlow{}
+	err = flowTable.Stream(ctx, q, func(r pack.Row) error {
+		if err := r.Decode(xf); err != nil {
+			return err
+		}
+		if voter, ok := voters[xf.AccountId]; ok {
+			voter.Stake += xf.AmountOut
+			voter.Rolls = voter.Stake / params.TokensPerRoll
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 3: list ballots
+	ballotTable, err := m.Table(index.BallotTableKey)
+	if err != nil {
+		return nil, err
+	}
+	q = pack.Query{
+		Name:   "api.list_voters",
+		Fields: ballotTable.Fields(),
+		Conditions: pack.ConditionList{
+			pack.Condition{
+				Field: ballotTable.Fields().Find("p"), // voting_period
+				Mode:  pack.FilterModeEqual,
+				Value: period,
+			},
+		},
+	}
+	ballot := &model.Ballot{}
+	err = ballotTable.Stream(ctx, q, func(r pack.Row) error {
+		if err := r.Decode(ballot); err != nil {
+			return err
+		}
+		if voter, ok := voters[ballot.SourceId]; ok {
+			voter.Ballot = ballot.Ballot
+			voter.Time = ballot.Time
+			voter.HasVoted = true
+			found := false
+			for _, v := range voter.Proposals {
+				if v != ballot.ProposalId {
+					continue
+				}
+				found = true
+				break
+			}
+			if !found {
+				voter.Proposals = append(voter.Proposals, ballot.ProposalId)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]*model.Voter, 0, len(voters))
+	for _, v := range voters {
+		out = append(out, v)
+	}
+	if order == pack.OrderAsc {
+		sort.Slice(out, func(i, j int) bool { return out[i].RowId < out[j].RowId })
+	} else {
+		sort.Slice(out, func(i, j int) bool { return out[i].RowId > out[j].RowId })
+	}
+	return out, nil
+}
+
 func (m *Indexer) ProposalsByElection(ctx context.Context, eid model.ElectionID) ([]*model.Proposal, error) {
 	table, err := m.Table(index.ProposalTableKey)
 	if err != nil {
@@ -2004,7 +2299,7 @@ func (m *Indexer) LookupProposalIds(ctx context.Context, ids []uint64) ([]*model
 	return props, nil
 }
 
-func (m *Indexer) ListAccountBallots(ctx context.Context, accId model.AccountID, since, until int64, offset, limit uint, cursor uint64, order pack.OrderType) ([]*model.Ballot, error) {
+func (m *Indexer) ListAccountBallots(ctx context.Context, acc *model.Account, since, until int64, offset, limit uint, cursor uint64, order pack.OrderType) ([]*model.Ballot, error) {
 	table, err := m.Table(index.BallotTableKey)
 	if err != nil {
 		return nil, err
@@ -2013,13 +2308,18 @@ func (m *Indexer) ListAccountBallots(ctx context.Context, accId model.AccountID,
 	if cursor > 0 {
 		offset = 0
 	}
+
+	// clamp time range to account lifetime
+	since = util.Max64(since, acc.FirstSeen-1)
+	until = util.NonZeroMin64(until, acc.LastSeen)
+
 	q := pack.Query{
 		Name:   "api.search_account_ballots",
 		Fields: table.Fields(),
 		Conditions: pack.ConditionList{pack.Condition{
 			Field: table.Fields().Find("S"), // search for source account id
 			Mode:  pack.FilterModeEqual,
-			Value: accId.Value(),
+			Value: acc.RowId.Value(),
 		}},
 		Limit: int(offset + limit),
 	}
@@ -2071,6 +2371,72 @@ func (m *Indexer) ListAccountBallots(ctx context.Context, accId model.AccountID,
 	})
 	if err != nil && err != io.EOF {
 		return nil, err
+	}
+	return ballots, nil
+}
+
+func (m *Indexer) ListBallots(ctx context.Context, period int64, offset, limit uint, cursor uint64, order pack.OrderType) ([]*model.Ballot, error) {
+	ballotTable, err := m.Table(index.BallotTableKey)
+	if err != nil {
+		return nil, err
+	}
+	// cursor and offset are mutually exclusive
+	if cursor > 0 {
+		offset = 0
+	}
+
+	q := pack.Query{
+		Name:    "api.list_ballots",
+		NoCache: true,
+		Fields:  ballotTable.Fields(),
+		Conditions: pack.ConditionList{
+			pack.Condition{
+				Field: ballotTable.Fields().Find("p"), // voting_period
+				Mode:  pack.FilterModeEqual,
+				Value: period,
+			},
+		},
+		Limit: int(offset + limit),
+	}
+	if cursor > 0 {
+		cursorMode := pack.FilterModeGt
+		if order == pack.OrderDesc {
+			cursorMode = pack.FilterModeLt
+		}
+		q.Conditions = append(q.Conditions, pack.Condition{
+			Field: ballotTable.Fields().Find("I"), // pk
+			Mode:  cursorMode,
+			Value: cursor,
+		})
+	}
+	ballots := make([]*model.Ballot, 0, util.NonZero(int(limit), 512))
+	err = ballotTable.Stream(ctx, q, func(r pack.Row) error {
+		if offset > 0 {
+			offset--
+			return nil
+		}
+		b := &model.Ballot{}
+		if err := r.Decode(b); err != nil {
+			return err
+		}
+		ballots = append(ballots, b)
+		if len(ballots) == int(limit) {
+			return io.EOF
+		}
+		if len(ballots)%512 == 0 {
+			if util.InterruptRequested(ctx) {
+				return ctx.Err()
+			}
+		}
+		return nil
+	})
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	if order == pack.OrderAsc {
+		sort.Slice(ballots, func(i, j int) bool { return ballots[i].RowId < ballots[j].RowId })
+	} else {
+		sort.Slice(ballots, func(i, j int) bool { return ballots[i].RowId > ballots[j].RowId })
 	}
 	return ballots, nil
 }
@@ -2132,7 +2498,7 @@ func (m *Indexer) LookupBigmap(ctx context.Context, id int64, withLast bool) (*m
 			pack.Condition{
 				Field: table.Fields().Find("a"), // alloc
 				Mode:  pack.FilterModeEqual,
-				Value: uint64(micheline.BigMapDiffActionAlloc),
+				Value: uint64(micheline.DiffActionAlloc),
 			},
 		},
 	}, func(r pack.Row) error {
@@ -2183,8 +2549,8 @@ func (m *Indexer) ListBigMapKeys(ctx context.Context, id, height int64, keyhash 
 				Field: table.Fields().Find("a"), // action
 				Mode:  pack.FilterModeNotIn,
 				Value: []uint64{
-					uint64(micheline.BigMapDiffActionAlloc),
-					uint64(micheline.BigMapDiffActionCopy),
+					uint64(micheline.DiffActionAlloc),
+					uint64(micheline.DiffActionCopy),
 				},
 			},
 		},
@@ -2233,8 +2599,6 @@ func (m *Indexer) ListBigMapKeys(ctx context.Context, id, height int64, keyhash 
 				return err
 			}
 			// skip values that were updated before height
-			// FIXME: when the database supports OR conditions, this can be
-			// done more efficiently with a condtion updated.eq=0 || updated.gt=height
 			if b.Updated > 0 && b.Updated <= height {
 				b.Free()
 				return nil
@@ -2263,7 +2627,6 @@ func (m *Indexer) ListBigMapKeys(ctx context.Context, id, height int64, keyhash 
 			}
 		}
 
-		// log.Infof("Found item %s %d %d key %x", b.Action, b.BigMapId, b.RowId, b.Key)
 		items = append(items, b)
 		if len(items) == int(limit) {
 			return io.EOF
@@ -2299,8 +2662,8 @@ func (m *Indexer) ListBigMapUpdates(ctx context.Context, id, minHeight, maxHeigh
 				Field: table.Fields().Find("a"), // action
 				Mode:  pack.FilterModeNotIn,
 				Value: []uint64{
-					uint64(micheline.BigMapDiffActionAlloc),
-					uint64(micheline.BigMapDiffActionCopy),
+					uint64(micheline.DiffActionAlloc),
+					uint64(micheline.DiffActionCopy),
 				},
 			},
 		},
@@ -2372,7 +2735,7 @@ func (m *Indexer) LookupRanking(ctx context.Context, id model.AccountID) (*Accou
 	return r, ok
 }
 
-func (m *Indexer) TopRich(ctx context.Context, n int) ([]*AccountRankingEntry, error) {
+func (m *Indexer) TopRich(ctx context.Context, n, o int) ([]*AccountRankingEntry, error) {
 	if n <= 0 {
 		return nil, fmt.Errorf("invalid negative top value %d", n)
 	}
@@ -2380,10 +2743,10 @@ func (m *Indexer) TopRich(ctx context.Context, n int) ([]*AccountRankingEntry, e
 	if err != nil {
 		return nil, err
 	}
-	return ranks.TopRich(n), nil
+	return ranks.TopRich(n, o), nil
 }
 
-func (m *Indexer) TopTraffic(ctx context.Context, n int) ([]*AccountRankingEntry, error) {
+func (m *Indexer) TopTraffic(ctx context.Context, n, o int) ([]*AccountRankingEntry, error) {
 	if n <= 0 {
 		return nil, fmt.Errorf("invalid negative top value %d", n)
 	}
@@ -2391,10 +2754,10 @@ func (m *Indexer) TopTraffic(ctx context.Context, n int) ([]*AccountRankingEntry
 	if err != nil {
 		return nil, err
 	}
-	return ranks.TopTraffic(n), nil
+	return ranks.TopTraffic(n, o), nil
 }
 
-func (m *Indexer) TopFlows(ctx context.Context, n int) ([]*AccountRankingEntry, error) {
+func (m *Indexer) TopVolume(ctx context.Context, n, o int) ([]*AccountRankingEntry, error) {
 	if n <= 0 {
 		return nil, fmt.Errorf("invalid negative top value %d", n)
 	}
@@ -2402,5 +2765,53 @@ func (m *Indexer) TopFlows(ctx context.Context, n int) ([]*AccountRankingEntry, 
 	if err != nil {
 		return nil, err
 	}
-	return ranks.TopFlows(n), nil
+	return ranks.TopFlows(n, o), nil
+}
+
+// luck, performance, contribution (reliability)
+func (m *Indexer) BakerPerformance(ctx context.Context, id model.AccountID, fromCycle, toCycle int64) ([3]int64, error) {
+	perf := [3]int64{}
+	table, err := m.Table(index.IncomeTableKey)
+	if err != nil {
+		return perf, err
+	}
+	q := pack.Query{
+		Name:    "api.baker_income",
+		Fields:  table.Fields().Select("l", "t", "p", "f"), // expected income for zero check
+		NoCache: true,
+		Conditions: pack.ConditionList{
+			pack.Condition{
+				Field: table.Fields().Find("A"), // account id
+				Mode:  pack.FilterModeEqual,
+				Value: id.Value(),
+			},
+			pack.Condition{
+				Field: table.Fields().Find("c"), // cycle
+				Mode:  pack.FilterModeRange,
+				From:  fromCycle,
+				To:    toCycle,
+			},
+		},
+	}
+	var count int64
+	income := &model.Income{}
+	err = table.Stream(ctx, q, func(r pack.Row) error {
+		if err := r.Decode(income); err != nil {
+			return err
+		}
+		perf[0] += income.LuckPct
+		perf[1] += income.PerformancePct
+		perf[2] += income.ContributionPct
+		count++
+		return nil
+	})
+	if err != nil {
+		return perf, err
+	}
+	if count > 0 {
+		perf[0] /= count
+		perf[1] /= count
+		perf[2] /= count
+	}
+	return perf, nil
 }

@@ -205,9 +205,15 @@ func (api *ApiContext) handleError(e error) {
 		case syscall.EPIPE:
 			re = EConnectionClosed(EC_NETWORK, "connection closed", err).(*Error)
 		default:
-			re = EInternal(EC_SERVER, "uncaught exception", err).(*Error)
-			if b, _ := api.jsonStack(); len(b) > 0 {
-				api.Log.Error(string(b))
+			switch errStr := err.Error(); errStr {
+			case "http2: stream closed":
+				// ignore
+				return
+			default:
+				re = EInternal(EC_SERVER, "uncaught exception", err).(*Error)
+				if b, _ := api.jsonStack(); len(b) > 0 {
+					api.Log.Error(string(b))
+				}
 			}
 		}
 	default:
@@ -263,15 +269,20 @@ func (api *ApiContext) sendResponse() {
 		}, " ")
 
 		err := api.err
-		if err.Cause != nil {
-			if api.status == 499 {
+		switch api.status {
+		case 429:
+			// don't log
+		case 400, 404, 499:
+			// only log in debug mode
+			if err.Cause != nil {
 				api.Log.Debugf("%d (%d) %s - %s failed (%s): %v", api.status, err.Code, path, err.Scope, err.Detail, err.Cause)
 			} else {
-				api.Log.Errorf("%d (%d) %s - %s failed (%s): %v", api.status, err.Code, path, err.Scope, err.Detail, err.Cause)
-			}
-		} else {
-			if api.status == 499 {
 				api.Log.Debugf("%d (%d) %s - %s failed (%s)", api.status, err.Code, path, err.Scope, err.Detail)
+			}
+		default:
+			// regular log
+			if err.Cause != nil {
+				api.Log.Errorf("%d (%d) %s - %s failed (%s): %v", api.status, err.Code, path, err.Scope, err.Detail, err.Cause)
 			} else {
 				api.Log.Errorf("%d (%d) %s - %s failed (%s)", api.status, err.Code, path, err.Scope, err.Detail)
 			}
@@ -307,9 +318,17 @@ func (api *ApiContext) StreamTrailer(cursor string, count int, err error) {
 			api.Request.RequestURI,
 			api.Request.Proto,
 		}, " ")
-		if api.status == 499 {
+		switch api.status {
+		case 499:
 			api.Log.Debugf("streaming %d (%d) %s - %s failed (%s): %v", api.status, api.err.Code, path, api.err.Scope, api.err.Detail, api.err.Cause)
-		} else {
+		case 429:
+			// don't log
+		case 400, 404:
+			api.Log.Debugf("streaming %d (%d) %s - %s failed (%s): %v", api.status, api.err.Code, path, api.err.Scope, api.err.Detail, api.err.Cause)
+		default:
+			if api.err == nil {
+				return
+			}
 			api.Log.Errorf("streaming %d (%d) %s - %s failed (%s): %v", api.status, api.err.Code, path, api.err.Scope, api.err.Detail, api.err.Cause)
 		}
 		h.Set(trailerError, api.err.String())
@@ -369,21 +388,22 @@ func (api *ApiContext) writeResponseHeaders(contentType, trailers string) {
 	// - request method is GET or OPTIONS (not needed, read-only API)
 	// - return status is 2xx
 	//
-	if api.Cfg.Http.CacheEnable && api.status >= 200 && api.status <= 299 {
+	cacheStatus := api.status >= 200 && api.status <= 299
+	cacheMethod := false
+	switch api.Request.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		cacheMethod = true
+	}
+	if api.Cfg.Http.CacheEnable && cacheStatus && cacheMethod {
 		// cache streaming responses from tables and series for 30sec
-		expires := 30 * time.Second
+		expires := defaultCacheExpires
 		if api.result != nil {
-			// disable cache for all regular reponses unless they implement Expires()
-			expires = 0
+			// disable cache for all regular responses unless they implement Expires()
 			if res, ok := api.result.(Resource); ok {
 				w.Header().Set("Last-Modified", res.LastModified().Format(http.TimeFormat))
 				exptime := res.Expires()
-				if exptime.IsZero() {
-					// anything that never changes like blocks and ops
-					expires = 365 * 24 * time.Hour
-				} else {
-					expires = exptime.Sub(now)
-					if expires < 0 {
+				if !exptime.IsZero() {
+					if expires = exptime.Sub(now); expires < 0 {
 						expires = 0
 					}
 				}
@@ -393,7 +413,7 @@ func (api *ApiContext) writeResponseHeaders(contentType, trailers string) {
 		// UTC format: time.RFC1123 (would set timezone string to UTC instead of GMT)
 		w.Header().Set("Date", now.Format(http.TimeFormat))
 		w.Header().Set("Expires", now.Add(expires).Format(http.TimeFormat))
-		w.Header().Set("Cache-Control", api.Cfg.Http.CacheControl+",max-age="+strconv.FormatInt(int64(expires/time.Second), 10))
+		w.Header().Set("Cache-Control", api.Cfg.Http.CacheControl+", max-age="+strconv.FormatInt(int64(expires/time.Second), 10))
 	} else {
 		h.Set("Cache-Control", "max-age=0, no-cache, no-store, must-revalidate")
 		h.Set("Pragma", "no-cache")

@@ -75,10 +75,14 @@ type ExplorerBlock struct {
 	TDD                 float64                `json:"days_destroyed"`
 	PctAccountsReused   float64                `json:"pct_account_reuse"`
 	NOpsImplicit        int                    `json:"n_ops_implicit"`
-	Ops                 *[]*ExplorerOp         `json:"ops,omitempty"`
 	Endorsers           []chain.Address        `json:"endorsers,omitempty"`
-	expires             time.Time              `json:"-"`
-	lastmod             time.Time              `json:"-"`
+
+	// LEGACY
+	Ops []*ExplorerOp `json:"ops,omitempty"`
+
+	// caching
+	expires time.Time `json:"-"`
+	lastmod time.Time `json:"-"`
 }
 
 func NewExplorerBlock(ctx *ApiContext, block *model.Block) *ExplorerBlock {
@@ -159,9 +163,8 @@ func NewExplorerBlock(ctx *ApiContext, block *model.Block) *ExplorerBlock {
 		}
 	}
 	rights, err := ctx.Indexer.ListBlockEndorsingRights(ctx.Context, block.Height)
-	if err != nil {
-		log.Errorf("explorer block: cannot resolve rights for block %d: %v", block.Height, err)
-	} else {
+	// ignore error in light mode
+	if err == nil {
 		b.Endorsers = make([]chain.Address, len(rights))
 		for i, v := range rights {
 			b.Endorsers[i] = lookupAddress(ctx, v.AccountId)
@@ -175,6 +178,9 @@ func NewExplorerBlock(ctx *ApiContext, block *model.Block) *ExplorerBlock {
 		// cache blocks in the reorg safety zone only until next block is expected
 		b.expires = ctx.Tip.BestTime.Add(p.TimeBetweenBlocks[0])
 		b.lastmod = b.Timestamp.Add(p.TimeBetweenBlocks[0])
+	} else {
+		b.expires = b.Timestamp.Add(maxCacheExpires)
+		b.lastmod = b.Timestamp
 	}
 	return b
 }
@@ -202,9 +208,11 @@ func (b ExplorerBlock) RegisterDirectRoutes(r *mux.Router) error {
 
 func (b ExplorerBlock) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/{ident}", C(ReadBlock)).Methods("GET").Name("block")
+	r.HandleFunc("/{ident}/operations", C(ListBlockOperations)).Methods("GET")
+
+	// LEGACY
 	r.HandleFunc("/{ident}/op", C(ReadBlockOps)).Methods("GET")
 	return nil
-
 }
 
 func loadBlock(ctx *ApiContext) *model.Block {
@@ -232,6 +240,7 @@ func ReadBlock(ctx *ApiContext) (interface{}, int) {
 	return NewExplorerBlock(ctx, loadBlock(ctx)), http.StatusOK
 }
 
+// LEGACY
 func ReadBlockOps(ctx *ApiContext) (interface{}, int) {
 	args := &ExplorerOpsRequest{}
 	ctx.ParseRequestArgs(args)
@@ -251,11 +260,34 @@ func ReadBlockOps(ctx *ApiContext) (interface{}, int) {
 		panic(EInternal(EC_DATABASE, "cannot read block operations", err))
 	}
 
-	// FIXME: collect account and op lookup into only two queries
+	b.Ops = make([]*ExplorerOp, len(ops))
+	for i, v := range ops {
+		b.Ops[i] = NewExplorerOp(ctx, v, block, nil, args)
+	}
+	return b, http.StatusOK
+}
+
+func ListBlockOperations(ctx *ApiContext) (interface{}, int) {
+	args := &ExplorerOpsRequest{}
+	ctx.ParseRequestArgs(args)
+	block := loadBlock(ctx)
+	ops, err := ctx.Indexer.ListBlockOps(
+		ctx,
+		block.Height,
+		args.TypeMode,
+		args.TypeList,
+		args.Offset,
+		ctx.Cfg.ClampExplore(args.Limit),
+		args.Cursor,
+		args.Order,
+	)
+	if err != nil {
+		panic(EInternal(EC_DATABASE, "cannot read block operations", err))
+	}
+
 	eops := make([]*ExplorerOp, len(ops))
 	for i, v := range ops {
-		eops[i] = NewExplorerOp(ctx, v, block, nil, args)
+		eops[i] = NewExplorerOp(ctx, v, nil, nil, args)
 	}
-	b.Ops = &eops
-	return b, http.StatusOK
+	return eops, http.StatusOK
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -213,20 +213,25 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 
 		// load corresponding contract
 		if contract.AccountId != op.ReceiverId {
-			err := contracts.Stream(ctx, pack.Query{
-				Name: "etl.bigmap.lookup",
-				Conditions: pack.ConditionList{
-					pack.Condition{
-						Field: contracts.Fields().Find("A"), // account id
-						Mode:  pack.FilterModeEqual,
-						Value: op.ReceiverId.Value(),
+			contract, ok = builder.ContractById(op.ReceiverId)
+			if !ok {
+				contract = &Contract{}
+				err := contracts.Stream(ctx, pack.Query{
+					Name: "etl.bigmap.lookup",
+					Conditions: pack.ConditionList{
+						pack.Condition{
+							Field: contracts.Fields().Find("A"), // account id
+							Mode:  pack.FilterModeEqual,
+							Value: op.ReceiverId.Value(),
+						},
 					},
-				},
-			}, func(r pack.Row) error {
-				return r.Decode(contract)
-			})
-			if err != nil {
-				return fmt.Errorf("missing contract account %d: %v", op.ReceiverId, err)
+				}, func(r pack.Row) error {
+					return r.Decode(contract)
+				})
+				if err != nil {
+					return fmt.Errorf("bigmap update op [%d:%d] type=%s internal=%t: missing contract for account %d: %v",
+						op.OpL, op.OpP, op.Type, op.IsInternal, op.ReceiverId, err)
+				}
 			}
 		}
 
@@ -236,7 +241,7 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 		for _, v := range bmd {
 			// find and update previous key if any
 			switch v.Action {
-			case micheline.BigMapDiffActionUpdate, micheline.BigMapDiffActionRemove:
+			case micheline.DiffActionUpdate, micheline.DiffActionRemove:
 				if v.Id < 0 {
 					// log.Infof("%s %d/%d/%d/%d Bigmap %s on temp id %d", op.Hash, op.OpL, op.OpP, op.OpC, op.OpI, v.Action, v.Id)
 					// on temporary bigmaps find the alloc from map
@@ -245,7 +250,7 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 						return fmt.Errorf("etl.bigmap.find_alloc: missing temporary bigmap %d", v.Id)
 					}
 					for _, vv := range items {
-						if vv.Action == micheline.BigMapDiffActionAlloc {
+						if vv.Action == micheline.DiffActionAlloc {
 							alloc = vv
 							break
 						}
@@ -265,7 +270,7 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 						// update/remove a single key
 						var item *BigMapItem
 						for _, vv := range items {
-							if vv.Action == micheline.BigMapDiffActionAlloc {
+							if vv.Action == micheline.DiffActionAlloc {
 								continue
 							}
 							if vv.IsReplaced || vv.IsDeleted {
@@ -282,7 +287,7 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 						}
 
 						nkeys := last.NKeys
-						if v.Action == micheline.BigMapDiffActionRemove {
+						if v.Action == micheline.DiffActionRemove {
 							// ignore double remove (if that's even possible)
 							nkeys--
 						} else {
@@ -322,7 +327,7 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 								pack.Condition{
 									Field: idx.table.Fields().Find("a"), // alloc
 									Mode:  pack.FilterModeEqual,
-									Value: uint64(micheline.BigMapDiffActionAlloc),
+									Value: uint64(micheline.DiffActionAlloc),
 								},
 							},
 						}, func(r pack.Row) error {
@@ -374,7 +379,7 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 									pack.Condition{
 										Field: idx.table.Fields().Find("a"), // action
 										Mode:  pack.FilterModeEqual,
-										Value: uint64(micheline.BigMapDiffActionUpdate),
+										Value: uint64(micheline.DiffActionUpdate),
 									},
 									pack.Condition{
 										Field: idx.table.Fields().Find("r"), // is_replaced
@@ -405,7 +410,7 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 
 								// insert deletion entry immediately to allow sequence of updates
 								prevdiff := prev.BigMapDiff()
-								prevdiff.Action = micheline.BigMapDiffActionRemove
+								prevdiff.Action = micheline.DiffActionRemove
 								item := NewBigMapItem(op, contract, prevdiff, alloc.KeyType, prev.RowId, last.Counter+1, last.NKeys-1)
 								if err := idx.table.Insert(ctx, item); err != nil {
 									return fmt.Errorf("etl.bigmap.insert: %v", err)
@@ -428,6 +433,7 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 						err := idx.table.Stream(ctx, pack.Query{
 							Name:  "etl.bigmap.update",
 							Limit: 1, // there should only be one match anyways
+							// NoIndex: true, // index may contain many duplicates, skip
 							Order: pack.OrderDesc,
 							Conditions: pack.ConditionList{
 								pack.Condition{
@@ -436,14 +442,14 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 									Value: v.Id,
 								},
 								pack.Condition{
-									Field: idx.table.Fields().Find("H"), // key hash
-									Mode:  pack.FilterModeEqual,
-									Value: v.KeyHash.Hash.Hash, // as []byte slice
-								},
-								pack.Condition{
 									Field: idx.table.Fields().Find("r"), // is_replaced
 									Mode:  pack.FilterModeEqual,
 									Value: false,
+								},
+								pack.Condition{
+									Field: idx.table.Fields().Find("H"), // key hash
+									Mode:  pack.FilterModeEqual,
+									Value: v.KeyHash.Hash.Hash, // as []byte slice
 								},
 								// don't filter by deleted flag so we find any deletion entry
 							},
@@ -465,7 +471,7 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 
 						// update counters for next entry
 						nkeys := last.NKeys
-						if v.Action == micheline.BigMapDiffActionRemove {
+						if v.Action == micheline.DiffActionRemove {
 							// ignore double remove (if that's even possible)
 							if prev.RowId > 0 && !prev.IsDeleted {
 								nkeys--
@@ -488,7 +494,7 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 					}
 				}
 
-			case micheline.BigMapDiffActionAlloc:
+			case micheline.DiffActionAlloc:
 				// insert immediately to allow sequence of updates
 				// log.Debugf("BigMap %s %d in block %d", v.Action, v.Id, block.Height)
 				if v.Id < 0 {
@@ -506,7 +512,7 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 					last = item
 				}
 
-			case micheline.BigMapDiffActionCopy:
+			case micheline.DiffActionCopy:
 				// copy the alloc and all current keys to new entries, set is_copied
 				items := make([]*BigMapItem, 0)
 
@@ -555,7 +561,7 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 							return err
 						}
 						// copy the item
-						if source.Action == micheline.BigMapDiffActionAlloc {
+						if source.Action == micheline.DiffActionAlloc {
 							// log.Debugf("BigMap %d %s alloc in block %d", v.DestId, v.Action, block.Height)
 							item := CopyBigMapAlloc(source, op, contract, v.DestId, counter+1, 0)
 							items = append(items, item)

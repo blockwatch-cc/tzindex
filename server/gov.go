@@ -1,22 +1,126 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
 
 import (
+	"encoding/json"
 	"github.com/gorilla/mux"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"blockwatch.cc/packdb/util"
+	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 )
 
+// keep a cache of addresses, block and op hashes involved in proposals
+// to avoid expensive database lookups id->hash
+type (
+	govBlockMap    map[int64]chain.BlockHash
+	govOpMap       map[model.OpID]chain.OperationHash
+	govProposalMap map[model.ProposalID]chain.ProtocolHash
+)
+
+var (
+	govBlockMapStore    atomic.Value
+	govOpMapStore       atomic.Value
+	govProposalMapStore atomic.Value
+	govMutex            sync.Mutex
+)
+
 func init() {
 	register(ExplorerElection{})
+	govBlockMapStore.Store(make(govBlockMap))
+	govOpMapStore.Store(make(govOpMap))
+	govProposalMapStore.Store(make(govProposalMap))
+}
+
+func purgeGovStore() {
+	govMutex.Lock()
+	defer govMutex.Unlock()
+	govBlockMapStore.Store(make(govBlockMap))
+	govOpMapStore.Store(make(govOpMap))
+	govProposalMapStore.Store(make(govProposalMap))
+}
+
+func govLookupBlockHash(ctx *ApiContext, height int64) chain.BlockHash {
+	m := govBlockMapStore.Load().(govBlockMap)
+	h, ok := m[height]
+	if !ok {
+		govMutex.Lock()
+		defer govMutex.Unlock()
+		block, err := ctx.Indexer.BlockByHeight(ctx.Context, height)
+		if err != nil {
+			log.Errorf("explorer: cannot resolve block height %d: %v", height, err)
+		} else {
+			h = block.Hash.Clone()
+			m2 := make(govBlockMap) // create a new map
+			for k, v := range m {
+				m2[k] = v // copy all data
+			}
+			m2[height] = h // add new hash
+			govBlockMapStore.Store(m2)
+		}
+	}
+	return h
+}
+
+func govLookupOpHash(ctx *ApiContext, id model.OpID) chain.OperationHash {
+	if id == 0 {
+		return chain.OperationHash{}
+	}
+	m := govOpMapStore.Load().(govOpMap)
+	h, ok := m[id]
+	if !ok {
+		govMutex.Lock()
+		defer govMutex.Unlock()
+		ops, err := ctx.Indexer.LookupOpIds(ctx.Context, []uint64{id.Value()})
+		if err != nil || len(ops) == 0 {
+			log.Errorf("explorer: cannot resolve op id %d: %v", id, err)
+		} else {
+			h = ops[0].Hash.Clone()
+			m2 := make(govOpMap) // create a new map
+			for k, v := range m {
+				m2[k] = v // copy all data
+			}
+			m2[id] = h // add new hash
+			govOpMapStore.Store(m2)
+		}
+	}
+	return h
+}
+
+func govLookupProposalHash(ctx *ApiContext, id model.ProposalID) chain.ProtocolHash {
+	if id == 0 {
+		return chain.ProtocolHash{}
+	}
+	m := govProposalMapStore.Load().(govProposalMap)
+	h, ok := m[id]
+	if !ok {
+		govMutex.Lock()
+		defer govMutex.Unlock()
+		props, err := ctx.Indexer.LookupProposalIds(ctx.Context, []uint64{id.Value()})
+		if err != nil || len(props) == 0 {
+			log.Errorf("explorer: cannot resolve proposal id %d: %v", id, err)
+		} else {
+			h = props[0].Hash.Clone()
+			m2 := make(govProposalMap) // create a new map
+			for k, v := range m {
+				m2[k] = v // copy all data
+			}
+			m2[id] = h // add new hash
+			govProposalMapStore.Store(m2)
+		}
+	}
+	return h
 }
 
 type ExplorerVote struct {
@@ -125,6 +229,18 @@ type ExplorerBallot struct {
 	Sender           string                 `json:"sender"`
 }
 
+type ExplorerBallotList struct {
+	list     []*ExplorerBallot
+	modified time.Time
+	expires  time.Time
+}
+
+func (l ExplorerBallotList) MarshalJSON() ([]byte, error) { return json.Marshal(l.list) }
+func (l ExplorerBallotList) LastModified() time.Time      { return l.modified }
+func (l ExplorerBallotList) Expires() time.Time           { return l.expires }
+
+var _ Resource = (*ExplorerBallotList)(nil)
+
 func NewExplorerBallot(ctx *ApiContext, b *model.Ballot, p chain.ProtocolHash, o chain.OperationHash) *ExplorerBallot {
 	return &ExplorerBallot{
 		RowId:            b.RowId,
@@ -186,14 +302,16 @@ func NewExplorerElection(ctx *ApiContext, e *model.Election) *ExplorerElection {
 	p := ctx.Params
 	tm := ctx.Tip.BestTime
 	if election.IsOpen {
-		diff := 4*p.BlocksPerVotingPeriod - (ctx.Tip.BestHeight - e.StartHeight)
+		diff := int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - (ctx.Tip.BestHeight - e.StartHeight)
 		election.EndTime = tm.Add(time.Duration(diff) * p.TimeBetweenBlocks[0])
-		election.EndHeight = election.StartHeight + 4*p.BlocksPerVotingPeriod - 1
+		election.EndHeight = election.StartHeight + int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - 1
 		election.expires = tm.Add(p.TimeBetweenBlocks[0])
 	} else {
 		height := ctx.Tip.BestHeight
 		if election.EndHeight >= height {
 			election.expires = tm.Add(p.TimeBetweenBlocks[0])
+		} else {
+			election.expires = ctx.Now.Add(maxCacheExpires)
 		}
 	}
 	return election
@@ -225,8 +343,9 @@ func (b ExplorerElection) RegisterDirectRoutes(r *mux.Router) error {
 
 func (b ExplorerElection) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/{ident}", C(ReadElection)).Methods("GET").Name("election")
+	r.HandleFunc("/{ident}/{stage}/ballots", C(ListBallots)).Methods("GET")
+	r.HandleFunc("/{ident}/{stage}/voters", C(ListVoters)).Methods("GET")
 	return nil
-
 }
 
 func loadElection(ctx *ApiContext) *model.Election {
@@ -251,6 +370,8 @@ func loadElection(ctx *ApiContext) *model.Election {
 			proposal, err = ctx.Indexer.LookupProposal(ctx.Context, p)
 			if err != nil {
 				switch err {
+				case etl.ErrNoTable:
+					panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, err.Error(), nil))
 				case index.ErrNoProposalEntry:
 					panic(ENotFound(EC_RESOURCE_NOTFOUND, "no proposal", err))
 				default:
@@ -268,6 +389,8 @@ func loadElection(ctx *ApiContext) *model.Election {
 		}
 		if err != nil {
 			switch err {
+			case etl.ErrNoTable:
+				panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, err.Error(), nil))
 			case index.ErrNoElectionEntry:
 				panic(ENotFound(EC_RESOURCE_NOTFOUND, "no election", err))
 			default:
@@ -279,15 +402,44 @@ func loadElection(ctx *ApiContext) *model.Election {
 	return nil
 }
 
+func loadStage(ctx *ApiContext, election *model.Election) int {
+	var stage int // 1 .. 4 (5 in Edo) (same as chain.VotingPeriodKind)
+	if s, ok := mux.Vars(ctx.Request)["stage"]; !ok || s == "" {
+		panic(EBadRequest(EC_RESOURCE_ID_MISSING, "missing voting period identifier", nil))
+	} else {
+		if i, err := strconv.Atoi(s); err != nil {
+			panic(EBadRequest(EC_RESOURCE_ID_MALFORMED, "invalid voting period identifier", err))
+		} else if i < 1 || i > ctx.Params.NumVotingPeriods {
+			panic(EBadRequest(EC_RESOURCE_ID_MALFORMED, "invalid voting period identifier", err))
+		} else if i > election.NumPeriods {
+			panic(ENotFound(EC_RESOURCE_NOTFOUND, "voting period does not exist", nil))
+		} else {
+			stage = i
+		}
+	}
+	// adjust to 0..3 (4 from Edo)
+	return stage - 1
+}
+
 func ReadElection(ctx *ApiContext) (interface{}, int) {
 	election := loadElection(ctx)
 	votes, err := ctx.Indexer.VotesByElection(ctx, election.RowId)
 	if err != nil {
-		panic(EInternal(EC_DATABASE, err.Error(), nil))
+		switch err {
+		case etl.ErrNoTable:
+			panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, err.Error(), nil))
+		default:
+			panic(EInternal(EC_DATABASE, err.Error(), nil))
+		}
 	}
 	proposals, err := ctx.Indexer.ProposalsByElection(ctx, election.RowId)
 	if err != nil {
-		panic(EInternal(EC_DATABASE, err.Error(), nil))
+		switch err {
+		case etl.ErrNoTable:
+			panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, err.Error(), nil))
+		default:
+			panic(EInternal(EC_DATABASE, err.Error(), nil))
+		}
 	}
 	ee := NewExplorerElection(ctx, election)
 	ee.NoProposal = ee.NumProposals == 0
@@ -323,7 +475,7 @@ func ReadElection(ctx *ApiContext) (interface{}, int) {
 		case chain.VotingPeriodTestingVote:
 			ee.TestingVotePeriod = NewExplorerVote(ctx, v)
 			ee.TestingVotePeriod.Proposals = []*ExplorerProposal{winner}
-		case chain.VotingPeriodTesting:
+		case chain.VotingPeriodTesting, chain.VotingPeriodAdoption:
 			ee.TestingPeriod = NewExplorerVote(ctx, v)
 			ee.TestingPeriod.Proposals = []*ExplorerProposal{winner}
 		case chain.VotingPeriodPromotionVote:
@@ -334,38 +486,149 @@ func ReadElection(ctx *ApiContext) (interface{}, int) {
 	return ee, http.StatusOK
 }
 
-func govLookupBlockHash(ctx *ApiContext, height int64) chain.BlockHash {
-	block, err := ctx.Indexer.BlockByHeight(ctx.Context, height)
+type ExplorerVoter struct {
+	RowId     model.AccountID      `json:"row_id"`
+	Address   chain.Address        `json:"address"`
+	Rolls     int64                `json:"rolls"`
+	Stake     int64                `json:"stake"`
+	HasVoted  bool                 `json:"has_voted"`
+	Ballot    chain.BallotVote     `json:"ballot,omitempty"`
+	Proposals []chain.ProtocolHash `json:"proposals,omitempty"`
+}
+
+type ExplorerVoterList struct {
+	list     []*ExplorerVoter
+	modified time.Time
+	expires  time.Time
+}
+
+func (l ExplorerVoterList) MarshalJSON() ([]byte, error) { return json.Marshal(l.list) }
+func (l ExplorerVoterList) LastModified() time.Time      { return l.modified }
+func (l ExplorerVoterList) Expires() time.Time           { return l.expires }
+
+var _ Resource = (*ExplorerVoterList)(nil)
+
+func NewExplorerVoter(ctx *ApiContext, v *model.Voter) *ExplorerVoter {
+	voter := &ExplorerVoter{
+		RowId:    v.RowId,
+		Address:  lookupAddress(ctx, v.RowId),
+		Rolls:    v.Rolls,
+		Stake:    v.Stake,
+		Ballot:   v.Ballot,
+		HasVoted: v.HasVoted,
+	}
+	if v.HasVoted {
+		voter.Proposals = make([]chain.ProtocolHash, 0)
+		for _, p := range v.Proposals {
+			voter.Proposals = append(voter.Proposals, govLookupProposalHash(ctx, p))
+		}
+	}
+	return voter
+}
+
+func ListVoters(ctx *ApiContext) (interface{}, int) {
+	args := &ExplorerListRequest{}
+	ctx.ParseRequestArgs(args)
+	election := loadElection(ctx)
+	stage := loadStage(ctx, election)
+	period := election.VotingPeriod + int64(stage)
+	height := election.StartHeight + int64(stage)*ctx.Params.BlocksPerVotingPeriod
+
+	voters, err := ctx.Indexer.ListVoters(
+		ctx,
+		height,
+		period,
+		args.Offset,
+		args.Limit, // allow higher limit to fetch all voters at once
+		// ctx.Cfg.ClampExplore(args.Limit),
+		args.Cursor,
+		args.Order,
+	)
 	if err != nil {
-		log.Errorf("explorer: cannot resolve block height %d: %v", height, err)
-		return chain.BlockHash{}
-	} else {
-		return block.Hash.Clone()
+		panic(EInternal(EC_DATABASE, err.Error(), nil))
 	}
+
+	resp := &ExplorerVoterList{
+		list: make([]*ExplorerVoter, 0, len(voters)),
+	}
+
+	if election.IsOpen {
+		resp.expires = ctx.Tip.BestTime.Add(ctx.Params.TimeBetweenBlocks[0])
+	} else {
+		resp.expires = ctx.Now.Add(maxCacheExpires)
+	}
+
+	for _, v := range voters {
+		if v.Rolls == 0 {
+			continue
+		}
+		// TODO: list may contain deactivated bakers who were still in the
+		// previous snapshot, but have been deactivated afterwards
+		// need to confirm how the protocol works here
+		resp.list = append(resp.list, NewExplorerVoter(ctx, v))
+		resp.modified = util.MaxTime(resp.modified, v.Time)
+	}
+	return resp, http.StatusOK
 }
 
-func govLookupOpHash(ctx *ApiContext, id model.OpID) chain.OperationHash {
-	if id == 0 {
-		return chain.OperationHash{}
-	}
-	ops, err := ctx.Indexer.LookupOpIds(ctx.Context, []uint64{id.Value()})
-	if err != nil || len(ops) == 0 {
-		log.Errorf("explorer: cannot resolve op id %d: %v", id, err)
-		return chain.OperationHash{}
-	} else {
-		return ops[0].Hash.Clone()
-	}
-}
+func ListBallots(ctx *ApiContext) (interface{}, int) {
+	args := &ExplorerListRequest{}
+	ctx.ParseRequestArgs(args)
+	election := loadElection(ctx)
+	stage := loadStage(ctx, election)
+	period := election.VotingPeriod + int64(stage)
 
-func govLookupProposalHash(ctx *ApiContext, id model.ProposalID) chain.ProtocolHash {
-	if id == 0 {
-		return chain.ProtocolHash{}
+	ballots, err := ctx.Indexer.ListBallots(
+		ctx,
+		period,
+		args.Offset,
+		args.Limit, // allow higher limit to fetch all voters at once
+		// ctx.Cfg.ClampExplore(args.Limit),
+		args.Cursor,
+		args.Order,
+	)
+	if err != nil {
+		panic(EInternal(EC_DATABASE, "cannot read ballots", err))
 	}
-	props, err := ctx.Indexer.LookupProposalIds(ctx.Context, []uint64{id.Value()})
-	if err != nil || len(props) == 0 {
-		log.Errorf("explorer: cannot resolve proposal id %d: %v", id, err)
-		return chain.ProtocolHash{}
+
+	// fetch op hashes for each ballot
+	oids := make([]uint64, 0)
+	for _, v := range ballots {
+		oids = append(oids, v.OpId.Value())
+	}
+
+	// lookup
+	ops, err := ctx.Indexer.LookupOpIds(ctx, vec.UniqueUint64Slice(oids))
+	if err != nil && err != index.ErrNoOpEntry {
+		panic(EInternal(EC_DATABASE, "cannot read ops for ballots", err))
+	}
+
+	// prepare for lookup
+	opMap := make(map[model.OpID]chain.OperationHash)
+	for _, v := range ops {
+		opMap[v.RowId] = v.Hash
+	}
+
+	resp := &ExplorerBallotList{
+		list: make([]*ExplorerBallot, 0, len(ballots)),
+	}
+
+	if election.IsOpen {
+		resp.expires = ctx.Tip.BestTime.Add(ctx.Params.TimeBetweenBlocks[0])
 	} else {
-		return props[0].Hash.Clone()
+		resp.expires = ctx.Now.Add(maxCacheExpires)
 	}
+
+	for _, v := range ballots {
+		o, _ := opMap[v.OpId]
+		b := NewExplorerBallot(
+			ctx,
+			v,
+			govLookupProposalHash(ctx, v.ProposalId),
+			o,
+		)
+		resp.list = append(resp.list, b)
+		resp.modified = util.MaxTime(resp.modified, v.Time)
+	}
+	return resp, http.StatusOK
 }

@@ -1,14 +1,16 @@
 # Blockwatch Tezos Indexer
 
-© 2020 Blockwatch Data Inc., All rights reserved.
+© 2020-2021 Blockwatch Data Inc., All rights reserved.
 
-All-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resource friendly way to gain tactical insights and build dapps on top of Tezos. Supported by [Blockwatch Data](https://blockwatch.cc), Pro version available on request. Talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](https://discord.gg/D5e98Hw).
+All-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resource friendly way to gain tactical insights and build dapps on top of Tezos. Supported by [Blockwatch Data](https://blockwatch.cc), Pro version available on request.
+
+For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](https://discord.gg/D5e98Hw).
 
 **Core Features**
 
 - indexes and cross-checks full on-chain state
 - feature-rich [REST API](https://tzstats.com/docs/api/index.html) with objects, bulk tables and time-series
-- supports protocols up to Delphi 2.0 (v007)
+- supports protocols up to Edo (v008)
 - auto-detects and locks Tezos network (never mixes data from different networks)
 - indexes all accounts and smart-contracts (including genesis data)
 - follows chain reorgs as they are resolved
@@ -18,7 +20,8 @@ All-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resour
 - high-performance embedded data-store
 - flexible in-memory caching for fast queries
 - automatic database backups/snapshots
-
+- configurable HTTP request rate-limiter
+- light mode for dapps with low storage requirements
 
 **Supported indexes and data tables**
 
@@ -35,9 +38,27 @@ All-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resour
 - baker **income**: per-cycle statistics on baker income, efficiency, etc
 - **bigmap**: bigmap smart contract storage index
 
+**Operation modes**
+
+- **Full** regular operation mode that builds all indexes (default)
+- **Light** light-weight mode without consensus and governance indexes (CLI: `--light`)
+- **Validate** state validation mode for checking accounts and balances each block/cycle (CLI: `--validate`)
+
+**Light mode** is best suited for dapps where access to baking-related data is not necessary. In light mode we don't generate the following list of indexes: rights, elections, votes, proposals, ballots, snapshots and income. Therefore its not possible to switch between full and light mode.
+
+Light mode saves roughly \~50% storage costs and \~50% indexing time. Keep in mind that some endpoints and data fields will not be available:
+
+- `/tables` and `/explorer` API endpoints for missing tables will return 409 errors
+- `/explorer/block/..` will not contain the block endorser list and snapshot flag
+- `/explorer/account/..` will not contain upcoming bake/endorse info
+- `/explorer/cycle/..` will not contain snapshot block info
+
+**Validate mode** works in combination with full and light mode. At each block it checks balances and states of all touched accounts against a Tezos archive node before any change is written to the database. At the end of each cycle, all known accounts in the indexer database are checked as well. This ensures 100% consistency although at the cost of a reduction in indexing speed.
+
+
 ### Requirements
 
-- Storage: 5.5GB (full Mainnet index, Nov 2020)
+- Storage: 6.3GB (full Mainnet index, Feb 2021), 3.9G (light mode)
 - RAM:  4-24GB (configurable, use more memory for better query latency)
 - CPU:  2+ cores (configurable, use more for better query parallelism)
 - Tezos node in archive mode
@@ -48,12 +69,13 @@ Requires access to the following Tezos RPC calls
 
 ```
 /chains/main/blocks/{blockid}
-/chains/main/blocks/{blockid}/helpers/baking_rights
-/chains/main/blocks/{blockid}/helpers/endorsing_rights
-/chains/main/blocks/{blockid}/context/raw/json/cycle/{cycle}
+/chains/main/blocks/{blockid}/helpers/baking_rights (full mode only)
+/chains/main/blocks/{blockid}/helpers/endorsing_rights (full mode only)
+/chains/main/blocks/{blockid}/context/raw/json/cycle/{cycle} (full mode only)
 /chains/main/blocks/{blockid}/context/constants
 /chains/main/blocks/head/header
 /monitor/heads/main (optional)
+/chains/main/blocks/{blockid}/context/contract/{address} (validate mode only)
 ```
 
 ### How to build
@@ -63,6 +85,9 @@ The contained Makefile supports local and Docker builds. For local builds you ne
 ```
 # build a binary for your OS
 make build
+
+# or directly with Go
+go build tzindex.go
 
 # build docker images
 make image
@@ -76,7 +101,7 @@ tzindex aims to be zero-conf and comes with sane defaults. All you need to do is
 tzindex run --rpcurl tezos-node
 ```
 
-If you prefer running from docker, check out the docker directory. Official images are available for the [indexer](https://hub.docker.com/r/blockwatch/tzindex) and [frontend](https://hub.docker.com/r/blockwatch/tzstats). You can run both, the indexer and the frontend in local Docker containers and have them connect to your Tezos node in a third container. Make sure all containers are connected to the same Docker network or if you choose different networks that they are known. Docker port forwarding on Linux usually works, on OSX its broken.
+If you prefer running from docker, check out the docker directory. Official images are available for the [indexer](https://hub.docker.com/r/blockwatch/tzindex) and [frontend](https://hub.docker.com/r/blockwatch/tzstats) (note the frontend may not support advanced features of new protocols). You can run both, the indexer and the frontend in local Docker containers and have them connect to your Tezos node in a third container. Make sure all containers are connected to the same Docker network or if you choose different networks that they are known. Docker port forwarding on Linux usually works, on OSX its broken.
 
 
 ### Configuration
@@ -146,6 +171,7 @@ Usage:
 Flags:
       --enable-cors      enable API CORS support
   -h, --help             help for run
+      --light            light mode (use to skip baker and gov data)
       --noapi            disable API server
       --noindex          disable indexing
       --norpc            disable RPC client
@@ -154,11 +180,12 @@ Flags:
       --rpcuser string   RPC username
       --stop height      stop indexing after height
       --unsafe           disable fsync for fast ingest (DANGEROUS! data will be lost on crashes)
+      --validate         validate account balances
 ```
 
 ### License
 
-This Software is available under two different licenses, the open-source **MIT** license with limited support / best-effort updates and a **PRO** license with professional support and scheduled updates. The professional license is meant for businesses such as staking providers, wallet providers, exchanges, asset issuers, and auditors who would like to use this software for their internal operations or bundle it with their commercial services.
+This Software is available under two different licenses, the open-source **MIT** license with limited support / best-effort updates and a **PRO** license with professional support and scheduled updates. The professional license is meant for businesses such as dapps, marketplaces, staking services, wallet providers, exchanges, asset issuers, and auditors who would like to use this software for their internal operations or bundle it with their commercial services.
 
 The PRO licenses helps us pay for software updates and maintenance and operate the free community services on tzstats.com.
 

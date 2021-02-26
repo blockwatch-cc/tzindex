@@ -219,8 +219,8 @@ type ExplorerParameters struct {
 
 // updates
 type ExplorerBigMapUpdate struct {
-	ExplorerBigmapValue                            // full value
-	Action              micheline.BigMapDiffAction `json:"action"`
+	ExplorerBigmapValue                      // full value
+	Action              micheline.DiffAction `json:"action"`
 
 	// alloc/copy
 	KeyEncoding *micheline.PrimType   `json:"key_encoding,omitempty"`
@@ -639,7 +639,7 @@ func ListBigMapUpdates(ctx *ApiContext) (interface{}, int) {
 			},
 		}
 		switch v.Action {
-		case micheline.BigMapDiffActionUpdate, micheline.BigMapDiffActionCopy:
+		case micheline.DiffActionUpdate, micheline.DiffActionCopy:
 			prim := &micheline.Prim{}
 			upd.Value = &micheline.BigMapValue{
 				Type:  typ,
@@ -743,7 +743,7 @@ func ListBigMapKeyUpdates(ctx *ApiContext) (interface{}, int) {
 			},
 		}
 		switch v.Action {
-		case micheline.BigMapDiffActionUpdate, micheline.BigMapDiffActionCopy:
+		case micheline.DiffActionUpdate, micheline.DiffActionCopy:
 			prim := &micheline.Prim{}
 			upd.Value = &micheline.BigMapValue{
 				Type:  typ,

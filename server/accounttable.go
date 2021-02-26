@@ -163,27 +163,34 @@ func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 		TokenGenMin        int64   `json:"token_gen_min"`
 		TokenGenMax        int64   `json:"token_gen_max"`
 		GracePeriod        int64   `json:"grace_period"`
-		FirstSeenTime      int64   `json:"first_seen_time"`
-		LastSeenTime       int64   `json:"last_seen_time"`
-		FirstInTime        int64   `json:"first_in_time"`
-		LastInTime         int64   `json:"last_in_time"`
-		FirstOutTime       int64   `json:"first_out_time"`
-		LastOutTime        int64   `json:"last_out_time"`
-		DelegatedSinceTime int64   `json:"delegated_since_time"`
-		DelegateSinceTime  int64   `json:"delegate_since_time"`
-		RichRank           int     `json:"rich_rank"`
-		FlowRank           int     `json:"flow_rank"`
-		TrafficRank        int     `json:"traffic_rank"`
-		CallStats          string  `json:"call_stats"`
+		// BakerVersion       string    `json:"baker_version"`
+		FirstSeenTime      int64  `json:"first_seen_time"`
+		LastSeenTime       int64  `json:"last_seen_time"`
+		FirstInTime        int64  `json:"first_in_time"`
+		LastInTime         int64  `json:"last_in_time"`
+		FirstOutTime       int64  `json:"first_out_time"`
+		LastOutTime        int64  `json:"last_out_time"`
+		DelegatedSinceTime int64  `json:"delegated_since_time"`
+		DelegateSinceTime  int64  `json:"delegate_since_time"`
+		RichRank           int    `json:"rich_rank"`
+		FlowRank           int    `json:"flow_rank"`
+		TrafficRank        int    `json:"traffic_rank"`
+		CallStats          string `json:"call_stats"`
+		// NextBakeHeight     int64     `json:"next_bake_height"`
+		// NextBakePriority   int       `json:"next_bake_priority"`
+		// NextBakeTime       time.Time `json:"next_bake_time"`
+		// NextEndorseHeight  int64     `json:"next_endorse_height"`
+		// NextEndorseTime    time.Time `json:"next_endorse_time"`
 	}{
-		RowId:              a.RowId.Value(),
-		Address:            a.String(),
-		AddressType:        a.Type.String(),
-		DelegateId:         a.DelegateId.Value(),
-		Delegate:           a.addrs[a.DelegateId].String(),
-		ManagerId:          a.ManagerId.Value(),
-		Manager:            a.addrs[a.ManagerId].String(),
-		Pubkey:             chain.NewHash(a.PubkeyType, a.PubkeyHash).String(),
+		RowId:       a.RowId.Value(),
+		Address:     a.String(),
+		AddressType: a.Type.String(),
+		DelegateId:  a.DelegateId.Value(),
+		Delegate:    a.addrs[a.DelegateId].String(),
+		ManagerId:   a.ManagerId.Value(),
+		Manager:     a.addrs[a.ManagerId].String(),
+		// FIXME
+		Pubkey:             chain.NewHash(a.PubkeyType.KeyType().HashType(), a.PubkeyHash).String(),
 		FirstIn:            a.FirstIn,
 		FirstOut:           a.FirstOut,
 		FirstSeen:          a.FirstSeen,
@@ -243,6 +250,9 @@ func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 		DelegateSinceTime:  a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.DelegateSince),
 		CallStats:          hex.EncodeToString(a.CallStats),
 	}
+	// if a.BakerVersion > 0 {
+	// 	acc.BakerVersion = hex.EncodeToString(a.GetVersionBytes())
+	// }
 	if a.ranking != nil {
 		if rank, ok := a.ranking.GetAccount(a.RowId); ok {
 			acc.RichRank = rank.RichRank
@@ -250,6 +260,19 @@ func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 			acc.FlowRank = rank.FlowRank
 		}
 	}
+	// if a.IsActiveDelegate {
+	// 	height, tm := a.ctx.Tip.BestHeight, a.ctx.Tip.BestTime
+	// 	bh, eh := a.ctx.Indexer.NextRights(a.ctx, a.RowId, height)
+	// 	if bh > 0 {
+	// 		acc.NextBakeHeight = bh
+	// 		acc.NextBakePriority = 0
+	// 		acc.NextBakeTime = tm.Add(a.params.TimeBetweenBlocks[0] * time.Duration(bh-height))
+	// 	}
+	// 	if eh > 0 {
+	// 		acc.NextEndorseHeight = eh
+	// 		acc.NextEndorseTime = tm.Add(a.params.TimeBetweenBlocks[0] * time.Duration(eh-height))
+	// 	}
+	// }
 	return json.Marshal(acc)
 }
 
@@ -287,7 +310,8 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 			}
 		case "pubkey":
 			if a.PubkeyType.IsValid() {
-				pk := chain.NewHash(a.PubkeyType, a.PubkeyHash)
+				// FIXME
+				pk := chain.NewHash(a.PubkeyType.KeyType().HashType(), a.PubkeyHash)
 				buf = strconv.AppendQuote(buf, pk.String())
 			} else {
 				buf = append(buf, "null"...)
@@ -430,6 +454,12 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, a.TokenGenMax, 10)
 		case "grace_period":
 			buf = strconv.AppendInt(buf, a.GracePeriod, 10)
+		// case "baker_version":
+		// 	if a.BakerVersion > 0 {
+		// 		buf = strconv.AppendQuote(buf, hex.EncodeToString(a.GetVersionBytes()))
+		// 	} else {
+		// 		buf = append(buf, "null"...)
+		// 	}
 		case "first_seen_time":
 			buf = strconv.AppendInt(buf, a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.FirstSeen), 10)
 		case "last_seen_time":
@@ -466,6 +496,16 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 			}
 		case "call_stats":
 			buf = strconv.AppendQuote(buf, hex.EncodeToString(a.CallStats))
+		// case "next_bake_height":
+		// 	buf = strconv.AppendInt(buf, nextBakeHeight, 10)
+		// case "next_bake_priority":
+		// 	buf = append(buf, '0')
+		// case "next_bake_time":
+		// 	buf = strconv.AppendInt(buf, a.ctx.Indexer.BlockTimeMs(a.ctx.Context, nextBakeHeight), 10)
+		// case "next_endorse_height":
+		// 	buf = strconv.AppendInt(buf, nextEndorseHeight, 10)
+		// case "next_endorse_time":
+		// 	buf = strconv.AppendInt(buf, a.ctx.Indexer.BlockTimeMs(a.ctx.Context, nextEndorseHeight), 10)
 		default:
 			continue
 		}
@@ -501,7 +541,8 @@ func (a *Account) MarshalCSV() ([]string, error) {
 		case "manager":
 			res[i] = strconv.Quote(a.addrs[a.ManagerId].String())
 		case "pubkey":
-			pk := chain.NewHash(a.PubkeyType, a.PubkeyHash)
+			// FIXME
+			pk := chain.NewHash(a.PubkeyType.KeyType().HashType(), a.PubkeyHash)
 			res[i] = strconv.Quote(pk.String())
 		case "first_in":
 			res[i] = strconv.FormatInt(a.FirstIn, 10)
@@ -601,6 +642,10 @@ func (a *Account) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(a.TokenGenMax, 10)
 		case "grace_period":
 			res[i] = strconv.FormatInt(a.GracePeriod, 10)
+		// case "baker_version":
+		// 	if a.BakerVersion > 0 {
+		// 		res[i] = strconv.Quote(hex.EncodeToString(a.GetVersionBytes()))
+		// 	}
 		case "first_seen_time":
 			res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, a.FirstSeen).Format(time.RFC3339))
 		case "last_seen_time":
@@ -637,6 +682,16 @@ func (a *Account) MarshalCSV() ([]string, error) {
 			}
 		case "call_stats":
 			res[i] = strconv.Quote(hex.EncodeToString(a.CallStats))
+		// case "next_bake_height":
+		// 	res[i] = strconv.FormatInt(nextBakeHeight, 10)
+		// case "next_bake_priority":
+		// 	res[i] = "0"
+		// case "next_bake_time":
+		// 	res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, nextBakeHeight).Format(time.RFC3339))
+		// case "next_endorse_height":
+		// 	res[i] = strconv.FormatInt(nextEndorseHeight, 10)
+		// case "next_endorse_time":
+		// 	res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, nextEndorseHeight).Format(time.RFC3339))
 		default:
 			continue
 		}

@@ -18,17 +18,20 @@ import (
 )
 
 type RestServer struct {
-	router   *mux.Router
-	srv      *http.Server
-	cfg      *Config
-	shutdown bool
+	router     *mux.Router
+	srv        *http.Server
+	dispatcher *Dispatcher
+	cfg        *Config
+	shutdown   bool
 }
 
 var (
-	UserAgent  = "Blockwatch-tzindex/1.0"
-	ApiVersion string
-	debugHttp  bool
-	srv        *RestServer
+	UserAgent           = "Blockwatch-tzindex/1.0"
+	ApiVersion          string
+	debugHttp           bool
+	srv                 *RestServer
+	defaultCacheExpires = 30 * time.Second
+	maxCacheExpires     = 24 * time.Hour
 )
 
 func New(cfg *Config) (*RestServer, error) {
@@ -77,6 +80,8 @@ func (s *RestServer) IsShutdown() bool {
 }
 
 func (s *RestServer) Start() {
+	s.dispatcher = NewDispatcher(s.cfg.Http.MaxWorkers, s.cfg.Http.MaxQueue)
+	s.dispatcher.Run()
 	go func() {
 		log.Info("Starting HTTP server at ", s.cfg.Http.Address())
 		if err := s.srv.ListenAndServe(); err != nil {
@@ -138,7 +143,14 @@ func wrapper(f ApiCall) func(http.ResponseWriter, *http.Request) {
 		defer cancel()
 
 		api := NewContext(ctx, r, w, f, srv)
-		api.serve()
-		api.sendResponse()
+		// schedule call processing, will return 429 on full queue
+		select {
+		case jobQueue <- api:
+			// wait until request is finished, otherwise go's http handler returns 200 OK
+			<-api.done
+		default:
+			api.handleError(ETooManyRequests(EC_ACCESS_RATE_LIMITED, "too many concurrent requests", nil))
+			api.sendResponse()
+		}
 	}
 }

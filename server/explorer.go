@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -8,6 +8,8 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"blockwatch.cc/packdb/pack"
@@ -31,7 +33,7 @@ func (e Explorer) LastModified() time.Time {
 }
 
 func (e Explorer) Expires() time.Time {
-	return time.Time{}
+	return time.Now().UTC().Add(defaultCacheExpires)
 }
 
 func (e Explorer) RESTPrefix() string {
@@ -99,17 +101,52 @@ type BlockchainTip struct {
 	expires time.Time `json:"-"`
 }
 
-func GetBlockchainTip(ctx *ApiContext) (interface{}, int) {
-	tip := buildBlockchainTip(ctx, ctx.Tip)
-	return tip, http.StatusOK
-}
-
 func (t BlockchainTip) LastModified() time.Time {
 	return t.Timestamp
 }
 
 func (t BlockchainTip) Expires() time.Time {
 	return t.expires
+}
+
+var (
+	tipStore atomic.Value
+	tipMutex sync.Mutex
+)
+
+func init() {
+	tipStore.Store(&BlockchainTip{})
+}
+
+func purgeTipStore() {
+	tipMutex.Lock()
+	defer tipMutex.Unlock()
+	tipStore.Store(&BlockchainTip{})
+}
+
+func getTip(ctx *ApiContext) *BlockchainTip {
+	ct := ctx.Tip
+	tip := tipStore.Load().(*BlockchainTip)
+	if tip.Height < ct.BestHeight {
+		tipMutex.Lock()
+		defer tipMutex.Unlock()
+		// load fresh tip again, locking may have waited
+		ct = ctx.Crawler.Tip()
+		tip = tipStore.Load().(*BlockchainTip)
+		if tip.Height < ct.BestHeight {
+			tip = buildBlockchainTip(ctx, ct)
+		}
+		tipStore.Store(tip)
+	}
+	return tip
+}
+
+func GetBlockchainTip(ctx *ApiContext) (interface{}, int) {
+	// copy tip and update status
+	tip := getTip(ctx)
+	t := *tip
+	t.Status = ctx.Crawler.Status()
+	return t, http.StatusOK
 }
 
 func buildBlockchainTip(ctx *ApiContext, tip *model.ChainTip) *BlockchainTip {
@@ -242,6 +279,9 @@ type BlockchainConfig struct {
 	EndorsementRewardV6          [2]float64 `json:"endorsement_rewards_v6"`
 	MaxAnonOpsPerBlock           int        `json:"max_anon_ops_per_block"`
 
+	// extra
+	NumVotingPeriods int `json:"num_voting_periods"`
+
 	timestamp time.Time `json:"-"`
 	expires   time.Time `json:"-"`
 }
@@ -323,6 +363,7 @@ func GetBlockchainConfig(ctx *ApiContext) (interface{}, int) {
 			p.ConvertValue(p.EndorsementRewardV6[1]),
 		},
 		MaxAnonOpsPerBlock: p.MaxAnonOpsPerBlock,
+		NumVotingPeriods:   p.NumVotingPeriods,
 		timestamp:          ctx.Tip.BestTime,
 		expires:            ctx.Tip.BestTime.Add(p.TimeBetweenBlocks[0]),
 	}

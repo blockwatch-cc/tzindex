@@ -1,6 +1,7 @@
 .PHONY: default all image deploy
 THIS_FILE := $(lastword $(MAKEFILE_LIST))
 
+FLAVOR ?= alpine
 REPO ?= blockwatch.cc/tzindex
 BUILD_TARGET ?= tzindex
 BUILD_VERSION ?= $(shell git describe --always --tags --dirty)

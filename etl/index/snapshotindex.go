@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -132,6 +132,7 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *Block, builde
 	// first snapshot (0 based) is block 255 (0 based index) in a cycle
 	// for governance, snapshot 15 (at end of cycle == start of voting period is used)
 	sn := ((block.Height - block.Params.BlocksPerRollSnapshot) % block.Params.BlocksPerCycle) / block.Params.BlocksPerRollSnapshot
+	isCycleEnd := block.Params.IsCycleEnd(block.Height)
 
 	// snapshot all currently funded accounts and delegates
 	table, err := builder.Table(AccountTableKey)
@@ -143,7 +144,7 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *Block, builde
 	q := pack.Query{
 		Name:    "snapshot.accounts",
 		NoCache: true,
-		Fields:  table.Fields().Select("I", "D", "d", "v", "s", "z", "Y", "~", "a", "*"),
+		Fields:  table.Fields().Select("I", "D", "d", "v", "s", "z", "Y", "~", "a", "*", "P"),
 		Conditions: pack.ConditionList{
 			pack.Condition{
 				Field: table.Fields().Find("v"), // is active delegate
@@ -164,6 +165,7 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *Block, builde
 		ActiveDelegations int64     `pack:"a"`
 		DelegatedSince    int64     `pack:"+"`
 		DelegateSince     int64     `pack:"*"`
+		GracePeriod       int64     `pack:"P"`
 		UnclaimedBalance  int64     `pack:"U"`
 		IsVesting         bool      `pack:"V"`
 	}
@@ -176,10 +178,33 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *Block, builde
 		}
 		// check account owns at least one roll
 		ownbalance := a.SpendableBalance + a.FrozenDeposits + a.FrozenFees
+		isActive := a.IsActiveDelegate
+
+		// adjust end-of-cycle snapshot: reduce balance by unfrozen rewards
+		if isCycleEnd {
+			for _, flow := range block.Flows {
+				if flow.AccountId != a.Id {
+					continue
+				}
+				if flow.Category != FlowCategoryRewards {
+					continue
+				}
+				if flow.Operation != FlowTypeInternal {
+					continue
+				}
+				ownbalance -= flow.AmountOut
+				break
+			}
+			// predict deactivation at end of cycle
+			isActive = isActive && a.GracePeriod > block.Cycle
+		}
+
+		// add delegated balance
 		stakingBalance := ownbalance + a.DelegatedBalance
 		if stakingBalance < block.Params.TokensPerRoll {
 			return nil
 		}
+
 		snap := NewSnapshot()
 		snap.Height = block.Height
 		snap.Cycle = block.Cycle
@@ -189,7 +214,7 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *Block, builde
 		snap.AccountId = a.Id
 		snap.DelegateId = a.DelegateId
 		snap.IsDelegate = a.IsDelegate
-		snap.IsActive = a.IsActiveDelegate
+		snap.IsActive = isActive
 		snap.Balance = ownbalance
 		snap.Delegated = a.DelegatedBalance
 		snap.NDelegations = a.ActiveDelegations

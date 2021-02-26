@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -25,9 +25,14 @@ func (c *Crawler) SnapshotRequest(ctx context.Context) error {
 		return fmt.Errorf("snapshot in progress")
 	}
 	// snapshot under lock held
-	if c.state == STATE_SYNCHRONIZED {
+	switch c.state {
+	case STATE_LOADING, STATE_STOPPING:
+		return fmt.Errorf("snapshot disabled in %s state", c.state)
+	case STATE_SYNCHRONIZED, STATE_STOPPED, STATE_WAITING, STATE_FAILED, STATE_CONNECTING:
 		defer c.Unlock()
 		return c.snapshot_locked(ctx)
+	case STATE_SYNCHRONIZING:
+		// continue below
 	}
 
 	log.Infof("Scheduling snapshot.")
@@ -73,18 +78,19 @@ func (c *Crawler) MaybeSnapshot(ctx context.Context) error {
 	// run under lock
 	c.Lock()
 	defer c.Unlock()
+	tip := c.Tip()
 
 	// check pre-condition (all conditions are logical OR)
 	if !match && len(c.snap.Blocks) > 0 {
 		for _, v := range c.snap.Blocks {
-			if v == c.tip.BestHeight {
+			if v == tip.BestHeight {
 				match = true
 				break
 			}
 		}
 	}
 	if !match && c.snap.BlockInterval > 0 {
-		if c.tip.BestHeight > 0 && c.tip.BestHeight%c.snap.BlockInterval == 0 {
+		if tip.BestHeight > 0 && tip.BestHeight%c.snap.BlockInterval == 0 {
 			match = true
 		}
 	}
@@ -103,11 +109,12 @@ func (c *Crawler) MaybeSnapshot(ctx context.Context) error {
 // run under lock
 func (c *Crawler) snapshot_locked(ctx context.Context) error {
 	// perform snapshot of all databases
+	tip := c.Tip()
 	start := time.Now()
-	log.Infof("Starting database snapshots at block %d.", c.tip.BestHeight)
+	log.Infof("Starting database snapshots at block %d.", tip.BestHeight)
 
 	// dump state db ()
-	snapName := "block-" + strconv.FormatInt(c.tip.BestHeight, 10)
+	snapName := "block-" + strconv.FormatInt(tip.BestHeight, 10)
 	dbName := filepath.Base(c.db.Path())
 	snapPath := filepath.Join(c.snap.Path, snapName, dbName)
 	if err := os.MkdirAll(filepath.Dir(snapPath), 0700); err != nil {

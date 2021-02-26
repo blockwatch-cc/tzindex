@@ -1,4 +1,4 @@
-// Copyright (c) 2018 - 2020 Blockwatch Data Inc.
+// Copyright (c) 2018 - 2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -372,7 +372,7 @@ findfork:
 		// try loading parent block from db, but don't fail if it does not exist
 		h := block.TZ.Parent()
 		// log.Debugf("REORGANIZE: looking for parent block %d %v", ancestor.Height-1, h)
-		if parent, err := c.indexer.BlockByHash(ctx, h); err != nil {
+		if parent, err := c.indexer.BlockByHash(ctx, h, 0, 0); err != nil {
 			// when block is missing from DB, resolve as new block via RPC
 			if tz, err := c.fetchBlockByHash(ctx, h); err != nil {
 				log.Errorf("REORGANIZE failed fetching main chain block %v: %v", h, err)

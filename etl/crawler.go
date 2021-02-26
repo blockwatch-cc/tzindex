@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"blockwatch.cc/packdb/pack"
@@ -33,6 +34,7 @@ type Mode string
 
 const (
 	MODE_SYNC     Mode = "sync"
+	MODE_LIGHT    Mode = "light"
 	MODE_INFO     Mode = "info"
 	MODE_ROLLBACK Mode = "rollback"
 )
@@ -58,6 +60,7 @@ type CrawlerConfig struct {
 	StopBlock     int64
 	Snapshot      *SnapshotConfig
 	EnableMonitor bool
+	Validate      bool
 }
 
 type SnapshotConfig struct {
@@ -88,7 +91,7 @@ type Crawler struct {
 	chainId chain.ChainIdHash
 
 	// read-mostly thread-safe access
-	tip *ChainTip
+	tipStore atomic.Value
 
 	// coordinated shutdown
 	quit   chan struct{}
@@ -110,7 +113,7 @@ func NewCrawler(cfg CrawlerConfig) *Crawler {
 		stopHeight:    cfg.StopBlock,
 		db:            cfg.DB,
 		rpc:           cfg.Client,
-		builder:       NewBuilder(cfg.Indexer),
+		builder:       NewBuilder(cfg.Indexer, cfg.Client, cfg.Validate),
 		indexer:       cfg.Indexer,
 		queue:         make(chan *Bundle, cfg.Queue),
 		plog:          NewBlockProgressLogger("Processed"),
@@ -119,25 +122,19 @@ func NewCrawler(cfg CrawlerConfig) *Crawler {
 }
 
 func (c *Crawler) Tip() *ChainTip {
-	c.RLock()
-	defer c.RUnlock()
-	return c.tip
+	return c.tipStore.Load().(*ChainTip)
 }
 
 func (c *Crawler) Height() int64 {
-	tip := c.Tip()
-	return tip.BestHeight
+	return c.Tip().BestHeight
 }
 
 func (c *Crawler) Time() time.Time {
-	tip := c.Tip()
-	return tip.BestTime
+	return c.Tip().BestTime
 }
 
 func (c *Crawler) updateTip(tip *ChainTip) {
-	c.Lock()
-	defer c.Unlock()
-	c.tip = tip
+	c.tipStore.Store(tip)
 }
 
 func (c *Crawler) setState(state State, args ...string) {
@@ -189,6 +186,7 @@ func (c *Crawler) BlockByHeight(ctx context.Context, height int64) (*Block, erro
 }
 
 type CrawlerStatus struct {
+	Mode     Mode    `json:"mode"`
 	Status   State   `json:"status"`
 	Blocks   int64   `json:"blocks"`
 	Indexed  int64   `json:"indexed"`
@@ -198,9 +196,13 @@ type CrawlerStatus struct {
 func (c *Crawler) Status() CrawlerStatus {
 	tip := c.Tip()
 	s := CrawlerStatus{
+		Mode:    c.mode,
 		Status:  c.state,
 		Blocks:  -1,
 		Indexed: tip.BestHeight,
+	}
+	if c.indexer.lightMode {
+		s.Mode = MODE_LIGHT
 	}
 	if tip.BestHeight > 0 && c.bchead != nil && c.bchead.Level > 0 {
 		s.Blocks = c.bchead.Level
@@ -227,7 +229,7 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 			return err
 		}
 		c.updateTip(tip)
-		c.chainId = c.tip.ChainId.Clone()
+		c.chainId = tip.ChainId.Clone()
 		// check manifest, allow empty
 		mft, err := dbTx.Manifest()
 		if err != nil {
@@ -279,7 +281,7 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 	// init table manager (this will init all registered indexers in order)
 	if c.indexer != nil {
 		// open databases and tables
-		if err = c.indexer.Init(ctx, c.Tip()); err != nil {
+		if err = c.indexer.Init(ctx, c.Tip(), mode); err != nil {
 			return err
 		}
 	}
@@ -880,8 +882,6 @@ func (c *Crawler) syncBlockchain() {
 			continue
 		}
 
-		// POINT OF NO RETURN
-
 		// assemble block data and statistics; will lookup and create new accounts
 		block, err := c.builder.Build(ctx, tzblock)
 		if err != nil {
@@ -901,6 +901,8 @@ func (c *Crawler) syncBlockchain() {
 			errCount++
 			goto again
 		}
+
+		// POINT OF NO RETURN
 
 		// update indexes; will insert or update rows & generate unique ids
 		// for blocks and flows
@@ -974,6 +976,13 @@ func (c *Crawler) syncBlockchain() {
 			if err := c.indexer.UpdateRanking(ctx, block.Timestamp); err != nil {
 				log.Errorf("updating ranking: %v", err)
 			}
+
+			// update rights cache at cycle start
+			if block.Params.IsCycleStart(block.Height) {
+				if err := c.indexer.UpdateRights(ctx, block.Height); err != nil {
+					log.Errorf("updating rights cache: %v", err)
+				}
+			}
 		}
 
 		// log progress once every 10sec
@@ -1002,6 +1011,14 @@ func (c *Crawler) syncBlockchain() {
 		}
 
 		if c.stopHeight > 0 && tip.BestHeight >= c.stopHeight {
+			err := c.db.Update(func(dbTx store.Tx) error {
+				return dbStoreChainTip(dbTx, tip)
+			})
+			if err != nil {
+				log.Errorf("Updating state database for block %d: %v", tip.BestHeight, err)
+				c.setState(STATE_FAILED)
+				return
+			}
 			log.Infof("Stopping blockchain sync after block height %d.", tip.BestHeight)
 			return
 		}
@@ -1062,6 +1079,11 @@ func (c *Crawler) fetchBlockByHash(ctx context.Context, blockID chain.BlockHash)
 	height := b.Block.Header.Level
 	b.Cycle = b.Params.CycleFromHeight(height)
 
+	// return early when running in light mode
+	if c.indexer.lightMode {
+		return b, nil
+	}
+
 	// in monitor mode we are live, so we don't have to check for early cycles
 	// still max look-ahead is 5 (e.g. PreservedCycles)
 	if b.Params.IsCycleStart(height) {
@@ -1100,6 +1122,11 @@ func (c *Crawler) fetchBlockByHeight(ctx context.Context, height int64) (*Bundle
 		return nil, err
 	}
 	b.Cycle = b.Params.CycleFromHeight(height)
+
+	// return early when running in light mode
+	if c.indexer.lightMode {
+		return b, nil
+	}
 
 	// on first block after genesis, fetch rights for first 7 cycles [0..6]
 	// cycle 7 rights are then processed at block 4096+1

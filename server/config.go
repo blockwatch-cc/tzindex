@@ -76,6 +76,7 @@ type HttpConfig struct {
 	Scheme              string        `json:"scheme"`
 	Host                string        `json:"host"`
 	MaxWorkers          int           `json:"workers"`
+	MaxQueue            int           `json:"queue"`
 	TimeoutHeader       string        `json:"timeout_header"`
 	ReadTimeout         time.Duration `json:"read_timeout"`
 	HeaderTimeout       time.Duration `json:"header_timeout"`
@@ -107,6 +108,8 @@ func NewHttpConfig() HttpConfig {
 		Port:                8000,
 		Host:                "127.0.0.1",
 		Scheme:              "http",
+		MaxWorkers:          50,
+		MaxQueue:            200,
 		TimeoutHeader:       "",
 		HeaderTimeout:       2 * time.Second,  // header timeout
 		ReadTimeout:         5 * time.Second,  // header+body timeout

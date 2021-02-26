@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package cmd
@@ -28,7 +28,8 @@ func init() {
 	config.SetDefault("server.port", 8000)
 	config.SetDefault("server.scheme", "http")
 	config.SetDefault("server.host", "127.0.0.1")
-	config.SetDefault("server.workers", 50)
+	config.SetDefault("server.workers", 64)
+	config.SetDefault("server.queue", 128)
 	config.SetDefault("server.read_timeout", 5*time.Second)
 	config.SetDefault("server.header_timeout", 2*time.Second)
 	config.SetDefault("server.write_timeout", 15*time.Second)

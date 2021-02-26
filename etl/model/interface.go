@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package model
@@ -47,14 +47,23 @@ type BlockBuilder interface {
 	// resolves account from id, returns nil and false when not found
 	AccountById(AccountID) (*Account, bool)
 
+	// resolves contract from account id, returns nil and false when not found
+	ContractById(AccountID) (*Contract, bool)
+
 	// returns a map of all accounts referenced in the current block
 	Accounts() map[AccountID]*Account
 
 	// returns a map of all delegates referenced in the current block
 	Delegates() map[AccountID]*Account
 
+	// returns a map of all contracts referenced in the current block
+	Contracts() map[AccountID]*Contract
+
 	// returns block rights
 	Rights(chain.RightType) []Right
+
+	// return params at specific height
+	Params(int64) *chain.Params
 
 	// returns the requested database table if exists or error otherwise
 	Table(string) (*pack.Table, error)

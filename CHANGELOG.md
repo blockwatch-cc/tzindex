@@ -1,5 +1,39 @@
 # Changelog
 
+## 8.0.0
+
+Note: compatible with Edo and API version 2020-06-01. Database rebuild is required.
+
+- ETL: Tezos Edo protocol and Edonet support including Edo2 (PtEdo2Zk) and Edonet2
+- ETL: support internal origination+delegation
+- ETL: new `light` mode that skips baker and governance data (cli arg `--light`)
+- ETL: new `validate` mode for checking balances and account state each block
+- ETL: improved decimal conversion performance
+- ETL: improved base58 encode/decode performance
+- ETL: improved database performance
+- ETL: added multiple caches to improve indexer and query performance
+- ETL: delegation operations now contain the delegated balance as volume
+- ETL: fixed `is_delegatable` and `is_spendable` flags for accounts and contracts
+- ETL: fixed removing accounts on rollback
+- ETL: fixed roll calculations for index 15 snapshots
+- ETL: fixed baker registrations due to Tezos protocol bug in v002
+- ETL: fixed call stats for migrated contracts
+- API: new call dispatcher to limit concurrent requests and return 429 on overflow
+- API: new governance endpoints to list voters `/explorer/election/:num/:stage/voters` and ballots `/explorer/election/:num/:stage/ballots`
+- API: new account rank endpoints `/explorer/rank/volume`, `/explorer/rank/traffic` and `/explorer/rank/balances`
+- API: improved cache expiry
+- API: improved operation list performance
+- API: improved Edo comb pair unwrapping
+
+**Tezos Edo Protocol Support**
+
+- introduced a 5th voting period (adoption) and decreased duration of each period
+- RPC changes for block metadata (level and voting info)
+- RPC changes for bigmap updates (now called lazy storage)
+- new Michelson `comb pairs` and related data encoding
+- new Michelson `tickets` and related data encoding
+- new Michelson instructions for BLS curves, Sapling and tickets
+
 ## 7.0.0
 
 Note: compatible with Delphi and API version 2020-06-01. Database rebuild is required.

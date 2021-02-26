@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package cmd
@@ -37,6 +37,9 @@ var (
 	rpcurl  string
 	rpcuser string
 	rpcpass string
+
+	// index options
+	lightIndex bool
 )
 
 var (
@@ -79,23 +82,11 @@ func openReadOnlyBlockchain() (*etl.Crawler, error) {
 
 	// enabled storage tables
 	indexer = etl.NewIndexer(etl.IndexerConfig{
-		DBPath:  pathname,
-		DBOpts:  DBOpts(engine, true, false),
-		StateDB: statedb,
-		Indexes: []model.BlockIndexer{
-			index.NewAccountIndex(tableOptions("account"), indexOptions("account")),
-			index.NewContractIndex(tableOptions("contract"), indexOptions("contract")),
-			index.NewBlockIndex(tableOptions("block"), indexOptions("block")),
-			index.NewOpIndex(tableOptions("op"), indexOptions("op")),
-			index.NewFlowIndex(tableOptions("flow")),
-			index.NewChainIndex(tableOptions("chain")),
-			index.NewSupplyIndex(tableOptions("supply")),
-			index.NewRightsIndex(tableOptions("right")),
-			index.NewSnapshotIndex(tableOptions("snapshot")),
-			index.NewIncomeIndex(tableOptions("income")),
-			index.NewGovIndex(tableOptions("gov")),
-			index.NewBigMapIndex(tableOptions("bigmap"), indexOptions("bigmap")),
-		},
+		DBPath:    pathname,
+		DBOpts:    DBOpts(engine, true, false),
+		StateDB:   statedb,
+		LightMode: lightIndex,
+		Indexes:   enabledIndexes(),
 	})
 
 	bc := etl.NewCrawler(etl.CrawlerConfig{
@@ -124,23 +115,11 @@ func openReadWriteBlockchain() (*etl.Crawler, error) {
 
 	// enabled storage tables
 	indexer = etl.NewIndexer(etl.IndexerConfig{
-		DBPath:  pathname,
-		DBOpts:  DBOpts(engine, false, false),
-		StateDB: statedb,
-		Indexes: []model.BlockIndexer{
-			index.NewAccountIndex(tableOptions("account"), indexOptions("account")),
-			index.NewContractIndex(tableOptions("contract"), indexOptions("contract")),
-			index.NewBlockIndex(tableOptions("block"), indexOptions("block")),
-			index.NewOpIndex(tableOptions("op"), indexOptions("op")),
-			index.NewFlowIndex(tableOptions("flow")),
-			index.NewChainIndex(tableOptions("chain")),
-			index.NewSupplyIndex(tableOptions("supply")),
-			index.NewRightsIndex(tableOptions("right")),
-			index.NewSnapshotIndex(tableOptions("snapshot")),
-			index.NewIncomeIndex(tableOptions("income")),
-			index.NewGovIndex(tableOptions("gov")),
-			index.NewBigMapIndex(tableOptions("bigmap"), indexOptions("bigmap")),
-		},
+		DBPath:    pathname,
+		DBOpts:    DBOpts(engine, false, false),
+		StateDB:   statedb,
+		LightMode: lightIndex,
+		Indexes:   enabledIndexes(),
 	})
 
 	bc := etl.NewCrawler(etl.CrawlerConfig{
@@ -274,4 +253,34 @@ func parseRPCFlags() error {
 		config.Set("rpc.pass", rpcpass)
 	}
 	return nil
+}
+
+func enabledIndexes() []model.BlockIndexer {
+	if lightIndex {
+		return []model.BlockIndexer{
+			index.NewAccountIndex(tableOptions("account"), indexOptions("account")),
+			index.NewContractIndex(tableOptions("contract"), indexOptions("contract")),
+			index.NewBlockIndex(tableOptions("block"), indexOptions("block")),
+			index.NewOpIndex(tableOptions("op"), indexOptions("op")),
+			index.NewFlowIndex(tableOptions("flow")),
+			index.NewChainIndex(tableOptions("chain")),
+			index.NewSupplyIndex(tableOptions("supply")),
+			index.NewBigMapIndex(tableOptions("bigmap"), indexOptions("bigmap")),
+		}
+	} else {
+		return []model.BlockIndexer{
+			index.NewAccountIndex(tableOptions("account"), indexOptions("account")),
+			index.NewContractIndex(tableOptions("contract"), indexOptions("contract")),
+			index.NewBlockIndex(tableOptions("block"), indexOptions("block")),
+			index.NewOpIndex(tableOptions("op"), indexOptions("op")),
+			index.NewFlowIndex(tableOptions("flow")),
+			index.NewChainIndex(tableOptions("chain")),
+			index.NewSupplyIndex(tableOptions("supply")),
+			index.NewRightsIndex(tableOptions("right")),
+			index.NewSnapshotIndex(tableOptions("snapshot")),
+			index.NewIncomeIndex(tableOptions("income")),
+			index.NewGovIndex(tableOptions("gov")),
+			index.NewBigMapIndex(tableOptions("bigmap"), indexOptions("bigmap")),
+		}
+	}
 }

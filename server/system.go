@@ -49,6 +49,7 @@ func (t SystemRequest) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/tables", C(GetTableStats)).Methods("GET")
 	r.HandleFunc("/mem", C(GetMemStats)).Methods("GET")
 	r.HandleFunc("/config", C(GetConfig)).Methods("GET")
+	r.HandleFunc("/purge", C(PurgeCaches)).Methods("PUT")
 	r.HandleFunc("/snapshot", C(SnapshotDatabases)).Methods("PUT")
 	r.HandleFunc("/flush", C(FlushDatabases)).Methods("PUT")
 	r.HandleFunc("/flush_journal", C(FlushJournals)).Methods("PUT")
@@ -68,6 +69,14 @@ func GetMemStats(ctx *ApiContext) (interface{}, int) {
 
 func GetConfig(ctx *ApiContext) (interface{}, int) {
 	return config.AllSettings(), http.StatusOK
+}
+
+func PurgeCaches(ctx *ApiContext) (interface{}, int) {
+	purgeCycleStore()
+	purgeAddrStore()
+	purgeTipStore()
+	purgeGovStore()
+	return nil, http.StatusNoContent
 }
 
 func SnapshotDatabases(ctx *ApiContext) (interface{}, int) {

@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -139,6 +139,21 @@ func (b *Builder) AppendMagicBakerRegistrationOp(ctx context.Context, acc *Accou
 	return nil
 }
 
+// func (b *Builder) AppendContractMigrationOp(ctx context.Context, acc *Account, c *Contract, p int) error {
+// 	n := len(b.block.Ops)
+// 	op := NewImplicitOp(b.block, acc.RowId, chain.OpTypeMigration, n, OPL_PROTOCOL_UPGRADE, p)
+// 	op.IsContract = true
+// 	if c.Type == chain.ContractTypeDelegator {
+// 		var err error
+// 		op.Storage, err = c.InitialStorage()
+// 		if err != nil {
+// 			return err
+// 		}
+// 	}
+// 	b.block.Ops = append(b.block.Ops, op)
+// 	return nil
+// }
+
 func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.OperationHeader, op_l, op_p, op_c int, rollback bool) error {
 	o := oh.Contents[op_c]
 
@@ -185,6 +200,7 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.OperationHeade
 	op.Status = chain.OpStatusApplied
 	op.Volume = activated
 	op.SenderId = acc.RowId
+	op.ReceiverId = acc.RowId
 	op.HasData = true
 	op.Data = hex.EncodeToString(aop.Secret) + "," + bkey.String()
 	b.block.Ops = append(b.block.Ops, op)
@@ -223,6 +239,7 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.OperationHeade
 			acc.FirstSeen = b.block.Height
 			acc.IsActivated = true
 			acc.IsSpendable = true
+			acc.IsDelegatable = true
 			acc.IsFunded = true
 			acc.IsDirty = true
 			b.accHashMap[accountHashKey(acc)] = acc
@@ -894,7 +911,7 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 		}
 	}
 	if len(res.BigMapDiff) > 0 {
-		top.Metadata.Result.BigMapDiff, err = b.PatchBigMapDiff(ctx, res.BigMapDiff, op.ReceiverId, nil)
+		top.Metadata.Result.BigMapDiff, err = b.PatchBigMapDiff(ctx, res.BigMapDiff, dst.Address(), nil)
 		if err != nil {
 			return Errorf("patch bigmap: %v", err)
 		}
@@ -980,7 +997,7 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 			if res.Allocated {
 				// init dest account when allocated
 				dst.IsSpendable = true
-				dst.IsDelegatable = dst.Type == chain.AddressTypeContract
+				dst.IsDelegatable = true
 			}
 			if dst.IsDelegate && b.block.Params.ReactivateByTx {
 				// reactivate inactive delegates (receiver only)
@@ -988,7 +1005,7 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 				//   that received transactions will reactivate an inactive delegate
 				//   and extend grace period for active delegates
 				// - support for this feature ends with proto_004
-				if !dst.IsActiveDelegate {
+				if !dst.IsActiveDelegate && dst.DelegateId == dst.RowId {
 					dst.IsActiveDelegate = true
 					dst.InitGracePeriod(b.block.Cycle, b.block.Params)
 				} else {
@@ -1018,9 +1035,7 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 			dst.NOps--
 			dst.NTx--
 			dst.IsDirty = true
-			if res.Allocated {
-				dst.MustDelete = true
-			}
+
 			if op.IsContract {
 				dst.DecCallStats(byte(op.Entrypoint), b.block.Height, b.block.Params)
 			}
@@ -1142,7 +1157,7 @@ func (b *Builder) AppendInternalTransactionOp(
 		}
 	}
 	if len(res.BigMapDiff) > 0 {
-		iop.Result.BigMapDiff, err = b.PatchBigMapDiff(ctx, res.BigMapDiff, op.ReceiverId, nil)
+		iop.Result.BigMapDiff, err = b.PatchBigMapDiff(ctx, res.BigMapDiff, dst.Address(), nil)
 		if err != nil {
 			return Errorf("patch bigmap: %v", err)
 		}
@@ -1219,18 +1234,6 @@ func (b *Builder) AppendInternalTransactionOp(
 			dst.LastSeen = b.block.Height
 			dst.IsDirty = true
 
-			// TODO: is this correct for internal ops?
-			if dst.IsDelegate && b.block.Params.ReactivateByTx {
-				// reactivate inactive delegates (receiver only)
-				// - it seems from reverse engineering delegate activation rules
-				//   that received transactions will reactivate an inactive delegate
-				if !dst.IsActiveDelegate {
-					dst.IsActiveDelegate = true
-					dst.InitGracePeriod(b.block.Cycle, b.block.Params)
-				} else {
-					dst.UpdateGracePeriod(b.block.Cycle, b.block.Params)
-				}
-			}
 			// update last seen for contracts (flow might be missing)
 			// update entrypoint call stats
 			if op.IsContract {
@@ -1384,7 +1387,7 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.OperationHead
 		}
 
 		// create or extend bigmap diff to inject alloc for proto < v005
-		oop.Metadata.Result.BigMapDiff, err = b.PatchBigMapDiff(ctx, res.BigMapDiff, op.ReceiverId, oop.Script)
+		oop.Metadata.Result.BigMapDiff, err = b.PatchBigMapDiff(ctx, res.BigMapDiff, dst.Address(), oop.Script)
 		if err != nil {
 			return Errorf("patch bigmap: %v", err)
 		}
@@ -1430,6 +1433,7 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.OperationHead
 			src.NOrigination++
 			src.LastSeen = b.block.Height
 			src.IsDirty = true
+
 			// initialize originated account
 			// in babylon, keep the sender as manager regardless
 			if mgr != nil {
@@ -1441,20 +1445,22 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.OperationHead
 			}
 			dst.IsContract = oop.Script != nil
 
+			// from Babylon, these flags always exist
+			if oop.Spendable != nil {
+				dst.IsSpendable = *oop.Spendable
+			}
+			if oop.Delegatable != nil {
+				dst.IsDelegatable = *oop.Delegatable
+			}
+			// pre-babylon, they were true when missing
 			if b.block.Params.SilentSpendable {
-				if oop.Spendable != nil {
-					dst.IsSpendable = *oop.Spendable
-				} else {
-					dst.IsSpendable = true
-				}
-				if oop.Delegatable != nil {
-					dst.IsDelegatable = *oop.Delegatable
-				} else {
-					dst.IsDelegatable = true
-				}
+				dst.IsSpendable = dst.IsSpendable || oop.Spendable == nil || *oop.Spendable
+				dst.IsDelegatable = dst.IsDelegatable || oop.Delegatable == nil || *oop.Delegatable
 			}
 			dst.LastSeen = b.block.Height
 			dst.IsDirty = true
+
+			// handle delegation
 			if newdlg != nil {
 				// register self delegate if not registered yet (only before v002)
 				if b.block.Params.HasOriginationBug && src.RowId == newdlg.RowId && !newdlg.IsDelegate {
@@ -1473,6 +1479,14 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.OperationHead
 				newdlg.LastSeen = b.block.Height
 				newdlg.IsDirty = true
 			}
+
+			// create and register temporary a contract for potential use by
+			// subsequent transactions in the same block (this happened once
+			// on Carthagenet block 346116); the actual contract table entry
+			// is later created & inserted separately in contract index and
+			// this temporary object is discarded
+			// b.conMap[dst.RowId] = NewContract(dst, oop, op)
+			b.conMap[dst.RowId] = NewContract(dst, oop, op_l, op_p)
 		}
 	} else {
 		if !op.IsSuccess {
@@ -1484,7 +1498,7 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.OperationHead
 			src.NOps--
 			src.NOrigination--
 			src.IsDirty = true
-			// reverse delegation
+			// reverse origination
 			dst.MustDelete = true
 			dst.IsDirty = true
 			// only update when new delegate is a registered delegate
@@ -1534,10 +1548,16 @@ func (b *Builder) AppendInternalOriginationOp(
 	if !ok {
 		return Errorf("missing branch %s", oh.Branch)
 	}
-	var srcdlg, dst *Account
+	var srcdlg, newdlg, dst *Account
 	if src.DelegateId != 0 {
 		if srcdlg, ok = b.AccountById(src.DelegateId); !ok {
 			return Errorf("missing delegate %d for source account %d", src.DelegateId, src.RowId)
+		}
+	}
+	if iop.Delegate != nil {
+		if newdlg, ok = b.AccountByAddress(*iop.Delegate); !ok && iop.Result.Status.IsSuccess() {
+			return fmt.Errorf("internal origination op [%d:%d:%d]: missing delegate account %s",
+				op_l, op_p, op_i, iop.Delegate)
 		}
 	}
 
@@ -1560,6 +1580,12 @@ func (b *Builder) AppendInternalOriginationOp(
 	op.IsSuccess = op.Status.IsSuccess()
 	op.StorageSize = res.StorageSize
 	op.StoragePaid = res.PaidStorageSizeDiff
+
+	// store delegate
+	if newdlg != nil {
+		op.DelegateId = newdlg.RowId
+	}
+
 	var (
 		flows []*Flow
 		err   error
@@ -1607,7 +1633,7 @@ func (b *Builder) AppendInternalOriginationOp(
 		}
 
 		// create or extend bigmap diff to inject alloc for proto < v005
-		iop.Result.BigMapDiff, err = b.PatchBigMapDiff(ctx, res.BigMapDiff, op.ReceiverId, iop.Script)
+		iop.Result.BigMapDiff, err = b.PatchBigMapDiff(ctx, res.BigMapDiff, dst.Address(), iop.Script)
 		if err != nil {
 			return Errorf("patch bigmap: %v", err)
 		}
@@ -1657,6 +1683,29 @@ func (b *Builder) AppendInternalOriginationOp(
 			// internal originations have no manager, delegate and flags (in protocol v5)
 			// but we still keep the original caller as manager to track contract ownership
 			dst.ManagerId = origsrc.RowId
+
+			// handle delegation
+			if newdlg != nil {
+				dst.IsDelegated = true
+				dst.DelegateId = newdlg.RowId
+				dst.DelegatedSince = b.block.Height
+
+				newdlg.TotalDelegations++
+				if op.Volume > 0 {
+					// delegation becomes active only when dst KT1 is funded
+					newdlg.ActiveDelegations++
+				}
+				newdlg.LastSeen = b.block.Height
+				newdlg.IsDirty = true
+			}
+
+			// create and register temporary a contract for potential use by
+			// subsequent transactions in the same block (this happened once
+			// on Carthagenet block 346116); the actual contract table entry
+			// is later created & inserted separately in contract index and
+			// this temporary object is discarded
+			// b.conMap[dst.RowId] = NewInternalContract(dst, iop, op)
+			b.conMap[dst.RowId] = NewInternalContract(dst, iop, op_l, op_p, op_i)
 		}
 	} else {
 		if !op.IsSuccess {
@@ -1668,9 +1717,19 @@ func (b *Builder) AppendInternalOriginationOp(
 			src.NOps--
 			src.NOrigination--
 			src.IsDirty = true
-			// reverse delegation
+			// reverse origination
 			dst.MustDelete = true
 			dst.IsDirty = true
+			// only update when new delegate is a registered delegate
+			if newdlg != nil && newdlg.IsDelegate {
+				dst.IsDelegated = false
+				dst.DelegateId = 0
+				newdlg.TotalDelegations--
+				if op.Volume > 0 {
+					newdlg.ActiveDelegations--
+				}
+				newdlg.IsDirty = true
+			}
 		}
 	}
 
@@ -1743,6 +1802,7 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.OperationHeade
 	if op.GasUsed > 0 && op.Fee > 0 {
 		op.GasPrice = float64(op.Fee) / float64(op.GasUsed)
 	}
+	op.Volume = src.Balance()
 	b.block.Ops = append(b.block.Ops, op)
 
 	// build flows
@@ -1916,9 +1976,7 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.OperationHeade
 				src.IsDelegated = true
 				src.DelegateId = odlg.RowId
 				src.DelegatedSince = lastsince
-				if ndlg != nil && src.RowId != ndlg.RowId {
-					odlg.ActiveDelegations++
-				}
+				odlg.ActiveDelegations++
 				odlg.IsDirty = true
 			} else {
 				src.IsDelegated = false
@@ -1988,6 +2046,7 @@ func (b *Builder) AppendInternalDelegationOp(
 	op.Status = res.Status
 	op.GasUsed = res.ConsumedGas
 	op.IsSuccess = op.Status.IsSuccess()
+	op.Volume = src.Balance()
 
 	// build op
 	b.block.Ops = append(b.block.Ops, op)

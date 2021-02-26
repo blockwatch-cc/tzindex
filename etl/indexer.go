@@ -1,10 +1,11 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,39 +20,43 @@ import (
 )
 
 type IndexerConfig struct {
-	DBPath  string
-	DBOpts  interface{}
-	StateDB store.DB
-	Indexes []BlockIndexer
+	DBPath    string
+	DBOpts    interface{}
+	StateDB   store.DB
+	Indexes   []BlockIndexer
+	LightMode bool
 }
 
 // Indexer defines an index manager that manages and stores multiple indexes.
 type Indexer struct {
-	mu      sync.Mutex
-	times   atomic.Value
-	ranks   atomic.Value
-	dbpath  string
-	dbopts  interface{}
-	statedb store.DB
-	reg     *Registry
-	indexes []BlockIndexer
-	tips    map[string]*IndexTip
-	tables  map[string]*pack.Table
+	mu        sync.Mutex
+	times     atomic.Value
+	ranks     atomic.Value
+	rights    atomic.Value
+	dbpath    string
+	dbopts    interface{}
+	statedb   store.DB
+	reg       *Registry
+	indexes   []BlockIndexer
+	tips      map[string]*IndexTip
+	tables    map[string]*pack.Table
+	lightMode bool
 }
 
 func NewIndexer(cfg IndexerConfig) *Indexer {
 	return &Indexer{
-		dbpath:  cfg.DBPath,
-		dbopts:  cfg.DBOpts,
-		statedb: cfg.StateDB,
-		indexes: cfg.Indexes,
-		reg:     NewRegistry(),
-		tips:    make(map[string]*IndexTip),
-		tables:  make(map[string]*pack.Table),
+		dbpath:    cfg.DBPath,
+		dbopts:    cfg.DBOpts,
+		statedb:   cfg.StateDB,
+		indexes:   cfg.Indexes,
+		reg:       NewRegistry(),
+		tips:      make(map[string]*IndexTip),
+		tables:    make(map[string]*pack.Table),
+		lightMode: cfg.LightMode,
 	}
 }
 
-func (m *Indexer) Init(ctx context.Context, tip *ChainTip) error {
+func (m *Indexer) Init(ctx context.Context, tip *ChainTip, mode Mode) error {
 	// Nothing to do when no indexes are enabled.
 	if len(m.indexes) == 0 {
 		return nil
@@ -86,6 +91,8 @@ func (m *Indexer) Init(ctx context.Context, tip *ChainTip) error {
 	}
 
 	// Create the initial state for the indexes as needed.
+	nError := 0
+	nMissing := 0
 	if needCreate {
 		err := m.statedb.Update(func(dbTx store.Tx) error {
 			// create buckets for index tips in the respecive databases
@@ -110,7 +117,28 @@ func (m *Indexer) Init(ctx context.Context, tip *ChainTip) error {
 		if err != nil {
 			return err
 		}
+	} else {
+		// check all indexes are at same height as chain tip
+		for n, v := range m.tips {
+			if tip.BestHeight > 0 && v.Height != tip.BestHeight {
+				log.Errorf("%s index with unexpected height %d/%d", n, v.Height, tip.BestHeight)
+				nError++
+				if v.Height == 0 {
+					nMissing++
+				}
+			}
+		}
 	}
+
+	switch true {
+	case nMissing > 0 && !m.lightMode:
+		return fmt.Errorf("Missing database files! Looks like you used --light mode before or you deleted a database file.")
+	case nMissing > 0 && m.lightMode:
+		return fmt.Errorf("Missing database files! Looks like you deleted a database file.")
+	case nError > 0 && mode != MODE_ROLLBACK:
+		return fmt.Errorf("Corrupted database! Looks like you need to rebuild your database.")
+	}
+
 	// Initialize each of the enabled indexes.
 	for _, t := range m.indexes {
 		log.Infof("Initializing %s.", t.Name())
@@ -143,12 +171,7 @@ func (m *Indexer) Close() error {
 }
 
 func (m *Indexer) ConnectProtocol(ctx context.Context, params *chain.Params) error {
-	// update previous protocol end
 	prev := m.reg.GetParamsLatest()
-	// if prev != nil && prev.Version >= params.Version {
-	// 	return fmt.Errorf("new protocol %s version mismatch: latest v%d, new v%d",
-	// 		params.Protocol, prev.Version, params.Version)
-	// }
 	err := m.statedb.Update(func(dbTx store.Tx) error {
 		if prev != nil {
 			prev.EndHeight = params.StartHeight - 1
@@ -276,7 +299,6 @@ func (m *Indexer) storeTip(key string) error {
 	if !ok {
 		return nil
 	}
-	log.Debugf("Storing %s idx tip.", key)
 	return m.statedb.Update(func(dbTx store.Tx) error {
 		return dbStoreIndexTip(dbTx, key, tip)
 	})
@@ -300,11 +322,6 @@ func (m *Indexer) buildBlockTimes(ctx context.Context) ([]uint32, error) {
 		NoCache: true,
 		Fields:  blocks.Fields().Select("T"),
 		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: blocks.Fields().Find("h"), // all blocks with h >= 0
-				Mode:  pack.FilterModeGte,
-				Value: int64(0),
-			},
 			pack.Condition{
 				Field: blocks.Fields().Find("Z"), // non-orphan blocks only
 				Mode:  pack.FilterModeEqual,

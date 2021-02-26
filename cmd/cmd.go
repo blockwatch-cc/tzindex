@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package cmd
@@ -131,7 +131,7 @@ func initConfig() {
 		maxcpu = runtime.NumCPU()
 	}
 	log.Infof("%s tzindex %s -- %s", ORG_NAME, VERSION, GITCOMMIT)
-	log.Infof("(c) Copyright 2018-2020 -- %s", COMPANY_NAME)
+	log.Infof("(c) Copyright 2018-2021 -- %s", COMPANY_NAME)
 	log.Infof("Starting %s on %d cores", UserAgent, maxcpu)
 	log.Infof("Go version %s", runtime.Version())
 	runtime.GOMAXPROCS(maxcpu)

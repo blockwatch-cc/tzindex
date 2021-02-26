@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -15,7 +15,6 @@ import (
 	"blockwatch.cc/tzindex/chain"
 	"blockwatch.cc/tzindex/etl/index"
 	. "blockwatch.cc/tzindex/etl/model"
-	"blockwatch.cc/tzindex/micheline"
 	"blockwatch.cc/tzindex/rpc"
 )
 
@@ -28,6 +27,8 @@ type Builder struct {
 	conMap     map[AccountID]*Contract // smart contracts by account id
 
 	// build state
+	validate  bool        // enables validation
+	rpc       *rpc.Client // used for validation
 	block     *Block
 	parent    *Block
 	baking    []Right
@@ -35,7 +36,7 @@ type Builder struct {
 	branches  map[string]*Block
 }
 
-func NewBuilder(idx *Indexer) *Builder {
+func NewBuilder(idx *Indexer, c *rpc.Client, validate bool) *Builder {
 	return &Builder{
 		idx:        idx,
 		accHashMap: make(map[uint64]*Account),
@@ -46,6 +47,8 @@ func NewBuilder(idx *Indexer) *Builder {
 		baking:     make([]Right, 0, 64),
 		endorsing:  make([]Right, 0, 32),
 		branches:   make(map[string]*Block, 128), // more than max of 64
+		validate:   validate,
+		rpc:        c,
 	}
 }
 
@@ -276,6 +279,13 @@ func (b *Builder) Build(ctx context.Context, tz *Bundle) (*Block, error) {
 		return nil, fmt.Errorf("build stage 4: %v", err)
 	}
 
+	// 5  validity checks (expensive)
+	if b.validate {
+		if err := b.CheckState(ctx); err != nil {
+			return nil, fmt.Errorf("build stage 5: %v", err)
+		}
+	}
+
 	return b.block, nil
 }
 
@@ -387,6 +397,13 @@ func (b *Builder) BuildReorg(ctx context.Context, tz *Bundle, parent *Block) (*B
 		return nil, fmt.Errorf("block %d reorg-build stage 4: %v", b.block.Height, err)
 	}
 
+	// 5  validity checks (expensive)
+	if b.validate {
+		if err := b.CheckState(ctx); err != nil {
+			return nil, fmt.Errorf("build stage 5: %v", err)
+		}
+	}
+
 	return b.block, nil
 }
 
@@ -467,7 +484,7 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 			// init branches
 			br := oh.Branch.String()
 			if _, ok := b.branches[br]; !ok {
-				branch, err := b.idx.BlockByHash(ctx, oh.Branch)
+				branch, err := b.idx.BlockByHash(ctx, oh.Branch, b.block.Height-chain.MaxBranchDepth, b.block.Height)
 				if err != nil {
 					return fmt.Errorf("op [%d:%d]: invalid branch %s: %v", oh.Branch, err)
 				}
@@ -513,18 +530,15 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 				case chain.OpTypeEndorsement:
 					// deactive delegates may not be in map
 					end := op.(*rpc.EndorsementOp)
-					if _, ok := b.AccountByAddress(end.Metadata.Delegate); !ok {
-						addresses.AddUnique(end.Metadata.Delegate.String())
+					if _, ok := b.AccountByAddress(end.Metadata.Address()); !ok {
+						addresses.AddUnique(end.Metadata.Address().String())
 					}
 
 				case chain.OpTypeOrigination:
 					orig := op.(*rpc.OriginationOp)
 					addresses.AddUnique(orig.Source.String())
-					if orig.ManagerPubkey.IsValid() {
-						addresses.AddUnique(orig.ManagerPubkey.String())
-					}
-					if orig.ManagerPubkey2.IsValid() {
-						addresses.AddUnique(orig.ManagerPubkey2.String())
+					if m := orig.Manager(); m.IsValid() {
+						addresses.AddUnique(m.String())
 					}
 					for _, v := range orig.Metadata.Result.OriginatedContracts {
 						addresses.AddUnique(v.String())
@@ -573,60 +587,62 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 	unknownDelegateIds := make([]uint64, 0)
 
 	// fetch baking and endorsing rights for this block
-	table, err := b.idx.Table(index.RightsTableKey)
-	if err != nil {
-		return err
-	}
-	q := pack.Query{
-		Name:   "etl.rights.search",
-		Fields: table.Fields(),
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: table.Fields().Find("h"), // height
-				Mode:  pack.FilterModeEqual,
-				Value: b.block.Height,
-			},
-			pack.Condition{
-				Field: table.Fields().Find("t"), // type
-				Mode:  pack.FilterModeEqual,
-				Value: int64(chain.RightTypeBaking),
-			},
-		},
-	}
-	right := Right{}
-	err = table.Stream(ctx, q, func(r pack.Row) error {
-		if err := r.Decode(&right); err != nil {
+	if !b.idx.lightMode {
+		table, err := b.idx.Table(index.RightsTableKey)
+		if err != nil {
 			return err
 		}
-		b.baking = append(b.baking, right)
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	// endorsements are for block-1
-	q.Conditions[0].Value = b.block.Height - 1
-	q.Conditions[1].Value = int64(chain.RightTypeEndorsing)
-	err = table.Stream(ctx, q, func(r pack.Row) error {
-		if err := r.Decode(&right); err != nil {
+		q := pack.Query{
+			Name:   "etl.rights.search",
+			Fields: table.Fields(),
+			Conditions: pack.ConditionList{
+				pack.Condition{
+					Field: table.Fields().Find("h"), // height
+					Mode:  pack.FilterModeEqual,
+					Value: b.block.Height,
+				},
+				pack.Condition{
+					Field: table.Fields().Find("t"), // type
+					Mode:  pack.FilterModeEqual,
+					Value: int64(chain.RightTypeBaking),
+				},
+			},
+		}
+		right := Right{}
+		err = table.Stream(ctx, q, func(r pack.Row) error {
+			if err := r.Decode(&right); err != nil {
+				return err
+			}
+			b.baking = append(b.baking, right)
+			return nil
+		})
+		if err != nil {
 			return err
 		}
-		b.endorsing = append(b.endorsing, right)
-		return nil
-	})
-	if err != nil {
-		return err
-	}
+		// endorsements are for block-1
+		q.Conditions[0].Value = b.block.Height - 1
+		q.Conditions[1].Value = int64(chain.RightTypeEndorsing)
+		err = table.Stream(ctx, q, func(r pack.Row) error {
+			if err := r.Decode(&right); err != nil {
+				return err
+			}
+			b.endorsing = append(b.endorsing, right)
+			return nil
+		})
+		if err != nil {
+			return err
+		}
 
-	// collect from rights: on genesis and when deactivated, delegates are not in map
-	for _, r := range b.baking {
-		if _, ok := b.AccountById(r.AccountId); !ok {
-			unknownDelegateIds = append(unknownDelegateIds, r.AccountId.Value())
+		// collect from rights: on genesis and when deactivated, delegates are not in map
+		for _, r := range b.baking {
+			if _, ok := b.AccountById(r.AccountId); !ok {
+				unknownDelegateIds = append(unknownDelegateIds, r.AccountId.Value())
+			}
 		}
-	}
-	for _, r := range b.endorsing {
-		if _, ok := b.AccountById(r.AccountId); !ok {
-			unknownDelegateIds = append(unknownDelegateIds, r.AccountId.Value())
+		for _, r := range b.endorsing {
+			if _, ok := b.AccountById(r.AccountId); !ok {
+				unknownDelegateIds = append(unknownDelegateIds, r.AccountId.Value())
+			}
 		}
 	}
 
@@ -689,7 +705,7 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 	}
 
 	// lookup addr by hashes (non-existent addrs are expected to not resolve)
-	table, err = b.idx.Table(index.AccountTableKey)
+	table, err := b.idx.Table(index.AccountTableKey)
 	if err != nil {
 		return err
 	}
@@ -716,9 +732,8 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 			}
 
 			// collect unknown delegates when referenced
-			if acc.DelegateId > 0 {
+			if acc.DelegateId > 0 && acc.DelegateId != acc.RowId {
 				if _, ok := b.AccountById(acc.DelegateId); !ok {
-					// if _, ok := b.dlgMap[acc.DelegateId]; !ok {
 					unknownDelegateIds = append(unknownDelegateIds, acc.DelegateId.Value())
 				}
 			}
@@ -750,7 +765,6 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 
 	// lookup inactive delegates
 	if len(unknownDelegateIds) > 0 {
-		// creates a new slice
 		unknownDelegateIds = vec.UniqueUint64Slice(unknownDelegateIds)
 		err := table.StreamLookup(ctx, unknownDelegateIds, func(r pack.Row) error {
 			acc := AllocAccount()
@@ -763,10 +777,10 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 				acc.Free()
 				return nil
 			}
-			// handle like a regular account
+			// handle like a regular account, overwrite account map
 			hashKey := accountHashKey(acc)
-			b.dlgHashMap[hashKey] = acc
-			b.dlgMap[acc.RowId] = acc
+			b.accHashMap[hashKey] = acc
+			b.accMap[acc.RowId] = acc
 			return nil
 		})
 		if err != nil {
@@ -897,12 +911,8 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 		b.block.Baker = baker
 		b.block.BakerId = baker.RowId
 
-		// // update version from block nonce
-		// var nonce [8]byte
-		// binary.BigEndian.PutUint64(nonce[:], b.block.Nonce)
-		// if bytes.Compare(baker.BakerVersion, nonce[:4]) != 0 {
-		// 	baker.BakerVersion = nonce[:4]
-		// }
+		// // update baker software version from block nonce
+		// baker.SetVersion(b.block.Nonce)
 
 		// handle grace period
 		if baker.IsActiveDelegate {
@@ -923,14 +933,16 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 				b.block.Baker.IsDirty = true
 				// identify lower prio bakers from rights table and update BlocksMissed
 				// assuming the rights list is sorted by priority
-				for i := 0; i < b.block.Priority; i++ {
-					id := b.baking[i].AccountId
-					missed, ok := b.AccountById(id)
-					if !ok {
-						return fmt.Errorf("missing baker account %d", id)
+				if !b.idx.lightMode {
+					for i := 0; i < b.block.Priority; i++ {
+						id := b.baking[i].AccountId
+						missed, ok := b.AccountById(id)
+						if !ok {
+							return fmt.Errorf("missing baker account %d", id)
+						}
+						missed.BlocksMissed++
+						missed.IsDirty = true
 					}
-					missed.BlocksMissed++
-					missed.IsDirty = true
 				}
 			}
 		} else {
@@ -943,14 +955,16 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 				b.block.Baker.IsDirty = true
 				// identify lower prio bakers from rights table and update BlocksMissed
 				// assuming the rights list is sorted by priority
-				for i := 0; i < b.block.Priority; i++ {
-					id := b.baking[i].AccountId
-					missed, ok := b.AccountById(id)
-					if !ok {
-						return fmt.Errorf("missing baker account %d", id)
+				if !b.idx.lightMode {
+					for i := 0; i < b.block.Priority; i++ {
+						id := b.baking[i].AccountId
+						missed, ok := b.AccountById(id)
+						if !ok {
+							return fmt.Errorf("missing baker account %d", id)
+						}
+						missed.BlocksMissed--
+						missed.IsDirty = true
 					}
-					missed.BlocksMissed--
-					missed.IsDirty = true
 				}
 			}
 		}
@@ -1133,40 +1147,42 @@ func (b *Builder) UpdateStats(ctx context.Context) error {
 	}
 
 	// count endorsement slots missed
-	erights := make(map[AccountID]int)
-	var count int
-	for _, r := range b.endorsing {
-		acc, ok := b.AccountById(r.AccountId)
-		if !ok {
-			return fmt.Errorf("missing endorsement delegate %d: %#v", r.AccountId, r)
+	if !b.idx.lightMode {
+		erights := make(map[AccountID]int)
+		var count int
+		for _, r := range b.endorsing {
+			acc, ok := b.AccountById(r.AccountId)
+			if !ok {
+				return fmt.Errorf("missing endorsement delegate %d: %#v", r.AccountId, r)
+			}
+			num, _ := erights[acc.RowId]
+			erights[acc.RowId] = num + 1
+			count++
 		}
-		num, _ := erights[acc.RowId]
-		erights[acc.RowId] = num + 1
-		count++
-	}
 
-	for _, op := range b.block.Ops {
-		if op.Type != chain.OpTypeEndorsement {
-			continue
+		for _, op := range b.block.Ops {
+			if op.Type != chain.OpTypeEndorsement {
+				continue
+			}
+			o, _ := b.block.GetRpcOp(op.OpL, op.OpP, op.OpC)
+			eop := o.(*rpc.EndorsementOp)
+			acc, _ := b.AccountByAddress(eop.Metadata.Delegate)
+			num, _ := erights[acc.RowId]
+			erights[acc.RowId] = num - len(eop.Metadata.Slots)
 		}
-		o, _ := b.block.GetRpcOp(op.OpL, op.OpP, op.OpC)
-		eop := o.(*rpc.EndorsementOp)
-		acc, _ := b.AccountByAddress(eop.Metadata.Delegate)
-		num, _ := erights[acc.RowId]
-		erights[acc.RowId] = num - len(eop.Metadata.Slots)
-	}
 
-	for id, n := range erights {
-		acc, _ := b.AccountById(id)
-		if n > 0 {
-			// missed endorsements
-			acc.SlotsMissed += n
-			acc.IsDirty = true
-		}
-		if n < 0 {
-			// stolen endorsements (should not happen)
-			log.Warnf("%d stolen endorsement(s) in block %d %s delegate %d %s",
-				-n, b.block.Height, b.block.Hash, id, acc)
+		for id, n := range erights {
+			acc, _ := b.AccountById(id)
+			if n > 0 {
+				// missed endorsements
+				acc.SlotsMissed += n
+				acc.IsDirty = true
+			}
+			if n < 0 {
+				// stolen endorsements (should not happen)
+				log.Warnf("%d stolen endorsement(s) in block %d %s delegate %d %s",
+					-n, b.block.Height, b.block.Hash, id, acc)
+			}
 		}
 	}
 
@@ -1243,803 +1259,4 @@ func (b *Builder) RollbackStats(ctx context.Context) error {
 	b.block.Chain.Rollback(b.block)
 	b.block.Supply.Rollback(b.block)
 	return nil
-}
-
-func (b *Builder) BuildGenesisBlock(ctx context.Context) (*Block, error) {
-	gen := b.block.TZ.Block.Header.Content.Parameters
-	if gen == nil {
-		return nil, fmt.Errorf("missing genesis protocol_parameters")
-	}
-	log.Info("Building genesis dataset.")
-
-	// register new protocol (will save as new deployment)
-	b.block.Params.StartHeight = b.block.Height
-	b.idx.ConnectProtocol(ctx, b.block.Params)
-
-	accounts := make([]pack.Item, 0)
-	contracts := make([]pack.Item, 0)
-
-	opCounter := 1
-	flowCounter := 1
-
-	// process foundation bakers and early backer accounts (activate right away)
-	for i, v := range gen.Accounts {
-		// we use hard coded row ids for registrations
-		acc := NewAccount(v.Addr)
-		acc.RowId = AccountID(len(accounts) + 1)
-		acc.FirstSeen = b.block.Height
-		acc.LastSeen = b.block.Height
-		acc.SpendableBalance = v.Value
-		acc.IsFunded = true
-		acc.IsActivated = true
-
-		// revealed accounts are registered as active delegates (foundation bakers)
-		if v.Key.IsValid() {
-			acc.IsRevealed = true
-			acc.PubkeyHash = v.Key.Data
-			acc.PubkeyType = v.Key.Type.HashType()
-			acc.IsDelegate = true
-			acc.IsActiveDelegate = true
-			acc.DelegateSince = b.block.Height
-			acc.DelegateId = acc.RowId
-			b.block.NDelegation++
-			b.RegisterDelegate(acc, true)
-			b.AppendMagicBakerRegistrationOp(ctx, acc, i)
-			log.Debugf("1 BOOT REG SELF %d %s -> %d bal=%d",
-				acc.RowId, acc, acc.ActiveDelegations, acc.Balance())
-		} else {
-			b.accMap[acc.RowId] = acc
-			b.accHashMap[accountHashKey(acc)] = acc
-		}
-
-		// update block counters
-		b.block.NewImplicitAccounts++
-		b.block.FundedAccounts++
-		b.block.NewAccounts++
-		b.block.SeenAccounts++
-		b.block.ActivatedSupply += v.Value
-
-		// register activation flows (will not be applied, just saved!)
-		f := NewFlow(b.block, acc, nil, opCounter, OPL_PROTOCOL_UPGRADE, flowCounter, 0, 0)
-		f.Category = FlowCategoryBalance
-		f.Operation = FlowTypeActivation
-		f.AmountIn = acc.SpendableBalance
-		b.block.Flows = append(b.block.Flows, f)
-		flowCounter++
-
-		// register implicit activation ops
-		op := NewImplicitOp(b.block, 0, chain.OpTypeActivateAccount, opCounter, OPL_PROTOCOL_UPGRADE, opCounter)
-		op.SenderId = acc.RowId
-		op.Counter = int64(opCounter)
-		op.Volume = acc.SpendableBalance
-		b.block.Ops = append(b.block.Ops, op)
-		opCounter++
-
-		// prepare for insert
-		accounts = append(accounts, acc)
-
-		log.Debug(newLogClosure(func() string {
-			var as, vs, ds, rs string
-			if acc.IsActivated {
-				as = " [activated]"
-			}
-			if acc.IsVesting {
-				vs = " [vesting]"
-			}
-			if acc.IsDelegate {
-				ds = " [delegated]"
-			}
-			if acc.IsRevealed {
-				rs = " [revealed]"
-			}
-			return fmt.Sprintf("Registered %d %s %.6f%s%s%s%s", acc.RowId, acc,
-				b.block.Params.ConvertValue(acc.Balance()), as, ds, rs, vs)
-		}))
-	}
-
-	// process KT1 vesting contracts
-	for _, v := range gen.Contracts {
-		// we use hard coded row ids for registrations
-		acc := NewAccount(v.Addr)
-		acc.RowId = AccountID(len(accounts) + 1)
-		acc.ManagerId = acc.RowId // satisfy invariant
-		acc.FirstSeen = b.block.Height
-		acc.LastSeen = b.block.Height
-		acc.IsVesting = true
-		acc.IsContract = true
-		acc.IsFunded = true
-		acc.UnclaimedBalance = v.Value
-
-		// update block counters
-		b.block.NewAccounts++
-		b.block.SeenAccounts++
-		b.block.NewContracts++
-		b.block.FundedAccounts++
-		b.block.Supply.Unvested += acc.UnclaimedBalance
-
-		// link to and update delegate
-		dlg, _ := b.AccountByAddress(v.Delegate)
-		acc.IsDelegated = true
-		acc.DelegateId = dlg.RowId
-		acc.DelegatedSince = b.block.Height
-		dlg.TotalDelegations++
-		dlg.ActiveDelegations++
-		dlg.DelegatedBalance += acc.Balance() // this includes unvested
-		log.Debugf("1 BOOT ADD delegation %d %s -> %d (%d %s) bal=%d",
-			dlg.RowId, dlg, dlg.ActiveDelegations, acc.RowId, acc, acc.Balance())
-		// register delegation flows (will not be applied, just saved!)
-		f := NewFlow(b.block, dlg, acc, opCounter, OPL_PROTOCOL_UPGRADE, flowCounter, 0, 0)
-		f.Category = FlowCategoryDelegation
-		f.Operation = FlowTypeDelegation
-		f.AmountIn = acc.Balance()
-		b.block.Flows = append(b.block.Flows, f)
-		flowCounter++
-
-		// register implicit delegation ops
-		op := NewImplicitOp(b.block, 0, chain.OpTypeDelegation, opCounter, OPL_PROTOCOL_UPGRADE, opCounter)
-		op.SenderId = acc.RowId
-		op.DelegateId = dlg.RowId
-		op.Counter = int64(opCounter)
-		op.Volume = acc.UnclaimedBalance
-		b.block.Ops = append(b.block.Ops, op)
-
-		// put in cache
-		b.accMap[acc.RowId] = acc
-		b.accHashMap[accountHashKey(acc)] = acc
-
-		// prepare for insert
-		accounts = append(accounts, acc)
-
-		// save as contract (not spendable, not delegatebale, no fee, gas, limits)
-		cc := AllocContract()
-		cc.Hash = acc.Hash
-		cc.AccountId = acc.RowId
-		cc.Height = acc.FirstSeen
-		cc.Script, _ = v.Script.MarshalBinary()
-		cc.InterfaceHash = v.Script.InterfaceHash()
-		ep, _ := v.Script.Entrypoints(false)
-		acc.CallStats = make([]byte, 4*len(ep))
-		cc.OpL = OPL_PROTOCOL_UPGRADE
-		cc.OpP = opCounter
-		contracts = append(contracts, cc)
-		opCounter++
-
-		log.Debug(newLogClosure(func() string {
-			var as, vs, ds, rs string
-			if acc.IsActivated {
-				as = " [activated]"
-			}
-			if acc.IsVesting {
-				vs = " [vesting]"
-			}
-			if acc.IsDelegate {
-				ds = " [delegated]"
-			}
-			if acc.IsRevealed {
-				rs = " [revealed]"
-			}
-			return fmt.Sprintf("Registered %d %s %.6f%s%s%s%s", acc.RowId, acc,
-				b.block.Params.ConvertValue(acc.Balance()), as, ds, rs, vs)
-		}))
-	}
-
-	// process fundraiser accounts that must be activated by users
-	for _, v := range gen.Commitments {
-		// we use hard coded row ids for registrations
-		acc := NewAccount(v.Addr)
-		acc.RowId = AccountID(len(accounts) + 1)
-		acc.FirstSeen = b.block.Height
-		acc.LastSeen = b.block.Height
-		acc.UnclaimedBalance = v.Value
-
-		// update block counters
-		b.block.NewImplicitAccounts++
-		b.block.NewAccounts++
-		b.block.SeenAccounts++
-
-		// count unclaimed supply
-		b.block.Supply.Unclaimed += acc.UnclaimedBalance
-
-		// prepare for insert
-		accounts = append(accounts, acc)
-	}
-
-	// insert accounts to create rows (later the indexer will update all accounts again,
-	// but we need to properly init the table row_id counter here)
-	table, err := b.idx.Table(index.AccountTableKey)
-	if err != nil {
-		return nil, err
-	}
-	if err := table.Insert(ctx, accounts); err != nil {
-		return nil, err
-	}
-	table, err = b.idx.Table(index.ContractTableKey)
-	if err != nil {
-		return nil, err
-	}
-	if err := table.Insert(ctx, contracts); err != nil {
-		return nil, err
-	}
-
-	// init chain and supply counters from block and flows
-	b.block.Chain.Update(b.block, b.dlgMap)
-	b.block.Supply.Update(b.block, b.dlgMap)
-
-	// adjust unclaimed supply because supply.Update() subtracts genesis activation flows
-	// which are not supposed to be accounted for here
-	b.block.Supply.Unclaimed += b.block.Supply.Activated
-
-	// set initial unclaimed accounts to number of blinded accounts
-	b.block.Chain.UnclaimedAccounts += int64(len(gen.Commitments))
-
-	// adjust total supply on init and cross-check
-	b.block.Supply.Total += b.block.Supply.Activated + b.block.Supply.Unvested + b.block.Supply.Unclaimed
-	b.block.Supply.Circulating = b.block.Supply.Total - b.block.Supply.Unvested
-
-	if genesisSupply := gen.Supply(); b.block.Supply.Total != genesisSupply {
-		return nil, fmt.Errorf("Genesis supply mismatch exp=%d got=%d (active=%d unvested=%d unclaimed=%d)",
-			genesisSupply, b.block.Supply.Total,
-			b.block.Supply.Activated, b.block.Supply.Unvested, b.block.Supply.Unclaimed)
-	}
-
-	return b.block, nil
-}
-
-func (b *Builder) FixUpgradeBugs(ctx context.Context, prevparams, nextparams *chain.Params) error {
-	if b.block.Height <= 1 || prevparams.Version == nextparams.Version {
-		return nil
-	}
-
-	// origination bug
-	if prevparams.HasOriginationBug && !nextparams.HasOriginationBug {
-		if err := b.FixOriginationBug(ctx, nextparams); err != nil {
-			return err
-		}
-	}
-
-	// babylon airdrop
-	if nextparams.Protocol.IsEqual(chain.ProtoV005_2) && nextparams.ChainId.IsEqual(chain.Mainnet) {
-		// airdrop 1 mutez to managers
-		if err := b.RunBabylonAirdrop(ctx, nextparams); err != nil {
-			return err
-		}
-		// upgrade KT1 contracts without code
-		if err := b.RunBabylonUpgrade(ctx, nextparams); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// Bakers implicitly activated by a bug in v001 (called magic delegates by us)
-//
-// Sadly, there is no documentation about broken baker activation rules.
-// Core devs are unable or unwilling to answer questions regarding this issue.
-// Our previous implementation resulted in many false positives which in turn
-// resulted in excess total rolls and in turn in wrong luck and payout
-// share calculations.
-//
-var v001MagicDelegates = []chain.Address{
-	chain.MustParseAddress("tz1T7NFTcJQULn4GVoEEcod8v5f7fRJwF2JJ"),
-	chain.MustParseAddress("tz1LGdjnU54XLWBTb3jeqoYdxwdzfbtLDikY"),
-	chain.MustParseAddress("tz1aMdq4MVVcNAinaLbBbz1RaiEYDAj32gLM"),
-	chain.MustParseAddress("tz1fahTqRiZ88aozjxt593aqEyGhXzPMPqp6"),
-	chain.MustParseAddress("tz1XkALkYAQ2KFA8NqK2tJ8HBtRXqeSX14aS"),
-	chain.MustParseAddress("tz1e6ousJm7xbVUudCCrijZbaMfk2sjv3C91"),
-	chain.MustParseAddress("tz1b3SaPHFSw51r92ARcV5mGyYbSSsdFd5Gz"),
-	chain.MustParseAddress("tz1eU1Xb57o9cgHymUYJ45VYm1uLvwBFQA9N"),
-	chain.MustParseAddress("tz1PtbtUpKHF9KrCZjeKDzk1xuzGFkmXdYMk"),
-	chain.MustParseAddress("tz1Kra1CK3zxgpfb6fHDMuant4kAxgakmPxV"),
-	chain.MustParseAddress("tz1e17nNMNs9wfkUuPivXg2XWaMkvcqdyWje"),
-	chain.MustParseAddress("tz1Mvef6LM2sqmGWHyxq5wWRRfkA3nCeNqUB"),
-	chain.MustParseAddress("tz1NLTAX47PdGCdz3F46qoj9kokEx2dBnoo8"),
-	// needed for snapshot on cycle 4 and 5, but has no rolls in cycle 2
-	// since v002 migration happens in cycle 6 we need to add it here,
-	// otherwise income table entries are missing
-	chain.MustParseAddress("tz1UcuaXouNppYnbJr3JWGV31Fa2fnzesmJ4"),
-}
-
-// hash table for lookup
-var v001MagicDelegateSet = chain.NewAddressSet(v001MagicDelegates...)
-
-// activated by v002 migration (list compiled from research about roll
-// distributions and babylon airdrop)
-var v002MagicDelegates = []chain.Address{
-	chain.MustParseAddress("tz1a8jxLZv6M8cDjmNYwAXweQiKUnXgFWVQN"),
-	chain.MustParseAddress("tz1ajpiR5wkPXghYDdT4tizu3BG8iy4WJLz4"),
-	chain.MustParseAddress("tz1aR3E7CGyceYDa2BHBde8AL1RvWbS1ZgYJ"),
-	chain.MustParseAddress("tz1azWX5Ux5Hizb3qj1vHF5LZwwCMFA8b4mZ"),
-	chain.MustParseAddress("tz1bcx82twLzuDHRM9i7B4Jjnp7NMAUSMQFN"),
-	chain.MustParseAddress("tz1bg9WkHYxigQ7J4n2sufKWcPn955UrF3Kb"),
-	chain.MustParseAddress("tz1bh296rrEb5yRtpg87j3TVfcsFL4NxoDdj"),
-	chain.MustParseAddress("tz1bkhnnvrtmwcryKzHGbKp48yS2qNMRDehA"),
-	chain.MustParseAddress("tz1bQofEmH6iF5DwNzfPkuMkSoPJfgFYFJYd"),
-	chain.MustParseAddress("tz1bVXGLBa8qhHaymZ3yEwgHjiAE7MDom13K"),
-	chain.MustParseAddress("tz1bxz1kjYmnE4fsWFQKyU2NWzyiTG2YjhGV"),
-	chain.MustParseAddress("tz1cP3XjgyQ4xY3kCJbxXLbq2QzkeMFUFBoh"),
-	chain.MustParseAddress("tz1cQM6iWcptjU68FGfy1b7TNLr6aKUTQbTT"),
-	chain.MustParseAddress("tz1cs4Q98YbsUfNpch7ijQHtEgMqvdzTvnhW"),
-	chain.MustParseAddress("tz1dFhaP5bWLgBswYtBxpTFEXec7mmzBskNw"),
-	chain.MustParseAddress("tz1dhMmmUA1k3AoF2thLk9rvfd8yDxXxEGun"),
-	chain.MustParseAddress("tz1djECaHtJXhYP1kbK4KgJ2EHpgCVjvANnQ"),
-	chain.MustParseAddress("tz1duEr8qA9y2PUkRYnA7qE2nwmUpunANcQg"),
-	chain.MustParseAddress("tz1dWokQy9hhBCj1bZnJVjjfc61JxW2qCG92"),
-	chain.MustParseAddress("tz1e1BgVt3DZgA1AuTMTRGS2cgS2vGP3hMRE"),
-	chain.MustParseAddress("tz1e5NtW8mi6F6U8DfKaMwSeRaiPjrxKxT3V"),
-	chain.MustParseAddress("tz1e9jBy9dEGER2dKrtzcWtCpDfbbLNPTQab"),
-	chain.MustParseAddress("tz1ei6WjcQWCttFQtpqw4zaZrpb3XJUVfGem"),
-	chain.MustParseAddress("tz1eMKUnpTfS7ypTH9SRTRXBW4RBE8EEszsD"),
-	chain.MustParseAddress("tz1eNUaSdwY7RJfb3aVXFwPc3tiG6HeCADnq"),
-	chain.MustParseAddress("tz1eRPe6QWnsB6mp8wqbNBDB4VuufS5bcv5e"),
-	chain.MustParseAddress("tz1ewpKn61gGEyvvpgWSTTsZvWVGA2t7fK7i"),
-	chain.MustParseAddress("tz1f4U4NUdnMgP8rkPHvUBVznZsgUG636nhz"),
-	chain.MustParseAddress("tz1fc7jqJ4YuJx9Diyb8b4iiWAto34p7pqRT"),
-	chain.MustParseAddress("tz1ffqW9CQ6aCD8zwcq5CLs8Gth335LWAEDJ"),
-	chain.MustParseAddress("tz1fntgFVaRT3jxaMyHaxVua7w2TaNcPKeZP"),
-	chain.MustParseAddress("tz1foqx9ArpckkTvwbPiV4kjoYsxnbQdSE3o"),
-	chain.MustParseAddress("tz1fR6dVH7fS58y2EdDGtM24ZcBuwDnaiTBA"),
-	chain.MustParseAddress("tz1fuPAGNKQVktnvVHiGR6RNwf2TXSTwZn9T"),
-	chain.MustParseAddress("tz1g7ZuJf8m1G2PUXhwQDB9AEXyPp2zNK6GB"),
-	chain.MustParseAddress("tz1g9e5poiqG2V2SC7aya93MTKJt6pbyWrEk"),
-	chain.MustParseAddress("tz1g9EpsbjJBjC7h5cd1crpnxY7FqzGWFpLw"),
-	chain.MustParseAddress("tz1gAiP5zzKdh56evj1bxrXw27moCuPdAX5W"),
-	chain.MustParseAddress("tz1gFjEVbJjEmCWUa274oX6yjRxkrf4mgPU2"),
-	chain.MustParseAddress("tz1gftALWAg7Ui7Tb5tkdbw1g97BRHUQZevA"),
-	chain.MustParseAddress("tz1gJvShTiuxoaZtjcwMv3LHcGU2QFqx5dsE"),
-	chain.MustParseAddress("tz1gkWnVtzqzavL8PJNsDTVYyP8mLhdwqF45"),
-	chain.MustParseAddress("tz1gthtquS9XUKQnzV72AQKqMjpNJEMgoRJU"),
-	chain.MustParseAddress("tz1gwHTJH5UPRyF1fq2uGYyL5ZtCYxe8oyW7"),
-	chain.MustParseAddress("tz1hbQBiAccFQCWhxetrmXceRWxUW2noVoLU"),
-	chain.MustParseAddress("tz1hE2bwMvNAJJuSnTLjxfLCdLbkuZwRumsW"),
-	chain.MustParseAddress("tz1hoFUMWpvRWy4fMUgLGZjwe3i5xxtN1Qci"),
-	chain.MustParseAddress("tz1hqDpNW9hVHautPpe5n2umNcrdMKZkjpkX"),
-	chain.MustParseAddress("tz1i3fUf3HdAmHAYrFkiBiYDbX2xoLuQQcDP"),
-	chain.MustParseAddress("tz1iDNPdZiKzLDQYQMwn4opK5gK5b7S9rXnE"),
-	chain.MustParseAddress("tz1iGjJkxZjHEh9t7XSJf1fURbGPYjBvLB5z"),
-	chain.MustParseAddress("tz1ihTyGCkQUPCf2QGz5vxxYMTwLmbnjT6WP"),
-	chain.MustParseAddress("tz1iUKcomroMTdQvhMkuY6TDxAwoMb2M6Ryx"),
-	chain.MustParseAddress("tz1KgWEWyAFqGD2i5iKA3E64ABkaybWr3TBG"),
-	chain.MustParseAddress("tz1Knoe8doKmD8b364hh94hSZZ6Au46uBLgU"),
-	chain.MustParseAddress("tz1Kvszu74tzrfjZRYW9d1r7ePK81rHxsZUB"),
-	chain.MustParseAddress("tz1KxJeKFKZj2AGzdefoCxgWRYySewxqptcu"),
-	chain.MustParseAddress("tz1L6a3SsVqzvcxESxzqvEJpAcU8Hs4SSHEF"),
-	chain.MustParseAddress("tz1LHFqnoQnmqTQd79DvxdRMXfVFTSk8XeUt"),
-	chain.MustParseAddress("tz1LkWA74w264oHvmuQUVEFM2c7w19EMDsv9"),
-	chain.MustParseAddress("tz1LmJsZuRyxswNV4YghF3q5fmLLxrKST3gp"),
-	chain.MustParseAddress("tz1LpfwGyyfYCGfsUqjXmo1ZaCNBtCm1HJ3e"),
-	chain.MustParseAddress("tz1LQBPXnV2rWd9pL5dhZZ9iNZCx6D6wJexj"),
-	chain.MustParseAddress("tz1LrFegiq14oByxgcS7vGFnorj9uYBed6bD"),
-	chain.MustParseAddress("tz1LS6oGf95DV7c2mSZ17C6RsuoEiD9EwGWc"),
-	chain.MustParseAddress("tz1LUWkTyB62ZFpvn8ZrqbaVDPekXzcVMuFd"),
-	chain.MustParseAddress("tz1LVHUSTmfNHn1NpDa8Mz8vq1Sh5CCMXX4V"),
-	chain.MustParseAddress("tz1MGrrhm1vabnAJRBEQxVHYcEC1adqiziRs"),
-	chain.MustParseAddress("tz1MK15cQnc6snngNWw7YfjowkCZw2JNNmbU"),
-	chain.MustParseAddress("tz1MPzCt4xgE74D1fwHFrmjabb1sZvgQNSDF"),
-	chain.MustParseAddress("tz1MRHkVE9zxbAgho7uNuqAcmct17d3Ej9VS"),
-	chain.MustParseAddress("tz1MYMR3dySgoe14L4nEPycFFBwD9dnmSdHm"),
-	chain.MustParseAddress("tz1Mz7ZZu5Rgg2LamJmu2dzozZ2KZ8Jb2rLP"),
-	chain.MustParseAddress("tz1NaujomKqcKKacopVcQtqh32DTNaLAdcNb"),
-	chain.MustParseAddress("tz1NC7TTSyNwB5N7bQWXmafvJbCVrPKGNPcS"),
-	chain.MustParseAddress("tz1NEV1TPAeF68AiyLBUG7CPBFNJ1txVYqu1"),
-	chain.MustParseAddress("tz1NgGYS3RiesowW19n9TZpd4gnrHH1Ckkhn"),
-	chain.MustParseAddress("tz1NHGYDZj1EkNo2ZqE5nCxTJosGw4PBedch"),
-	chain.MustParseAddress("tz1NLQyBAjbgG9tk1rcVgXL2ArwBoH9jJxKo"),
-	chain.MustParseAddress("tz1NqYMDAR4dDxsgxV4WDcVNGfXAKakpdTeR"),
-	chain.MustParseAddress("tz1Nthwqk6zjHei1tEGdj228Awt7VsN86c6b"),
-	chain.MustParseAddress("tz1NuXPd1qePQeMzsMTZQAqy8a8DSkqYUVcb"),
-	chain.MustParseAddress("tz1P4CZSLSmD6VVUm9dqNFpy9eV3ZU1LwwbQ"),
-	chain.MustParseAddress("tz1P6GGbfN6EGVpgYHHbFpMAkBmGjhAqsEWJ"),
-	chain.MustParseAddress("tz1P6nfhyAx8uUapcZSuFmYtBzv4RmwF6qvg"),
-	chain.MustParseAddress("tz1PAcQy7L3EqKLaYZjpJ7sUNRXWe4NNnmEc"),
-	chain.MustParseAddress("tz1PCPMQ7WC62WqGxgHB1G48wVUCmvTbmoAE"),
-	chain.MustParseAddress("tz1Pk341z4zeN8rRTX1HwWXMfbzSsn6dwEYo"),
-	chain.MustParseAddress("tz1PPVuUuJR258nGtdHEsUSmBHHsvFeLrRTW"),
-	chain.MustParseAddress("tz1PS6NW7jeVrQEik1F8pguKR8tKQZbiT8fC"),
-	chain.MustParseAddress("tz1PygG8dRGV5vev2DALRAqmdYAqReTD8987"),
-	chain.MustParseAddress("tz1Q3fqvAJmijgABnHbbNm1ou81rvFcmBipM"),
-	chain.MustParseAddress("tz1QJVCDbrGkfEjcdWD1eXy71fXYtbNg93Gp"),
-	chain.MustParseAddress("tz1Qk2Q8Ju3YCSqPv9QxCEafSYZM1ZwTTcCn"),
-	chain.MustParseAddress("tz1QRKeabUMA4dExyk1y12v1MwqibWoczoZU"),
-	chain.MustParseAddress("tz1QRz9FBkKwtmP6nv6WhHVbnbGkFG5mNjwS"),
-	chain.MustParseAddress("tz1Qsa82diwpvMbsyi3t57KVyV6dGZX5zkSg"),
-	chain.MustParseAddress("tz1QWLv49qn15Vq7cCR2LnzWNrD8HtkwAeNd"),
-	chain.MustParseAddress("tz1R4MPhiReS2ujzj9RzVuvmrAZiTx1s1URX"),
-	chain.MustParseAddress("tz1RCpatyxtpTEzXYqQjsz6r2VrhMeF3pCY6"),
-	chain.MustParseAddress("tz1Rctu7qNj3RyAyz7kdyJjYkbYxeTpNFQRF"),
-	chain.MustParseAddress("tz1Rf4CBpave59kipUeSwUSvNjacnVPSpsoP"),
-	chain.MustParseAddress("tz1RQMjZjF2hg4ySfMCuZH5hAzNLziqTkazH"),
-	chain.MustParseAddress("tz1RQRJtR9xBKCPk6XBxVZo6Z5bjASYrDRtN"),
-	chain.MustParseAddress("tz1S3ucpKQrtkp8Bz7mw4LJ1zPVqmWufC5aS"),
-	chain.MustParseAddress("tz1S8ocaHL58fSrneqJeF6Ure4LSjarPcDDx"),
-	chain.MustParseAddress("tz1SQ3fSVjscp2vjmVSiyWQL9Yapt3y6FZHJ"),
-	chain.MustParseAddress("tz1SYSLhuc8woqw68isT2zFvkRgksyJReMTm"),
-	chain.MustParseAddress("tz1Szcfqv3iTVSsTb11X8YCCnxRsFP6uK3v5"),
-	chain.MustParseAddress("tz1TJY3ouYwqdcyPQFWU9DEy5q4Y5qEusPqY"),
-	chain.MustParseAddress("tz1TKzBHiEh1KrcYckcSiNWRRKjfowKw2GH3"),
-	chain.MustParseAddress("tz1TuY6PkTDL6LKL3jFjMBPst728uhGdQ6c6"),
-	chain.MustParseAddress("tz1TWQmJTfosQPFGUXjbXUzV6Tj23s8zbXUs"),
-	chain.MustParseAddress("tz1TwzoBefS8PEbe91h3eTkYsA4QAQEBMcVL"),
-	chain.MustParseAddress("tz1Ua95YukXAmcMbfUv67gEhxiJx1n9djMiU"),
-	chain.MustParseAddress("tz1UHQ7YYDaxSV4dY8boJRhUfmU7jKprEsZw"),
-	chain.MustParseAddress("tz1UrBsKAUybPbqZHKaNp8ru4F8NcW2e1inG"),
-	chain.MustParseAddress("tz1UVB4Yt8raLZq8AH9k386aqr7CG7qSMMjU"),
-	chain.MustParseAddress("tz1VayoLunKK13JkS6ZpLfHvB193VaZLnU3N"),
-	chain.MustParseAddress("tz1VDn5stQhZzeyPiMMNGwRpXZC9MP9AnAt6"),
-	chain.MustParseAddress("tz1VDRt5NL44SEECAW7Qft8nSCjhDWvhYPrb"),
-	chain.MustParseAddress("tz1VdUYXimk7JCvZawMtsZgd6gwj8XdpQHF1"),
-	chain.MustParseAddress("tz1VJDAEFypQPtU3t23ZFiVxPQDV8zamkvgZ"),
-	chain.MustParseAddress("tz1VpBoHR8MHD33kbzN5VHM5b6dBtp35LoZp"),
-	chain.MustParseAddress("tz1VqbLLmk7WVxStGh22wMQwpnspahivg7QT"),
-	chain.MustParseAddress("tz1VQuud7J1kmBCrhcKYsYHU1FX5nkFjtLpu"),
-	chain.MustParseAddress("tz1VuiTbm9gJa1HoYQqZxvggdBaB9DB4mM8z"),
-	chain.MustParseAddress("tz1VUunMWp6tfK7T7QQQTBcsrnp713CmCDYi"),
-	chain.MustParseAddress("tz1VuWhc9ZvbXgmnwAcYdYAkZQscuVZyrdba"),
-	chain.MustParseAddress("tz1W7roMZucBCjh8QgwwgJsjEazW2YgA7sJ5"),
-	chain.MustParseAddress("tz1WAvs7bK5EYscH3xBf1LbJCoMMXBpjgK5F"),
-	chain.MustParseAddress("tz1WeuWTkfMaViHypSX7joYjWX8NApHHC2sq"),
-	chain.MustParseAddress("tz1WtkJEkKjHX3bMDYwJoDVC4gPksNPUa3v7"),
-	chain.MustParseAddress("tz1WtUtJcKEEp8ixYDEqkHEUYLyS2U4qWpzJ"),
-	chain.MustParseAddress("tz1WUVANirUcv3rSNNWxcv8GwMUAnH9mDnjn"),
-	chain.MustParseAddress("tz1X1T8PQWFoVzRS8WLDTYs9HWUVNTe3FNv5"),
-	chain.MustParseAddress("tz1X4C6KvSAkavFAexxCJNpdyYtP8bftRcoe"),
-	chain.MustParseAddress("tz1XB7RRogXyqoDPVcRLd9LS2kJoQRGT4Eje"),
-	chain.MustParseAddress("tz1Xbr2W9JAjfSa8P2LZut3kAUGwfN5Gb1B8"),
-	chain.MustParseAddress("tz1XkRTJT7gn41VczW8dx1KQjPFxWYVei8Cs"),
-	chain.MustParseAddress("tz1XWPzj88rcMfFAbwe9MPYQQ3wJi64HVWCp"),
-	chain.MustParseAddress("tz1XymQfBfSJMDoeCAMmseR5SiHKMXCWMaNy"),
-	chain.MustParseAddress("tz1XzPWgr4vYMKXJ64MwpfD2EWXKvnpcmFgi"),
-	chain.MustParseAddress("tz1YJPm9wxbGrX9gC8ExdqFQqtGCVMRhoJ43"),
-	chain.MustParseAddress("tz1YKEF6GHFkkHxmpn11ongpYtmA3tCL7ZXv"),
-	chain.MustParseAddress("tz1YptCde7YGdZt5Hyefi84LkQ6g23rPUzuh"),
-	chain.MustParseAddress("tz1YRDGSE2DDyLdVDn6tXm2gGqTSF5FXTGhB"),
-	chain.MustParseAddress("tz1Yua1wMkSaggN3pkFF157jfXTELAVExuxM"),
-	chain.MustParseAddress("tz1YVWh2g8Lne3RrJukx7bESXKWzryiXvyyV"),
-	chain.MustParseAddress("tz1Z2YY9D5piNsiPwe9KrvqBam4vqhvyLboD"),
-	chain.MustParseAddress("tz1ZSr8MfNZsFQJ2Gt67rJfNFeJks2P7cgwr"),
-	chain.MustParseAddress("tz1NRxCpNaQuYpTvqCTq6Qns6gm25ApRwg4Q"),
-	chain.MustParseAddress("tz1hG79KtHTkfJuCedpayNhuDwbFnbQL6tCG"),
-	chain.MustParseAddress("tz1U8xtmSRzu9RWP62YQMSev6Q3XG1KhHqRz"),
-	chain.MustParseAddress("tz1TW1Ncg3BPHLbmy83R9c6xoGE6WaTQE5bL"),
-	chain.MustParseAddress("tz1U8xtmSRzu9RWP62YQMSev6Q3XG1KhHqRz"),
-	chain.MustParseAddress("tz1MXj88Yeq7jW3Y6GpeV8GcPqySB4Y2grZR"),
-}
-
-// v002 fixed an 'origination bug'
-//
-// Changelog published on Slack at 20-07-2018 15:45:31 (block 26,579 cycle 6)
-// https://log.tezos.link/index.php?date=20-07-2018
-//
-// - Fixed a bug in delegations, where contracts could delegate to unregistered
-//   delegates. This will be enforced from now on, and the existing unregistered
-//   delegates will be automatically registered (except for two empty addresses).
-//
-// Note: this description is not fully correct (the correct answer is unknown) but
-// it provides us with a sufficiently accurate estimate that overestimates the
-// number of delegates, but is safe to move forward
-//
-// We usually register all delegates as soon as they send an op to include them into
-// snapshots. In protocols that have params.HasOriginationBug set we do this as soon
-// as the origination is sent to a non registered delegate. That's why here we
-// re-register such delegates to update their grace period and set a proper delegate id
-// which does not happen during origination on purpose. That way we can discern such
-// delegates from correctly registered delegates by checking
-//
-//   IsDelegate == true && DelegateId == 0
-//
-func (b *Builder) FixOriginationBug(ctx context.Context, params *chain.Params) error {
-	// only run on mainnet
-	if !params.ChainId.IsEqual(chain.Mainnet) {
-		return nil
-	}
-
-	var count int
-	var err error
-	for i, addr := range v002MagicDelegates {
-		dlg, ok := b.AccountByAddress(addr)
-		if !ok {
-			dlg, err = b.idx.LookupAccount(ctx, addr)
-			if err != nil {
-				return fmt.Errorf("Upgrade v%03d: missing account %s", params.Version, addr)
-			}
-		}
-
-		// skip properly registered bakers
-		if dlg.DelegateId > 0 {
-			continue
-		}
-
-		// activate magic bakers
-		dlg.DelegateId = dlg.RowId
-		b.RegisterDelegate(dlg, true)
-		count++
-
-		// inject an implicit baker registration
-		b.AppendMagicBakerRegistrationOp(ctx, dlg, i)
-	}
-	log.Infof("Upgrade to v%03d: registered %d extra bakers", params.Version, count)
-
-	// reset grace period for v001 magic bakers
-	count = 0
-	for _, addr := range v001MagicDelegates {
-		dlg, ok := b.AccountByAddress(addr)
-		if !ok {
-			dlg, err = b.idx.LookupAccount(ctx, addr)
-			if err != nil {
-				return fmt.Errorf("Upgrade v%03d: missing baker account %s", params.Version, addr)
-			}
-		}
-
-		// bump grace period if smaller than cycle + preserved + 2
-		// - tz1b3SaPHFSw51r92ARcV5mGyYbSSsdFd5Gz has 14 (stays at 14)
-		// - tz1fahTqRiZ88aozjxt593aqEyGhXzPMPqp6 has 17 (reinit to 6 + 11)
-		// - tz1UcuaXouNppYnbJr3JWGV31Fa2fnzesmJ4 has 17 (reinit to 6 + 11)
-		if dlg.GracePeriod <= b.block.Cycle+b.block.Params.PreservedCycles+2 {
-			dlg.InitGracePeriod(b.block.Cycle, b.block.Params)
-			count++
-		}
-	}
-	log.Infof("Upgrade to v%03d: updated %d extra bakers", params.Version, count)
-
-	// unregister non-baker accounts
-	drop := make([]*Account, 0)
-	for _, dlg := range b.dlgMap {
-		if dlg.DelegateId > 0 {
-			continue
-		}
-		drop = append(drop, dlg)
-	}
-	for _, v := range drop {
-		b.UnregisterDelegate(v)
-	}
-	log.Infof("Upgrade to v%03d: dropped %d non-bakers", params.Version, len(drop))
-	return nil
-}
-
-// v005 airdrops 1 mutez to unfunded manager accounts to avoid origination burn
-func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *chain.Params) error {
-	// collect all eligible addresses and inject airdrop flows
-	table, err := b.idx.Table(index.AccountTableKey)
-	if err != nil {
-		return err
-	}
-
-	// The rules are:
-	// - process all originated accounts (KT1)
-	// - if it has code and is spendable allocate the manager contract (implicit account)
-	// - if it has code and is delegatble allocate the manager contract (implicit account)
-	// - if it has no code (delegation KT1) allocate the manager contract (implicit account)
-	// - (extra side condition) implicait account is not registered as delegate
-	//
-	// The above three cases are the cases where the manager contract (implicit account) is
-	// able to interact through the KT1 that it manages. For example, if the originated
-	// account has code but is neither spendable nor delegatable then the manager contract
-	// cannot act on behalf of the originated contract.
-
-	// find eligible KT1 contracts where we need to check the manager
-	q := pack.Query{
-		Name: "etl.addr.babylon_airdrop_eligible",
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: table.Fields().Find("t"), // type
-				Mode:  pack.FilterModeEqual,
-				Value: int64(chain.AddressTypeContract),
-			},
-		},
-	}
-	managers := make([]uint64, 0)
-	contract := &Account{}
-	err = table.Stream(ctx, q, func(r pack.Row) error {
-		if err := r.Decode(contract); err != nil {
-			return err
-		}
-		// skip all excluded contracts that do not match the rules above
-		if contract.IsContract {
-			if !contract.IsSpendable && !contract.IsDelegatable {
-				return nil
-			}
-		}
-		managers = append(managers, contract.ManagerId.Value())
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-
-	// find unfunded managers who are not reqistered as delegates
-	q = pack.Query{
-		Name: "etl.addr.babylon_airdrop",
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: table.Fields().Find("f"), // is_funded
-				Mode:  pack.FilterModeEqual,
-				Value: false,
-			},
-			pack.Condition{
-				Field: table.Fields().Find("d"), // is_delegate
-				Mode:  pack.FilterModeEqual,
-				Value: false,
-			},
-			pack.Condition{
-				Field: table.Fields().Find("I"), // pk
-				Mode:  pack.FilterModeIn,
-				Value: vec.UniqueUint64Slice(managers), // make list unique
-			},
-		},
-	}
-	var count int
-	err = table.Stream(ctx, q, func(r pack.Row) error {
-		acc := AllocAccount()
-		if err := r.Decode(acc); err != nil {
-			acc.Free()
-			return err
-		}
-		// airdrop 1 mutez
-		if err := b.AppendAirdropOp(ctx, acc, 1, count); err != nil {
-			return err
-		}
-		count++
-		// log.Debugf("airdrop: %s %f", acc, params.ConvertValue(1))
-		// add account to builder map if not exist
-		if _, ok := b.accMap[acc.RowId]; !ok {
-			b.accMap[acc.RowId] = acc
-		} else {
-			acc.Free()
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	log.Infof("Upgrade to v%03d: executed %d airdrops", params.Version, count)
-	return nil
-}
-
-func (b *Builder) RunBabylonUpgrade(ctx context.Context, params *chain.Params) error {
-	// collect all eligible addresses and inject airdrop flows
-	table, err := b.idx.Table(index.AccountTableKey)
-	if err != nil {
-		return err
-	}
-	// find eligible KT1 accounts that are not yet contracts
-	// Note: these are KT1 accounts distinct from the tz1/2/3 airdrop
-	// accounts above
-	q := pack.Query{
-		Name: "etl.addr.babylon_upgrade_eligible",
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: table.Fields().Find("t"), // type
-				Mode:  pack.FilterModeEqual,
-				Value: int64(chain.AddressTypeContract),
-			},
-			pack.Condition{
-				Field: table.Fields().Find("c"), // is_contract
-				Mode:  pack.FilterModeEqual,
-				Value: false,
-			},
-		},
-	}
-	err = table.Stream(ctx, q, func(r pack.Row) error {
-		acc := &Account{}
-		if err := r.Decode(acc); err != nil {
-			return err
-		}
-		// not all such KT1's are eleigible for upgrade, just ones
-		// that are either spendable or delegatable
-		if !acc.NeedsBabylonUpgrade(params) {
-			return nil
-		}
-		// upgrade note:
-		// - this does not add contract code to the contract table!
-		// - this does not change parameters for existing operations
-		log.Debugf("upgrade: %s to smart contract", acc)
-		acc.UpgradeToBabylon(params)
-
-		// add account to builder map, account index will write back to db
-		b.accMap[acc.RowId] = acc
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// big_map_diffs in proto < v005 lack id and action. Also allocs are not explicit.
-// In order to satisfy further processing logic we patch in an alloc when we see a
-// new contract using a bigmap.
-// Contracts before v005 can only own a single bigmap which makes life a bit easier.
-// Note: on zeronet big_map is a regular map due to protocol bug
-func (b *Builder) PatchBigMapDiff(ctx context.Context, diff micheline.BigMapDiff, accId AccountID, script *micheline.Script) (micheline.BigMapDiff, error) {
-	// do nothing on post-Athens bigmaps
-	if b.block.Params.Version > 4 {
-		return diff, nil
-	}
-
-	// without diff, check if script contains a bigmap alloc
-	if diff == nil {
-		if script == nil {
-			return nil, nil
-		}
-		// technically, the bigmap type must be top-level or part of a pair
-		// https://gitlab.com/tezos/tezos/merge_requests/617
-		if _, ok := script.Code.Storage.FindType(micheline.T_BIG_MAP); !ok {
-			return nil, nil
-		}
-	}
-
-	// load contract
-	contract, err := b.idx.LookupContractId(ctx, accId)
-	if err != nil {
-		return nil, err
-	}
-
-	// either script is set (origination) or we lookup the contract (transaction)
-	if script == nil {
-		// unpack script
-		script = micheline.NewScript()
-		if err := script.UnmarshalBinary(contract.Script); err != nil {
-			return nil, fmt.Errorf("unmarshal script: %v", err)
-		}
-	}
-
-	// bitmap id allocation on mainnet is not origination order!
-	// looks random, so we hard-code ids here
-	staticAthensBigmapIds := map[string]int64{
-		"KT1LvAUw8xXH2X4WQRKUYvSiDuXkh15kNC1B": 0,
-		"KT1WRUe3csC1jiThN9KUtaji2bd412upfn1E": 1,
-		"KT1UDc2ZUoAAvv8amw2DqVuQK1fKjb1HjxR4": 2,
-		"KT1R3uoZ6W1ZxEwzqtv75Ro7DhVY6UAcxuK2": 3,
-		"KT1VG2WtYdSWz5E7chTeAdDPZNy2MpP8pTfL": 4,
-		"KT1CvzXrz19fnHKuWedFY3WqmVAB7kMTPLLS": 5,
-		"KT1FbkiY8Y1gSh4x9QVzfvtcUrXEQAx7wYnf": 6,
-		"KT1SAaFjYUD5KFYidYxPzpnf6HgFs4oAJuTz": 7,
-		"KT1A1N85VE2Mi3zuDvKidWNy6P6Fj4iRz2rA": 8,
-		"KT1UvfyLytrt71jh63YV4Yex5SmbNXpWHxtg": 9,
-		"KT1REHQ183LzfoVoqiDR87mCrt7CLUH1MbcV": 10,
-	}
-	id, ok := staticAthensBigmapIds[contract.String()]
-	if !ok {
-		return nil, fmt.Errorf("bigmap patch unknown contract %s", contract.String())
-	}
-
-	// check if bigmap is allocated
-	var needAlloc bool
-	if _, _, err := b.idx.LookupBigmap(ctx, id, false); err != nil {
-		if err != index.ErrNoBigMapEntry {
-			return nil, err
-		}
-		needAlloc = true
-	}
-
-	// inject a synthetic alloc to satisfy processing logic
-	if needAlloc {
-		// find bigmap type definition
-		typ, ok := script.Code.Storage.FindType(micheline.T_BIG_MAP)
-		if ok {
-			// create alloc for new bigmaps
-			alloc := micheline.BigMapDiffElem{
-				Action:    micheline.BigMapDiffActionAlloc,
-				Id:        id,          // alloc new id
-				KeyType:   typ.Args[0], // (Left) == key_type
-				ValueType: typ.Args[1], // (Right) == value_type
-			}
-			// prepend
-			diff = append([]micheline.BigMapDiffElem{alloc}, diff...)
-
-			// set id on all items
-			for i := range diff {
-				diff[i].Id = id
-			}
-		} else {
-			return nil, fmt.Errorf("missing bigmap type def for contract/account %d", accId)
-		}
-	} else {
-		// patch id for existing bigmap
-		for i := range diff {
-			diff[i].Id = id
-		}
-	}
-
-	return diff, nil
 }

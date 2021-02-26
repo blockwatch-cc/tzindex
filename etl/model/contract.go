@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package model
@@ -145,7 +145,7 @@ func (c *Contract) Reset() {
 
 func (c *Contract) NeedsBabylonUpgrade(p *chain.Params, height int64) bool {
 	// babylon activation
-	isEligible := p.ChainId.IsEqual(chain.Mainnet) && p.Version >= 5 && height < 655361
+	isEligible := p.IsMainnet() && p.Version >= 5 && height < 655361
 	// contract upgrade criteria
 	isEligible = isEligible && (c.IsSpendable || (!c.IsSpendable && c.IsDelegatable))
 	return isEligible

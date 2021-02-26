@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -9,6 +9,8 @@ import (
 	"math/bits"
 	"net/http"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"blockwatch.cc/packdb/pack"
@@ -20,8 +22,58 @@ import (
 	"blockwatch.cc/tzindex/rpc"
 )
 
+// keep a cache of past cycles to avoid expensive database lookups
+type (
+	cycleMap map[int64]*ExplorerCycle
+)
+
+var (
+	cycleMapStore atomic.Value
+	cycleMutex    sync.Mutex
+)
+
 func init() {
 	register(ExplorerCycle{})
+	cycleMapStore.Store(make(cycleMap))
+}
+
+func purgeCycleStore() {
+	cycleMutex.Lock()
+	defer cycleMutex.Unlock()
+	cycleMapStore.Store(make(cycleMap))
+}
+
+// use read-mostly cache for complete cycles
+func lookupOrBuildCycle(ctx *ApiContext, id int64) *ExplorerCycle {
+	if id < 0 {
+		return nil
+	}
+	m := cycleMapStore.Load().(cycleMap)
+	c, ok := m[id]
+	if !ok {
+		// lazy load under lock to avoid duplicate calls while building
+		cycleMutex.Lock()
+		defer cycleMutex.Unlock()
+		// check again after aquiring the lock
+		m = cycleMapStore.Load().(cycleMap)
+		c, ok = m[id]
+		if !ok {
+			c = NewExplorerCycle(ctx, id)
+			// cycles are final when complete and when snapshot was taken
+			if c != nil && c.IsComplete && c.IsSnapshot {
+				m2 := make(cycleMap) // create a new map
+				for k, v := range m {
+					m2[k] = v // copy all data
+				}
+				m2[id] = c // add new cycle data
+				cycleMapStore.Store(m2)
+			}
+		}
+	}
+	// always return a copy
+	cc := &ExplorerCycle{}
+	*cc = *c
+	return cc
 }
 
 var _ RESTful = (*ExplorerCycle)(nil)
@@ -76,6 +128,7 @@ type ExplorerCycle struct {
 
 	// cache hint
 	expires time.Time `json:"-"`
+	lastmod time.Time `json:"-"`
 }
 
 func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
@@ -352,19 +405,15 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 }
 
 func (c ExplorerCycle) LastModified() time.Time {
-	if c.IsComplete {
-		return c.EndTime
+	if c.FollowerCycle != nil && c.FollowerCycle.IsComplete {
+		return c.FollowerCycle.EndTime
 	}
-	return time.Now().UTC()
+	return c.lastmod
 }
 
 func (c ExplorerCycle) Expires() time.Time {
-	if c.IsComplete {
-		if c.FollowerCycle.IsComplete {
-			return time.Time{}
-		} else {
-			return c.FollowerCycle.expires
-		}
+	if c.FollowerCycle != nil && c.FollowerCycle.IsComplete {
+		return time.Now().UTC().Add(maxCacheExpires)
 	}
 	return c.expires
 }
@@ -410,15 +459,20 @@ func parseCycle(ctx *ApiContext) int64 {
 func ReadCycle(ctx *ApiContext) (interface{}, int) {
 	id := parseCycle(ctx)
 	p := ctx.Params
+	tiptime := ctx.Tip.BestTime
 
 	// compose cycle data from N, N-7 and N+7
-	cycle := NewExplorerCycle(ctx, id)
+	cycle := lookupOrBuildCycle(ctx, id)
 
 	// snapshot cycle who defined rights for this cycle
-	cycle.SnapshotCycle = NewExplorerCycle(ctx, id-(p.PreservedCycles+2))
+	cycle.SnapshotCycle = lookupOrBuildCycle(ctx, id-(p.PreservedCycles+2))
 
 	// future cycle who's rights are defined by this cycle
-	cycle.FollowerCycle = NewExplorerCycle(ctx, id+(p.PreservedCycles+2))
+	cycle.FollowerCycle = lookupOrBuildCycle(ctx, id+(p.PreservedCycles+2))
+
+	// set cache expiry
+	cycle.expires = tiptime.Add(p.TimeBetweenBlocks[0])
+	cycle.lastmod = tiptime
 
 	return cycle, http.StatusOK
 }

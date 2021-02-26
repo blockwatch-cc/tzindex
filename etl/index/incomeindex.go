@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -171,7 +171,7 @@ func (idx *IncomeIndex) DisconnectBlock(ctx context.Context, block *Block, build
 
 	// new rights are fetched in cycles
 	if block.Params.IsCycleStart(block.Height) {
-		return idx.DeleteCycle(ctx, block.Height)
+		return idx.DeleteCycle(ctx, block.Cycle+block.Params.PreservedCycles)
 	}
 	return nil
 }
@@ -412,7 +412,7 @@ func (idx *IncomeIndex) CreateCycleIncome(ctx context.Context, block *Block, bui
 					Value: sn.RollSnapshot, // the selected index
 				},
 				pack.Condition{
-					Field: snap.Fields().Find("v"), // (previously) active delegates only
+					Field: snap.Fields().Find("?"), // delegates only (active+inactive)
 					Mode:  pack.FilterModeEqual,
 					Value: true,
 				},

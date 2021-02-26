@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package cmd
@@ -16,8 +16,6 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/store"
 	"blockwatch.cc/tzindex/etl"
-	"blockwatch.cc/tzindex/etl/index"
-	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 	"github.com/echa/config"
@@ -31,6 +29,7 @@ var (
 	noapi     bool
 	cors      bool
 	stop      int64
+	validate  bool
 )
 
 func init() {
@@ -44,6 +43,8 @@ func init() {
 	runCmd.Flags().BoolVar(&unsafe, "unsafe", false, "disable fsync for fast ingest (DANGEROUS! data will be lost on crashes)")
 	runCmd.Flags().Int64Var(&stop, "stop", 0, "stop indexing after `height`")
 	runCmd.Flags().BoolVar(&cors, "enable-cors", false, "enable API CORS support")
+	runCmd.Flags().BoolVar(&validate, "validate", false, "validate account balances")
+	runCmd.Flags().BoolVar(&lightIndex, "light", false, "light mode (use to skip baker and gov data)")
 
 	rootCmd.AddCommand(runCmd)
 }
@@ -110,23 +111,11 @@ func runServer(args []string) error {
 
 	// enable index storage tables
 	indexer := etl.NewIndexer(etl.IndexerConfig{
-		DBPath:  pathname,
-		DBOpts:  DBOpts(engine, false, unsafe),
-		StateDB: statedb,
-		Indexes: []model.BlockIndexer{
-			index.NewAccountIndex(tableOptions("account"), indexOptions("account")),
-			index.NewContractIndex(tableOptions("contract"), indexOptions("contract")),
-			index.NewBlockIndex(tableOptions("block"), indexOptions("block")),
-			index.NewOpIndex(tableOptions("op"), indexOptions("op")),
-			index.NewFlowIndex(tableOptions("flow")),
-			index.NewChainIndex(tableOptions("chain")),
-			index.NewSupplyIndex(tableOptions("supply")),
-			index.NewRightsIndex(tableOptions("right")),
-			index.NewSnapshotIndex(tableOptions("snapshot")),
-			index.NewIncomeIndex(tableOptions("income")),
-			index.NewGovIndex(tableOptions("gov")),
-			index.NewBigMapIndex(tableOptions("bigmap"), indexOptions("bigmap")),
-		},
+		DBPath:    pathname,
+		DBOpts:    DBOpts(engine, false, unsafe),
+		StateDB:   statedb,
+		LightMode: lightIndex,
+		Indexes:   enabledIndexes(),
 	})
 	defer indexer.Close()
 
@@ -137,6 +126,7 @@ func runServer(args []string) error {
 		Queue:         config.GetInt("crawler.queue"),
 		EnableMonitor: !nomonitor,
 		StopBlock:     stop,
+		Validate:      validate,
 		Snapshot: &etl.SnapshotConfig{
 			Path:          config.GetString("crawler.snapshot_path"),
 			Blocks:        config.GetInt64Slice("crawler.snapshot_blocks"),

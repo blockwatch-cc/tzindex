@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -31,15 +31,25 @@ var (
 	_ RESTful = (*ExplorerOpList)(nil)
 )
 
-type ExplorerOpList []*ExplorerOp
+type ExplorerOpList struct {
+	list    []*ExplorerOp
+	expires time.Time
+}
 
 func (t ExplorerOpList) LastModified() time.Time {
-	return t[0].Timestamp
+	l := len(t.list)
+	if l == 0 {
+		return time.Time{}
+	}
+	a, b := t.list[0].Timestamp, t.list[l-1].Timestamp
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
-func (t ExplorerOpList) Expires() time.Time {
-	return time.Time{}
-}
+func (l ExplorerOpList) MarshalJSON() ([]byte, error) { return json.Marshal(l.list) }
+func (l ExplorerOpList) Expires() time.Time           { return l.expires }
 
 func (t ExplorerOpList) RESTPrefix() string {
 	return ""
@@ -396,7 +406,7 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 				},
 			}
 			switch v.Action {
-			case micheline.BigMapDiffActionUpdate:
+			case micheline.DiffActionUpdate:
 				// temporary bigmap updates lack type info
 				if keyType == nil {
 					keyType = v.Key.BuildType()
@@ -435,7 +445,7 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 					}
 				}
 
-			case micheline.BigMapDiffActionRemove:
+			case micheline.DiffActionRemove:
 				// remove may be a bigmap removal without key
 				if v.Key.OpCode != micheline.I_EMPTY_BIG_MAP {
 					// temporary bigmap updates lack type info
@@ -460,7 +470,7 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 					}
 				}
 
-			case micheline.BigMapDiffActionAlloc:
+			case micheline.DiffActionAlloc:
 				// no unboxed value, just types
 				// bmt := micheline.BigMapType(*v.ValueType)
 				enc := v.Encoding()
@@ -474,7 +484,7 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 					}
 				}
 
-			case micheline.BigMapDiffActionCopy:
+			case micheline.DiffActionCopy:
 				// no unboxed value, just types
 				bmd := alloc.BigMapDiff()
 				upd.KeyEncoding = &alloc.KeyEncoding
@@ -537,6 +547,7 @@ type ExplorerOpsRequest struct {
 	Since  string `schema:"since"`  // block hash or height for updates
 	Unpack bool   `schema:"unpack"` // unpack packed key/values
 	Prim   bool   `schema:"prim"`   // for prim/value rendering
+	Meta   bool   `schema:"meta"`   // include account metadata
 
 	// decoded type condition
 	TypeMode pack.FilterMode `schema:"-"`
@@ -662,9 +673,12 @@ func ReadOp(ctx *ApiContext) (interface{}, int) {
 	args := &ExplorerOpsRequest{}
 	ctx.ParseRequestArgs(args)
 	ops := loadOps(ctx)
-	resp := make(ExplorerOpList, 0, len(ops))
+	resp := &ExplorerOpList{
+		list:    make([]*ExplorerOp, 0, len(ops)),
+		expires: ctx.Now.Add(maxCacheExpires),
+	}
 	for _, v := range ops {
-		resp = append(resp, NewExplorerOp(ctx, v, nil, nil, args))
+		resp.list = append(resp.list, NewExplorerOp(ctx, v, nil, nil, args))
 	}
 	return resp, http.StatusOK
 }

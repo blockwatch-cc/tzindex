@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package model
@@ -132,11 +132,11 @@ func NewBlock(tz *Bundle, parent *Block) (*Block, error) {
 	}
 
 	// init block model from rpc block and local data (expecing defaults for unset fields)
-	b.Height = tz.Block.Header.Level
-	b.Cycle = tz.Block.Metadata.Level.Cycle
-	b.Timestamp = tz.Block.Header.Timestamp
+	b.Height = tz.Block.GetLevel()
+	b.Cycle = tz.Block.GetCycle()
+	b.Timestamp = tz.Block.GetTimestamp()
 	b.Hash = tz.Block.Hash
-	b.Version = tz.Block.Header.Proto
+	b.Version = tz.Block.GetVersion()
 	b.Validation = tz.Block.Header.ValidationPass
 	b.Priority = tz.Block.Header.Priority
 	if len(tz.Block.Header.ProofOfWorkNonce) >= 8 {
@@ -149,7 +149,7 @@ func NewBlock(tz *Bundle, parent *Block) (*Block, error) {
 	}
 
 	// be robust against missing voting period (like on block 0 and 1)
-	b.VotingPeriodKind = tz.Block.Metadata.VotingPeriodKind
+	b.VotingPeriodKind = tz.Block.GetVotingPeriodKind()
 	if !b.VotingPeriodKind.IsValid() {
 		if parent != nil {
 			b.VotingPeriodKind = parent.VotingPeriodKind
@@ -205,8 +205,8 @@ func (b *Block) FetchRPC(ctx context.Context, c *rpc.Client) error {
 			b.Params = chain.NewParams()
 		}
 		b.Params = b.Params.
-			ForProtocol(b.TZ.Block.Protocol).
-			ForNetwork(b.TZ.Block.ChainId)
+			ForNetwork(b.TZ.Block.ChainId).
+			ForProtocol(b.TZ.Block.Protocol)
 		b.Params.Deployment = b.TZ.Block.Header.Proto
 	}
 	b.TZ.Params = b.Params

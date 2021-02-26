@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package model
@@ -263,8 +263,8 @@ func (a *Account) UpgradeToBabylon(p *chain.Params) {
 	if !a.IsSpendable && a.IsDelegatable {
 		offs++
 	}
-	newcs := make([]byte, offs+len(a.CallStats))
-	copy(newcs[offs:], a.CallStats)
+	newcs := make([]byte, 4*offs+len(a.CallStats))
+	copy(newcs[4*offs:], a.CallStats)
 	a.CallStats = newcs
 }
 
