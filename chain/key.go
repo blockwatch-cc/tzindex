@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package chain
@@ -20,12 +20,15 @@ var (
 	ErrUnknownKeyType = errors.New("unknown key type")
 )
 
-type KeyType int
+type KeyType byte
 
 const (
 	KeyTypeEd25519 KeyType = iota
 	KeyTypeSecp256k1
 	KeyTypeP256
+	KeyTypeEd25519Sec
+	KeyTypeSecp256k1Sec
+	KeyTypeP256Sec
 	KeyTypeInvalid
 )
 
@@ -33,14 +36,24 @@ func (t KeyType) IsValid() bool {
 	return t >= 0 && t < KeyTypeInvalid
 }
 
+func (t KeyType) String() string {
+	return t.Prefix()
+}
+
 func (t KeyType) HashType() HashType {
 	switch t {
 	case KeyTypeEd25519:
-		return HashTypePkhEd25519
+		return HashTypePkEd25519
 	case KeyTypeSecp256k1:
-		return HashTypePkhSecp256k1
+		return HashTypePkSecp256k1
 	case KeyTypeP256:
-		return HashTypePkhP256
+		return HashTypePkP256
+	case KeyTypeEd25519Sec:
+		return HashTypeSkEd25519
+	case KeyTypeSecp256k1Sec:
+		return HashTypeSkSecp256k1
+	case KeyTypeP256Sec:
+		return HashTypeSkP256
 	default:
 		return HashTypeInvalid
 	}
@@ -67,6 +80,12 @@ func (t KeyType) PrefixBytes() []byte {
 		return SECP256K1_PUBLIC_KEY_ID
 	case KeyTypeP256:
 		return P256_PUBLIC_KEY_ID
+	case KeyTypeEd25519Sec:
+		return ED25519_SECRET_KEY_ID
+	case KeyTypeSecp256k1Sec:
+		return SECP256K1_SECRET_KEY_ID
+	case KeyTypeP256Sec:
+		return P256_SECRET_KEY_ID
 	default:
 		return nil
 	}
@@ -80,6 +99,12 @@ func (t KeyType) Prefix() string {
 		return SECP256K1_PUBLIC_KEY_PREFIX
 	case KeyTypeP256:
 		return P256_PUBLIC_KEY_PREFIX
+	case KeyTypeEd25519Sec:
+		return ED25519_SECRET_KEY_PREFIX
+	case KeyTypeSecp256k1Sec:
+		return SECP256K1_SECRET_KEY_PREFIX
+	case KeyTypeP256Sec:
+		return P256_SECRET_KEY_PREFIX
 	default:
 		return ""
 	}
@@ -93,6 +118,9 @@ func (t KeyType) Tag() byte {
 		return 1
 	case KeyTypeP256:
 		return 2
+	// case KeyTypeEd25519Sec:// ?
+	// case KeyTypeSecp256k1Sec:// ?
+	// case KeyTypeP256Sec:// ?
 	default:
 		return 255
 	}
@@ -106,6 +134,9 @@ func ParseKeyTag(b byte) KeyType {
 		return KeyTypeSecp256k1
 	case 2:
 		return KeyTypeP256
+	// case KeyTypeEd25519Sec:// ?
+	// case KeyTypeSecp256k1Sec:// ?
+	// case KeyTypeP256Sec:// ?
 	default:
 		return KeyTypeInvalid
 	}
@@ -116,6 +147,9 @@ func HasKeyPrefix(s string) bool {
 		ED25519_PUBLIC_KEY_PREFIX,
 		SECP256K1_PUBLIC_KEY_PREFIX,
 		P256_PUBLIC_KEY_PREFIX,
+		ED25519_SECRET_KEY_PREFIX,
+		SECP256K1_SECRET_KEY_PREFIX,
+		P256_SECRET_KEY_PREFIX,
 	} {
 		if strings.HasPrefix(s, prefix) {
 			return true
@@ -132,6 +166,12 @@ func (t KeyType) Len() int {
 		return 33
 	case KeyTypeP256:
 		return 33
+	case KeyTypeEd25519Sec:
+		return 64
+	case KeyTypeSecp256k1Sec:
+		return 32
+	case KeyTypeP256Sec:
+		return 32
 	default:
 		return 0
 	}
@@ -150,7 +190,7 @@ func NewKey(typ KeyType, data []byte) Key {
 }
 
 func (k Key) IsValid() bool {
-	return k.Type.Len() == len(k.Data)
+	return k.Type.IsValid() && k.Type.Len() == len(k.Data)
 }
 
 func (k Key) IsEqual(k2 Key) bool {
@@ -263,12 +303,19 @@ func ParseKey(s string) (Key, error) {
 		k.Type = KeyTypeSecp256k1
 	case bytes.Compare(version, P256_PUBLIC_KEY_ID) == 0:
 		k.Type = KeyTypeP256
+	case bytes.Compare(version, ED25519_SECRET_KEY_ID) == 0:
+		k.Type = KeyTypeEd25519Sec
+	case bytes.Compare(version, SECP256K1_SECRET_KEY_ID) == 0:
+		k.Type = KeyTypeSecp256k1Sec
+	case bytes.Compare(version, P256_SECRET_KEY_ID) == 0:
+		k.Type = KeyTypeP256Sec
 	default:
 		return k, fmt.Errorf("unknown version %v for key %s", version, s)
 	}
 	if l := len(decoded); l != k.Type.Len() {
 		return k, fmt.Errorf("invalid length %d for %s key data", l, k.Type.Prefix())
 	}
+	// k.Data = decoded[:k.Type.Len()]
 	k.Data = decoded
 	return k, nil
 }

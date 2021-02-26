@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package chain
@@ -15,7 +15,16 @@ const (
 	VotingPeriodTestingVote
 	VotingPeriodTesting
 	VotingPeriodPromotionVote
+	VotingPeriodAdoption
 )
+
+var VotingPeriods = []VotingPeriodKind{
+	VotingPeriodProposal,
+	VotingPeriodTestingVote,
+	VotingPeriodTesting,
+	VotingPeriodPromotionVote,
+	VotingPeriodAdoption,
+}
 
 func (v VotingPeriodKind) IsValid() bool {
 	return v != VotingPeriodInvalid
@@ -44,6 +53,8 @@ func (v VotingPeriodKind) Num() int {
 		return 3
 	case VotingPeriodPromotionVote:
 		return 4
+	case VotingPeriodAdoption:
+		return 5
 	default:
 		return 1
 	}
@@ -57,6 +68,8 @@ func ToVotingPeriod(i int) VotingPeriodKind {
 		return VotingPeriodTesting
 	case 4:
 		return VotingPeriodPromotionVote
+	case 5:
+		return VotingPeriodAdoption
 	default:
 		return VotingPeriodProposal
 	}
@@ -72,6 +85,8 @@ func ParseVotingPeriod(s string) VotingPeriodKind {
 		return VotingPeriodTesting
 	case "promotion_vote":
 		return VotingPeriodPromotionVote
+	case "adoption":
+		return VotingPeriodAdoption
 	default:
 		return VotingPeriodInvalid
 	}
@@ -87,6 +102,8 @@ func (v VotingPeriodKind) String() string {
 		return "testing"
 	case VotingPeriodPromotionVote:
 		return "promotion_vote"
+	case VotingPeriodAdoption:
+		return "adoption"
 	default:
 		return ""
 	}

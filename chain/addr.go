@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package chain
@@ -335,11 +335,14 @@ func (s AddressSet) hash(addr Address) uint64 {
 	return h.Sum64()
 }
 
+func (s *AddressSet) AddUnique(addr Address) bool {
+	h := s.hash(addr)
+	_, ok := s.set[h]
+	s.set[h] = struct{}{}
+	return !ok
+}
+
 func (s *AddressSet) Add(addr Address) {
-	if s.Contains(addr) {
-		fmt.Printf("AddressSet: duplicate %s\n", addr)
-		return
-	}
 	s.set[s.hash(addr)] = struct{}{}
 }
 
@@ -350,6 +353,16 @@ func (s *AddressSet) Remove(addr Address) {
 func (s AddressSet) Contains(addr Address) bool {
 	_, ok := s.set[s.hash(addr)]
 	return ok
+}
+
+func (s *AddressSet) Merge(b *AddressSet) {
+	for n, _ := range b.set {
+		s.set[n] = struct{}{}
+	}
+}
+
+func (s *AddressSet) Len() int {
+	return len(s.set)
 }
 
 // from stdlib hash/fnv/fnv.go

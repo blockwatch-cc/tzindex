@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package chain
@@ -406,6 +406,23 @@ func (t HashType) Base58Len() int {
 		return 99
 	default:
 		return 0
+	}
+}
+
+// DEPRECATED, will migrate to new key handling in v8.1
+func (t HashType) KeyType() KeyType {
+	switch t {
+	case HashTypePkhEd25519, // technically incorrect, bug in v7/packdb
+		HashTypePkEd25519: // correct
+		return KeyTypeEd25519
+	case HashTypePkhSecp256k1, // technically incorrect, bug in v7/packdb
+		HashTypePkSecp256k1: // correct
+		return KeyTypeSecp256k1
+	case HashTypePkhP256, // technically incorrect, bug in v7/packdb
+		HashTypePkP256: // correct
+		return KeyTypeP256
+	default:
+		return KeyTypeInvalid
 	}
 }
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package chain
@@ -65,21 +65,24 @@ type Params struct {
 	Invoices map[string]int64 `json:"invoices,omitempty"`
 
 	// extra features to follow protocol upgrades
-	SilentSpendable      bool `json:"silent_spendable"` // contracts are spendable/delegatable without flag set
-	HasOriginationBug    bool `json:"has_origination_bug"`
-	ReactivateByTx       bool `json:"reactivate_by_tx"`
-	OperationTagsVersion int  `json:"operation_tags_version"`
+	SilentSpendable      bool  `json:"silent_spendable"` // contracts are spendable/delegatable without flag set
+	HasOriginationBug    bool  `json:"has_origination_bug"`
+	ReactivateByTx       bool  `json:"reactivate_by_tx"`
+	OperationTagsVersion int   `json:"operation_tags_version"`
+	NumVotingPeriods     int   `json:"num_voting_periods"`
+	StartBlockOffset     int64 `json:"vote_block_offset"` // correct voting start/end detection
 }
 
 func NewParams() *Params {
 	return &Params{
-		Name:        "Tezos",
-		Network:     "",
-		Symbol:      "XTZ",
-		StartHeight: -1,
-		EndHeight:   -1,
-		Decimals:    6,
-		Token:       1000000,
+		Name:             "Tezos",
+		Network:          "",
+		Symbol:           "XTZ",
+		StartHeight:      -1,
+		EndHeight:        -1,
+		Decimals:         6,
+		Token:            1000000,
+		NumVotingPeriods: 4,
 	}
 }
 
@@ -137,20 +140,28 @@ func (p *Params) SnapshotBlock(cycle, index int64) int64 {
 
 func (p *Params) VotingStartCycleFromHeight(height int64) int64 {
 	currentCycle := p.CycleFromHeight(height)
-	offset := height % p.BlocksPerVotingPeriod
+	offset := (height - p.StartBlockOffset) % p.BlocksPerVotingPeriod
 	return currentCycle - offset/p.BlocksPerCycle
 }
 
 func (p *Params) IsVoteStart(height int64) bool {
-	return height > 0 && (height-1)%p.BlocksPerVotingPeriod == 0
+	return height > 0 && (height-p.StartBlockOffset-1)%p.BlocksPerVotingPeriod == 0
 }
 
 func (p *Params) IsVoteEnd(height int64) bool {
-	return height > 0 && height%p.BlocksPerVotingPeriod == 0
+	return height > 0 && (height-p.StartBlockOffset)%p.BlocksPerVotingPeriod == 0
+}
+
+func (p *Params) MaxBlockReward() int64 {
+	return p.BlockReward + p.EndorsementReward*int64(p.EndorsersPerBlock)
 }
 
 func (p *Params) ContainsHeight(height int64) bool {
-	// treat -1 as special hight query that matches open interval params only
+	// treat -1 as special height query that matches open interval params only
 	return (height < 0 && p.EndHeight < 0) ||
 		(p.StartHeight <= height && (p.EndHeight < 0 || p.EndHeight >= height))
+}
+
+func (p *Params) IsMainnet() bool {
+	return p.ChainId.IsEqual(Mainnet)
 }

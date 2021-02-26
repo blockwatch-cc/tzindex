@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package chain
@@ -14,6 +14,8 @@ var (
 	ProtoV006_1 = ParseProtocolHashSafe("PtCarthavAMoXqbjBPVgDCRd5LgT7qqKWUPXnYii3xCaHRBMfHH")
 	ProtoV006_2 = ParseProtocolHashSafe("PsCARTHAGazKbHtnKfLzQg3kms52kSRpgnDY982a9oYsSXRLQEb")
 	ProtoV007   = ParseProtocolHashSafe("PsDELPH1Kxsxt8f9eWbxQeRxkjfbxoqM52jvs5Y5fBxWWh4ifpo")
+	ProtoV008_1 = ParseProtocolHashSafe("PtEdoTezd3RHSC31mpxxo1npxFjoWWcFgQtxapi51Z8TLu6v6Uq")
+	ProtoV008_2 = ParseProtocolHashSafe("PtEdo2ZkT9oKpimTah6x2embF25oss54njMuPzkJTEi5RqfdZFA")
 
 	Mainnet     = MustParseChainIdHash("NetXdQprcVkpaWU")
 	Alphanet    = MustParseChainIdHash("NetXgtSLGNJvNye")
@@ -21,6 +23,8 @@ var (
 	Babylonnet  = MustParseChainIdHash("NetXUdfLh6Gm88t")
 	Carthagenet = MustParseChainIdHash("NetXjD3HPJJjmcd")
 	Delphinet   = MustParseChainIdHash("NetXm8tYqnMWky1")
+	Edonet      = MustParseChainIdHash("NetXSp4gfdanies")
+	Edonet2     = MustParseChainIdHash("NetXSgo1ZT2DRUG")
 
 	// maximum depth of branches for ops to be included on chain, also
 	// defines max depth of a possible reorg and max block priorities
@@ -44,6 +48,10 @@ func (p *Params) ForNetwork(net ChainIdHash) *Params {
 		pp.Network = "Carthagenet"
 	case Delphinet.IsEqual(net):
 		pp.Network = "Delphinet"
+	case Edonet.IsEqual(net):
+		pp.Network = "Edonet"
+	case Edonet2.IsEqual(net):
+		pp.Network = "Edonet2"
 	default:
 		pp.Network = "Sandbox"
 	}
@@ -54,6 +62,7 @@ func (p *Params) ForProtocol(proto ProtocolHash) *Params {
 	pp := &Params{}
 	*pp = *p
 	pp.Protocol = proto
+	pp.NumVotingPeriods = 4
 	switch true {
 	case ProtoV000.IsEqual(proto):
 		pp.Version = 0
@@ -92,6 +101,14 @@ func (p *Params) ForProtocol(proto ProtocolHash) *Params {
 	case ProtoV007.IsEqual(proto):
 		pp.Version = 7
 		pp.OperationTagsVersion = 1
+		// no invoice
+	case ProtoV008_2.IsEqual(proto) || ProtoV008_1.IsEqual(proto):
+		pp.Version = 8
+		pp.OperationTagsVersion = 1
+		pp.NumVotingPeriods = 5
+		if Mainnet.IsEqual(p.ChainId) {
+			pp.StartBlockOffset = 1343488
+		}
 		// no invoice
 	}
 	return pp
