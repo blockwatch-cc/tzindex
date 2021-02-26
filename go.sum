@@ -1,5 +1,7 @@
 blockwatch.cc/packdb v0.0.0-20201121154437-716b4859c9de h1:gJQZ9UNz4/M4dwpol7SxG4RCmf+nD3SKndMITkDf9LI=
 blockwatch.cc/packdb v0.0.0-20201121154437-716b4859c9de/go.mod h1:FY/quF9xQRYz98aGqcz7tUBp8hCxBHDcTxksB2SZSsE=
+blockwatch.cc/packdb v0.0.0-20210203182112-d2201387d365 h1:vgIyZq6SzV3mf56yaPF/L8rLU/3Sd4PrwmZOJ7+ETjo=
+blockwatch.cc/packdb v0.0.0-20210203182112-d2201387d365/go.mod h1:FY/quF9xQRYz98aGqcz7tUBp8hCxBHDcTxksB2SZSsE=
 cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/OneOfOne/xxhash v1.2.2 h1:KMrpdQIwFcEqXDklaen+P1axHaj9BSKzvpUUfnHldSE=
