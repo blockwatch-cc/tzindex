@@ -1,3 +1,4 @@
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Copyright (c) 2013-2014 The btcsuite developers
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
@@ -11,7 +12,7 @@ import (
 )
 
 var bufPool = &sync.Pool{
-	New: func() interface{} { return make([]byte, 0) },
+	New: func() interface{} { return make([]byte, 0, 96) },
 }
 
 // ErrChecksum indicates that the checksum of a check-encoded string does not verify against
@@ -31,12 +32,16 @@ func checksum(input []byte) (cksum [4]byte) {
 
 // CheckEncode prepends a version byte and appends a four byte checksum.
 func CheckEncode(input []byte, version []byte) string {
-	b := make([]byte, 0, len(version)+len(input)+4)
+	bi := bufPool.Get()
+	b := bi.([]byte)[:0]
 	b = append(b, version[:]...)
 	b = append(b, input[:]...)
 	cksum := checksum(b)
 	b = append(b, cksum[:]...)
-	return Encode(b)
+	res := Encode(b)
+	b = b[:0]
+	bufPool.Put(bi)
+	return res
 }
 
 // CheckDecode decodes a string that was encoded with CheckEncode and verifies the checksum.
@@ -53,6 +58,5 @@ func CheckDecode(input string, vlen int, buf []byte) ([]byte, []byte, error) {
 		return nil, nil, ErrChecksum
 	}
 	payload := decoded[vlen : len(decoded)-4]
-	// result = append(result, payload...)
 	return payload, version, nil
 }

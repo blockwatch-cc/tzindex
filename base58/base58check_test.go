@@ -1,3 +1,4 @@
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Copyright (c) 2013-2014 The btcsuite developers
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
@@ -31,15 +32,15 @@ var checkEncodingStringTests = []struct {
 func TestBase58Check(t *testing.T) {
 	for x, test := range checkEncodingStringTests {
 		// test encoding
-		if res := base58.CheckEncode([]byte(test.in), test.version); res != test.out {
+		if res := base58.CheckEncode([]byte(test.in), []byte{test.version}); res != test.out {
 			t.Errorf("CheckEncode test #%d failed: got %s, want: %s", x, res, test.out)
 		}
 
 		// test decoding
-		res, version, err := base58.CheckDecode(test.out)
+		res, version, err := base58.CheckDecode(test.out, 1, nil)
 		if err != nil {
 			t.Errorf("CheckDecode test #%d failed with err: %v", x, err)
-		} else if version != test.version {
+		} else if version[0] != test.version {
 			t.Errorf("CheckDecode test #%d failed: got version: %d want: %d", x, version, test.version)
 		} else if string(res) != test.in {
 			t.Errorf("CheckDecode test #%d failed: got: %s want: %s", x, res, test.in)
@@ -48,7 +49,7 @@ func TestBase58Check(t *testing.T) {
 
 	// test the two decoding failure cases
 	// case 1: checksum error
-	_, _, err := base58.CheckDecode("3MNQE1Y")
+	_, _, err := base58.CheckDecode("3MNQE1Y", 1, nil)
 	if err != base58.ErrChecksum {
 		t.Error("Checkdecode test failed, expected ErrChecksum")
 	}
@@ -56,8 +57,8 @@ func TestBase58Check(t *testing.T) {
 	// bytes are missing).
 	testString := ""
 	for len := 0; len < 4; len++ {
-		// make a string of length `len`
-		_, _, err = base58.CheckDecode(testString)
+		testString = testString + "x"
+		_, _, err = base58.CheckDecode(testString, 1, nil)
 		if err != base58.ErrInvalidFormat {
 			t.Error("Checkdecode test failed, expected ErrInvalidFormat")
 		}
