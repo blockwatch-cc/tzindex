@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 // see http://tezos.gitlab.io/whitedoc/michelson.html#full-grammar
@@ -53,12 +53,18 @@ func (k BigMapKey) IsPacked() bool {
 	return k.Type.OpCode == T_BYTES && len(k.BytesKey) > 1 && k.BytesKey[0] == 0x5
 }
 
-func (k BigMapKey) UnpackPrim() (*Prim, error) {
+func (k BigMapKey) UnpackPrim() (p *Prim, err error) {
 	if !k.IsPacked() {
 		return nil, fmt.Errorf("key is not packed")
 	}
-	p := &Prim{}
-	if err := p.UnmarshalBinary(k.BytesKey[1:]); err != nil {
+	defer func() {
+		if e := recover(); e != nil {
+			p = nil
+			err = fmt.Errorf("prim is not packed")
+		}
+	}()
+	p = &Prim{}
+	if err = p.UnmarshalBinary(k.BytesKey[1:]); err != nil {
 		return nil, err
 	}
 	return p, nil
@@ -170,6 +176,23 @@ func ParseBigMapKey(typ, val string) (*BigMapKey, error) {
 			}
 			key.AddrKey = a
 		}
+	case T_PAIR:
+		// parse comma-separated list into a pair tree
+		v := strings.SplitN(val, ",", 2)
+		if len(v) != 2 {
+			return nil, fmt.Errorf("micheline: invalid big_map %s key '%s'", key.Type.OpCode, val)
+		}
+		left, err := ParseBigMapKey(InferBigMapKeyType(v[0]).String(), v[0])
+		if err != nil {
+			return nil, fmt.Errorf("micheline: decoding bigmap pair key '%s': %v", key.Type, val, err)
+		}
+		right, err := ParseBigMapKey(InferBigMapKeyType(v[1]).String(), v[1])
+		if err != nil {
+			return nil, fmt.Errorf("micheline: decoding bigmap pair key '%s': %v", key.Type, val, err)
+		}
+		key.PrimKey = dpair(left.Prim(), right.Prim())
+		key.Type.Type = PrimBinary
+
 	default:
 		return nil, fmt.Errorf("micheline: unsupported big_map key type '%s' in query", key.Type.OpCode)
 	}
@@ -196,6 +219,9 @@ func InferBigMapKeyType(val string) OpCode {
 	}
 	if _, err := hex.DecodeString(val); err == nil {
 		return T_BYTES
+	}
+	if strings.Contains(val, ",") {
+		return T_PAIR
 	}
 	return T_STRING
 }
@@ -295,7 +321,7 @@ func NewBigMapKeyAs(typ *Prim, key *Prim) (*BigMapKey, error) {
 		if len(k.StringKey) == 0 && len(key.Bytes) > 0 {
 			k.Type.OpCode = T_BYTES
 			k.BytesKey = key.Bytes
-			log.Debugf("changed string to bytes key '%x'", key.Bytes)
+			// log.Debugf("changed string to bytes key '%x'", key.Bytes)
 		}
 	case T_BYTES:
 		k.BytesKey = key.Bytes
@@ -372,10 +398,19 @@ func (k *BigMapKey) String() string {
 	case T_KEY:
 		return k.Hash.String()
 	case T_PAIR, D_PAIR:
-		return fmt.Sprintf("%s#%s",
-			k.PrimKey.Args[0].Value(k.PrimKey.Args[0].OpCode),
-			k.PrimKey.Args[1].Value(k.PrimKey.Args[1].OpCode),
-		)
+		left := k.PrimKey.Args[0].Value(k.PrimKey.Args[0].OpCode)
+		if _, ok := left.(fmt.Stringer); !ok {
+			if _, ok := left.(string); !ok {
+				left = k.PrimKey.Args[0].OpCode.String()
+			}
+		}
+		right := k.PrimKey.Args[1].Value(k.PrimKey.Args[1].OpCode)
+		if _, ok := right.(fmt.Stringer); !ok {
+			if _, ok := right.(string); !ok {
+				right = k.PrimKey.Args[1].OpCode.String()
+			}
+		}
+		return fmt.Sprintf("%s#%s", left, right)
 	default:
 		return ""
 	}
@@ -412,6 +447,9 @@ func (k *BigMapKey) Prim() *Prim {
 	case T_BYTES:
 		p.Bytes = k.BytesKey
 		p.Type = PrimBytes
+	case T_ADDRESS, T_KEY_HASH, T_KEY:
+		p.Bytes, _ = k.MarshalBinary()
+		p.Type = PrimBytes
 	case T_BOOL:
 		p.Type = PrimNullary
 		if k.BoolKey {
@@ -419,21 +457,18 @@ func (k *BigMapKey) Prim() *Prim {
 		} else {
 			p.OpCode = D_FALSE
 		}
-	case T_ADDRESS, T_KEY_HASH, T_KEY:
-		p.Bytes, _ = k.MarshalBinary()
-		p.Type = PrimBytes
 	case T_PAIR:
 		p = k.PrimKey
 	default:
 		if k.BytesKey != nil {
-			log.Debugf("micheline: unpacking big_map key type '%s'", k.Type.OpCode)
+			// log.Debugf("micheline: unpacking big_map key type '%s'", k.Type.OpCode)
 			if err := p.UnmarshalBinary(k.BytesKey); err == nil {
 				break
 			}
 		}
 		p.Bytes, _ = k.MarshalBinary()
 		p.Type = PrimBytes
-		log.Debugf("micheline: marshalled big_map key type '%s' as %s", k.Type.OpCode, p.Type)
+		// log.Debugf("micheline: marshalled big_map key type '%s' as %s", k.Type.OpCode, p.Type)
 	}
 	return p
 }

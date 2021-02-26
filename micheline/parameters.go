@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package micheline
@@ -37,13 +37,15 @@ func (p Parameters) MapEntrypoint(script *Script) (Entrypoint, *Prim, error) {
 	case "default":
 		// rebase branch by prepending the path to the named default entrypoint
 		prefix := script.SearchEntrypointName("default")
+		// log.Debugf("rebasing default entrypoint to branch '%s'", prefix)
 		branch := p.Branch(prefix, eps) // can be [LR]+ or empty when entrypoint is used
 		ep, ok = eps.FindBranch(branch)
 		if !ok {
-			log.Debugf("micheline: using fallback default entrypoint 0, '%s' not found", p.Entrypoint)
+			// log.Debugf("micheline: using fallback default entrypoint 0, '%s' not found", p.Entrypoint)
 			ep, _ = eps.FindId(0)
 			prim = p.Value
 		} else {
+			// log.Debugf("found default entrypoint at branch '%s'", ep.Branch)
 			prim = p.Unwrap(strings.TrimPrefix(ep.Branch, prefix))
 		}
 
@@ -52,16 +54,17 @@ func (p Parameters) MapEntrypoint(script *Script) (Entrypoint, *Prim, error) {
 		branch := p.Branch("", eps)
 		ep, ok = eps.FindBranch(branch)
 		if !ok {
+			// return ep, nil, fmt.Errorf("micheline: missing root entrypoint '%s'", branch)
 			ep, _ = eps.FindId(0)
 		}
-		log.Debugf("found unnamed/root entrypoint at %s", ep.Branch)
+		// log.Debugf("found unnamed/root entrypoint at %s", ep.Branch)
 		prim = p.Unwrap(ep.Branch)
 
 	default:
 		// search for named entrypoint
 		ep, ok = eps[p.Entrypoint]
 		if !ok {
-			log.Debugf("entrypoint %s in parameters is unknown, recursing", p.Entrypoint)
+			// log.Debugf("entrypoint %s in parameters is unknown, recursing", p.Entrypoint)
 			// entrypoint can be a combination of an annotated branch and more T_OR branches
 			// inside parameters, so lets find the named branch
 			prefix := script.SearchEntrypointName(p.Entrypoint)
@@ -70,16 +73,17 @@ func (p Parameters) MapEntrypoint(script *Script) (Entrypoint, *Prim, error) {
 				return ep, nil, fmt.Errorf("micheline: missing entrypoint '%s'", p.Entrypoint)
 			}
 			// otherwise rebase using the annotated branch as prefix
-			log.Debugf("found nested branch '%s' at %s", p.Entrypoint, prefix)
+			// log.Debugf("found nested branch '%s' at %s", p.Entrypoint, prefix)
 			branch := p.Branch(prefix, eps)
 			ep, ok = eps.FindBranch(branch)
 			if !ok {
 				return ep, nil, fmt.Errorf("micheline: missing entrypoint '%s' + %s", p.Entrypoint, prefix)
 			}
-			log.Debugf("rebase to real entrypoint '%s' at %s", ep.Call, ep.Branch)
+			// log.Debugf("rebase to real entrypoint '%s' at %s", ep.Call, ep.Branch)
 			// unwrap the suffix branch only
 			prim = p.Unwrap(strings.TrimPrefix(ep.Branch, prefix))
 		} else {
+			// log.Debugf("found named entrypoint '%s' at %s", p.Entrypoint, ep.Branch)
 			prim = p.Value
 		}
 	}

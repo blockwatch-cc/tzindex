@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package micheline
@@ -146,15 +146,34 @@ const (
 	T_CHAIN_ID      // 74
 	I_CHAIN_ID      // 75
 
-	// v007 additions
-	T_sapling_state         // 76
-	T_sapling_transaction   // 77
-	I_SAPLING_EMPTY_STATE   // 78
-	I_SAPLING_VERIFY_UPDATE // 79
+	// v008 additions
+	I_LEVEL                 // 76
+	I_SELF_ADDRESS          // 77
+	T_NEVER                 // 78
+	I_NEVER                 // 79
+	I_UNPAIR                // 7A
+	I_VOTING_POWER          // 7B
+	I_TOTAL_VOTING_POWER    // 7C
+	I_KECCAK                // 7D
+	I_SHA3                  // 7E
+	I_PAIRING_CHECK         // 7F
+	T_BLS12_381_G1          // 80
+	T_BLS12_381_G2          // 81
+	T_BLS12_381_FR          // 82
+	T_SAPLING_STATE         // 83
+	T_SAPLING_TRANSACTION   // 84
+	I_SAPLING_EMPTY_STATE   // 85
+	I_SAPLING_VERIFY_UPDATE // 86
+	T_TICKET                // 87
+	I_TICKET                // 88
+	I_READ_TICKET           // 89
+	I_SPLIT_TICKET          // 8A
+	I_JOIN_TICKETS          // 8B
+	I_GET_AND_UPDATE        // 8C
 )
 
 func (op OpCode) IsValid() bool {
-	return op <= I_CHAIN_ID
+	return op <= I_GET_AND_UPDATE
 }
 
 var (
@@ -277,10 +296,29 @@ var (
 		I_APPLY:                 "APPLY",
 		T_CHAIN_ID:              "chain_id",
 		I_CHAIN_ID:              "CHAIN_ID",
+		I_LEVEL:                 "LEVEL",
+		I_SELF_ADDRESS:          "SELF_ADDRESS",
+		T_NEVER:                 "never",
+		I_NEVER:                 "NEVER",
+		I_UNPAIR:                "UNPAIR",
+		I_VOTING_POWER:          "VOTING_POWER",
+		I_TOTAL_VOTING_POWER:    "TOTAL_VOTING_POWER",
+		I_KECCAK:                "KECCAK",
+		I_SHA3:                  "SHA3",
+		I_PAIRING_CHECK:         "PAIRING_CHECK",
+		T_BLS12_381_G1:          "bls12_381_g1",
+		T_BLS12_381_G2:          "bls12_381_g2",
+		T_BLS12_381_FR:          "bls12_381_fr",
+		T_SAPLING_STATE:         "sapling_state",
+		T_SAPLING_TRANSACTION:   "sapling_transaction",
 		I_SAPLING_EMPTY_STATE:   "SAPLING_EMPTY_STATE",
 		I_SAPLING_VERIFY_UPDATE: "SAPLING_VERIFY_UPDATE",
-		T_sapling_transaction:   "sapling_transaction",
-		T_sapling_state:         "sapling_state",
+		T_TICKET:                "ticket",
+		I_TICKET:                "TICKET",
+		I_READ_TICKET:           "READ_TICKET",
+		I_SPLIT_TICKET:          "SPLIT_TICKET",
+		I_JOIN_TICKETS:          "JOIN_TICKETS",
+		I_GET_AND_UPDATE:        "GET_AND_UPDATE",
 	}
 	stringToOp map[string]OpCode
 )
@@ -313,7 +351,41 @@ func ParseOpCode(str string) (OpCode, error) {
 }
 
 func (op OpCode) IsType() bool {
-	return (op >= T_BOOL && op <= T_ADDRESS) || op == T_CHAIN_ID
+	switch op {
+	case T_BOOL,
+		T_CONTRACT,
+		T_INT,
+		T_KEY,
+		T_KEY_HASH,
+		T_LAMBDA,
+		T_LIST,
+		T_MAP,
+		T_BIG_MAP,
+		T_NAT,
+		T_OPTION,
+		T_OR,
+		T_PAIR,
+		T_SET,
+		T_SIGNATURE,
+		T_STRING,
+		T_BYTES,
+		T_MUTEZ,
+		T_TIMESTAMP,
+		T_UNIT,
+		T_OPERATION,
+		T_ADDRESS,
+		T_CHAIN_ID,
+		T_NEVER,
+		T_BLS12_381_G1,
+		T_BLS12_381_G2,
+		T_BLS12_381_FR,
+		T_SAPLING_STATE,
+		T_SAPLING_TRANSACTION,
+		T_TICKET:
+		return true
+	default:
+		return false
+	}
 }
 
 func (op OpCode) IsKey() bool {

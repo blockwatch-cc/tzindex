@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package micheline
@@ -122,10 +122,17 @@ func walkTypeTree(m map[string]interface{}, path string, typ *Prim, withSequence
 			var lifted bool
 			if len(mmm) == 1 {
 				for n, v := range mmm {
-					if n == "0" {
-						lifted = true
-						mm[strconv.Itoa(i)] = v
+					fields := strings.Split(n, "@")
+					liftedName := strconv.Itoa(i)
+					lifted = true
+					if fields[0] == "0" {
+						if len(fields) > 1 {
+							liftedName += "@" + strings.Join(fields[1:], "@")
+						}
+					} else {
+						liftedName += "@" + strings.Join(fields, "@")
 					}
+					mm[liftedName] = v
 				}
 			}
 			if !lifted {
@@ -170,6 +177,7 @@ func walkTypeTree(m map[string]interface{}, path string, typ *Prim, withSequence
 		} else {
 			// when annots are NOT empty, create a new sub-map unless value is scalar
 			mm := make(map[string]interface{})
+			// 	log.Debugf("marshal sub pair map %p %s into map %p", mm, path, m)
 			for _, v := range typ.Args {
 				if err := walkTypeTree(mm, "", v, withSequenceNum); err != nil {
 					return err
@@ -181,20 +189,34 @@ func walkTypeTree(m map[string]interface{}, path string, typ *Prim, withSequence
 	case T_OR, T_OPTION:
 		// option <type>
 		// or <type> <type>
-		mm := m
-		p := path
-		if haveName {
-			mm = make(map[string]interface{})
-			p = p + "@" + typ.OpCode.String()
-		}
-		for _, v := range typ.Args {
-			if err := walkTypeTree(mm, "", v, withSequenceNum); err != nil {
-				return err
+		if len(typ.Args) == 0 {
+			p := path
+			if haveName {
+				p = p + "@" + typ.OpCode.String()
+			}
+			for _, v := range typ.Args {
+				if err := walkTypeTree(m, p, v, withSequenceNum); err != nil {
+					return err
+				}
+			}
+		} else {
+			mm := m
+			p := path
+			if haveName {
+				mm = make(map[string]interface{})
+				p = p + "@" + typ.OpCode.String()
+			}
+			for _, v := range typ.Args {
+				if err := walkTypeTree(mm, "", v, withSequenceNum); err != nil {
+					return err
+				}
+			}
+			if haveName {
+				m[p] = mm
 			}
 		}
-		if haveName {
-			m[p] = mm
-		}
+	case T_TICKET:
+		return walkTypeTree(m, path, TicketType(typ.Args[0]), withSequenceNum)
 
 	default:
 		// int

@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package micheline
@@ -23,7 +23,15 @@ func (p *Prim) StripAnno(name string) {
 }
 
 func (p *Prim) HasAnyAnno() bool {
-	return len(p.Anno) > 0
+	if len(p.Anno) == 0 {
+		return false
+	}
+	for _, v := range p.Anno {
+		if len(v) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Prim) HasTypeAnno() bool {
@@ -50,7 +58,9 @@ func (p *Prim) GetTypeAnnoAny() string {
 		if p.HasTypeAnno() {
 			return p.GetTypeAnno()
 		}
-		return p.Anno[0][1:]
+		if len(p.Anno[0]) > 1 {
+			return p.Anno[0][1:]
+		}
 	}
 	return ""
 }
@@ -79,7 +89,9 @@ func (p *Prim) GetVarAnnoAny() string {
 		if p.HasVarAnno() {
 			return p.GetVarAnno()
 		}
-		return p.Anno[0][1:]
+		if len(p.Anno[0]) > 1 {
+			return p.Anno[0][1:]
+		}
 	}
 	return ""
 }
@@ -108,7 +120,9 @@ func (p *Prim) GetFieldAnnoAny() string {
 		if p.HasFieldAnno() {
 			return p.GetFieldAnno()
 		}
-		return p.Anno[0][1:]
+		if len(p.Anno[0]) > 1 {
+			return p.Anno[0][1:]
+		}
 	}
 	return ""
 }

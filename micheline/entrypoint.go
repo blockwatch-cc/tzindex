@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package micheline
@@ -139,7 +139,6 @@ func listEntrypoints(e Entrypoints, branch string, node *Prim) error {
 		Type:   ArgType(*node.Clone()), // copy node
 		Prim:   node,
 	}
-
 	if node.HasAnyAnno() {
 		// drop entrypoint name annotation, keep any other annots (in case a single
 		// value entrypoint has another variable name)
