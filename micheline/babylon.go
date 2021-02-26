@@ -57,7 +57,7 @@ func (s *Script) MigrateToBabylonAddDo(managerHash []byte) {
 	s.Code.Storage.Args[0] = code(T_PAIR, code(T_KEY_HASH), s.Code.Storage.Args[0])
 
 	// wrap code
-	s.Code.Code = seq(
+	s.Code.Code.Args[0] = seq(
 		code(I_DUP),
 		code(I_CAR),
 		code(I_IF_LEFT,
@@ -67,7 +67,7 @@ func (s *Script) MigrateToBabylonAddDo(managerHash []byte) {
 				code(I_DIP, seq(code(I_CDR), code(I_DUP), code(I_CDR))),
 				code(I_PAIR),
 				// # 'default' entrypoint - original code
-				s.Code.Code,
+				s.Code.Code.Args[0],
 				// # Transform the outputs to the new script types
 				code(I_SWAP),
 				code(I_CAR),
@@ -101,7 +101,7 @@ func (s *Script) MigrateToBabylonSetDelegate(managerHash []byte) {
 	s.Code.Storage.Args[0] = code(T_PAIR, code(T_KEY_HASH), s.Code.Storage.Args[0])
 
 	// wrap code
-	s.Code.Code = seq(
+	s.Code.Code.Args[0] = seq(
 		code(I_DUP),
 		code(I_CAR),
 		code(I_IF_LEFT,
@@ -111,7 +111,7 @@ func (s *Script) MigrateToBabylonSetDelegate(managerHash []byte) {
 				code(I_DIP, seq(code(I_CDR), code(I_DUP), code(I_CDR))),
 				code(I_PAIR),
 				// # 'default' entrypoint - original code
-				s.Code.Code,
+				s.Code.Code.Args[0],
 				// # Transform the outputs to the new script types
 				code(I_SWAP),
 				code(I_CAR),
