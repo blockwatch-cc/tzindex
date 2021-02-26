@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -38,7 +38,7 @@ type DelegateList []chain.Address
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-block-id-context-delegates
 func (c *Client) ListActiveDelegates(ctx context.Context, height int64) (DelegateList, error) {
 	delegates := make(DelegateList, 0)
-	u := fmt.Sprintf("chains/%s/blocks/%d/context/delegates?active=1", c.ChainID, height)
+	u := fmt.Sprintf("chains/%s/blocks/%d/context/delegates?active=true", c.ChainID, height)
 	if err := c.Get(ctx, u, &delegates); err != nil {
 		return nil, err
 	}

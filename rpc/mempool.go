@@ -1,5 +1,5 @@
 // Copyright (c) 2018 ECAD Labs Inc. MIT License
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -26,23 +26,6 @@ func (c *Client) GetMempoolPendingOperations(ctx context.Context) (*MempoolOpera
 	return &ops, nil
 }
 
-/*
-OperationHeaderAlt is a named array encoded OperationHeader with hash as a
-first array member, i.e.
-	[
-		"...", // hash
-		{
-			"protocol": "...",
-			...
-		}
-	]
-instead of
-	{
-		"protocol": "...",
-		"hash": "...",
-		...
-	}
-*/
 type OperationHeaderAlt OperationHeader
 
 // UnmarshalJSON implements json.Unmarshaler

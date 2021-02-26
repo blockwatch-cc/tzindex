@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -229,7 +229,7 @@ func handleError(resp *http.Response) error {
 
 	var errs Errors
 	if err := json.Unmarshal(body, &errs); err != nil {
-		log.Errorf("rpc: error decoding RPC error: %v", err)
+		log.Errorf("rpc: error decoding RPC error response: %v", err)
 		return &httpErr
 	}
 

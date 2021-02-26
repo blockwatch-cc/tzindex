@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -26,6 +26,13 @@ type OriginationOp struct {
 	Metadata       *OriginationOpMetadata `json:"metadata"`
 }
 
+func (o OriginationOp) Manager() chain.Address {
+	if o.ManagerPubkey2.IsValid() {
+		return o.ManagerPubkey2
+	}
+	return o.ManagerPubkey
+}
+
 // OriginationOpMetadata represents a transaction operation metadata
 type OriginationOpMetadata struct {
 	BalanceUpdates BalanceUpdates     `json:"balance_updates"` // fee-related
@@ -34,12 +41,20 @@ type OriginationOpMetadata struct {
 
 // OriginationResult represents a contract creation result
 type OriginationResult struct {
-	BalanceUpdates      BalanceUpdates       `json:"balance_updates"` // burned fees
-	OriginatedContracts []chain.Address      `json:"originated_contracts"`
-	ConsumedGas         int64                `json:"consumed_gas,string"`
-	StorageSize         int64                `json:"storage_size,string"`
-	PaidStorageSizeDiff int64                `json:"paid_storage_size_diff,string"`
-	BigMapDiff          micheline.BigMapDiff `json:"big_map_diff,omitempty"`
-	Status              chain.OpStatus       `json:"status"`
-	Errors              []OperationError     `json:"errors,omitempty"`
+	BalanceUpdates      BalanceUpdates   `json:"balance_updates"` // burned fees
+	OriginatedContracts []chain.Address  `json:"originated_contracts"`
+	ConsumedGas         int64            `json:"consumed_gas,string"`
+	StorageSize         int64            `json:"storage_size,string"`
+	PaidStorageSizeDiff int64            `json:"paid_storage_size_diff,string"`
+	Status              chain.OpStatus   `json:"status"`
+	Errors              []OperationError `json:"errors,omitempty"`
+
+	// v007
+	ConsumedMilliGas int64 `json:"consumed_milligas,string"`
+
+	// deprecated in v008
+	BigMapDiff micheline.BigMapDiff `json:"big_map_diff,omitempty"`
+
+	// v008
+	LazyStorageDiff LazyStorageDiff `json:"lazy_storage_diff,omitempty"`
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -137,8 +137,13 @@ type contract struct {
 
 func (b *bootstrap) DecodeContracts() ([]*X1, error) {
 	// ignore non-mainnet contract lists (we don't know their addresses)
-	if len(b.Contracts) != len(vestingContractAddrs) {
-		log.Warnf("ignoring genesis contracts")
+	switch len(b.Contracts) {
+	case 0:
+		return nil, nil
+	case len(vestingContractAddrs):
+		// expected
+	default:
+		log.Warnf("Ignoring genesis contracts")
 		return nil, nil
 	}
 	c := make([]*X1, len(b.Contracts))
@@ -171,19 +176,19 @@ func (b *bootstrap) DecodeContracts() ([]*X1, error) {
 		switch true {
 		case c[i].Script.Storage == nil:
 			isVesting = false
-		case len(c[i].Script.Storage.Args) == 0:
+		case c[i].Script.Storage.Args == nil:
 			isVesting = false
 		case c[i].Script.Storage.Args[0] == nil:
 			isVesting = false
-		case len(c[i].Script.Storage.Args[0].Args) == 0:
+		case c[i].Script.Storage.Args[0].Args == nil:
 			isVesting = false
 		case c[i].Script.Storage.Args[0].Args[1] == nil:
 			isVesting = false
-		case len(c[i].Script.Storage.Args[0].Args[1].Args) == 0:
+		case c[i].Script.Storage.Args[0].Args[1].Args == nil:
 			isVesting = false
 		case c[i].Script.Storage.Args[0].Args[1].Args[0] == nil:
 			isVesting = false
-		case len(c[i].Script.Storage.Args[0].Args[1].Args[0].Args) == 0:
+		case c[i].Script.Storage.Args[0].Args[1].Args[0].Args == nil:
 			isVesting = false
 		}
 

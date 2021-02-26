@@ -1,5 +1,5 @@
 // Copyright (c) 2018 ECAD Labs Inc. MIT License
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -17,6 +17,15 @@ const (
 	// ErrorKindBranch Tezos RPC error kind.
 	ErrorKindBranch = "branch"
 )
+
+func ErrorStatus(err error) int {
+	switch e := err.(type) {
+	case *httpError:
+		return e.statusCode
+	default:
+		return 0
+	}
+}
 
 // Error is a Tezos error as documented on http://tezos.gitlab.io/mainnet/api/errors.html.
 type Error interface {

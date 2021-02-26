@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -31,15 +31,20 @@ type TransactionOpMetadata struct {
 
 // TransactionResult represents a transaction result
 type TransactionResult struct {
-	BalanceUpdates      BalanceUpdates       `json:"balance_updates"` // tx or contract related
-	ConsumedGas         int64                `json:"consumed_gas,string"`
-	Status              chain.OpStatus       `json:"status"`
-	Allocated           bool                 `json:"allocated_destination_contract"` // new addr created and payed
-	Errors              []OperationError     `json:"errors,omitempty"`
-	Storage             *micheline.Prim      `json:"storage,omitempty"`
-	StorageSize         int64                `json:"storage_size,string"`
-	PaidStorageSizeDiff int64                `json:"paid_storage_size_diff,string"`
-	BigMapDiff          micheline.BigMapDiff `json:"big_map_diff,omitempty"`
+	BalanceUpdates      BalanceUpdates   `json:"balance_updates"` // tx or contract related
+	ConsumedGas         int64            `json:"consumed_gas,string"`
+	Status              chain.OpStatus   `json:"status"`
+	Allocated           bool             `json:"allocated_destination_contract"` // new addr created and payed
+	Errors              []OperationError `json:"errors,omitempty"`
+	Storage             *micheline.Prim  `json:"storage,omitempty"`
+	StorageSize         int64            `json:"storage_size,string"`
+	PaidStorageSizeDiff int64            `json:"paid_storage_size_diff,string"`
+
+	// deprecated in v008
+	BigMapDiff micheline.BigMapDiff `json:"big_map_diff,omitempty"`
+
+	// v008
+	LazyStorageDiff LazyStorageDiff `json:"lazy_storage_diff,omitempty"`
 
 	// when reused as internal origination result
 	OriginatedContracts []chain.Address `json:"originated_contracts,omitempty"`
