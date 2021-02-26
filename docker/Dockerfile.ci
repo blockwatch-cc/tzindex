@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:experimental
 # build stage
-FROM          golang:alpine AS builder
+FROM          golang:alpine AS tzindex-builder
 ARG           REPO=blockwatch.cc/tzindex
 ARG           BUILD_TARGET=tzindex
 ARG           BUILD_VERSION=dev
@@ -24,8 +24,8 @@ ENV           BUILD_TARGET=${BUILD_TARGET}
 RUN           apk --no-cache add ca-certificates 'su-exec>=0.2' jq \
               && addgroup $USER -g 500 \
 			  && adduser -u 500 -D -h /home/$USER -S -s /sbin/nologin -G $USER $USER
-COPY          --from=builder /${BUILD_TARGET} /usr/local/bin
-COPY          --from=builder /go/bin/gttp /usr/local/bin
+COPY          --from=tzindex-builder /${BUILD_TARGET} /usr/local/bin
+COPY          --from=tzindex-builder /go/bin/gttp /usr/local/bin
 COPY          docker/docker-entrypoint.sh /usr/local/bin
 COPY          docker/config.json /home/$USER/
 RUN           chmod +x /usr/local/bin/${BUILD_TARGET}

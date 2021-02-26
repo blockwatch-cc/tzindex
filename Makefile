@@ -22,7 +22,7 @@ build:
 
 image:
 	@echo $@
-	docker build -f docker/Dockerfile --pull --no-cache --rm --tag $(BUILD_IMAGE) --tag $(BUILD_LATEST) $(BUILD_FLAGS) .
+	docker build -f docker/Dockerfile.${FLAVOR} --pull --no-cache --rm --tag $(BUILD_IMAGE) --tag $(BUILD_LATEST) $(BUILD_FLAGS) .
 	docker image prune --force --filter "label=autodelete=true"
 
 deploy: image
