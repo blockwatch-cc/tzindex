@@ -1050,7 +1050,7 @@ func (c *Crawler) fetchParamsForBlock(ctx context.Context, block *rpc.Block) (*c
 			params = chain.NewParams()
 		}
 		// changes will be updated during build
-		params = params.ForProtocol(block.Protocol).ForNetwork(block.ChainId)
+		params = params.ForNetwork(block.ChainId).ForProtocol(block.Protocol)
 		params.Deployment = block.Header.Proto
 		params.StartHeight = start
 		// adjust deployment number for genesis & bootstrap blocks
