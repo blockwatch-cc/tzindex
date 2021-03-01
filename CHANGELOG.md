@@ -1,5 +1,11 @@
 # Changelog
 
+## 8.0.1
+
+Bugfix release
+
+- ETL: fix protocol detection for Edo
+
 ## 8.0.0
 
 Note: compatible with Edo and API version 2020-06-01. Database rebuild is required.
