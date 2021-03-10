@@ -259,6 +259,7 @@ func NewExplorerBallot(ctx *ApiContext, b *model.Ballot, p chain.ProtocolHash, o
 
 type ExplorerElection struct {
 	Id                  int                    `json:"election_id"`
+	MaxPeriods          int                    `json:"max_periods"`
 	NumPeriods          int                    `json:"num_periods"`
 	NumProposals        int                    `json:"num_proposals"`
 	StartTime           time.Time              `json:"start_time"`
@@ -276,6 +277,7 @@ type ExplorerElection struct {
 	TestingVotePeriod   *ExplorerVote          `json:"testing_vote"`
 	TestingPeriod       *ExplorerVote          `json:"testing"`
 	PromotionVotePeriod *ExplorerVote          `json:"promotion_vote"`
+	AdoptionPeriod      *ExplorerVote          `json:"adoption"`
 	expires             time.Time              `json:"-"`
 }
 
@@ -284,6 +286,7 @@ var _ RESTful = (*ExplorerElection)(nil)
 func NewExplorerElection(ctx *ApiContext, e *model.Election) *ExplorerElection {
 	election := &ExplorerElection{
 		Id:               int(e.RowId),
+		MaxPeriods:       ctx.Params.NumVotingPeriods,
 		NumPeriods:       e.NumPeriods,
 		NumProposals:     e.NumProposals,
 		StartTime:        e.StartTime,
@@ -475,12 +478,15 @@ func ReadElection(ctx *ApiContext) (interface{}, int) {
 		case chain.VotingPeriodTestingVote:
 			ee.TestingVotePeriod = NewExplorerVote(ctx, v)
 			ee.TestingVotePeriod.Proposals = []*ExplorerProposal{winner}
-		case chain.VotingPeriodTesting, chain.VotingPeriodAdoption:
+		case chain.VotingPeriodTesting:
 			ee.TestingPeriod = NewExplorerVote(ctx, v)
 			ee.TestingPeriod.Proposals = []*ExplorerProposal{winner}
 		case chain.VotingPeriodPromotionVote:
 			ee.PromotionVotePeriod = NewExplorerVote(ctx, v)
 			ee.PromotionVotePeriod.Proposals = []*ExplorerProposal{winner}
+		case chain.VotingPeriodAdoption:
+			ee.AdoptionPeriod = NewExplorerVote(ctx, v)
+			ee.AdoptionPeriod.Proposals = []*ExplorerProposal{winner}
 		}
 	}
 	return ee, http.StatusOK

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- API: add missing adoption period info
+
 ## 8.0.1
 
 Bugfix release
