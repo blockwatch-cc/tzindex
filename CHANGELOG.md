@@ -3,6 +3,7 @@
 ## Unreleased
 
 - API: add missing adoption period info
+- Micheline: Fix Zarith encoder emitting wrong binary for numbers between 32 and 63
 
 ## 8.0.1
 

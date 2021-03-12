@@ -103,7 +103,7 @@ func (z *Z) EncodeBuffer(buf *bytes.Buffer) error {
 		sign = 0x40
 		x.Neg(x)
 	}
-	if x.IsInt64() && x.Int64() < 0x20 {
+	if x.IsInt64() && x.Int64() < 0x40 {
 		buf.WriteByte(byte(x.Int64()) | sign)
 		return nil
 	} else {
