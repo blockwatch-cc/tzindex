@@ -171,15 +171,19 @@ func IsEqualPrim(p1, p2 Prim, withAnno bool) bool {
 	}
 
 	// type
-	switch p2.Type {
-	case PrimNullaryAnno, PrimUnaryAnno, PrimBinaryAnno:
-		if p2.Type != p1.Type && p2.Type-1 != p1.Type {
-			return false
+	t1, t2 := p1.Type, p2.Type
+	if !withAnno {
+		switch t1 {
+		case PrimNullaryAnno, PrimUnaryAnno, PrimBinaryAnno:
+			t1--
 		}
-	default:
-		if p2.Type != p1.Type {
-			return false
+		switch t2 {
+		case PrimNullaryAnno, PrimUnaryAnno, PrimBinaryAnno:
+			t2--
 		}
+	}
+	if t1 != t2 {
+		return false
 	}
 
 	// arg len
