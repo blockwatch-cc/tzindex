@@ -2547,11 +2547,8 @@ func (m *Indexer) ListBigMapKeys(ctx context.Context, id, height int64, keyhash 
 			},
 			pack.Condition{
 				Field: table.Fields().Find("a"), // action
-				Mode:  pack.FilterModeNotIn,
-				Value: []uint64{
-					uint64(micheline.DiffActionAlloc),
-					uint64(micheline.DiffActionCopy),
-				},
+				Mode:  pack.FilterModeEqual,
+				Value: uint64(micheline.DiffActionUpdate),
 			},
 		},
 	}
@@ -2576,13 +2573,16 @@ func (m *Indexer) ListBigMapKeys(ctx context.Context, id, height int64, keyhash 
 		})
 	}
 	if keyhash.IsValid() {
+		q.Order = pack.OrderDesc
+		q.Limit = 1
 		q.Conditions = append(q.Conditions, pack.Condition{
 			Field: table.Fields().Find("H"), // hash
 			Mode:  pack.FilterModeEqual,
 			Value: keyhash.Hash.Hash,
 		})
 	} else if len(key) > 0 {
-		// log.Infof("searching key %x", key)
+		q.Order = pack.OrderDesc
+		q.Limit = 1
 		q.Conditions = append(q.Conditions, pack.Condition{
 			Field: table.Fields().Find("k"), // key
 			Mode:  pack.FilterModeEqual,
