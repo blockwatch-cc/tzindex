@@ -3,7 +3,7 @@ module blockwatch.cc/tzindex
 go 1.13
 
 require (
-	blockwatch.cc/packdb v0.0.0-20210203182112-d2201387d365
+	blockwatch.cc/packdb v0.0.0-20210324103517-013e51656cc6
 	github.com/cespare/xxhash v1.1.0
 	github.com/echa/config v1.0.3
 	github.com/echa/log v1.0.3

@@ -431,10 +431,10 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 
 						// find the previous entry at this key if exists
 						err := idx.table.Stream(ctx, pack.Query{
-							Name:  "etl.bigmap.update",
-							Limit: 1, // there should only be one match anyways
-							// NoIndex: true, // index may contain many duplicates, skip
-							Order: pack.OrderDesc,
+							Name:    "etl.bigmap.update",
+							Limit:   1,    // there should only be one match anyways
+							NoIndex: true, // index may contain many duplicates, skip
+							Order:   pack.OrderDesc,
 							Conditions: pack.ConditionList{
 								pack.Condition{
 									Field: idx.table.Fields().Find("B"), // bigmap id
