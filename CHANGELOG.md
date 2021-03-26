@@ -1,9 +1,11 @@
 # Changelog
 
-## Unreleased
+## 8.0.2
 
 - API: add missing adoption period info
 - Micheline: Fix Zarith encoder emitting wrong binary for numbers between 32 and 63
+- ETL: improve bigmap indexing by skipping hash index lookups
+- API: improve bigmap query performance
 
 ## 8.0.1
 
