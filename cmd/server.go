@@ -159,6 +159,7 @@ func runServer(args []string) error {
 				Scheme:              config.GetString("server.scheme"),
 				Host:                config.GetString("server.host"),
 				MaxWorkers:          config.GetInt("server.workers"),
+				MaxQueue:            config.GetInt("server.queue"),
 				TimeoutHeader:       config.GetString("server.timeout_header"),
 				ReadTimeout:         config.GetDuration("server.read_timeout"),
 				HeaderTimeout:       config.GetDuration("server.header_timeout"),
