@@ -171,10 +171,13 @@ Usage:
 Flags:
       --enable-cors      enable API CORS support
   -h, --help             help for run
+      --insecure         disable RPC TLS certificate checks (not recommended)
       --light            light mode (use to skip baker and gov data)
       --noapi            disable API server
       --noindex          disable indexing
+      --nomonitor        disable block monitor
       --norpc            disable RPC client
+      --notls            disable RPC TLS support (use http)
       --rpcpass string   RPC password
       --rpcurl string    RPC url (default "http://127.0.0.1:8732")
       --rpcuser string   RPC username
