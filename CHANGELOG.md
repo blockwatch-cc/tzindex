@@ -1,5 +1,9 @@
 # Changelog
 
+## 8.0.3
+
+- ETL: fixed delegation flows from internal origination operations
+
 ## 8.0.2
 
 - API: add missing adoption period info
