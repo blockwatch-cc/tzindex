@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -34,9 +35,11 @@ var (
 	end   string // time
 
 	// rpc-specific options
-	rpcurl  string
-	rpcuser string
-	rpcpass string
+	rpcurl   string
+	rpcuser  string
+	rpcpass  string
+	notls    bool
+	insecure bool
 
 	// index options
 	lightIndex bool
@@ -163,16 +166,18 @@ func newHTTPClient() (*http.Client, error) {
 	}
 
 	// Configure TLS if needed.
-	// var tlsConfig *tls.Config
-	// if !config.GetBool("rpc.disable_tls") {
+	var tlsConfig *tls.Config
+	if !config.GetBool("rpc.disable_tls") {
+		tlsConfig = &tls.Config{
+			InsecureSkipVerify: config.GetBool("rpc.insecure_tls"),
+		}
+	}
+
 	// 	if len(config.Certificates) > 0 {
 	// 		pool := x509.NewCertPool()
 	// 		pool.AppendCertsFromPEM(config.Certificates)
-	// 		tlsConfig = &tls.Config{
-	// 			RootCAs: pool,
-	// 		}
+	// 		tlsConfig.RootCAs = pool
 	// 	}
-	// }
 
 	client := http.Client{
 		Transport: &http.Transport{
@@ -180,8 +185,8 @@ func newHTTPClient() (*http.Client, error) {
 				Timeout:   config.GetDuration("rpc.dial_timeout"),
 				KeepAlive: config.GetDuration("rpc.keepalive"),
 			}).Dial,
-			Proxy: proxyFunc,
-			// TLSClientConfig:       tlsConfig,
+			Proxy:                 proxyFunc,
+			TLSClientConfig:       tlsConfig,
 			IdleConnTimeout:       config.GetDuration("rpc.idle_timeout"),
 			ResponseHeaderTimeout: config.GetDuration("rpc.response_timeout"),
 			ExpectContinueTimeout: config.GetDuration("rpc.continue_timeout"),
@@ -217,11 +222,23 @@ func newRPCClient() (*rpc.Client, error) {
 }
 
 func parseRPCFlags() error {
-	// overwrite config from flags
+	// overwrite config from flags only if set
+	if notls {
+		config.Set("rpc.disable_tls", notls)
+	}
+	if insecure {
+		config.Set("rpc.insecure_tls", insecure)
+	}
 	if rpcurl != "" {
 		ux := rpcurl
 		if !strings.HasPrefix(ux, "http") {
-			ux = "http://" + ux
+			if config.GetBool("rpc.disable_tls") {
+				ux = "http://" + ux
+			} else {
+				ux = "https://" + ux
+			}
+		} else {
+			config.Set("rpc.disable_tls", !strings.HasPrefix(ux, "https://"))
 		}
 		u, err := url.Parse(ux)
 		if err != nil {
@@ -239,7 +256,6 @@ func parseRPCFlags() error {
 		} else {
 			config.Set("rpc.port", "")
 		}
-		config.Set("rpc.disable_tls", u.Scheme != "https")
 		path := strings.TrimPrefix(u.Path, "/")
 		if len(path) > 0 && !strings.HasSuffix(path, "/") {
 			path = path + "/"

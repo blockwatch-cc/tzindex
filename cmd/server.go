@@ -37,6 +37,8 @@ func init() {
 	runCmd.Flags().StringVar(&rpcuser, "rpcuser", "", "RPC username")
 	runCmd.Flags().StringVar(&rpcpass, "rpcpass", "", "RPC password")
 	runCmd.Flags().BoolVar(&norpc, "norpc", false, "disable RPC client")
+	runCmd.Flags().BoolVar(&notls, "notls", false, "disable RPC TLS support (use http)")
+	runCmd.Flags().BoolVar(&insecure, "insecure", false, "disable RPC TLS certificate checks (not recommended)")
 	runCmd.Flags().BoolVar(&noapi, "noapi", false, "disable API server")
 	runCmd.Flags().BoolVar(&noindex, "noindex", false, "disable indexing")
 	runCmd.Flags().BoolVar(&nomonitor, "nomonitor", false, "disable block monitor")

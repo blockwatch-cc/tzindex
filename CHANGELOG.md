@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- CLI: new `--notls` argument to disable RPC TLS when no protocol is specified in the RPC URL (also available as env `TZ_RPC_DISABLE_TLS`)
+- CLI: new `--insecure` argument to disable RPC TLS certificate checks (also available as env `TZ_RPC_INSECURE_TLS`)
+
 ## 8.0.3
 
 - ETL: fixed delegation flows from internal origination operations

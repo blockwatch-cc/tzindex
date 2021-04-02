@@ -63,6 +63,7 @@ func init() {
 	config.SetDefault("rpc.host", "127.0.0.1")
 	config.SetDefault("rpc.port", 8732)
 	config.SetDefault("rpc.disable_tls", false)
+	config.SetDefault("rpc.insecure_tls", false)
 	config.SetDefault("rpc.proxy", "")
 	// config.SetDefault("rpc.proxy_user", "")
 	// config.SetDefault("rpc.proxy_pass", "")
