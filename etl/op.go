@@ -1600,14 +1600,13 @@ func (b *Builder) AppendInternalOriginationOp(
 			return Errorf("missing originated account %s", res.OriginatedContracts[0])
 		}
 		op.ReceiverId = dst.RowId
-
-		// no target delegate
 		flows, err = b.NewInternalOriginationFlows(
 			origsrc,
 			src,
 			dst,
 			origdlg,
 			srcdlg,
+			newdlg,
 			res.BalanceUpdates,
 			op_n, op_l, op_c, op_c, op_i,
 		)

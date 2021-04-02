@@ -760,7 +760,7 @@ func (b *Builder) NewOriginationFlows(src, dst, srcdlg, newdlg *Account, feeupd,
 	return flows, nil
 }
 
-func (b *Builder) NewInternalOriginationFlows(origsrc, src, dst, origdlg, srcdlg *Account, upd rpc.BalanceUpdates, n, l, p, c, i int) ([]*Flow, error) {
+func (b *Builder) NewInternalOriginationFlows(origsrc, src, dst, origdlg, srcdlg, newdlg *Account, upd rpc.BalanceUpdates, n, l, p, c, i int) ([]*Flow, error) {
 	flows := make([]*Flow, 0)
 	// fees are paid by outer transaction, here we only have burned coins
 	var burned, moved int64
@@ -812,6 +812,15 @@ func (b *Builder) NewInternalOriginationFlows(origsrc, src, dst, origdlg, srcdlg
 		f.Category = FlowCategoryDelegation
 		f.Operation = FlowTypeOrigination
 		f.AmountOut = moved // deduct moved amount
+		flows = append(flows, f)
+	}
+
+	// delegate when a new delegate was set
+	if newdlg != nil && moved > 0 {
+		f := NewFlow(b.block, newdlg, src, n, l, p, c, i)
+		f.Category = FlowCategoryDelegation
+		f.Operation = FlowTypeOrigination
+		f.AmountIn = moved
 		flows = append(flows, f)
 	}
 
