@@ -66,7 +66,7 @@ func Decode(b string, buf []byte) []byte {
 
 		total := uint64(0)
 		for _, v := range t[:n] {
-			tmp := b58[v]
+			tmp := b58[v%256]
 			if tmp == 255 {
 				return []byte("")
 			}

@@ -241,12 +241,14 @@ func (idx *GovIndex) ConnectBlock(ctx context.Context, block *Block, builder Blo
 	switch block.VotingPeriodKind {
 	case chain.VotingPeriodProposal:
 		err = idx.processProposals(ctx, block, builder)
-	case chain.VotingPeriodTestingVote:
+	case chain.VotingPeriodExploration:
 		err = idx.processBallots(ctx, block, builder)
-	case chain.VotingPeriodTesting:
+	case chain.VotingPeriodCooldown:
 		// nothing to do here
-	case chain.VotingPeriodPromotionVote:
+	case chain.VotingPeriodPromotion:
 		err = idx.processBallots(ctx, block, builder)
+	case chain.VotingPeriodAdoption:
+		// nothing to do here
 	}
 	if err != nil {
 		return err
@@ -279,8 +281,29 @@ func (idx *GovIndex) ConnectBlock(ctx context.Context, block *Block, builder Blo
 	return nil
 }
 
-func (idx *GovIndex) DisconnectBlock(ctx context.Context, block *Block, _ BlockBuilder) error {
-	return idx.DeleteBlock(ctx, block.Height)
+func (idx *GovIndex) DisconnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
+	// clear state first (also removes any new vote/election periods)
+	if err := idx.DeleteBlock(ctx, block.Height); err != nil {
+		return err
+	}
+
+	// re-open vote/election when at end of cycle
+	isPeriodEnd := block.Height > firstVoteBlock && block.Params.IsVoteEnd(block.Height)
+	if isPeriodEnd {
+		success, err := idx.reopenVote(ctx, block, builder)
+		if err != nil {
+			log.Errorf("Rollback: reopen %s vote at block %d: %v", block.VotingPeriodKind, block.Height, err)
+			return err
+		}
+		if !success || block.VotingPeriodKind == chain.VotingPeriodProposal {
+			if err := idx.reopenElection(ctx, block, builder); err != nil {
+				log.Errorf("Rollback: reopen election at block %d: %v", block.Height, err)
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func (idx *GovIndex) DeleteBlock(ctx context.Context, height int64) error {
@@ -384,6 +407,21 @@ func (idx *GovIndex) closeElection(ctx context.Context, block *Block, builder Bl
 	return idx.electionTable.Update(ctx, election)
 }
 
+func (idx *GovIndex) reopenElection(ctx context.Context, block *Block, builder BlockBuilder) error {
+	// load current election
+	election, err := idx.electionByHeight(ctx, block.Height, block.Params)
+	if err != nil {
+		return err
+	}
+	// check its closed
+	if election.IsOpen {
+		return fmt.Errorf("reopen election: election %d already open", election.RowId)
+	}
+	// just update state (will roll forward at end of reorg)
+	election.IsOpen = false
+	return idx.electionTable.Update(ctx, election)
+}
+
 func (idx *GovIndex) openVote(ctx context.Context, block *Block, builder BlockBuilder) error {
 	// load current election, must exist
 	election, err := idx.electionByHeight(ctx, block.Height, block.Params)
@@ -400,7 +438,7 @@ func (idx *GovIndex) openVote(ctx context.Context, block *Block, builder BlockBu
 	// Note: this adjusts end height of first cycle (we run this func at height 2 instead of 0)
 	//       otherwise the formula could be simpler
 	p := block.Params
-	endHeight := (block.Height - block.Height%p.BlocksPerVotingPeriod) + p.BlocksPerVotingPeriod
+	endHeight := (block.Height - (block.Height-p.StartBlockOffset)%p.BlocksPerVotingPeriod) + p.BlocksPerVotingPeriod
 
 	vote := &Vote{
 		ElectionId:       election.RowId,
@@ -424,10 +462,10 @@ func (idx *GovIndex) openVote(ctx context.Context, block *Block, builder BlockBu
 	case chain.VotingPeriodProposal:
 		// fixed min proposal quorum as defined by protocol
 		vote.QuorumPct = p.MinProposalQuorum
-	case chain.VotingPeriodTesting, chain.VotingPeriodAdoption:
+	case chain.VotingPeriodCooldown, chain.VotingPeriodAdoption:
 		// no quorum
 		vote.QuorumPct = 0
-	case chain.VotingPeriodTestingVote, chain.VotingPeriodPromotionVote:
+	case chain.VotingPeriodExploration, chain.VotingPeriodPromotion:
 		// from most recent (testing_vote or promotion_vote) period
 		quorumPct, turnoutEma, err := idx.quorumByHeight(ctx, block.Height, p)
 		if err != nil {
@@ -508,18 +546,38 @@ func (idx *GovIndex) closeVote(ctx context.Context, block *Block, builder BlockB
 		vote.IsDraw = isDraw
 		vote.IsFailed = vote.NoProposal || vote.NoQuorum || vote.IsDraw
 
-	case chain.VotingPeriodTestingVote, chain.VotingPeriodPromotionVote:
+	case chain.VotingPeriodExploration, chain.VotingPeriodPromotion:
 		vote.NoQuorum = vote.TurnoutRolls < vote.QuorumRolls
 		vote.NoMajority = vote.YayRolls < (vote.YayRolls+vote.NayRolls)*8/10
 		vote.IsFailed = vote.NoQuorum || vote.NoMajority
 
-	case chain.VotingPeriodTesting, chain.VotingPeriodAdoption:
+	case chain.VotingPeriodCooldown, chain.VotingPeriodAdoption:
 		// empty, cannot fail
 	}
 
 	vote.EndTime = block.Timestamp
 	vote.IsOpen = false
 
+	if err := idx.voteTable.Update(ctx, vote); err != nil {
+		return false, err
+	}
+
+	return !vote.IsFailed, nil
+}
+
+func (idx *GovIndex) reopenVote(ctx context.Context, block *Block, builder BlockBuilder) (bool, error) {
+	// load current vote
+	vote, err := idx.voteByHeight(ctx, block.Height, block.Params)
+	if err != nil {
+		return false, err
+	}
+	// check its closed
+	if vote.IsOpen {
+		return false, fmt.Errorf("reopen vote: vote %d/%d is already open", vote.ElectionId, vote.VotingPeriod)
+	}
+
+	// just reset state flag
+	vote.IsOpen = true
 	if err := idx.voteTable.Update(ctx, vote); err != nil {
 		return false, err
 	}
@@ -1078,7 +1136,7 @@ func (idx *GovIndex) quorumByHeight(ctx context.Context, height int64, params *c
 			return err
 		}
 		switch vote.VotingPeriodKind {
-		case chain.VotingPeriodTestingVote, chain.VotingPeriodPromotionVote:
+		case chain.VotingPeriodExploration, chain.VotingPeriodPromotion:
 			lastQuorum = vote.QuorumPct
 			lastTurnout = vote.TurnoutPct
 			lastTurnoutEma = vote.TurnoutEma

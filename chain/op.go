@@ -87,6 +87,9 @@ const (
 	OpTypeInvoice                                 // 13
 	OpTypeAirdrop                                 // 14
 	OpTypeSeedSlash                               // 15
+	OpTypeMigration                               // 16 indexer only
+	OpTypeFailingNoop                             // 17 v009
+	OpTypeBatch                     = 254         // indexer only, output-only
 	OpTypeInvalid                   = 255
 )
 
@@ -127,7 +130,7 @@ func ParseOpType(s string) OpType {
 		return OpTypeDelegation
 	case "reveal":
 		return OpTypeReveal
-	case "endorsement":
+	case "endorsement", "endorsement_with_slot":
 		return OpTypeEndorsement
 	case "proposals":
 		return OpTypeProposals
@@ -141,6 +144,12 @@ func ParseOpType(s string) OpType {
 		return OpTypeAirdrop
 	case "seed_slash":
 		return OpTypeSeedSlash
+	case "migration":
+		return OpTypeMigration
+	case "batch":
+		return OpTypeBatch
+	case "failing_noop":
+		return OpTypeFailingNoop
 	default:
 		return OpTypeInvalid
 	}
@@ -180,6 +189,12 @@ func (t OpType) String() string {
 		return "airdrop"
 	case OpTypeSeedSlash:
 		return "seed_slash"
+	case OpTypeMigration:
+		return "migration"
+	case OpTypeBatch:
+		return "batch"
+	case OpTypeFailingNoop:
+		return "failing_noop"
 	default:
 		return ""
 	}
@@ -218,6 +233,7 @@ var (
 		OpTypeTransaction:               108,
 		OpTypeOrigination:               109,
 		OpTypeDelegation:                110,
+		OpTypeFailingNoop:               17,  // v009
 		OpTypeBake:                      255, // invalid tag, not part of protocol
 		OpTypeUnfreeze:                  255, // invalid tag, not part of protocol
 		OpTypeInvoice:                   255, // invalid tag, not part of protocol
@@ -263,6 +279,8 @@ func ParseOpTag(t byte) OpType {
 		return OpTypeOrigination
 	case 10, 110:
 		return OpTypeDelegation
+	case 17:
+		return OpTypeFailingNoop
 	default:
 		return OpTypeInvalid
 	}

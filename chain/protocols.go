@@ -16,6 +16,7 @@ var (
 	ProtoV007   = ParseProtocolHashSafe("PsDELPH1Kxsxt8f9eWbxQeRxkjfbxoqM52jvs5Y5fBxWWh4ifpo")
 	ProtoV008_1 = ParseProtocolHashSafe("PtEdoTezd3RHSC31mpxxo1npxFjoWWcFgQtxapi51Z8TLu6v6Uq")
 	ProtoV008_2 = ParseProtocolHashSafe("PtEdo2ZkT9oKpimTah6x2embF25oss54njMuPzkJTEi5RqfdZFA")
+	ProtoV009   = ParseProtocolHashSafe("PsFLorenaUUuikDWvMDr6fGBRG8kt3e3D3fHoXK1j1BFRxeSH4i")
 
 	Mainnet     = MustParseChainIdHash("NetXdQprcVkpaWU")
 	Alphanet    = MustParseChainIdHash("NetXgtSLGNJvNye")
@@ -25,6 +26,7 @@ var (
 	Delphinet   = MustParseChainIdHash("NetXm8tYqnMWky1")
 	Edonet      = MustParseChainIdHash("NetXSp4gfdanies")
 	Edonet2     = MustParseChainIdHash("NetXSgo1ZT2DRUG")
+	Florencenet = MustParseChainIdHash("NetXxkAx4woPLyu")
 
 	// maximum depth of branches for ops to be included on chain, also
 	// defines max depth of a possible reorg and max block priorities
@@ -52,6 +54,8 @@ func (p *Params) ForNetwork(net ChainIdHash) *Params {
 		pp.Network = "Edonet"
 	case Edonet2.IsEqual(net):
 		pp.Network = "Edonet2"
+	case Florencenet.IsEqual(net):
+		pp.Network = "Florencenet"
 	default:
 		pp.Network = "Sandbox"
 	}
@@ -110,6 +114,18 @@ func (p *Params) ForProtocol(proto ProtocolHash) *Params {
 			pp.StartBlockOffset = 1343488
 		}
 		// no invoice
+	case ProtoV009.IsEqual(proto):
+		pp.Version = 9
+		pp.OperationTagsVersion = 1
+		pp.NumVotingPeriods = 5
+		if Mainnet.IsEqual(p.ChainId) {
+			pp.StartBlockOffset = 1343488
+		}
+		// invoice (will be applied as balance update from v009+)
+		// so we leave it empty
+		// pp.Invoices = map[string]int64{
+		// 	"tz1abmz7jiCV2GH2u81LRrGgAFFgvQgiDiaf": 100 * 1000000,
+		// }
 	}
 	return pp
 }

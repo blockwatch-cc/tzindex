@@ -14,7 +14,7 @@ RUN           strip /${BUILD_TARGET}
 
 # final stage
 FROM          alpine:latest
-MAINTAINER    Alexander Eichhorn <alex@kidtsunami.com>
+MAINTAINER    Alexander Eichhorn <alex@blockwatch.cc>
 ARG           BUILD_TARGET=tzindex
 ARG           USER=tzindex
 ENV           BUILD_TARGET=${BUILD_TARGET}

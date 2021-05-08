@@ -37,20 +37,31 @@ func (b *Builder) NewImplicitFlows() ([]*Flow, error) {
 			if !ok {
 				return nil, fmt.Errorf("missing account %s", u.Address())
 			}
-			if u.Change < 0 {
-				// baking: deposits paid from balance
+			switch u.Origin {
+			case "", "block":
+				if u.Change < 0 {
+					// baking: deposits paid from balance
+					f := NewFlow(b.block, acc, nil, opn, opl, opn, 0, 0)
+					f.Category = FlowCategoryBalance
+					f.Operation = FlowTypeBaking
+					f.AmountOut = -u.Change // note the negation!
+					flows = append(flows, f)
+				} else {
+					// payout: credit unfrozen deposits, rewards and fees
+					f := NewFlow(b.block, acc, nil, opn, opl, opn, 0, 0)
+					f.Category = FlowCategoryBalance
+					f.Operation = FlowTypeInternal
+					f.AmountIn = u.Change
+					f.IsUnfrozen = true
+					f.TokenGenMin = 1
+					flows = append(flows, f)
+				}
+			case "migration":
+				// Florence v009+
 				f := NewFlow(b.block, acc, nil, opn, opl, opn, 0, 0)
 				f.Category = FlowCategoryBalance
-				f.Operation = FlowTypeBaking
-				f.AmountOut = -u.Change // note the negation!
-				flows = append(flows, f)
-			} else {
-				// payout: credit unfrozen deposits, rewards and fees
-				f := NewFlow(b.block, acc, nil, opn, opl, opn, 0, 0)
-				f.Category = FlowCategoryBalance
-				f.Operation = FlowTypeInternal
+				f.Operation = FlowTypeInvoice
 				f.AmountIn = u.Change
-				f.IsUnfrozen = true
 				f.TokenGenMin = 1
 				flows = append(flows, f)
 			}

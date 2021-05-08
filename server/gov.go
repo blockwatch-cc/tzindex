@@ -258,27 +258,27 @@ func NewExplorerBallot(ctx *ApiContext, b *model.Ballot, p chain.ProtocolHash, o
 }
 
 type ExplorerElection struct {
-	Id                  int                    `json:"election_id"`
-	MaxPeriods          int                    `json:"max_periods"`
-	NumPeriods          int                    `json:"num_periods"`
-	NumProposals        int                    `json:"num_proposals"`
-	StartTime           time.Time              `json:"start_time"`
-	EndTime             time.Time              `json:"end_time"`
-	StartHeight         int64                  `json:"start_height"`
-	EndHeight           int64                  `json:"end_height"`
-	IsEmpty             bool                   `json:"is_empty"`
-	IsOpen              bool                   `json:"is_open"`
-	IsFailed            bool                   `json:"is_failed"`
-	NoQuorum            bool                   `json:"no_quorum"`
-	NoMajority          bool                   `json:"no_majority"`
-	NoProposal          bool                   `json:"no_proposal"`
-	VotingPeriodKind    chain.VotingPeriodKind `json:"voting_period"`
-	ProposalPeriod      *ExplorerVote          `json:"proposal"`
-	TestingVotePeriod   *ExplorerVote          `json:"testing_vote"`
-	TestingPeriod       *ExplorerVote          `json:"testing"`
-	PromotionVotePeriod *ExplorerVote          `json:"promotion_vote"`
-	AdoptionPeriod      *ExplorerVote          `json:"adoption"`
-	expires             time.Time              `json:"-"`
+	Id                int                    `json:"election_id"`
+	MaxPeriods        int                    `json:"max_periods"`
+	NumPeriods        int                    `json:"num_periods"`
+	NumProposals      int                    `json:"num_proposals"`
+	StartTime         time.Time              `json:"start_time"`
+	EndTime           time.Time              `json:"end_time"`
+	StartHeight       int64                  `json:"start_height"`
+	EndHeight         int64                  `json:"end_height"`
+	IsEmpty           bool                   `json:"is_empty"`
+	IsOpen            bool                   `json:"is_open"`
+	IsFailed          bool                   `json:"is_failed"`
+	NoQuorum          bool                   `json:"no_quorum"`
+	NoMajority        bool                   `json:"no_majority"`
+	NoProposal        bool                   `json:"no_proposal"`
+	VotingPeriodKind  chain.VotingPeriodKind `json:"voting_period"`
+	ProposalPeriod    *ExplorerVote          `json:"proposal"`
+	ExplorationPeriod *ExplorerVote          `json:"exploration"`
+	CooldownPeriod    *ExplorerVote          `json:"cooldown"`
+	PromotionPeriod   *ExplorerVote          `json:"promotion"`
+	AdoptionPeriod    *ExplorerVote          `json:"adoption"`
+	expires           time.Time              `json:"-"`
 }
 
 var _ RESTful = (*ExplorerElection)(nil)
@@ -475,15 +475,15 @@ func ReadElection(ctx *ApiContext) (interface{}, int) {
 			if len(ee.ProposalPeriod.Proposals) > 0 {
 				ee.IsEmpty = false
 			}
-		case chain.VotingPeriodTestingVote:
-			ee.TestingVotePeriod = NewExplorerVote(ctx, v)
-			ee.TestingVotePeriod.Proposals = []*ExplorerProposal{winner}
-		case chain.VotingPeriodTesting:
-			ee.TestingPeriod = NewExplorerVote(ctx, v)
-			ee.TestingPeriod.Proposals = []*ExplorerProposal{winner}
-		case chain.VotingPeriodPromotionVote:
-			ee.PromotionVotePeriod = NewExplorerVote(ctx, v)
-			ee.PromotionVotePeriod.Proposals = []*ExplorerProposal{winner}
+		case chain.VotingPeriodExploration:
+			ee.ExplorationPeriod = NewExplorerVote(ctx, v)
+			ee.ExplorationPeriod.Proposals = []*ExplorerProposal{winner}
+		case chain.VotingPeriodCooldown:
+			ee.CooldownPeriod = NewExplorerVote(ctx, v)
+			ee.CooldownPeriod.Proposals = []*ExplorerProposal{winner}
+		case chain.VotingPeriodPromotion:
+			ee.PromotionPeriod = NewExplorerVote(ctx, v)
+			ee.PromotionPeriod.Proposals = []*ExplorerProposal{winner}
 		case chain.VotingPeriodAdoption:
 			ee.AdoptionPeriod = NewExplorerVote(ctx, v)
 			ee.AdoptionPeriod.Proposals = []*ExplorerProposal{winner}

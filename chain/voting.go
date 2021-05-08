@@ -12,17 +12,17 @@ type VotingPeriodKind int
 const (
 	VotingPeriodInvalid VotingPeriodKind = iota
 	VotingPeriodProposal
-	VotingPeriodTestingVote
-	VotingPeriodTesting
-	VotingPeriodPromotionVote
+	VotingPeriodExploration
+	VotingPeriodCooldown
+	VotingPeriodPromotion
 	VotingPeriodAdoption
 )
 
 var VotingPeriods = []VotingPeriodKind{
 	VotingPeriodProposal,
-	VotingPeriodTestingVote,
-	VotingPeriodTesting,
-	VotingPeriodPromotionVote,
+	VotingPeriodExploration,
+	VotingPeriodCooldown,
+	VotingPeriodPromotion,
 	VotingPeriodAdoption,
 }
 
@@ -47,11 +47,11 @@ func (v VotingPeriodKind) Num() int {
 	switch v {
 	case VotingPeriodProposal:
 		return 1
-	case VotingPeriodTestingVote:
+	case VotingPeriodExploration:
 		return 2
-	case VotingPeriodTesting:
+	case VotingPeriodCooldown:
 		return 3
-	case VotingPeriodPromotionVote:
+	case VotingPeriodPromotion:
 		return 4
 	case VotingPeriodAdoption:
 		return 5
@@ -63,11 +63,11 @@ func (v VotingPeriodKind) Num() int {
 func ToVotingPeriod(i int) VotingPeriodKind {
 	switch i {
 	case 2:
-		return VotingPeriodTestingVote
+		return VotingPeriodExploration
 	case 3:
-		return VotingPeriodTesting
+		return VotingPeriodCooldown
 	case 4:
-		return VotingPeriodPromotionVote
+		return VotingPeriodPromotion
 	case 5:
 		return VotingPeriodAdoption
 	default:
@@ -79,12 +79,12 @@ func ParseVotingPeriod(s string) VotingPeriodKind {
 	switch s {
 	case "proposal":
 		return VotingPeriodProposal
-	case "testing_vote":
-		return VotingPeriodTestingVote
-	case "testing":
-		return VotingPeriodTesting
-	case "promotion_vote":
-		return VotingPeriodPromotionVote
+	case "testing_vote", "exploration":
+		return VotingPeriodExploration
+	case "testing", "cooldown":
+		return VotingPeriodCooldown
+	case "promotion_vote", "promotion":
+		return VotingPeriodPromotion
 	case "adoption":
 		return VotingPeriodAdoption
 	default:
@@ -96,12 +96,12 @@ func (v VotingPeriodKind) String() string {
 	switch v {
 	case VotingPeriodProposal:
 		return "proposal"
-	case VotingPeriodTestingVote:
-		return "testing_vote"
-	case VotingPeriodTesting:
-		return "testing"
-	case VotingPeriodPromotionVote:
-		return "promotion_vote"
+	case VotingPeriodExploration:
+		return "exploration"
+	case VotingPeriodCooldown:
+		return "cooldown"
+	case VotingPeriodPromotion:
+		return "promotion"
 	case VotingPeriodAdoption:
 		return "adoption"
 	default:

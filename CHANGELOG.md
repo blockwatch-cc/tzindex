@@ -1,7 +1,20 @@
 # Changelog
 
-## Unreleased
+## 9.0.0
 
+**Tezos Florence Protocol Support**
+
+- Florence v009 `PsFLorena` protocol and Florencenet
+- renamed voting periods to `proposal`, `exploration`, `cooldown`, `promotion` and `adoption`
+- renamed voting-related API data types accordingly (`/explorer/election`)
+- new protocol operation `failing_noop` usable for message signatures without effect on on-chain state
+- new `endorsement_with_slot` data model
+- handle balance receipts from migrations
+
+**Fixes and Improvements**
+
+- ETL: fix vote state rollback on cycle end
+- BASE58: fix overflow panic on ill-formed base58 strings
 - CLI: new `--notls` argument to disable RPC TLS when no protocol is specified in the RPC URL (also available as env `TZ_RPC_DISABLE_TLS`)
 - CLI: new `--insecure` argument to disable RPC TLS certificate checks (also available as env `TZ_RPC_INSECURE_TLS`)
 

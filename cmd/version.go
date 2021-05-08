@@ -15,8 +15,8 @@ var (
 	APP_NAMESPACE        = "cc.blockwatch"
 	ORG_NAME             = "Blockwatch"
 	APP_NAME             = "tzindex"
-	API_VERSION          = "v008-2020-06-01"
-	VERSION       string = "v8.0.0"
+	API_VERSION          = "v009-2020-06-01"
+	VERSION       string = "v9.0.0"
 	GITCOMMIT     string = "dev"
 	ENV_PREFIX           = "TZ"
 )

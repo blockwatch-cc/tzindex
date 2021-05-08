@@ -101,9 +101,9 @@ func (e *Election) MarshalJSONVerbose() ([]byte, error) {
 	if e.IsOpen {
 		p := e.ctx.Params
 		tm := e.ctx.Tip.BestTime
-		diff := 4*p.BlocksPerVotingPeriod - (e.ctx.Tip.BestHeight - e.StartHeight)
+		diff := int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - (e.ctx.Tip.BestHeight - e.StartHeight)
 		election.EndTime = util.UnixMilliNonZero(tm.Add(time.Duration(diff) * p.TimeBetweenBlocks[0]))
-		election.EndHeight = election.StartHeight + 4*p.BlocksPerVotingPeriod - 1
+		election.EndHeight = election.StartHeight + int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - 1
 	}
 	return json.Marshal(election)
 }
@@ -131,7 +131,7 @@ func (e *Election) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(e.StartTime), 10)
 		case "end_time":
 			if e.IsOpen {
-				diff := 4*p.BlocksPerVotingPeriod - (e.ctx.Tip.BestHeight - e.StartHeight)
+				diff := int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - (e.ctx.Tip.BestHeight - e.StartHeight)
 				endTime := tm.Add(time.Duration(diff) * p.TimeBetweenBlocks[0])
 				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(endTime), 10)
 			} else {
@@ -141,7 +141,7 @@ func (e *Election) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, e.StartHeight, 10)
 		case "end_height":
 			if e.IsOpen {
-				endHeight := e.StartHeight + 4*p.BlocksPerVotingPeriod - 1
+				endHeight := e.StartHeight + int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - 1
 				buf = strconv.AppendInt(buf, endHeight, 10)
 			} else {
 				buf = strconv.AppendInt(buf, e.EndHeight, 10)
@@ -217,7 +217,7 @@ func (e *Election) MarshalCSV() ([]string, error) {
 			res[i] = strconv.Quote(e.StartTime.Format(time.RFC3339))
 		case "end_time":
 			if e.IsOpen {
-				diff := 4*p.BlocksPerVotingPeriod - (e.ctx.Tip.BestHeight - e.StartHeight)
+				diff := int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - (e.ctx.Tip.BestHeight - e.StartHeight)
 				endTime := tm.Add(time.Duration(diff) * p.TimeBetweenBlocks[0])
 				res[i] = strconv.Quote(endTime.Format(time.RFC3339))
 			} else {
@@ -227,7 +227,7 @@ func (e *Election) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(e.StartHeight, 10)
 		case "end_height":
 			if e.IsOpen {
-				endHeight := e.StartHeight + 4*p.BlocksPerVotingPeriod - 1
+				endHeight := e.StartHeight + int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - 1
 				res[i] = strconv.FormatInt(endHeight, 10)
 			} else {
 				res[i] = strconv.FormatInt(e.EndHeight, 10)

@@ -27,6 +27,7 @@ const (
 )
 
 // generate synthetic ops from flows for
+// OpTypeInvoice
 // OpTypeBake
 // OpTypeUnfreeze
 // OpTypeSeedSlash
@@ -51,6 +52,15 @@ func (b *Builder) AppendImplicitOps(ctx context.Context) error {
 			continue
 		}
 		switch true {
+		case f.Operation == FlowTypeInvoice:
+			// only append additional invoice op when none is defined in params
+			if len(b.block.Params.Invoices) == 0 {
+				if ops[f.OpN] == nil {
+					ops[f.OpN] = NewImplicitOp(b.block, f.AccountId, chain.OpTypeInvoice, f.OpN, f.OpL, f.OpP)
+					ops[f.OpN].SenderId = f.AccountId
+					ops[f.OpN].Volume = f.AmountIn
+				}
+			}
 		case f.Operation == FlowTypeBaking:
 			// OpTypeBake
 			if ops[f.OpN] == nil {
@@ -237,6 +247,7 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.OperationHeade
 			acc.Hash = aop.Pkh.Hash
 			acc.Type = aop.Pkh.Type
 			acc.FirstSeen = b.block.Height
+			acc.LastSeen = b.block.Height
 			acc.IsActivated = true
 			acc.IsSpendable = true
 			acc.IsDelegatable = true
@@ -272,6 +283,7 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.OperationHeade
 			acc.IsActivated = false
 			acc.IsDirty = true
 			acc.FirstSeen = 1 // reset to genesis
+			acc.LastSeen = 1  // reset to genesis
 			b.accHashMap[accountHashKey(acc)] = acc
 		}
 	}
