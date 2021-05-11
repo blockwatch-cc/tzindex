@@ -370,12 +370,20 @@ func (a *Account) UpdateBalance(f *Flow) error {
 					a.TokenGenMin = util.NonZeroMin64(a.TokenGenMin, f.TokenGenMin+1)
 				}
 			}
-		case FlowTypeVest, FlowTypeActivation:
+		case FlowTypeActivation:
 			if a.UnclaimedBalance < f.AmountIn {
 				return fmt.Errorf("acc.update id %d %s unclaimed balance %d is smaller than "+
 					"activated amount %d", a.RowId, a, a.UnclaimedBalance, f.AmountIn)
 			}
 			a.UnclaimedBalance -= f.AmountIn
+			a.TokenGenMin = 1
+			a.TokenGenMax = util.Max64(a.TokenGenMax, 1)
+		case FlowTypeVest:
+			if a.UnclaimedBalance+a.SpendableBalance < f.AmountIn {
+				return fmt.Errorf("acc.update id %d %s total balance %d is smaller than "+
+					"vested amount %d", a.RowId, a, a.UnclaimedBalance+a.SpendableBalance, f.AmountIn)
+			}
+			a.UnclaimedBalance = util.Max64(a.UnclaimedBalance-f.AmountIn, 0)
 			a.TokenGenMin = 1
 			a.TokenGenMax = util.Max64(a.TokenGenMax, 1)
 		}

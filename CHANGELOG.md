@@ -1,5 +1,9 @@
 # Changelog
 
+## 9.0.1
+
+- ETL: fix undocumented vesting balance update
+
 ## 9.0.0
 
 **Tezos Florence Protocol Support**
