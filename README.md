@@ -61,7 +61,7 @@ Light mode saves roughly \~50% storage costs and \~50% indexing time. Keep in mi
 
 ### Requirements
 
-- Storage: 6.3GB (full Mainnet index, Feb 2021), 3.9G (light mode)
+- Storage: 6.7GB (full Mainnet index, Jun 2021), 3.9G (light mode)
 - RAM:  4-24GB (configurable, use more memory for better query latency)
 - CPU:  2+ cores (configurable, use more for better query parallelism)
 - Tezos node in archive mode
