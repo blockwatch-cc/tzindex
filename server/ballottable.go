@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -17,8 +17,7 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/packdb/vec"
-
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
@@ -54,11 +53,10 @@ func init() {
 // configurable marshalling helper
 type Ballot struct {
 	model.Ballot
-	verbose  bool                               `csv:"-" pack:"-"` // cond. marshal
-	columns  util.StringList                    `csv:"-" pack:"-"` // cond. cols & order when brief
-	ctx      *ApiContext                        `csv:"-" pack:"-"` // blockchain amount conversion
-	accounts map[model.AccountID]chain.Address  `csv:"-" pack:"-"` // address map
-	ops      map[model.OpID]chain.OperationHash `csv:"-" pack:"-"` // op map
+	verbose bool                        // cond. marshal
+	columns util.StringList             // cond. cols & order when brief
+	ctx     *ApiContext                 // blockchain amount conversion
+	ops     map[model.OpID]tezos.OpHash // op map
 }
 
 func (b *Ballot) MarshalJSON() ([]byte, error) {
@@ -95,7 +93,7 @@ func (b *Ballot) MarshalJSONVerbose() ([]byte, error) {
 		Height:           b.Height,
 		Time:             util.UnixMilliNonZero(b.Time),
 		SourceId:         b.SourceId.Value(),
-		Source:           b.accounts[b.SourceId].String(),
+		Source:           b.ctx.Indexer.LookupAddress(b.ctx, b.SourceId).String(),
 		OpId:             b.OpId.Value(),
 		Op:               b.ops[b.OpId].String(),
 		Rolls:            b.Rolls,
@@ -128,7 +126,7 @@ func (b *Ballot) MarshalJSONBrief() ([]byte, error) {
 		case "source_id":
 			buf = strconv.AppendUint(buf, b.SourceId.Value(), 10)
 		case "source":
-			buf = strconv.AppendQuote(buf, b.accounts[b.SourceId].String())
+			buf = strconv.AppendQuote(buf, b.ctx.Indexer.LookupAddress(b.ctx, b.SourceId).String())
 		case "op_id":
 			buf = strconv.AppendUint(buf, b.OpId.Value(), 10)
 		case "op":
@@ -171,7 +169,7 @@ func (b *Ballot) MarshalCSV() ([]string, error) {
 		case "source_id":
 			res[i] = strconv.FormatUint(b.SourceId.Value(), 10)
 		case "source":
-			res[i] = strconv.Quote(b.accounts[b.SourceId].String())
+			res[i] = strconv.Quote(b.ctx.Indexer.LookupAddress(b.ctx, b.SourceId).String())
 		case "op_id":
 			res[i] = strconv.FormatUint(b.OpId.Value(), 10)
 		case "op":
@@ -193,10 +191,6 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	if err != nil {
 		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", args.Table), err))
 	}
-	accountT, err := ctx.Indexer.Table(index.AccountTableKey)
-	if err != nil {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", index.AccountTableKey), err))
-	}
 	opT, err := ctx.Indexer.Table(index.OpTableKey)
 	if err != nil {
 		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", index.OpTableKey), err))
@@ -204,9 +198,8 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 
 	// translate long column names to short names used in pack tables
 	var (
-		needAccountT bool
-		needOpT      bool
-		srcNames     []string
+		needOpT  bool
+		srcNames []string
 	)
 	if len(args.Columns) > 0 {
 		// resolve short column names
@@ -219,14 +212,7 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			if n != "-" {
 				srcNames = append(srcNames, n)
 			}
-			switch v {
-			case "source":
-				needAccountT = true
-			case "op":
-				needOpT = true
-			}
-			if args.Verbose {
-				needAccountT = true
+			if args.Verbose || v == "op" {
 				needOpT = true
 			}
 		}
@@ -234,20 +220,18 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		// use all table columns in order and reverse lookup their long names
 		srcNames = table.Fields().Names()
 		args.Columns = ballotAllAliases
-		needAccountT = true
 		needOpT = true
 	}
 
 	// build table query
 	q := pack.Query{
-		Name:       ctx.RequestID,
-		Fields:     table.Fields().Select(srcNames...),
-		Limit:      int(args.Limit),
-		Conditions: make(pack.ConditionList, 0),
-		Order:      args.Order,
+		Name:   ctx.RequestID,
+		Fields: table.Fields().Select(srcNames...),
+		Limit:  int(args.Limit),
+		Order:  args.Order,
 	}
-	accMap := make(map[model.AccountID]chain.Address)
-	opMap := make(map[model.OpID]chain.OperationHash)
+	accMap := make(map[model.AccountID]tezos.Address)
+	opMap := make(map[model.OpID]tezos.OpHash)
 
 	// build dynamic filter conditions from query (will panic on error)
 	for key, val := range ctx.Request.URL.Query() {
@@ -261,7 +245,7 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			}
 		}
 		switch prefix {
-		case "columns", "limit", "order", "verbose":
+		case "columns", "limit", "order", "verbose", "filename":
 			// skip these fields
 		case "cursor":
 			// add row id condition: id > cursor (new cursor == last row id)
@@ -273,12 +257,42 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
+			q.Conditions.AddAndCondition(&pack.Condition{
 				Field: table.Fields().Pk(),
 				Mode:  cursorMode,
 				Value: id,
 				Raw:   val[0], // debugging aid
 			})
+		case "ballot":
+			switch mode {
+			case pack.FilterModeEqual, pack.FilterModeNotEqual:
+				ballot := tezos.ParseBallotVote(val[0])
+				if !ballot.IsValid() {
+					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid ballot vote '%s'", val[0]), nil))
+				}
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find("b"), // ballot
+					Mode:  mode,
+					Value: ballot,
+					Raw:   val[0], // debugging aid
+				})
+
+			case pack.FilterModeIn, pack.FilterModeNotIn:
+				ballots := make([]int64, 0)
+				for _, v := range strings.Split(val[0], ",") {
+					ballot := tezos.ParseBallotVote(v)
+					if !ballot.IsValid() {
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid ballot vote '%s'", v), nil))
+					}
+					ballots = append(ballots, int64(ballot))
+				}
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find("b"), // ballot
+					Mode:  mode,
+					Value: ballots,
+					Raw:   val[0], // debugging aid
+				})
+			}
 		case "source":
 			// parse source/baker address and lookup id
 			// valid filter modes: eq, in
@@ -289,15 +303,15 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty address matches id 0 (== missing baker)
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find("S"), // source id
 						Mode:  mode,
-						Value: uint64(0),
+						Value: 0,
 						Raw:   val[0], // debugging aid
 					})
 				} else {
 					// single-address lookup and compile condition
-					addr, err := chain.ParseAddress(val[0])
+					addr, err := tezos.ParseAddress(val[0])
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
@@ -307,7 +321,7 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 					}
 					// Note: when not found we insert an always false condition
 					if acc == nil || acc.RowId == 0 {
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find("S"), // source id
 							Mode:  mode,
 							Value: uint64(math.MaxUint64),
@@ -315,12 +329,11 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 						})
 					} else {
 						// keep for output
-						accMap[acc.RowId] = chain.NewAddress(acc.Type, acc.Hash)
-						// add addr id as extra fund_flow condition
-						q.Conditions = append(q.Conditions, pack.Condition{
+						accMap[acc.RowId] = acc.Hash.Clone()
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find("S"), // source id
 							Mode:  mode,
-							Value: acc.RowId.Value(),
+							Value: acc.RowId,
 							Raw:   val[0], // debugging aid
 						})
 					}
@@ -329,7 +342,7 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(v)
+					addr, err := tezos.ParseAddress(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
@@ -342,13 +355,13 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 						continue
 					}
 					// keep for output
-					accMap[acc.RowId] = chain.NewAddress(acc.Type, acc.Hash)
+					accMap[acc.RowId] = acc.Hash.Clone()
 					// collect list of account ids
 					ids = append(ids, acc.RowId.Value())
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("S"), // source id
 					Mode:  mode,
 					Value: ids,
@@ -367,10 +380,10 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty op matches id 0 (== missing baker)
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find("O"), // op id
 						Mode:  mode,
-						Value: uint64(0),
+						Value: 0,
 						Raw:   val[0], // debugging aid
 					})
 				} else {
@@ -382,31 +395,32 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 							// expected
 						case etl.ErrInvalidHash:
 							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid op hash '%s'", val[0]), err))
+						case index.ErrInvalidOpID:
+							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid op id '%s'", val[0]), err))
 						default:
 							panic(err)
 						}
 					}
 					// Note: when not found we insert an always false condition
 					if op == nil || len(op) == 0 {
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find("O"), // op id
 							Mode:  mode,
 							Value: uint64(math.MaxUint64),
 							Raw:   "op not found", // debugging aid
 						})
 					} else {
-						// add addr id as extra fund_flow condition
 						opMap[op[0].RowId] = op[0].Hash.Clone()
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find("O"), // op id
 							Mode:  mode,
-							Value: op[0].RowId.Value(), // op slice may contain internal ops
-							Raw:   val[0],              // debugging aid
+							Value: op[0].RowId, // op slice may contain internal ops
+							Raw:   val[0],      // debugging aid
 						})
 					}
 				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
-				// multi-address lookup and compile condition
+				// multi-op lookup and compile condition
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
 					op, err := ctx.Indexer.LookupOp(ctx, v)
@@ -416,6 +430,8 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 							// expected
 						case etl.ErrInvalidHash:
 							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid op hash '%s'", v), err))
+						case index.ErrInvalidOpID:
+							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid op id '%s'", val[0]), err))
 						default:
 							panic(err)
 						}
@@ -431,7 +447,7 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				// Note: when list is empty (no ops were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("O"), // op id
 					Mode:  mode,
 					Value: ids,
@@ -454,7 +470,7 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions = append(q.Conditions, cond)
+					q.Conditions.AddAndCondition(&cond)
 				}
 			}
 		}
@@ -465,75 +481,27 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		lastId uint64
 	)
 
-	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
-	defer func() {
-		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	}()
+	// start := time.Now()
+	// ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
+	// defer func() {
+	// 	ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
+	// }()
 
 	// Step 1: query database
 	res, err := table.Query(ctx, q)
 	if err != nil {
 		panic(EInternal(EC_DATABASE, "query failed", err))
 	}
-	ctx.Log.Tracef("Processing result with %d rows %d cols", res.Rows(), res.Cols())
+	// ctx.Log.Tracef("Processing result with %d rows %d cols", res.Rows(), res.Cols())
 	defer res.Close()
 
-	// Step 2: resolve accounts using lookup (when requested)
-	if needAccountT && res.Rows() > 0 {
-		// get a unique copy of source id column (clip on request limit)
-		ucol, _ := res.Uint64Column("S")
-		find := vec.UniqueUint64Slice(ucol[:util.Min(len(ucol), int(args.Limit))])
-
-		// filter already known accounts
-		var n int
-		for _, v := range find {
-			if _, ok := accMap[model.AccountID(v)]; !ok {
-				find[n] = v
-				n++
-			}
-		}
-		find = find[:n]
-
-		if len(find) > 0 {
-			// lookup accounts from id
-			q := pack.Query{
-				Name:   ctx.RequestID + ".ballot_source_lookup",
-				Fields: accountT.Fields().Select("I", "H", "t"),
-				Conditions: pack.ConditionList{pack.Condition{
-					Field: accountT.Fields().Find("I"),
-					Mode:  pack.FilterModeIn,
-					Value: find,
-				}},
-			}
-			ctx.Log.Tracef("Looking up %d accounts", len(find))
-			type XAcc struct {
-				Id   model.AccountID   `pack:"I,pk"`
-				Hash []byte            `pack:"H"`
-				Type chain.AddressType `pack:"t"`
-			}
-			acc := &XAcc{}
-			err := accountT.Stream(ctx, q, func(r pack.Row) error {
-				if err := r.Decode(acc); err != nil {
-					return err
-				}
-				accMap[acc.Id] = chain.NewAddress(acc.Type, acc.Hash)
-				return nil
-			})
-			if err != nil {
-				// non-fatal error
-				ctx.Log.Errorf("Account lookup failed: %v", err)
-			}
-		}
-	}
-
-	// Step 3: resolve ops using lookup (when requested)
+	// Step 2: resolve ops using lookup (when requested)
 	if needOpT && res.Rows() > 0 {
-		// get a unique copy of source id column (clip on request limit)
+		// get a unique copy of op id column (clip on request limit)
 		ucol, _ := res.Uint64Column("O")
 		find := vec.UniqueUint64Slice(ucol[:util.Min(len(ucol), int(args.Limit))])
 
-		// filter already known accounts
+		// filter already known ops
 		var n int
 		for _, v := range find {
 			if _, ok := opMap[model.OpID(v)]; !ok {
@@ -544,29 +512,23 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		find = find[:n]
 
 		if len(find) > 0 {
-			// lookup accounts from id
-			q := pack.Query{
-				Name:   ctx.RequestID + ".ballot_op_lookup",
-				Fields: opT.Fields().Select("I", "H"),
-				Conditions: pack.ConditionList{pack.Condition{
-					Field: accountT.Fields().Find("I"),
-					Mode:  pack.FilterModeIn,
-					Value: find,
-				}},
-			}
-			ctx.Log.Tracef("Looking up %d ops", len(find))
+			// lookup ops from id
+			// ctx.Log.Tracef("Looking up %d ops", len(find))
 			type XOp struct {
-				Id   model.OpID          `pack:"I,pk"`
-				Hash chain.OperationHash `pack:"H"`
+				Id   model.OpID   `pack:"I,pk"`
+				Hash tezos.OpHash `pack:"H"`
 			}
 			op := &XOp{}
-			err := opT.Stream(ctx, q, func(r pack.Row) error {
-				if err := r.Decode(op); err != nil {
-					return err
-				}
-				opMap[op.Id] = op.Hash.Clone()
-				return nil
-			})
+			err = pack.NewQuery(ctx.RequestID+".ballot_op_lookup", opT).
+				WithFields("I", "H").
+				AndIn("I", find).
+				Stream(ctx, func(r pack.Row) error {
+					if err := r.Decode(op); err != nil {
+						return err
+					}
+					opMap[op.Id] = op.Hash.Clone()
+					return nil
+				})
 			if err != nil {
 				// non-fatal error
 				ctx.Log.Errorf("Op lookup failed: %v", err)
@@ -576,11 +538,10 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 
 	// prepare return type marshalling
 	ballot := &Ballot{
-		verbose:  args.Verbose,
-		columns:  util.StringList(args.Columns),
-		ctx:      ctx,
-		accounts: accMap,
-		ops:      opMap,
+		verbose: args.Verbose,
+		columns: util.StringList(args.Columns),
+		ctx:     ctx,
+		ops:     opMap,
 	}
 
 	// prepare response stream
@@ -626,7 +587,7 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 
 		// close JSON bracket
 		io.WriteString(ctx.ResponseWriter, "]")
-		ctx.Log.Tracef("JSON encoded %d rows", count)
+		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":
 		enc := csv.NewEncoder(ctx.ResponseWriter)
@@ -651,7 +612,7 @@ func StreamBallotTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				return nil
 			})
 		}
-		ctx.Log.Tracef("CSV Encoded %d rows", count)
+		// ctx.Log.Tracef("CSV Encoded %d rows", count)
 	}
 
 	// without new records, cursor remains the same as input (may be empty)

@@ -11,13 +11,13 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	. "blockwatch.cc/tzindex/etl/model"
 )
 
 const (
 	OpPackSizeLog2         = 15  // 32k packs ~4M
-	OpJournalSizeLog2      = 16  // 64k - search for spending op, so keep small
+	OpJournalSizeLog2      = 18  // 512k
 	OpCacheSize            = 128 // 128=512MB
 	OpFillLevel            = 100
 	OpIndexPackSizeLog2    = 15   // 16k packs (32k split size) ~256k
@@ -142,12 +142,34 @@ func (idx *OpIndex) Close() error {
 	return nil
 }
 
-func (idx *OpIndex) ConnectBlock(ctx context.Context, block *Block, _ BlockBuilder) error {
+func (idx *OpIndex) ConnectBlock(ctx context.Context, block *Block, b BlockBuilder) error {
 	ops := make([]pack.Item, 0, len(block.Ops))
-	for _, op := range block.Ops {
+	for i, op := range block.Ops {
+		// skip all consensus-related ops in light mode
+		if b.IsLightMode() {
+			switch op.Type {
+			case tezos.OpTypeBake,
+				tezos.OpTypeDoubleBakingEvidence,
+				tezos.OpTypeDoubleEndorsementEvidence,
+				tezos.OpTypeSeedNonceRevelation,
+				tezos.OpTypeEndorsement,
+				tezos.OpTypeProposals,
+				tezos.OpTypeBallot,
+				tezos.OpTypeUnfreeze,
+				tezos.OpTypeInvoice,
+				tezos.OpTypeSeedSlash:
+				continue
+			}
+		}
 		// assign block fees to implicit baker operation
-		if op.Type == chain.OpTypeBake {
+		if op.Type == tezos.OpTypeBake {
 			op.Fee = block.Fee
+		}
+		// set batch flag if op_c > 0 or next op list+pos are the same
+		op.IsBatch = op.OpC > 0
+		if i < len(block.Ops)-1 {
+			next := block.Ops[i+1]
+			op.IsBatch = op.IsBatch || (next.OpL == op.OpL && next.OpP == op.OpP)
 		}
 		ops = append(ops, op)
 	}
@@ -159,15 +181,9 @@ func (idx *OpIndex) DisconnectBlock(ctx context.Context, block *Block, _ BlockBu
 }
 
 func (idx *OpIndex) DeleteBlock(ctx context.Context, height int64) error {
-	log.Debugf("Rollback deleting ops at height %d", height)
-	q := pack.Query{
-		Name: "etl.op.delete",
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: idx.table.Fields().Find("h"), // block height (!)
-			Mode:  pack.FilterModeEqual,
-			Value: height,
-		}},
-	}
-	_, err := idx.table.Delete(ctx, q)
+	// log.Debugf("Rollback deleting ops at height %d", height)
+	_, err := pack.NewQuery("etl.op.delete", idx.table).
+		AndEqual("height", height).
+		Delete(ctx)
 	return err
 }

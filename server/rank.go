@@ -56,7 +56,7 @@ func (l RankList) LastModified() time.Time      { return l.modified }
 func (l RankList) Expires() time.Time           { return l.expires }
 
 func GetTrafficList(ctx *ApiContext) (interface{}, int) {
-	args := &ExplorerListRequest{}
+	args := &ListRequest{}
 	ctx.ParseRequestArgs(args)
 	tip := ctx.Tip
 	params := ctx.Params
@@ -77,14 +77,14 @@ func GetTrafficList(ctx *ApiContext) (interface{}, int) {
 			break
 		}
 		resp.list[i].Rank = v.TrafficRank
-		resp.list[i].Address = v.Address.String()
+		resp.list[i].Address = ctx.Indexer.LookupAddress(ctx, v.AccountId).String()
 		resp.list[i].Traffic = v.TxTraffic24h
 	}
 	return resp, http.StatusOK
 }
 
 func GetVolumeList(ctx *ApiContext) (interface{}, int) {
-	args := &ExplorerListRequest{}
+	args := &ListRequest{}
 	ctx.ParseRequestArgs(args)
 	tip := ctx.Tip
 	params := ctx.Params
@@ -100,19 +100,19 @@ func GetVolumeList(ctx *ApiContext) (interface{}, int) {
 		modified: tip.BestTime,
 	}
 	for i, v := range list {
-		if v.TrafficRank == 0 {
+		if v.VolumeRank == 0 {
 			resp.list = resp.list[:i]
 			break
 		}
-		resp.list[i].Rank = v.TrafficRank
-		resp.list[i].Address = v.Address.String()
-		resp.list[i].Volume = params.ConvertValue(v.TxTraffic24h)
+		resp.list[i].Rank = v.VolumeRank
+		resp.list[i].Address = ctx.Indexer.LookupAddress(ctx, v.AccountId).String()
+		resp.list[i].Volume = params.ConvertValue(v.TxVolume24h)
 	}
 	return resp, http.StatusOK
 }
 
 func GetRichList(ctx *ApiContext) (interface{}, int) {
-	args := &ExplorerListRequest{}
+	args := &ListRequest{}
 	ctx.ParseRequestArgs(args)
 	tip := ctx.Tip
 	params := ctx.Params
@@ -133,7 +133,7 @@ func GetRichList(ctx *ApiContext) (interface{}, int) {
 			break
 		}
 		resp.list[i].Rank = v.RichRank
-		resp.list[i].Address = v.Address.String()
+		resp.list[i].Address = ctx.Indexer.LookupAddress(ctx, v.AccountId).String()
 		resp.list[i].Balance = params.ConvertValue(v.Balance)
 	}
 	return resp, http.StatusOK

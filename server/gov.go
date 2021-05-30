@@ -13,119 +13,22 @@ import (
 	"sync/atomic"
 	"time"
 
-	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/packdb/vec"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
-)
 
-// keep a cache of addresses, block and op hashes involved in proposals
-// to avoid expensive database lookups id->hash
-type (
-	govBlockMap    map[int64]chain.BlockHash
-	govOpMap       map[model.OpID]chain.OperationHash
-	govProposalMap map[model.ProposalID]chain.ProtocolHash
-)
-
-var (
-	govBlockMapStore    atomic.Value
-	govOpMapStore       atomic.Value
-	govProposalMapStore atomic.Value
-	govMutex            sync.Mutex
+	"blockwatch.cc/packdb/util"
+	"blockwatch.cc/packdb/vec"
 )
 
 func init() {
 	register(ExplorerElection{})
-	govBlockMapStore.Store(make(govBlockMap))
-	govOpMapStore.Store(make(govOpMap))
-	govProposalMapStore.Store(make(govProposalMap))
-}
-
-func purgeGovStore() {
-	govMutex.Lock()
-	defer govMutex.Unlock()
-	govBlockMapStore.Store(make(govBlockMap))
-	govOpMapStore.Store(make(govOpMap))
-	govProposalMapStore.Store(make(govProposalMap))
-}
-
-func govLookupBlockHash(ctx *ApiContext, height int64) chain.BlockHash {
-	m := govBlockMapStore.Load().(govBlockMap)
-	h, ok := m[height]
-	if !ok {
-		govMutex.Lock()
-		defer govMutex.Unlock()
-		block, err := ctx.Indexer.BlockByHeight(ctx.Context, height)
-		if err != nil {
-			log.Errorf("explorer: cannot resolve block height %d: %v", height, err)
-		} else {
-			h = block.Hash.Clone()
-			m2 := make(govBlockMap) // create a new map
-			for k, v := range m {
-				m2[k] = v // copy all data
-			}
-			m2[height] = h // add new hash
-			govBlockMapStore.Store(m2)
-		}
-	}
-	return h
-}
-
-func govLookupOpHash(ctx *ApiContext, id model.OpID) chain.OperationHash {
-	if id == 0 {
-		return chain.OperationHash{}
-	}
-	m := govOpMapStore.Load().(govOpMap)
-	h, ok := m[id]
-	if !ok {
-		govMutex.Lock()
-		defer govMutex.Unlock()
-		ops, err := ctx.Indexer.LookupOpIds(ctx.Context, []uint64{id.Value()})
-		if err != nil || len(ops) == 0 {
-			log.Errorf("explorer: cannot resolve op id %d: %v", id, err)
-		} else {
-			h = ops[0].Hash.Clone()
-			m2 := make(govOpMap) // create a new map
-			for k, v := range m {
-				m2[k] = v // copy all data
-			}
-			m2[id] = h // add new hash
-			govOpMapStore.Store(m2)
-		}
-	}
-	return h
-}
-
-func govLookupProposalHash(ctx *ApiContext, id model.ProposalID) chain.ProtocolHash {
-	if id == 0 {
-		return chain.ProtocolHash{}
-	}
-	m := govProposalMapStore.Load().(govProposalMap)
-	h, ok := m[id]
-	if !ok {
-		govMutex.Lock()
-		defer govMutex.Unlock()
-		props, err := ctx.Indexer.LookupProposalIds(ctx.Context, []uint64{id.Value()})
-		if err != nil || len(props) == 0 {
-			log.Errorf("explorer: cannot resolve proposal id %d: %v", id, err)
-		} else {
-			h = props[0].Hash.Clone()
-			m2 := make(govProposalMap) // create a new map
-			for k, v := range m {
-				m2[k] = v // copy all data
-			}
-			m2[id] = h // add new hash
-			govProposalMapStore.Store(m2)
-		}
-	}
-	return h
 }
 
 type ExplorerVote struct {
 	VotingPeriod     int64                  `json:"voting_period"`
-	VotingPeriodKind chain.VotingPeriodKind `json:"voting_period_kind"`
+	VotingPeriodKind tezos.VotingPeriodKind `json:"voting_period_kind"`
 	StartTime        time.Time              `json:"period_start_time"`
 	EndTime          time.Time              `json:"period_end_time"`
 	StartHeight      int64                  `json:"period_start_block"`
@@ -192,14 +95,14 @@ func NewExplorerVote(ctx *ApiContext, v *model.Vote) *ExplorerVote {
 }
 
 type ExplorerProposal struct {
-	Hash          chain.ProtocolHash  `json:"hash"`
-	SourceAddress chain.Address       `json:"source"`
-	BlockHash     chain.BlockHash     `json:"block_hash"`
-	OpHash        chain.OperationHash `json:"op_hash"`
-	Height        int64               `json:"height"`
-	Time          time.Time           `json:"time"`
-	Rolls         int64               `json:"rolls"`
-	Voters        int64               `json:"voters"`
+	Hash          tezos.ProtocolHash `json:"hash"`
+	SourceAddress tezos.Address      `json:"source"`
+	BlockHash     tezos.BlockHash    `json:"block_hash"`
+	OpHash        tezos.OpHash       `json:"op_hash"`
+	Height        int64              `json:"height"`
+	Time          time.Time          `json:"time"`
+	Rolls         int64              `json:"rolls"`
+	Voters        int64              `json:"voters"`
 }
 
 func NewExplorerProposal(ctx *ApiContext, p *model.Proposal) *ExplorerProposal {
@@ -209,10 +112,84 @@ func NewExplorerProposal(ctx *ApiContext, p *model.Proposal) *ExplorerProposal {
 		Time:          p.Time,
 		Rolls:         p.Rolls,
 		Voters:        p.Voters,
-		BlockHash:     govLookupBlockHash(ctx, p.Height),
+		BlockHash:     ctx.Indexer.LookupBlockHash(ctx, p.Height),
 		OpHash:        govLookupOpHash(ctx, p.OpId),
-		SourceAddress: lookupAddress(ctx, p.SourceId),
+		SourceAddress: ctx.Indexer.LookupAddress(ctx, p.SourceId),
 	}
+}
+
+// keep a cache of op and proposal hashes
+type (
+	govOpMap       map[model.OpID]tezos.OpHash
+	govProposalMap map[model.ProposalID]tezos.ProtocolHash
+)
+
+var (
+	govOpMapStore       atomic.Value
+	govProposalMapStore atomic.Value
+	govMutex            sync.Mutex
+)
+
+func init() {
+	govOpMapStore.Store(make(govOpMap))
+	govProposalMapStore.Store(make(govProposalMap))
+}
+
+func purgeGovStore() {
+	govMutex.Lock()
+	defer govMutex.Unlock()
+	govOpMapStore.Store(make(govOpMap))
+	govProposalMapStore.Store(make(govProposalMap))
+}
+
+func govLookupOpHash(ctx *ApiContext, id model.OpID) tezos.OpHash {
+	if id == 0 {
+		return tezos.OpHash{}
+	}
+	m := govOpMapStore.Load().(govOpMap)
+	h, ok := m[id]
+	if !ok {
+		govMutex.Lock()
+		defer govMutex.Unlock()
+		ops, err := ctx.Indexer.LookupOpIds(ctx.Context, []uint64{id.Value()})
+		if err != nil || len(ops) == 0 {
+			log.Errorf("explorer: cannot resolve op id %d: %v", id, err)
+		} else {
+			h = ops[0].Hash.Clone()
+			m2 := make(govOpMap) // create a new map
+			for k, v := range m {
+				m2[k] = v // copy all data
+			}
+			m2[id] = h // add new hash
+			govOpMapStore.Store(m2)
+		}
+	}
+	return h
+}
+
+func govLookupProposalHash(ctx *ApiContext, id model.ProposalID) tezos.ProtocolHash {
+	if id == 0 {
+		return tezos.ProtocolHash{}
+	}
+	m := govProposalMapStore.Load().(govProposalMap)
+	h, ok := m[id]
+	if !ok {
+		govMutex.Lock()
+		defer govMutex.Unlock()
+		props, err := ctx.Indexer.LookupProposalIds(ctx.Context, []uint64{id.Value()})
+		if err != nil || len(props) == 0 {
+			log.Errorf("explorer: cannot resolve proposal id %d: %v", id, err)
+		} else {
+			h = props[0].Hash.Clone()
+			m2 := make(govProposalMap) // create a new map
+			for k, v := range m {
+				m2[k] = v // copy all data
+			}
+			m2[id] = h // add new hash
+			govProposalMapStore.Store(m2)
+		}
+	}
+	return h
 }
 
 type ExplorerBallot struct {
@@ -221,10 +198,10 @@ type ExplorerBallot struct {
 	Timestamp        time.Time              `json:"time"`
 	ElectionId       int                    `json:"election_id"`
 	VotingPeriod     int64                  `json:"voting_period"`
-	VotingPeriodKind chain.VotingPeriodKind `json:"voting_period_kind"`
-	Proposal         chain.ProtocolHash     `json:"proposal"`
-	OpHash           chain.OperationHash    `json:"op"`
-	Ballot           chain.BallotVote       `json:"ballot"`
+	VotingPeriodKind tezos.VotingPeriodKind `json:"voting_period_kind"`
+	Proposal         tezos.ProtocolHash     `json:"proposal"`
+	OpHash           tezos.OpHash           `json:"op"`
+	Ballot           tezos.BallotVote       `json:"ballot"`
 	Rolls            int64                  `json:"rolls"`
 	Sender           string                 `json:"sender"`
 }
@@ -241,7 +218,7 @@ func (l ExplorerBallotList) Expires() time.Time           { return l.expires }
 
 var _ Resource = (*ExplorerBallotList)(nil)
 
-func NewExplorerBallot(ctx *ApiContext, b *model.Ballot, p chain.ProtocolHash, o chain.OperationHash) *ExplorerBallot {
+func NewExplorerBallot(ctx *ApiContext, b *model.Ballot, p tezos.ProtocolHash, o tezos.OpHash) *ExplorerBallot {
 	return &ExplorerBallot{
 		RowId:            b.RowId,
 		Height:           b.Height,
@@ -253,7 +230,7 @@ func NewExplorerBallot(ctx *ApiContext, b *model.Ballot, p chain.ProtocolHash, o
 		OpHash:           o,
 		Ballot:           b.Ballot,
 		Rolls:            b.Rolls,
-		Sender:           lookupAddress(ctx, b.SourceId).String(),
+		Sender:           ctx.Indexer.LookupAddress(ctx, b.SourceId).String(),
 	}
 }
 
@@ -272,7 +249,7 @@ type ExplorerElection struct {
 	NoQuorum          bool                   `json:"no_quorum"`
 	NoMajority        bool                   `json:"no_majority"`
 	NoProposal        bool                   `json:"no_proposal"`
-	VotingPeriodKind  chain.VotingPeriodKind `json:"voting_period"`
+	VotingPeriodKind  tezos.VotingPeriodKind `json:"voting_period"`
 	ProposalPeriod    *ExplorerVote          `json:"proposal"`
 	ExplorationPeriod *ExplorerVote          `json:"exploration"`
 	CooldownPeriod    *ExplorerVote          `json:"cooldown"`
@@ -299,7 +276,7 @@ func NewExplorerElection(ctx *ApiContext, e *model.Election) *ExplorerElection {
 		NoQuorum:         e.NoQuorum,
 		NoMajority:       e.NoMajority,
 		NoProposal:       e.NumProposals == 0,
-		VotingPeriodKind: chain.ToVotingPeriod(e.NumPeriods),
+		VotingPeriodKind: tezos.ToVotingPeriod(e.NumPeriods),
 	}
 	// estimate end time for open elections
 	p := ctx.Params
@@ -349,6 +326,7 @@ func (b ExplorerElection) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/{ident}/{stage}/ballots", C(ListBallots)).Methods("GET")
 	r.HandleFunc("/{ident}/{stage}/voters", C(ListVoters)).Methods("GET")
 	return nil
+
 }
 
 func loadElection(ctx *ApiContext) *model.Election {
@@ -363,9 +341,9 @@ func loadElection(ctx *ApiContext) *model.Election {
 		switch true {
 		case id == "head":
 			election, err = ctx.Indexer.ElectionByHeight(ctx.Context, ctx.Tip.BestHeight)
-		case strings.HasPrefix(id, chain.HashTypeProtocol.Prefix()):
-			var p chain.ProtocolHash
-			p, err = chain.ParseProtocolHash(id)
+		case strings.HasPrefix(id, tezos.HashTypeProtocol.Prefix()):
+			var p tezos.ProtocolHash
+			p, err = tezos.ParseProtocolHash(id)
 			if err != nil {
 				panic(EBadRequest(EC_RESOURCE_ID_MALFORMED, "invalid proposal", err))
 			}
@@ -406,7 +384,7 @@ func loadElection(ctx *ApiContext) *model.Election {
 }
 
 func loadStage(ctx *ApiContext, election *model.Election) int {
-	var stage int // 1 .. 4 (5 in Edo) (same as chain.VotingPeriodKind)
+	var stage int // 1 .. 4 (5 in Edo) (same as tezos.VotingPeriodKind)
 	if s, ok := mux.Vars(ctx.Request)["stage"]; !ok || s == "" {
 		panic(EBadRequest(EC_RESOURCE_ID_MISSING, "missing voting period identifier", nil))
 	} else {
@@ -449,7 +427,7 @@ func ReadElection(ctx *ApiContext) (interface{}, int) {
 	var winner *ExplorerProposal
 	for _, v := range votes {
 		switch v.VotingPeriodKind {
-		case chain.VotingPeriodProposal:
+		case tezos.VotingPeriodProposal:
 			ee.ProposalPeriod = NewExplorerVote(ctx, v)
 			ee.ProposalPeriod.Proposals = make([]*ExplorerProposal, 0)
 			for _, vv := range proposals {
@@ -475,16 +453,16 @@ func ReadElection(ctx *ApiContext) (interface{}, int) {
 			if len(ee.ProposalPeriod.Proposals) > 0 {
 				ee.IsEmpty = false
 			}
-		case chain.VotingPeriodExploration:
+		case tezos.VotingPeriodExploration:
 			ee.ExplorationPeriod = NewExplorerVote(ctx, v)
 			ee.ExplorationPeriod.Proposals = []*ExplorerProposal{winner}
-		case chain.VotingPeriodCooldown:
+		case tezos.VotingPeriodCooldown:
 			ee.CooldownPeriod = NewExplorerVote(ctx, v)
 			ee.CooldownPeriod.Proposals = []*ExplorerProposal{winner}
-		case chain.VotingPeriodPromotion:
+		case tezos.VotingPeriodPromotion:
 			ee.PromotionPeriod = NewExplorerVote(ctx, v)
 			ee.PromotionPeriod.Proposals = []*ExplorerProposal{winner}
-		case chain.VotingPeriodAdoption:
+		case tezos.VotingPeriodAdoption:
 			ee.AdoptionPeriod = NewExplorerVote(ctx, v)
 			ee.AdoptionPeriod.Proposals = []*ExplorerProposal{winner}
 		}
@@ -494,12 +472,12 @@ func ReadElection(ctx *ApiContext) (interface{}, int) {
 
 type ExplorerVoter struct {
 	RowId     model.AccountID      `json:"row_id"`
-	Address   chain.Address        `json:"address"`
+	Address   tezos.Address        `json:"address"`
 	Rolls     int64                `json:"rolls"`
 	Stake     int64                `json:"stake"`
 	HasVoted  bool                 `json:"has_voted"`
-	Ballot    chain.BallotVote     `json:"ballot,omitempty"`
-	Proposals []chain.ProtocolHash `json:"proposals,omitempty"`
+	Ballot    tezos.BallotVote     `json:"ballot,omitempty"`
+	Proposals []tezos.ProtocolHash `json:"proposals,omitempty"`
 }
 
 type ExplorerVoterList struct {
@@ -517,14 +495,14 @@ var _ Resource = (*ExplorerVoterList)(nil)
 func NewExplorerVoter(ctx *ApiContext, v *model.Voter) *ExplorerVoter {
 	voter := &ExplorerVoter{
 		RowId:    v.RowId,
-		Address:  lookupAddress(ctx, v.RowId),
+		Address:  ctx.Indexer.LookupAddress(ctx, v.RowId),
 		Rolls:    v.Rolls,
 		Stake:    v.Stake,
 		Ballot:   v.Ballot,
 		HasVoted: v.HasVoted,
 	}
 	if v.HasVoted {
-		voter.Proposals = make([]chain.ProtocolHash, 0)
+		voter.Proposals = make([]tezos.ProtocolHash, 0)
 		for _, p := range v.Proposals {
 			voter.Proposals = append(voter.Proposals, govLookupProposalHash(ctx, p))
 		}
@@ -533,23 +511,21 @@ func NewExplorerVoter(ctx *ApiContext, v *model.Voter) *ExplorerVoter {
 }
 
 func ListVoters(ctx *ApiContext) (interface{}, int) {
-	args := &ExplorerListRequest{}
+	args := &ListRequest{}
 	ctx.ParseRequestArgs(args)
 	election := loadElection(ctx)
 	stage := loadStage(ctx, election)
-	period := election.VotingPeriod + int64(stage)
-	height := election.StartHeight + int64(stage)*ctx.Params.BlocksPerVotingPeriod
 
-	voters, err := ctx.Indexer.ListVoters(
-		ctx,
-		height,
-		period,
-		args.Offset,
-		args.Limit, // allow higher limit to fetch all voters at once
-		// ctx.Cfg.ClampExplore(args.Limit),
-		args.Cursor,
-		args.Order,
-	)
+	r := etl.ListRequest{
+		Since:  election.StartHeight + int64(stage)*ctx.Params.BlocksPerVotingPeriod,
+		Period: election.VotingPeriod + int64(stage),
+		Offset: args.Offset,
+		Limit:  args.Limit, // allow higher limit to fetch all voters at once
+		Cursor: args.Cursor,
+		Order:  args.Order,
+	}
+
+	voters, err := ctx.Indexer.ListVoters(ctx, r)
 	if err != nil {
 		panic(EInternal(EC_DATABASE, err.Error(), nil))
 	}
@@ -578,21 +554,20 @@ func ListVoters(ctx *ApiContext) (interface{}, int) {
 }
 
 func ListBallots(ctx *ApiContext) (interface{}, int) {
-	args := &ExplorerListRequest{}
+	args := &ListRequest{}
 	ctx.ParseRequestArgs(args)
 	election := loadElection(ctx)
 	stage := loadStage(ctx, election)
-	period := election.VotingPeriod + int64(stage)
 
-	ballots, err := ctx.Indexer.ListBallots(
-		ctx,
-		period,
-		args.Offset,
-		args.Limit, // allow higher limit to fetch all voters at once
-		// ctx.Cfg.ClampExplore(args.Limit),
-		args.Cursor,
-		args.Order,
-	)
+	r := etl.ListRequest{
+		Period: election.VotingPeriod + int64(stage),
+		Offset: args.Offset,
+		Limit:  args.Limit, // allow higher limit to fetch all voters at once
+		Cursor: args.Cursor,
+		Order:  args.Order,
+	}
+
+	ballots, err := ctx.Indexer.ListBallots(ctx, r)
 	if err != nil {
 		panic(EInternal(EC_DATABASE, "cannot read ballots", err))
 	}
@@ -610,7 +585,7 @@ func ListBallots(ctx *ApiContext) (interface{}, int) {
 	}
 
 	// prepare for lookup
-	opMap := make(map[model.OpID]chain.OperationHash)
+	opMap := make(map[model.OpID]tezos.OpHash)
 	for _, v := range ops {
 		opMap[v.RowId] = v.Hash
 	}

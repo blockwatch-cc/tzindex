@@ -13,8 +13,8 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzindex/chain"
-	"blockwatch.cc/tzindex/rpc"
+	"blockwatch.cc/tzgo/rpc"
+	"blockwatch.cc/tzgo/tezos"
 )
 
 const BlockCacheLineSize = 320
@@ -35,7 +35,7 @@ func init() {
 type Block struct {
 	RowId               uint64                 `pack:"I,pk,snappy"   json:"row_id"`                         // internal: id, not height!
 	ParentId            uint64                 `pack:"P,snappy"      json:"parent_id"`                      // internal: parent block id
-	Hash                chain.BlockHash        `pack:"H"             json:"hash"`                           // bc: block hash
+	Hash                tezos.BlockHash        `pack:"H"             json:"hash"`                           // bc: block hash
 	IsOrphan            bool                   `pack:"Z,snappy"      json:"is_orphan,omitempty"`            // internal: valid or orphan state
 	Height              int64                  `pack:"h,snappy"      json:"height"`                         // bc: block height (also for orphans)
 	Cycle               int64                  `pack:"c,snappy"      json:"cycle"`                          // bc: block cycle (tezos specific)
@@ -47,7 +47,7 @@ type Block struct {
 	Fitness             uint64                 `pack:"f,snappy"      json:"fitness"`                        // bc: block fitness bits
 	Priority            int                    `pack:"p,snappy"      json:"priority"`                       // bc: baker priority
 	Nonce               uint64                 `pack:"n,snappy"      json:"nonce"`                          // bc: block nonce
-	VotingPeriodKind    chain.VotingPeriodKind `pack:"k,snappy"      json:"voting_period_kind"`             // bc: tezos voting period (enum)
+	VotingPeriodKind    tezos.VotingPeriodKind `pack:"k,snappy"      json:"voting_period_kind"`             // bc: tezos voting period (enum)
 	BakerId             AccountID              `pack:"B,snappy"      json:"baker_id"`                       // bc: block baker (address id)
 	SlotsEndorsed       uint32                 `pack:"s,snappy"      json:"endorsed_slots"`                 // bc: slots that were endorsed by the following block
 	NSlotsEndorsed      int                    `pack:"e,snappy"      json:"n_endorsed_slots"`               // stats: successful endorsed slots
@@ -83,14 +83,14 @@ type Block struct {
 	FundedAccounts      int                    `pack:"J,snappy"      json:"n_funded_accounts"`              // stats: count of (re)funded acc at end of block (new or previously cleared aacc)
 	GasLimit            int64                  `pack:"L,snappy"      json:"gas_limit"`                      // stats: total gas limit this block
 	GasUsed             int64                  `pack:"G,snappy"      json:"gas_used"`                       // stats: total gas used this block
-	GasPrice            float64                `pack:"g,convert,precision=5,snappy"      json:"gas_price"`  // stats: gas price in tezos per unit gas
+	GasPrice            float64                `pack:"g,convert,precision=5,snappy"  json:"gas_price"`      // stats: gas price in tezos per unit gas
 	StorageSize         int64                  `pack:"Y,snappy"      json:"storage_size"`                   // stats: total new storage size allocated
-	TDD                 float64                `pack:"t,convert,precision=6,snappy"  json:"days_destroyed"` // stats: token days destroyed (from last-in time to spend)
+	TDD                 float64                `pack:"t,convert,precision=5,snappy"  json:"days_destroyed"` // stats: token days destroyed (from last-in time to spend)
 	NOpsImplicit        int                    `pack:"j,snappy"      json:"n_ops_implicit"`                 // stats: number of implicit operations
 
 	// other tz or extracted/translated data for processing
 	TZ     *Bundle       `pack:"-" json:"-"`
-	Params *chain.Params `pack:"-" json:"-"`
+	Params *tezos.Params `pack:"-" json:"-"`
 	Chain  *Chain        `pack:"-" json:"-"`
 	Supply *Supply       `pack:"-" json:"-"`
 	Ops    []*Op         `pack:"-" json:"-"`
@@ -108,6 +108,11 @@ func (b Block) ID() uint64 {
 
 func (b *Block) SetID(id uint64) {
 	b.RowId = id
+}
+
+// be compatible with time series interface
+func (b Block) Time() time.Time {
+	return b.Timestamp
 }
 
 func AllocBlock() *Block {
@@ -154,7 +159,7 @@ func NewBlock(tz *Bundle, parent *Block) (*Block, error) {
 		if parent != nil {
 			b.VotingPeriodKind = parent.VotingPeriodKind
 		} else {
-			b.VotingPeriodKind = chain.VotingPeriodProposal
+			b.VotingPeriodKind = tezos.VotingPeriodProposal
 		}
 	}
 
@@ -202,7 +207,7 @@ func (b *Block) FetchRPC(ctx context.Context, c *rpc.Client) error {
 			}
 			b.Params = cons.MapToChainParams()
 		} else {
-			b.Params = chain.NewParams()
+			b.Params = tezos.NewParams()
 		}
 		b.Params = b.Params.
 			ForNetwork(b.TZ.Block.ChainId).
@@ -241,7 +246,7 @@ func (b *Block) IsProtocolUpgrade() bool {
 	if b.Parent == nil || b.Parent.TZ == nil || b.TZ == nil {
 		return false
 	}
-	return !b.Parent.TZ.Block.Metadata.Protocol.IsEqual(b.TZ.Block.Metadata.Protocol)
+	return !b.Parent.TZ.Block.Metadata.Protocol.Equal(b.TZ.Block.Metadata.Protocol)
 }
 
 func (b *Block) GetRpcOp(l, p, c int) (rpc.Operation, bool) {
@@ -275,13 +280,21 @@ func (b *Block) GetOpId(opn, opc, opi int) (OpID, bool) {
 	return 0, false
 }
 
+func (b *Block) NextN() int {
+	n := 0
+	if l := len(b.Ops); l > 0 {
+		n = b.Ops[l-1].OpN + 1
+	}
+	return n
+}
+
 func (b *Block) Age(height int64) int64 {
 	// instead of real time we use block offsets and the target time
 	// between blocks as time diff
 	return (b.Height - height) * int64(b.Params.TimeBetweenBlocks[0]/time.Second)
 }
 
-func (b *Block) BlockReward(p *chain.Params) int64 {
+func (b *Block) BlockReward(p *tezos.Params) int64 {
 	blockReward := p.BlockReward
 	if b.Cycle < p.NoRewardCycles {
 		blockReward = 0
@@ -294,7 +307,7 @@ func (b *Block) BlockReward(p *chain.Params) int64 {
 	// count number of included endorsements
 	var nEndorsements int
 	for _, op := range b.Ops {
-		if op.Type != chain.OpTypeEndorsement {
+		if op.Type != tezos.OpTypeEndorsement {
 			continue
 		}
 		eop, _ := b.GetRpcOp(op.OpL, op.OpP, op.OpC)
@@ -331,7 +344,7 @@ func (b *Block) Free() {
 func (b *Block) Reset() {
 	b.RowId = 0
 	b.ParentId = 0
-	b.Hash = chain.BlockHash{chain.InvalidHash}
+	b.Hash = tezos.BlockHash{tezos.InvalidHash}
 	b.IsOrphan = false
 	b.Height = 0
 	b.Cycle = 0
@@ -461,55 +474,55 @@ func (b *Block) Update(accounts, delegates map[AccountID]*Account) {
 			b.NOpsImplicit++
 		}
 		switch op.Type {
-		case chain.OpTypeActivateAccount:
+		case tezos.OpTypeActivateAccount:
 			b.NOps++
 			b.NActivation++
 			if op.IsSuccess {
 				b.ActivatedSupply += op.Volume
 				b.Volume += op.Volume
 			}
-		case chain.OpTypeDoubleBakingEvidence:
+		case tezos.OpTypeDoubleBakingEvidence:
 			b.NOps++
 			b.N2Baking++
-		case chain.OpTypeDoubleEndorsementEvidence:
+		case tezos.OpTypeDoubleEndorsementEvidence:
 			b.NOps++
 			b.N2Endorsement++
-		case chain.OpTypeSeedNonceRevelation:
+		case tezos.OpTypeSeedNonceRevelation:
 			b.NOps++
 			b.NSeedNonce++
-		case chain.OpTypeTransaction:
+		case tezos.OpTypeTransaction:
 			b.NOps++
 			b.NTx++
 			b.Fee += op.Fee
 			if op.IsSuccess {
 				b.Volume += op.Volume
 			}
-		case chain.OpTypeOrigination:
+		case tezos.OpTypeOrigination:
 			b.NOps++
 			b.NOrigination++
 			b.Fee += op.Fee
 			if op.IsSuccess {
 				b.Volume += op.Volume
 			}
-		case chain.OpTypeDelegation:
+		case tezos.OpTypeDelegation:
 			b.NOps++
 			b.NDelegation++
 			b.Fee += op.Fee
-		case chain.OpTypeReveal:
+		case tezos.OpTypeReveal:
 			b.NOps++
 			b.NReveal++
 			b.Fee += op.Fee
-		case chain.OpTypeEndorsement:
+		case tezos.OpTypeEndorsement:
 			b.NOps++
 			b.NEndorsement++
 			eop, _ := b.GetRpcOp(op.OpL, op.OpP, op.OpC)
 			for _, v := range eop.(*rpc.EndorsementOp).Metadata.Slots {
 				slotsEndorsed |= 1 << uint(v)
 			}
-		case chain.OpTypeProposals:
+		case tezos.OpTypeProposals:
 			b.NOps++
 			b.NProposal++
-		case chain.OpTypeBallot:
+		case tezos.OpTypeBallot:
 			b.NOps++
 			b.NBallot++
 		}
@@ -517,7 +530,7 @@ func (b *Block) Update(accounts, delegates map[AccountID]*Account) {
 
 	if b.Parent != nil {
 		b.Parent.SlotsEndorsed = slotsEndorsed
-		b.Parent.NSlotsEndorsed = bits.OnesCount32(slotsEndorsed)
+		b.Parent.NSlotsEndorsed = int(bits.OnesCount32(slotsEndorsed))
 	}
 
 	// mean gas price for this block
@@ -555,8 +568,6 @@ func (b *Block) Update(accounts, delegates map[AccountID]*Account) {
 				// all indexers have run
 				b.BurnedSupply += f.AmountOut
 			}
-		case FlowTypeVest:
-			b.ActivatedSupply += f.AmountIn
 		}
 	}
 
@@ -571,7 +582,7 @@ func (b *Block) Update(accounts, delegates map[AccountID]*Account) {
 			switch true {
 			case acc.IsContract:
 				b.NewContracts++
-			case acc.ManagerId != 0:
+			case acc.CreatorId != 0:
 				b.NewManagedAccounts++
 			default:
 				b.NewImplicitAccounts++

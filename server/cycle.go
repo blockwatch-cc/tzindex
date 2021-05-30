@@ -16,10 +16,10 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/vec"
 
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/rpc"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
-	"blockwatch.cc/tzindex/rpc"
 )
 
 // keep a cache of past cycles to avoid expensive database lookups
@@ -90,17 +90,19 @@ type ExplorerCycle struct {
 	IsActive    bool      `json:"is_active"`   // cycle is in progress
 
 	// this cycle staking data (at snapshot block or last available block)
-	SnapshotHeight int64     `json:"snapshot_height"` // -1 when no snapshot
-	SnapshotIndex  int64     `json:"snapshot_index"`  // -1 when no snapshot
-	SnapshotTime   time.Time `json:"snapshot_time"`   // zero when no snapshot
-	Rolls          int64     `json:"rolls"`
-	RollOwners     int64     `json:"roll_owners"`
-	StakingSupply  float64   `json:"staking_supply"`
-	StakingPercent float64   `json:"staking_percent"` // of total supply
+	SnapshotHeight   int64     `json:"snapshot_height"` // -1 when no snapshot
+	SnapshotIndex    int64     `json:"snapshot_index"`  // -1 when no snapshot
+	SnapshotTime     time.Time `json:"snapshot_time"`   // zero when no snapshot
+	Rolls            int64     `json:"rolls"`
+	RollOwners       int64     `json:"roll_owners"`
+	ActiveDelegators int64     `json:"active_delegators"`
+	ActiveBakers     int64     `json:"active_bakers"`
+	StakingSupply    float64   `json:"staking_supply"`
+	StakingPercent   float64   `json:"staking_percent"` // of total supply
 
 	// health data across all blocks in cycle (empty for future cycles)
-	ActiveBakers       int     `json:"active_bakers"`
-	ActiveEndorsers    int     `json:"active_endorsers"` // from ops
+	WorkingBakers      int     `json:"working_bakers"`
+	WorkingEndorsers   int     `json:"working_endorsers"` // from ops
 	MissedPriorities   int     `json:"missed_priorities"`
 	MissedEndorsements int     `json:"missed_endorsements"`
 	N2Baking           int     `json:"n_double_baking"`
@@ -164,16 +166,15 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 
 	// set times
 	if ec.IsComplete {
-		ec.StartTime = ctx.Indexer.BlockTime(ctx.Context, start)
-		ec.EndTime = ctx.Indexer.BlockTime(ctx.Context, end)
+		ec.StartTime = ctx.Indexer.LookupBlockTime(ctx.Context, start)
+		ec.EndTime = ctx.Indexer.LookupBlockTime(ctx.Context, end)
 	} else {
 		nowtime := ctx.Tip.BestTime
-		ec.StartTime = ctx.Indexer.BlockTime(ctx.Context, start)
+		ec.StartTime = ctx.Indexer.LookupBlockTime(ctx.Context, start)
 		if ec.StartTime.IsZero() {
 			ec.StartTime = nowtime.Add(time.Duration(start-nowheight) * p.TimeBetweenBlocks[0])
 		}
 		ec.EndTime = nowtime.Add(time.Duration(end-nowheight) * p.TimeBetweenBlocks[0])
-		ec.expires = nowtime.Add(p.TimeBetweenBlocks[0])
 	}
 
 	var (
@@ -210,67 +211,64 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 			log.Errorf("cycle: block table: %v", err)
 		}
 		b := &model.Block{}
-		err = blocks.Stream(ctx.Context, pack.Query{
-			Name: "cycle.blocks",
-			Conditions: pack.ConditionList{pack.Condition{
-				Field: blocks.Fields().Find("c"), // search for cycle
-				Mode:  pack.FilterModeEqual,
-				Value: id,
-			}},
-		}, func(r pack.Row) error {
-			if err := r.Decode(b); err != nil {
-				return err
-			}
-
-			if b.IsOrphan {
-				ec.NOrphans++
-				// don't proceed when orphan
-				return nil
-			}
-
-			// find snapshot block
-			if b.IsCycleSnapshot {
-				snapHeight = b.Height
-				ec.SnapshotHeight = b.Height
-				ec.SnapshotIndex = ((b.Height - start) / p.BlocksPerRollSnapshot)
-				ec.SnapshotTime = ctx.Indexer.BlockTime(ctx, b.Height)
-			}
-
-			// collect unique bakers
-			if b.BakerId > 0 {
-				uniqueAccountsMap[b.BakerId] = struct{}{}
-			}
-
-			// sum misses and ops
-			ec.MissedPriorities += b.Priority
-
-			// collect stats
-			prioStats.Add(int64(b.Priority))
-			timeStats.Add(int64(b.Solvetime))
-
-			// update worst blocks
-			if b.Priority > worstPriority {
-				worstPriority = b.Priority
-				ec.WorstBakedBlock = b.Height
-			}
-
-			// don't count endorsements for the current block
-			if b.Height != nowheight {
-				nEndorse := bits.OnesCount32(b.SlotsEndorsed)
-				ec.MissedEndorsements += p.EndorsersPerBlock - nEndorse
-				endorseStats.Add(int64(nEndorse))
-				if nEndorse < worstEndorsements {
-					worstEndorsements = nEndorse
-					ec.WorstEndorsedBlock = b.Height
+		err = blocks.Stream(ctx.Context,
+			pack.NewQuery("cycle.blocks", blocks).
+				WithFields("Z", "o", "h", "B", "p", "d", "s").
+				AndEqual("cycle", id),
+			func(r pack.Row) error {
+				if err := r.Decode(b); err != nil {
+					return err
 				}
-			}
 
-			return nil
-		})
+				if b.IsOrphan {
+					ec.NOrphans++
+					// don't proceed when orphan
+					return nil
+				}
+
+				// find snapshot block
+				if b.IsCycleSnapshot {
+					snapHeight = b.Height
+					ec.SnapshotHeight = b.Height
+					ec.SnapshotIndex = ((b.Height - start) / p.BlocksPerRollSnapshot)
+					ec.SnapshotTime = ctx.Indexer.LookupBlockTime(ctx, b.Height)
+				}
+
+				// collect unique bakers
+				if b.BakerId > 0 {
+					uniqueAccountsMap[b.BakerId] = struct{}{}
+				}
+
+				// sum misses and ops
+				ec.MissedPriorities += b.Priority
+
+				// collect stats
+				prioStats.Add(int64(b.Priority))
+				timeStats.Add(int64(b.Solvetime))
+
+				// update worst blocks
+				if b.Priority > worstPriority {
+					worstPriority = b.Priority
+					ec.WorstBakedBlock = b.Height
+				}
+
+				// don't count endorsements for the current block
+				if b.Height != nowheight {
+					nEndorse := bits.OnesCount32(b.SlotsEndorsed)
+					ec.MissedEndorsements += p.EndorsersPerBlock - nEndorse
+					endorseStats.Add(int64(nEndorse))
+					if nEndorse < worstEndorsements {
+						worstEndorsements = nEndorse
+						ec.WorstEndorsedBlock = b.Height
+					}
+				}
+
+				return nil
+			})
 		if err != nil {
 			log.Errorf("cycle: block stream: %v", err)
 		}
-		ec.ActiveBakers = len(uniqueAccountsMap)
+		ec.WorkingBakers = len(uniqueAccountsMap)
 		ec.SolveTimeMin = timeStats.Min()
 		ec.SolveTimeMax = timeStats.Max()
 		ec.SolveTimeMean = timeStats.Mean()
@@ -294,42 +292,33 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 			return ec
 		}
 		op := &model.Op{}
-		q := pack.Query{
-			Name: "cycle.endorse_ops",
-			Conditions: pack.ConditionList{
-				pack.Condition{
-					Field: ops.Fields().Find("h"), // height
-					Mode:  pack.FilterModeRange,
-					From:  start + 1, // Note: endorsements are always sent one block later!
-					To:    end + 1,   // safe when cycle is still active
-				},
-				pack.Condition{
-					Field: ops.Fields().Find("t"), // op type
-					Mode:  pack.FilterModeEqual,
-					Value: int64(chain.OpTypeEndorsement),
-				},
-			},
-		}
-		err = ops.Stream(ctx.Context, q, func(r pack.Row) error {
-			if err := r.Decode(op); err != nil {
-				return err
-			}
-			uniqueAccountsMap[op.SenderId] = struct{}{}
-			return nil
-		})
+		err = pack.NewQuery("cycle.endorse_ops", ops).
+			WithFields("S").
+			AndRange(
+				"height",
+				start+1, // Note: endorsements are always sent one block later!
+				end+1,   // safe when cycle is still active
+			).
+			AndEqual("type", tezos.OpTypeEndorsement).
+			Stream(ctx.Context, func(r pack.Row) error {
+				if err := r.Decode(op); err != nil {
+					return err
+				}
+				uniqueAccountsMap[op.SenderId] = struct{}{}
+				return nil
+			})
 		if err != nil {
 			log.Errorf("cycle: op stream: %v", err)
 		}
-		ec.ActiveEndorsers = len(uniqueAccountsMap)
+		ec.WorkingEndorsers = len(uniqueAccountsMap)
 
 		// seed nonces are send as operations and we expect one commitment
 		// for every 32nd block produced in the cycle before, they need to be sent
 		// by the bakers who produced block%32==0 in the previous cycle
-		q.Name = "cycle.seeds"
-		q.Conditions[0].From = start
-		q.Conditions[0].To = end
-		q.Conditions[1].Value = int64(chain.OpTypeSeedNonceRevelation)
-		seeds, err := ops.Count(ctx.Context, q)
+		seeds, err := pack.NewQuery("cycle.seeds", ops).
+			AndRange("height", start, end).
+			AndEqual("type", tezos.OpTypeSeedNonceRevelation).
+			Count(ctx.Context)
 		if err != nil {
 			log.Errorf("cycle: op count: %v", err)
 		}
@@ -341,44 +330,33 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 		// count unique double bake and endorse events
 		bake2 := make(map[int64]struct{})    // height
 		endorse2 := make(map[int64]struct{}) // height
-		q = pack.Query{
-			Name: "cycle.denounce_ops",
-			Conditions: pack.ConditionList{
-				pack.Condition{
-					Field: ops.Fields().Find("c"), // cycle
-					Mode:  pack.FilterModeEqual,
-					Value: id,
-				},
-				pack.Condition{
-					Field: ops.Fields().Find("t"), // op type
-					Mode:  pack.FilterModeIn,
-					Value: []int64{
-						int64(chain.OpTypeDoubleBakingEvidence),
-						int64(chain.OpTypeDoubleEndorsementEvidence),
-					},
-				},
-			},
-		}
-		err = ops.Stream(ctx.Context, q, func(r pack.Row) error {
-			if err := r.Decode(op); err != nil {
-				return err
-			}
-			switch op.Type {
-			case chain.OpTypeDoubleBakingEvidence:
-				bhs := make([]rpc.BlockHeader, 0)
-				if err := json.Unmarshal([]byte(op.Data), &bhs); err != nil {
+		err = pack.NewQuery("cycle.denounce_ops", ops).
+			WithFields("t", "a").
+			AndEqual("cycle", id).
+			AndIn("type", []uint8{
+				uint8(tezos.OpTypeDoubleBakingEvidence),
+				uint8(tezos.OpTypeDoubleEndorsementEvidence),
+			}).
+			Stream(ctx.Context, func(r pack.Row) error {
+				if err := r.Decode(op); err != nil {
 					return err
 				}
-				bake2[bhs[0].Level] = struct{}{}
-			case chain.OpTypeDoubleEndorsementEvidence:
-				dops := make([]rpc.DoubleEndorsementEvidence, 0)
-				if err := json.Unmarshal([]byte(op.Data), &dops); err != nil {
-					return err
+				switch op.Type {
+				case tezos.OpTypeDoubleBakingEvidence:
+					bhs := make([]rpc.BlockHeader, 0)
+					if err := json.Unmarshal([]byte(op.Data), &bhs); err != nil {
+						return err
+					}
+					bake2[bhs[0].Level] = struct{}{}
+				case tezos.OpTypeDoubleEndorsementEvidence:
+					dops := make([]rpc.DoubleEndorsementEvidence, 0)
+					if err := json.Unmarshal([]byte(op.Data), &dops); err != nil {
+						return err
+					}
+					endorse2[dops[0].Operations.Level] = struct{}{}
 				}
-				endorse2[dops[0].Operations.Level] = struct{}{}
-			}
-			return nil
-		})
+				return nil
+			})
 		if err != nil {
 			log.Errorf("cycle: op stream 2: %v", err)
 		}
@@ -390,6 +368,8 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 		// ignore loading errors because height may be in the future
 
 		if chain, err := ctx.Indexer.ChainByHeight(ctx.Context, snapHeight); err == nil {
+			ec.ActiveDelegators = chain.ActiveDelegators
+			ec.ActiveBakers = chain.ActiveDelegates
 			ec.Rolls = chain.Rolls
 			ec.RollOwners = chain.RollOwners
 		}

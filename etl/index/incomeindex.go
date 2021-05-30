@@ -15,13 +15,13 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	. "blockwatch.cc/tzindex/etl/model"
 )
 
 const (
 	IncomePackSizeLog2    = 15 // =32k packs ~ 3M unpacked
-	IncomeJournalSizeLog2 = 17 // =128k entries for busy blockchains
+	IncomeJournalSizeLog2 = 16 // =64k entries for busy blockchains
 	IncomeCacheSize       = 2  // minimum
 	IncomeFillLevel       = 100
 	IncomeIndexKey        = "income"
@@ -210,8 +210,8 @@ func (idx *IncomeIndex) BootstrapIncome(ctx context.Context, block *Block, build
 			}
 		}
 
-		log.Debugf("New bootstrap income for cycle %d from no snapshot with %d delegates",
-			cycle, len(incomeMap))
+		// log.Debugf("New bootstrap income for cycle %d from no snapshot with %d delegates",
+		// 	cycle, len(incomeMap))
 
 		// pre-calculate deposit and reward amounts
 		blockDeposit, endorseDeposit := p.BlockSecurityDeposit, p.EndorsementSecurityDeposit
@@ -297,12 +297,12 @@ func (idx *IncomeIndex) UpdateCycleIncome(ctx context.Context, block *Block, bui
 	switch true {
 	case block.Cycle <= 2*(p.PreservedCycles+2):
 		// during ramp-up cycles
-		log.Debugf("Updating expected income for cycle %d during ramp-up.", block.Cycle)
+		// log.Debugf("Updating expected income for cycle %d during ramp-up.", block.Cycle)
 		updateCycles = []int64{block.Cycle}
 
 	case block.Height == p.StartHeight && p.Version == 6:
 		// on upgrade to v6, update all future reward expectations
-		log.Debug("Updating expected income after v006 activation.")
+		// log.Debug("Updating expected income after v006 activation.")
 		updateCycles = make([]int64, 0)
 		for i := int64(0); i < p.PreservedCycles; i++ {
 			updateCycles = append(updateCycles, block.Cycle+i)
@@ -319,28 +319,21 @@ func (idx *IncomeIndex) UpdateCycleIncome(ctx context.Context, block *Block, bui
 	for _, v := range updateCycles {
 		incomes := make([]*Income, 0)
 		var totalRolls int64
-		err := idx.table.Stream(ctx, pack.Query{
-			Name: "etl.income.update",
-			Conditions: pack.ConditionList{
-				pack.Condition{
-					Field: idx.table.Fields().Find("c"), // cycle (!)
-					Mode:  pack.FilterModeEqual,
-					Value: v,
-				},
-			},
-		}, func(r pack.Row) error {
-			in := &Income{}
-			if err := r.Decode(in); err != nil {
-				return err
-			}
-			in.ExpectedIncome = blockReward * in.NBakingRights
-			in.ExpectedBonds = blockDeposit * in.NBakingRights
-			in.ExpectedIncome += endorseReward * in.NEndorsingRights
-			in.ExpectedBonds += endorseDeposit * in.NEndorsingRights
-			totalRolls += in.Rolls
-			incomes = append(incomes, in)
-			return nil
-		})
+		err := idx.table.Stream(ctx,
+			pack.NewQuery("etl.income.update", idx.table).AndEqual("cycle", v),
+			func(r pack.Row) error {
+				in := &Income{}
+				if err := r.Decode(in); err != nil {
+					return err
+				}
+				in.ExpectedIncome = blockReward * in.NBakingRights
+				in.ExpectedBonds = blockDeposit * in.NBakingRights
+				in.ExpectedIncome += endorseReward * in.NEndorsingRights
+				in.ExpectedBonds += endorseDeposit * in.NEndorsingRights
+				totalRolls += in.Rolls
+				incomes = append(incomes, in)
+				return nil
+			})
 		if err != nil {
 			return err
 		}
@@ -373,6 +366,7 @@ func (idx *IncomeIndex) CreateCycleIncome(ctx context.Context, block *Block, bui
 		sort.Slice(accs, func(i, j int) bool { return accs[i].RowId < accs[j].RowId })
 
 		for _, v := range accs {
+			// will later be adjusted in UpdateCycleIncome()
 			rolls := v.StakingBalance() / p.TokensPerRoll
 			totalRolls += rolls
 			incomeMap[v.RowId] = &Income{
@@ -385,8 +379,8 @@ func (idx *IncomeIndex) CreateCycleIncome(ctx context.Context, block *Block, bui
 				LuckPct:      10000,
 			}
 		}
-		log.Debugf("New bootstrap income for cycle %d from no snapshot with %d delegates",
-			sn.Cycle, len(incomeMap))
+		// log.Debugf("New bootstrap income for cycle %d from no snapshot with %d delegates",
+		// 	sn.Cycle, len(incomeMap))
 
 	} else {
 		// build income from snapshot
@@ -397,46 +391,32 @@ func (idx *IncomeIndex) CreateCycleIncome(ctx context.Context, block *Block, bui
 		// FIXME: params should come from the future cycle
 		// p := builder.Registry().GetParamsByHeight(block.Params.CycleStartHeight(sn.Cycle))
 		s := &Snapshot{}
-		err = snap.Stream(ctx, pack.Query{
-			Name:    "snapshot.income_list",
-			NoCache: true,
-			Conditions: pack.ConditionList{
-				pack.Condition{
-					Field: snap.Fields().Find("c"), // cycle
-					Mode:  pack.FilterModeEqual,
-					Value: sn.Cycle - (p.PreservedCycles + 2), // adjust to source snapshot cycle
-				},
-				pack.Condition{
-					Field: snap.Fields().Find("i"), // index
-					Mode:  pack.FilterModeEqual,
-					Value: sn.RollSnapshot, // the selected index
-				},
-				pack.Condition{
-					Field: snap.Fields().Find("?"), // delegates only (active+inactive)
-					Mode:  pack.FilterModeEqual,
-					Value: true,
-				},
-			}}, func(r pack.Row) error {
-			if err := r.Decode(s); err != nil {
-				return err
-			}
-			incomeMap[s.AccountId] = &Income{
-				Cycle:        sn.Cycle, // the future cycle
-				AccountId:    s.AccountId,
-				Rolls:        s.Rolls,
-				Balance:      s.Balance,
-				Delegated:    s.Delegated,
-				NDelegations: s.NDelegations,
-				LuckPct:      10000,
-			}
-			totalRolls += s.Rolls
-			return nil
-		})
+		err = pack.NewQuery("snapshot.income_list", snap).
+			WithoutCache().
+			AndEqual("cycle", sn.Cycle-(p.PreservedCycles+2)). // adjust to source snapshot cycle
+			AndEqual("index", sn.RollSnapshot).                // the selected index
+			AndEqual("is_delegate", true).                     // delegates only (active+inactive)
+			Stream(ctx, func(r pack.Row) error {
+				if err := r.Decode(s); err != nil {
+					return err
+				}
+				incomeMap[s.AccountId] = &Income{
+					Cycle:        sn.Cycle, // the future cycle
+					AccountId:    s.AccountId,
+					Rolls:        s.Rolls,
+					Balance:      s.Balance,
+					Delegated:    s.Delegated,
+					NDelegations: s.NDelegations,
+					LuckPct:      10000,
+				}
+				totalRolls += s.Rolls
+				return nil
+			})
 		if err != nil {
 			return err
 		}
-		log.Debugf("New income for cycle %d from snapshot [%d/%d] with %d delegates [%d/%d] rights",
-			sn.Cycle, sn.Cycle-(p.PreservedCycles+2), sn.RollSnapshot, len(incomeMap), len(block.TZ.Baking), len(block.TZ.Endorsing))
+		// log.Debugf("New income for cycle %d from snapshot [%d/%d] with %d delegates [%d/%d] rights",
+		// 	sn.Cycle, sn.Cycle-(p.PreservedCycles+2), sn.RollSnapshot, len(incomeMap), len(block.TZ.Baking), len(block.TZ.Endorsing))
 	}
 
 	// pre-calculate deposit and reward amounts
@@ -459,7 +439,7 @@ func (idx *IncomeIndex) CreateCycleIncome(ctx context.Context, block *Block, bui
 		ic, ok := incomeMap[acc.RowId]
 		if !ok {
 			return fmt.Errorf("income: missing snapshot data for baker %s [%d] at snapshot %d[%d]",
-				v.Address(), acc.RowId, sn.Cycle, sn.RollSnapshot)
+				v.Address(), acc.RowId, sn.Cycle-(p.PreservedCycles+2), sn.RollSnapshot)
 		}
 		ic.NBakingRights++
 		ic.ExpectedIncome += blockReward
@@ -483,8 +463,8 @@ func (idx *IncomeIndex) CreateCycleIncome(ctx context.Context, block *Block, bui
 		}
 		ic, ok := incomeMap[acc.RowId]
 		if !ok {
-			return fmt.Errorf("income: missing income data for endorser %s %d at %d[%d]",
-				v.Address(), acc.RowId, sn.Cycle, sn.RollSnapshot)
+			return fmt.Errorf("income: missing snapshot data for endorser %s [%d] at snapshot %d[%d]",
+				v.Address(), acc.RowId, sn.Cycle-(p.PreservedCycles+2), sn.RollSnapshot)
 		}
 		ic.NEndorsingRights += int64(len(v.Slots))
 		ic.ExpectedIncome += endorseReward * int64(len(v.Slots))
@@ -495,53 +475,41 @@ func (idx *IncomeIndex) CreateCycleIncome(ctx context.Context, block *Block, bui
 	if err != nil {
 		return err
 	}
-	right := Right{}
-	err = rights.Stream(ctx, pack.Query{
-		Name:   "etl.rights.search",
-		Fields: rights.Fields(),
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: rights.Fields().Find("h"), // height
-				Mode:  pack.FilterModeEqual,
-				Value: endorseStartBlock,
-			},
-			pack.Condition{
-				Field: rights.Fields().Find("t"), // type
-				Mode:  pack.FilterModeEqual,
-				Value: int64(chain.RightTypeEndorsing),
-			},
-		},
-	}, func(r pack.Row) error {
-		if err := r.Decode(&right); err != nil {
-			return err
-		}
-		// the previous cycle could have more delegates which still get some trailing
-		// endorsement rewards here even though they may not have any more rights
-		ic, ok := incomeMap[right.AccountId]
-		if !ok {
-			// load prev data
-			ic, err = idx.loadIncome(ctx, right.Cycle, right.AccountId)
-			if err != nil {
-				return fmt.Errorf("income: missing income data for prev cycle endorser %d at %d[%d]",
-					right.AccountId, sn.Cycle, sn.RollSnapshot)
+	right := &Right{}
+	err = pack.NewQuery("etl.rights.search", rights).
+		AndEqual("height", endorseStartBlock).
+		AndEqual("type", tezos.RightTypeEndorsing).
+		Stream(ctx, func(r pack.Row) error {
+			if err := r.Decode(right); err != nil {
+				return err
 			}
-			// copy to new income struct
-			ic = &Income{
-				Cycle:        sn.Cycle, // the future cycle
-				AccountId:    right.AccountId,
-				Rolls:        ic.Rolls,
-				Balance:      ic.Balance,
-				Delegated:    ic.Delegated,
-				NDelegations: ic.NDelegations,
-				LuckPct:      10000,
+			// the previous cycle could have more delegates which still get some trailing
+			// endorsement rewards here even though they may not have any more rights
+			ic, ok := incomeMap[right.AccountId]
+			if !ok {
+				// load prev data
+				ic, err = idx.loadIncome(ctx, right.Cycle, right.AccountId)
+				if err != nil {
+					return fmt.Errorf("income: missing income data for prev cycle endorser %d at %d[%d]",
+						right.AccountId, sn.Cycle-(p.PreservedCycles+2), sn.RollSnapshot)
+				}
+				// copy to new income struct
+				ic = &Income{
+					Cycle:        sn.Cycle, // the future cycle
+					AccountId:    right.AccountId,
+					Rolls:        ic.Rolls,
+					Balance:      ic.Balance,
+					Delegated:    ic.Delegated,
+					NDelegations: ic.NDelegations,
+					LuckPct:      10000,
+				}
+				incomeMap[ic.AccountId] = ic
 			}
-			incomeMap[ic.AccountId] = ic
-		}
-		ic.NEndorsingRights++
-		ic.ExpectedIncome += endorseReward
-		ic.ExpectedBonds += endorseDeposit
-		return nil
-	})
+			ic.NEndorsingRights++
+			ic.ExpectedIncome += endorseReward
+			ic.ExpectedBonds += endorseDeposit
+			return nil
+		})
 	if err != nil {
 		return err
 	}
@@ -613,7 +581,7 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 					in.StolenBakingIncome += f.AmountIn * mul
 
 					// the original prio 0 baker lost it
-					for _, v := range builder.Rights(chain.RightTypeBaking) {
+					for _, v := range builder.Rights(tezos.RightTypeBaking) {
 						if v.Priority > 0 {
 							continue
 						}
@@ -677,6 +645,7 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 			// fee flows from all kinds of operations
 			if f.Category == FlowCategoryFees {
 				in.FeesIncome += f.AmountIn * mul
+				in.TotalIncome += f.AmountIn * mul
 			}
 		}
 	}
@@ -697,7 +666,7 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 			baker.NBlocksStolen += mul
 
 			// the original prio 0 baker lost it
-			for _, v := range builder.Rights(chain.RightTypeBaking) {
+			for _, v := range builder.Rights(tezos.RightTypeBaking) {
 				if v.Priority > 0 {
 					continue
 				}
@@ -717,7 +686,7 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 	// for counters and creditor denounciations we parse operations
 	for _, op := range block.Ops {
 		switch op.Type {
-		case chain.OpTypeSeedNonceRevelation:
+		case tezos.OpTypeSeedNonceRevelation:
 			// credit sender
 			in, ok := incomeMap[op.SenderId]
 			if !ok {
@@ -729,7 +698,7 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 			}
 			in.NSeedsRevealed += mul
 
-		case chain.OpTypeEndorsement:
+		case tezos.OpTypeEndorsement:
 			// credit sender
 			in, ok := incomeMap[op.SenderId]
 			if !ok {
@@ -742,7 +711,7 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 			slots, _ := strconv.ParseUint(op.Data, 10, 32)
 			in.NSlotsEndorsed += mul * int64(bits.OnesCount32(uint32(slots)))
 
-		case chain.OpTypeDoubleBakingEvidence:
+		case tezos.OpTypeDoubleBakingEvidence:
 			// credit sender
 			in, ok := incomeMap[op.SenderId]
 			if !ok {
@@ -757,7 +726,7 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 
 			// offender is debited above
 
-		case chain.OpTypeDoubleEndorsementEvidence:
+		case tezos.OpTypeDoubleEndorsementEvidence:
 			// credit sender
 			in, ok := incomeMap[op.SenderId]
 			if !ok {
@@ -781,7 +750,7 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 
 	// handle missed endorsements
 	if block.Parent != nil && block.Parent.SlotsEndorsed != math.MaxUint32 {
-		for _, v := range builder.Rights(chain.RightTypeEndorsing) {
+		for _, v := range builder.Rights(tezos.RightTypeEndorsing) {
 			if !v.IsMissed {
 				continue
 			}
@@ -890,16 +859,10 @@ func (idx *IncomeIndex) UpdateNonceRevelations(ctx context.Context, block *Block
 }
 
 func (idx *IncomeIndex) DeleteCycle(ctx context.Context, cycle int64) error {
-	log.Debugf("Rollback deleting income for cycle %d", cycle)
-	q := pack.Query{
-		Name: "etl.income.delete",
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: idx.table.Fields().Find("c"), // cycle (!)
-			Mode:  pack.FilterModeEqual,
-			Value: cycle,
-		}},
-	}
-	_, err := idx.table.Delete(ctx, q)
+	// log.Debugf("Rollback deleting income for cycle %d", cycle)
+	_, err := pack.NewQuery("etl.income.delete", idx.table).
+		AndEqual("cycle", cycle).
+		Delete(ctx)
 	return err
 }
 
@@ -908,22 +871,10 @@ func (idx *IncomeIndex) loadIncome(ctx context.Context, cycle int64, id AccountI
 		return nil, ErrNoIncomeEntry
 	}
 	in := &Income{}
-	err := idx.table.Stream(ctx, pack.Query{
-		Name: "etl.income.search",
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: idx.table.Fields().Find("c"), // cycle (!)
-				Mode:  pack.FilterModeEqual,
-				Value: cycle,
-			}, pack.Condition{
-				Field: idx.table.Fields().Find("A"), // account
-				Mode:  pack.FilterModeEqual,
-				Value: id.Value(),
-			},
-		},
-	}, func(r pack.Row) error {
-		return r.Decode(in)
-	})
+	err := pack.NewQuery("etl.income.search", idx.table).
+		AndEqual("cycle", cycle).
+		AndEqual("account_id", id).
+		Execute(ctx, in)
 	if err != nil || in.RowId == 0 {
 		return nil, ErrNoIncomeEntry
 	}

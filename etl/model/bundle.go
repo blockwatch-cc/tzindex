@@ -4,13 +4,13 @@
 package model
 
 import (
-	"blockwatch.cc/tzindex/chain"
-	"blockwatch.cc/tzindex/rpc"
+	"blockwatch.cc/tzgo/rpc"
+	"blockwatch.cc/tzgo/tezos"
 )
 
 type Bundle struct {
 	Block     *rpc.Block
-	Params    *chain.Params
+	Params    *tezos.Params
 	Cycle     int64
 	Baking    []rpc.BakingRight
 	Endorsing []rpc.EndorsingRight
@@ -24,16 +24,16 @@ func (b *Bundle) Height() int64 {
 	return b.Block.Header.Level
 }
 
-func (b *Bundle) Hash() chain.BlockHash {
+func (b *Bundle) Hash() tezos.BlockHash {
 	if b.Block == nil {
-		return chain.BlockHash{}
+		return tezos.BlockHash{}
 	}
 	return b.Block.Hash
 }
 
-func (b *Bundle) Parent() chain.BlockHash {
+func (b *Bundle) Parent() tezos.BlockHash {
 	if b.Block == nil {
-		return chain.BlockHash{}
+		return tezos.BlockHash{}
 	}
 	return b.Block.Header.Predecessor
 }

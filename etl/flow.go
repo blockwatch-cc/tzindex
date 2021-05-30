@@ -4,13 +4,12 @@
 package etl
 
 import (
-	"bytes"
 	"fmt"
 
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/micheline"
+	"blockwatch.cc/tzgo/rpc"
+	"blockwatch.cc/tzgo/tezos"
 	. "blockwatch.cc/tzindex/etl/model"
-	"blockwatch.cc/tzindex/micheline"
-	"blockwatch.cc/tzindex/rpc"
 )
 
 // - baker pays deposit and receives block rewards+fees
@@ -22,11 +21,11 @@ func (b *Builder) NewImplicitFlows() ([]*Flow, error) {
 	opl := OPL_BLOCK_HEADER
 	var (
 		opn  int = -1
-		last chain.Address
+		last tezos.Address
 	)
 	for _, upd := range b.block.TZ.Block.Metadata.BalanceUpdates {
 		// count individual delegate updates as separate batch operations
-		if addr := upd.Address(); !last.IsEqual(addr) {
+		if addr := upd.Address(); !last.Equal(addr) {
 			last = addr
 			opn++
 		}
@@ -434,6 +433,7 @@ func (b *Builder) NewDoubleEndorsingFlows(accuser, offender *Account, upd rpc.Ba
 
 func (b *Builder) NewTransactionFlows(
 	src, dst, srcdlg, dstdlg *Account,
+	srccon, dstcon *Contract,
 	feeupd, txupd rpc.BalanceUpdates,
 	block *Block,
 	n, l, p, c int) ([]*Flow, error) {
@@ -492,6 +492,7 @@ func (b *Builder) NewTransactionFlows(
 		f.TokenGenMin = src.TokenGenMin
 		f.TokenGenMax = src.TokenGenMax
 		f.TokenAge = block.Age(src.LastIn)
+		f.IsUnshielded = srccon != nil && srccon.Features.Contains(micheline.FeatureSapling)
 		flows = append(flows, f)
 		// credited to dest
 		f = NewFlow(b.block, dst, src, n, l, p, c, 0)
@@ -501,6 +502,7 @@ func (b *Builder) NewTransactionFlows(
 		f.TokenGenMin = src.TokenGenMin
 		f.TokenGenMax = src.TokenGenMax
 		f.TokenAge = block.Age(src.LastIn)
+		f.IsShielded = dstcon != nil && dstcon.Features.Contains(micheline.FeatureSapling)
 		flows = append(flows, f)
 	}
 
@@ -542,6 +544,7 @@ func (b *Builder) NewTransactionFlows(
 func (b *Builder) NewInternalTransactionFlows(
 	origsrc, src, dst,
 	origdlg, srcdlg, dstdlg *Account,
+	srccon, dstcon *Contract,
 	txupd rpc.BalanceUpdates,
 	storage *micheline.Prim,
 	block *Block,
@@ -563,61 +566,7 @@ func (b *Builder) NewInternalTransactionFlows(
 		}
 	}
 
-	// vesting criteria (specific to Tezos genesis vesting contracts)
-	// - src must be a vesting contract
-	// - vesting itself (vest) cannot be observed without looking at the
-	//   contract storage (.storage.args[1].args[0].args[0].args[0].int)
-	// - payout (pour) account may be reset by a previous contract tx which
-	//   we do not currently track, so we must assume the given dest is
-	//   eligible and the blockchain has properly verified the tx
-
-	// extract contract balance if vesting
-	if src.IsVesting {
-		vestingBalance, err := GetVestingBalance(storage)
-		if err != nil {
-			return nil, fmt.Errorf("cannot read vesting balance: %v", err)
-		}
-
-		// vest difference into source, cap at unclaimed balance
-		//
-		// the cap is necessary because a vesting contract cannot vest
-		// more than the max unclaimed balance even though the internal
-		// vesting balance may be set to an overly high value (this seems
-		// to be related to custodian contracts or vesting contracts without
-		// pour information set. (e.g. some contracts have a 200M internal
-		// vesting balance, no pour data and an initial/max contract balance
-		// much smaller)
-		//
-		// References
-		// https://gitlab.com/tezos/tezos/tree/9efc6cbcc0ded0472b9a504f9e927221514dc911/contracts/vesting
-		// https://tezos.foundation/wp-content/uploads/2018/09/5223213-genesis.txt
-		//
-
-		// assume vest & pour when contract balance after the op is zero
-		if vestingBalance == 0 {
-			vestingBalance = moved
-		}
-
-		// // cap at unclaimed balance
-		// if vestingBalance > src.UnclaimedBalance {
-		// 	vestingBalance = src.UnclaimedBalance
-		// }
-
-		// // cross check
-		// if moved > vestingBalance {
-		// 	return nil, fmt.Errorf("vest: %s pour %d is larger than vesting balance %d",
-		// 		src, moved, vestingBalance)
-		// }
-		// vest moved amount into source
-		f := NewFlow(b.block, src, origsrc, n, l, p, c, i)
-		f.Category = FlowCategoryBalance
-		f.Operation = FlowTypeVest
-		f.AmountIn = moved
-		flows = append(flows, f)
-	}
-
-	// create move and burn flows when necessary, pouring a vested amount
-	// is similar to a regular transaction
+	// create move and burn flows when necessary
 	if moved > 0 && dst != nil {
 		// deducted from source
 		f := NewFlow(b.block, src, dst, n, l, p, c, i)
@@ -627,6 +576,7 @@ func (b *Builder) NewInternalTransactionFlows(
 		f.TokenGenMin = src.TokenGenMin
 		f.TokenGenMax = src.TokenGenMax
 		f.TokenAge = block.Age(src.LastIn)
+		f.IsUnshielded = srccon != nil && srccon.Features.Contains(micheline.FeatureSapling)
 		flows = append(flows, f)
 		// credit to dest
 		f = NewFlow(b.block, dst, src, n, l, p, c, i)
@@ -636,6 +586,7 @@ func (b *Builder) NewInternalTransactionFlows(
 		f.TokenGenMin = src.TokenGenMin
 		f.TokenGenMax = src.TokenGenMax
 		f.TokenAge = block.Age(src.LastIn)
+		f.IsShielded = dstcon != nil && dstcon.Features.Contains(micheline.FeatureSapling)
 		flows = append(flows, f)
 	}
 
@@ -780,7 +731,7 @@ func (b *Builder) NewInternalOriginationFlows(origsrc, src, dst, origdlg, srcdlg
 		case "contract":
 			u := v.(*rpc.ContractBalanceUpdate)
 			switch true {
-			case bytes.Compare(u.Contract.Hash, origsrc.Hash) == 0:
+			case u.Contract.Equal(origsrc.Hash):
 				// burned from original source balance
 				f := NewFlow(b.block, origsrc, nil, n, l, p, c, i)
 				f.Category = FlowCategoryBalance
@@ -789,7 +740,7 @@ func (b *Builder) NewInternalOriginationFlows(origsrc, src, dst, origdlg, srcdlg
 				f.IsBurned = true
 				flows = append(flows, f)
 				burned += -u.Change
-			case bytes.Compare(u.Contract.Hash, src.Hash) == 0:
+			case u.Contract.Equal(src.Hash):
 				// transfers from src contract to dst contract
 				f := NewFlow(b.block, src, dst, n, l, p, c, i)
 				f.Category = FlowCategoryBalance
@@ -797,7 +748,7 @@ func (b *Builder) NewInternalOriginationFlows(origsrc, src, dst, origdlg, srcdlg
 				f.AmountOut = -u.Change // note the negation!
 				flows = append(flows, f)
 				moved += -u.Change
-			case bytes.Compare(u.Contract.Hash, dst.Hash) == 0:
+			case u.Contract.Equal(dst.Hash):
 				// transfers from src contract to dst contract
 				f := NewFlow(b.block, dst, src, n, l, p, c, i)
 				f.Category = FlowCategoryBalance

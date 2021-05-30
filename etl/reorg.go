@@ -1,4 +1,4 @@
-// Copyright (c) 2018 - 2021 Blockwatch Data Inc.
+// Copyright (c) 2018 - 2020 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -65,7 +65,7 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 		lastDetachBlock := detach.Back().Value.(*Block)
 		firstParentHash := firstAttachBlock.TZ.Parent()
 		lastParentHash := lastDetachBlock.TZ.Parent()
-		if !firstParentHash.IsEqual(lastParentHash) {
+		if !firstParentHash.Equal(lastParentHash) {
 			return fmt.Errorf("REORGANIZE blocks do not have the "+
 				"same fork point -- first attach parent %s, last detach "+
 				"parent %s", firstParentHash, lastParentHash)
@@ -173,8 +173,8 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 	c.builder.parent = forkBlock
 
 	for e := attach.Front(); e != nil; e = e.Next() {
-		if util.InterruptRequested(ctx) {
-			return ctx.Err()
+		if interruptRequested(ctx) {
+			return errInterruptRequested
 		}
 
 		// build from RPC block on forward reorg
@@ -201,8 +201,8 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 			block.ParentId = pid
 		}
 
-		if util.InterruptRequested(ctx) {
-			return ctx.Err()
+		if interruptRequested(ctx) {
+			return errInterruptRequested
 		}
 
 		// update indexes; this will also generate a unique block id
@@ -310,7 +310,7 @@ func (c *Crawler) getReorganizeBlocks(ctx context.Context, tip *Block, best *Blo
 findfork:
 	for i, side := range sidechain[0] {
 		for j, main := range mainchain[0] {
-			if side.IsEqual(main) {
+			if side.Equal(main) {
 				// discount the best block (will be appended after reorg finishes
 				forkDepthMain = j - 1
 				forkDepthSide = i
@@ -354,8 +354,8 @@ findfork:
 		ancestor = parent
 	}
 
-	if util.InterruptRequested(ctx) {
-		return nil, nil, nil, ctx.Err()
+	if interruptRequested(ctx) {
+		return nil, nil, nil, errInterruptRequested
 	}
 
 	// Now start from the end of the valid main chain and work backwards

@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -15,7 +15,7 @@ import (
 	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
 )
 
@@ -40,9 +40,9 @@ func init() {
 // configurable marshalling helper
 type Supply struct {
 	model.Supply
-	verbose bool            `csv:"-" pack:"-"` // cond. marshal
-	columns util.StringList `csv:"-" pack:"-"` // cond. cols & order when brief
-	params  *chain.Params   `csv:"-" pack:"-"` // blockchain amount conversion
+	verbose bool            // cond. marshal
+	columns util.StringList // cond. cols & order when brief
+	params  *tezos.Params   // blockchain amount conversion
 }
 
 func (s *Supply) MarshalJSON() ([]byte, error) {
@@ -62,11 +62,10 @@ func (s *Supply) MarshalJSONVerbose() ([]byte, error) {
 		Total               float64   `json:"total"`
 		Activated           float64   `json:"activated"`
 		Unclaimed           float64   `json:"unclaimed"`
-		Vested              float64   `json:"vested"`
-		Unvested            float64   `json:"unvested"`
-		Circulating         float64   `json:"circulating"`
+		Liquid              float64   `json:"liquid"`
 		Delegated           float64   `json:"delegated"`
 		Staking             float64   `json:"staking"`
+		Shielded            float64   `json:"shielded"`
 		ActiveDelegated     float64   `json:"active_delegated"`
 		ActiveStaking       float64   `json:"active_staking"`
 		InactiveDelegated   float64   `json:"inactive_delegated"`
@@ -94,11 +93,10 @@ func (s *Supply) MarshalJSONVerbose() ([]byte, error) {
 		Total:               s.params.ConvertValue(s.Total),
 		Activated:           s.params.ConvertValue(s.Activated),
 		Unclaimed:           s.params.ConvertValue(s.Unclaimed),
-		Vested:              s.params.ConvertValue(s.Vested),
-		Unvested:            s.params.ConvertValue(s.Unvested),
-		Circulating:         s.params.ConvertValue(s.Circulating),
+		Liquid:              s.params.ConvertValue(s.Liquid),
 		Delegated:           s.params.ConvertValue(s.Delegated),
 		Staking:             s.params.ConvertValue(s.Staking),
+		Shielded:            s.params.ConvertValue(s.Shielded),
 		ActiveDelegated:     s.params.ConvertValue(s.ActiveDelegated),
 		ActiveStaking:       s.params.ConvertValue(s.ActiveStaking),
 		InactiveDelegated:   s.params.ConvertValue(s.InactiveDelegated),
@@ -142,16 +140,14 @@ func (s *Supply) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Activated), 'f', dec, 64)
 		case "unclaimed":
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Unclaimed), 'f', dec, 64)
-		case "vested":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Vested), 'f', dec, 64)
-		case "unvested":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Unvested), 'f', dec, 64)
-		case "circulating":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Circulating), 'f', dec, 64)
+		case "liquid":
+			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Liquid), 'f', dec, 64)
 		case "delegated":
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Delegated), 'f', dec, 64)
 		case "staking":
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Staking), 'f', dec, 64)
+		case "shielded":
+			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Shielded), 'f', dec, 64)
 		case "active_delegated":
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.ActiveDelegated), 'f', dec, 64)
 		case "active_staking":
@@ -220,16 +216,14 @@ func (s *Supply) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Activated), 'f', dec, 64)
 		case "unclaimed":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Unclaimed), 'f', dec, 64)
-		case "vested":
-			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Vested), 'f', dec, 64)
-		case "unvested":
-			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Unvested), 'f', dec, 64)
-		case "circulating":
-			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Circulating), 'f', dec, 64)
+		case "liquid":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Liquid), 'f', dec, 64)
 		case "delegated":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Delegated), 'f', dec, 64)
 		case "staking":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Staking), 'f', dec, 64)
+		case "shielded":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Shielded), 'f', dec, 64)
 		case "active_delegated":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.ActiveDelegated), 'f', dec, 64)
 		case "active_staking":
@@ -307,11 +301,10 @@ func StreamSupplyTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 
 	// build table query
 	q := pack.Query{
-		Name:       ctx.RequestID,
-		Fields:     table.Fields().Select(srcNames...),
-		Limit:      int(args.Limit),
-		Conditions: make(pack.ConditionList, 0),
-		Order:      args.Order,
+		Name:   ctx.RequestID,
+		Fields: table.Fields().Select(srcNames...),
+		Limit:  int(args.Limit),
+		Order:  args.Order,
 	}
 
 	// build dynamic filter conditions from query (will panic on error)
@@ -326,7 +319,7 @@ func StreamSupplyTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			}
 		}
 		switch prefix {
-		case "columns", "limit", "order", "verbose":
+		case "columns", "limit", "order", "verbose", "filename":
 			// skip these fields
 		case "cursor":
 			// add row id condition: id > cursor (new cursor == last row id)
@@ -338,7 +331,7 @@ func StreamSupplyTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
+			q.Conditions.AddAndCondition(&pack.Condition{
 				Field: table.Fields().Pk(),
 				Mode:  cursorMode,
 				Value: id,
@@ -379,7 +372,7 @@ func StreamSupplyTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions = append(q.Conditions, cond)
+					q.Conditions.AddAndCondition(&cond)
 				}
 			}
 		}
@@ -390,11 +383,11 @@ func StreamSupplyTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		lastId uint64
 	)
 
-	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
-	defer func() {
-		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	}()
+	// start := time.Now()
+	// ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
+	// defer func() {
+	// 	ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
+	// }()
 
 	// prepare return type marshalling
 	supply := &Supply{
@@ -445,7 +438,7 @@ func StreamSupplyTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		})
 		// close JSON bracket
 		io.WriteString(ctx.ResponseWriter, "]")
-		ctx.Log.Tracef("JSON encoded %d rows", count)
+		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":
 		enc := csv.NewEncoder(ctx.ResponseWriter)
@@ -470,7 +463,7 @@ func StreamSupplyTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				return nil
 			})
 		}
-		ctx.Log.Tracef("CSV Encoded %d rows", count)
+		// ctx.Log.Tracef("CSV Encoded %d rows", count)
 	}
 
 	// without new records, cursor remains the same as input (may be empty)

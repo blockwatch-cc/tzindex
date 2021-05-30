@@ -13,13 +13,11 @@ import (
 	"time"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/packdb/vec"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/micheline"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
-	"blockwatch.cc/tzindex/micheline"
 )
 
 func init() {
@@ -34,6 +32,75 @@ var (
 type ExplorerOpList struct {
 	list    []*ExplorerOp
 	expires time.Time
+}
+
+func (l *ExplorerOpList) Append(op *ExplorerOp, collapsed bool) {
+	if !collapsed {
+		l.list = append(l.list, op)
+		return
+	}
+
+	// build op tree based on list and internal op positions
+
+	// find op for insert
+	var idx int = -1
+	for i, v := range l.list {
+		if v.Height != op.Height {
+			break
+		}
+		if v.OpL == op.OpL && v.OpP == op.OpP {
+			idx = i
+			break
+		}
+	}
+
+	// append if no match was found
+	if idx < 0 {
+		l.list = append(l.list, op)
+		return
+	}
+
+	// there's 2 types of related operations (they can appear mixed)
+	// 1 batch: list of operations, e.g. reveal+tx, approve+transfer, multi-transfer
+	// 2 group: internal operation sequences (can appear alone or inside a batch)
+
+	// if the found op is not a batch, but the to be appended op belongs to a batch
+	// wrap the existing op as batch
+	ins := l.list[idx]
+	if !ins.IsBatch && op.OpC != ins.OpC {
+		ins = WrapAsBatchOp(l.list[idx])
+		l.list[idx] = ins
+	}
+
+	// count embedded ops
+	ins.NOps++
+
+	// append to batch if op is not an internal operation, update batch op summary
+	if ins.IsBatch && !op.IsInternal {
+		ins.Batch = append(ins.Batch, op)
+		ins.GasLimit += op.GasLimit
+		ins.GasUsed += op.GasUsed
+		ins.GasPrice += op.GasPrice
+		ins.StorageLimit += op.StorageLimit
+		ins.StorageSize += op.StorageSize
+		ins.StoragePaid += op.StoragePaid
+		ins.Volume += op.Volume
+		ins.Fee += op.Fee
+		return
+	}
+
+	// append internal ops to the last batch member (or the current group)
+	if ins.IsBatch {
+		ins = ins.Batch[len(ins.Batch)-1]
+	}
+
+	// init group if not done yet
+	if len(ins.Internal) == 0 {
+		ins.Internal = make([]*ExplorerOp, 0)
+	}
+	ins.Internal = append(ins.Internal, op)
+
+	// TODO: should we summarize gas/fee across internal ops into a batch header?
 }
 
 func (t ExplorerOpList) LastModified() time.Time {
@@ -68,179 +135,224 @@ func (t ExplorerOpList) RegisterRoutes(r *mux.Router) error {
 }
 
 type ExplorerOp struct {
-	RowId        model.OpID                `json:"row_id"`
-	Hash         chain.OperationHash       `json:"hash"`
-	Type         chain.OpType              `json:"type"`
-	BlockHash    chain.BlockHash           `json:"block"`
-	Timestamp    time.Time                 `json:"time"`
-	Height       int64                     `json:"height"`
-	Cycle        int64                     `json:"cycle"`
-	Counter      int64                     `json:"counter"`
-	OpN          int                       `json:"op_n"`
-	OpL          int                       `json:"op_l"`
-	OpP          int                       `json:"op_p"`
-	OpC          int                       `json:"op_c"`
-	OpI          int                       `json:"op_i"`
-	Status       string                    `json:"status"`
-	IsSuccess    bool                      `json:"is_success"`
-	IsContract   bool                      `json:"is_contract"`
-	GasLimit     int64                     `json:"gas_limit"`
-	GasUsed      int64                     `json:"gas_used"`
-	GasPrice     float64                   `json:"gas_price"`
-	StorageLimit int64                     `json:"storage_limit"`
-	StorageSize  int64                     `json:"storage_size"`
-	StoragePaid  int64                     `json:"storage_paid"`
-	Volume       float64                   `json:"volume"`
-	Fee          float64                   `json:"fee"`
-	Reward       float64                   `json:"reward"`
-	Deposit      float64                   `json:"deposit"`
-	Burned       float64                   `json:"burned"`
-	IsInternal   bool                      `json:"is_internal"`
-	HasData      bool                      `json:"has_data"`
-	TDD          float64                   `json:"days_destroyed"`
-	Data         json.RawMessage           `json:"data,omitempty"`
-	Errors       json.RawMessage           `json:"errors,omitempty"`
-	Parameters   *ExplorerParameters       `json:"parameters,omitempty"`
-	Storage      *ExplorerStorageValue     `json:"storage,omitempty"`
-	BigMapDiff   *ExplorerBigMapUpdateList `json:"big_map_diff,omitempty"`
-	Sender       *chain.Address            `json:"sender,omitempty"`
-	Receiver     *chain.Address            `json:"receiver,omitempty"`
-	Manager      *chain.Address            `json:"manager,omitempty"`
-	Delegate     *chain.Address            `json:"delegate,omitempty"`
-	BranchId     uint64                    `json:"branch_id"`
-	BranchHeight int64                     `json:"branch_height"`
-	BranchDepth  int64                     `json:"branch_depth"`
-	BranchHash   chain.BlockHash           `json:"branch"`
-	IsImplicit   bool                      `json:"is_implicit"`
-	Entrypoint   int                       `json:"entrypoint_id"`
-	IsOrphan     bool                      `json:"is_orphan"`
+	RowId         model.OpID                   `json:"row_id,omitempty"`
+	Hash          tezos.OpHash                 `json:"hash,omitempty"`
+	Type          tezos.OpType                 `json:"type"`
+	BlockHash     tezos.BlockHash              `json:"block"`
+	Timestamp     time.Time                    `json:"time"`
+	Height        int64                        `json:"height"`
+	Cycle         int64                        `json:"cycle"`
+	Counter       int64                        `json:"counter"`
+	OpL           int                          `json:"op_l"`
+	OpP           int                          `json:"op_p"`
+	OpC           int                          `json:"op_c"`
+	OpI           int                          `json:"op_i"`
+	Status        string                       `json:"status"`
+	IsSuccess     bool                         `json:"is_success"`
+	IsContract    bool                         `json:"is_contract"`
+	GasLimit      int64                        `json:"gas_limit"`
+	GasUsed       int64                        `json:"gas_used"`
+	GasPrice      float64                      `json:"gas_price"`
+	StorageLimit  int64                        `json:"storage_limit"`
+	StorageSize   int64                        `json:"storage_size"`
+	StoragePaid   int64                        `json:"storage_paid"`
+	Volume        float64                      `json:"volume"`
+	Fee           float64                      `json:"fee"`
+	Reward        float64                      `json:"reward,omitempty"`
+	Deposit       float64                      `json:"deposit,omitempty"`
+	Burned        float64                      `json:"burned,omitempty"`
+	IsInternal    bool                         `json:"is_internal,omitempty"`
+	HasData       bool                         `json:"has_data,omitempty"`
+	TDD           float64                      `json:"days_destroyed"`
+	Data          json.RawMessage              `json:"data,omitempty"`
+	Errors        json.RawMessage              `json:"errors,omitempty"`
+	Parameters    *ExplorerParameters          `json:"parameters,omitempty"`
+	Storage       *ExplorerStorageValue        `json:"storage,omitempty"`
+	BigmapDiff    *ExplorerBigmapUpdateList    `json:"big_map_diff,omitempty"`
+	Sender        *tezos.Address               `json:"sender,omitempty"`
+	Receiver      *tezos.Address               `json:"receiver,omitempty"`
+	Creator       *tezos.Address               `json:"creator,omitempty"`
+	Delegate      *tezos.Address               `json:"delegate,omitempty"`
+	BranchHeight  int64                        `json:"branch_height,omitempty"`
+	BranchDepth   int64                        `json:"branch_depth,omitempty"`
+	BranchHash    *tezos.BlockHash             `json:"branch,omitempty"`
+	IsImplicit    bool                         `json:"is_implicit,omitempty"`
+	Entrypoint    *int                         `json:"entrypoint_id,omitempty"`
+	IsOrphan      bool                         `json:"is_orphan,omitempty"`
+	IsBatch       bool                         `json:"is_batch,omitempty"`
+	IsSapling     bool                         `json:"is_sapling,omitempty"`
+	BatchVolume   float64                      `json:"batch_volume,omitempty"`
+	Metadata      map[string]*ExplorerMetadata `json:"metadata,omitempty"`
+	Batch         []*ExplorerOp                `json:"batch,omitempty"`
+	Internal      []*ExplorerOp                `json:"internal,omitempty"`
+	NOps          int                          `json:"n_ops,omitempty"`
+	Confirmations int64                        `json:"confirmations"`
 
 	expires time.Time `json:"-"`
 }
 
-func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.Contract, args ContractArg) *ExplorerOp {
+func WrapAsBatchOp(op *ExplorerOp) *ExplorerOp {
+	return &ExplorerOp{
+		Hash:          op.Hash,
+		BlockHash:     op.BlockHash,
+		Type:          tezos.OpTypeBatch,
+		Timestamp:     op.Timestamp,
+		Height:        op.Height,
+		Cycle:         op.Cycle,
+		Counter:       op.Counter,
+		OpL:           op.OpL,
+		OpP:           op.OpP,
+		Status:        op.Status,
+		IsSuccess:     op.IsSuccess,
+		IsContract:    op.IsContract,
+		GasLimit:      op.GasLimit,
+		GasUsed:       op.GasUsed,
+		GasPrice:      op.GasPrice,
+		StorageLimit:  op.StorageLimit,
+		StorageSize:   op.StorageSize,
+		StoragePaid:   op.StoragePaid,
+		Volume:        op.Volume,
+		Fee:           op.Fee,
+		IsImplicit:    true,
+		IsBatch:       true,
+		Batch:         []*ExplorerOp{op},
+		NOps:          1,
+		Confirmations: op.Confirmations,
+	}
+}
+
+func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.Contract, args Options, cache map[int64]interface{}) *ExplorerOp {
 	p := ctx.Params
-	t := &ExplorerOp{
-		RowId:        op.RowId,
-		Type:         op.Type,
-		Timestamp:    op.Timestamp,
-		Height:       op.Height,
-		Cycle:        op.Cycle,
-		Counter:      op.Counter,
-		OpN:          op.OpN,
-		OpL:          op.OpL,
-		OpP:          op.OpP,
-		OpC:          op.OpC,
-		OpI:          op.OpI,
-		Status:       op.Status.String(),
-		IsSuccess:    op.IsSuccess,
-		IsContract:   op.IsContract,
-		GasLimit:     op.GasLimit,
-		GasUsed:      op.GasUsed,
-		GasPrice:     op.GasPrice,
-		StorageLimit: op.StorageLimit,
-		StorageSize:  op.StorageSize,
-		StoragePaid:  op.StoragePaid,
-		Volume:       p.ConvertValue(op.Volume),
-		Fee:          p.ConvertValue(op.Fee),
-		Reward:       p.ConvertValue(op.Reward),
-		Deposit:      p.ConvertValue(op.Deposit),
-		Burned:       p.ConvertValue(op.Burned),
-		IsInternal:   op.IsInternal,
-		HasData:      op.HasData,
-		TDD:          op.TDD,
-		BranchId:     op.BranchId,
-		BranchHeight: op.BranchHeight,
-		BranchDepth:  op.BranchDepth,
-		IsImplicit:   op.IsImplicit,
-		Entrypoint:   op.Entrypoint,
-		IsOrphan:     op.IsOrphan,
+	o := &ExplorerOp{
+		RowId:         op.RowId,
+		Type:          op.Type,
+		Timestamp:     op.Timestamp,
+		Height:        op.Height,
+		Cycle:         op.Cycle,
+		Counter:       op.Counter,
+		OpL:           op.OpL,
+		OpP:           op.OpP,
+		OpC:           op.OpC,
+		OpI:           op.OpI,
+		Status:        op.Status.String(),
+		IsSuccess:     op.IsSuccess,
+		IsContract:    op.IsContract,
+		GasLimit:      op.GasLimit,
+		GasUsed:       op.GasUsed,
+		GasPrice:      op.GasPrice,
+		StorageLimit:  op.StorageLimit,
+		StorageSize:   op.StorageSize,
+		StoragePaid:   op.StoragePaid,
+		Volume:        p.ConvertValue(op.Volume),
+		Fee:           p.ConvertValue(op.Fee),
+		Reward:        p.ConvertValue(op.Reward),
+		Deposit:       p.ConvertValue(op.Deposit),
+		Burned:        p.ConvertValue(op.Burned),
+		IsInternal:    op.IsInternal,
+		HasData:       op.HasData,
+		TDD:           op.TDD,
+		IsImplicit:    op.IsImplicit,
+		IsOrphan:      op.IsOrphan,
+		IsBatch:       op.IsBatch,
+		IsSapling:     op.IsSapling,
+		Confirmations: ctx.Tip.BestHeight - op.Height,
 	}
 
-	if !op.Hash.IsEqual(chain.ZeroOpHash) {
-		t.Hash = op.Hash
+	if !op.Hash.Equal(tezos.ZeroOpHash) {
+		o.Hash = op.Hash
 	}
 
 	// lookup accounts
-	accs, err := ctx.Indexer.LookupAccountIds(ctx.Context,
-		vec.UniqueUint64Slice([]uint64{
-			op.SenderId.Value(),
-			op.ReceiverId.Value(),
-			op.ManagerId.Value(),
-			op.DelegateId.Value(),
-		}))
-	if err != nil {
-		log.Errorf("explorer op: cannot resolve accounts: %v", err)
+	if op.SenderId > 0 {
+		a := ctx.Indexer.LookupAddress(ctx, op.SenderId)
+		o.Sender = &a
 	}
-	for _, acc := range accs {
-		if acc.RowId == op.SenderId {
-			t.Sender = &chain.Address{
-				Type: acc.Type,
-				Hash: acc.Hash,
+	if op.ReceiverId > 0 {
+		a := ctx.Indexer.LookupAddress(ctx, op.ReceiverId)
+		o.Receiver = &a
+	}
+	if op.CreatorId > 0 {
+		a := ctx.Indexer.LookupAddress(ctx, op.CreatorId)
+		o.Creator = &a
+	}
+	if op.DelegateId > 0 {
+		a := ctx.Indexer.LookupAddress(ctx, op.DelegateId)
+		o.Delegate = &a
+	}
+
+	// add metadata, if any account is supported
+	if args.WithMeta() {
+		meta := make(map[string]*ExplorerMetadata)
+		if op.SenderId > 0 {
+			if md, ok := lookupMetadataById(ctx, op.SenderId, 0, false); ok {
+				meta[o.Sender.String()] = md
 			}
 		}
-		if acc.RowId == op.ReceiverId {
-			t.Receiver = &chain.Address{
-				Type: acc.Type,
-				Hash: acc.Hash,
+		if op.ReceiverId > 0 {
+			if md, ok := lookupMetadataById(ctx, op.ReceiverId, 0, false); ok {
+				meta[o.Receiver.String()] = md
 			}
 		}
-		if acc.RowId == op.ManagerId {
-			t.Manager = &chain.Address{
-				Type: acc.Type,
-				Hash: acc.Hash,
+		if op.CreatorId > 0 {
+			if md, ok := lookupMetadataById(ctx, op.CreatorId, 0, false); ok {
+				meta[o.Creator.String()] = md
 			}
 		}
-		if acc.RowId == op.DelegateId {
-			t.Delegate = &chain.Address{
-				Type: acc.Type,
-				Hash: acc.Hash,
+		if op.DelegateId > 0 {
+			if md, ok := lookupMetadataById(ctx, op.DelegateId, 0, false); ok {
+				meta[o.Delegate.String()] = md
+			}
+		}
+		if len(meta) > 0 {
+			o.Metadata = meta
+		}
+
+		// set branch hash
+		o.BranchHeight = op.BranchHeight
+		o.BranchDepth = op.BranchDepth
+		if op.BranchId != 0 {
+			found := false
+			if v, ok := cache[int64(op.BranchId)]; ok {
+				if h, ok := v.(tezos.BlockHash); ok {
+					o.BranchHash = &h
+					found = true
+				}
+			}
+			if !found {
+				if h, err := ctx.Indexer.BlockHashById(ctx.Context, op.BranchId); err == nil {
+					o.BranchHash = &h
+					cache[int64(op.BranchId)] = h
+				}
 			}
 		}
 	}
 
 	if op.HasData {
 		switch op.Type {
-		case chain.OpTypeDoubleBakingEvidence, chain.OpTypeDoubleEndorsementEvidence:
-			t.Data = json.RawMessage{}
-			if err := json.Unmarshal([]byte(op.Data), &t.Data); err != nil {
-				t.Data = nil
+		case tezos.OpTypeDoubleBakingEvidence, tezos.OpTypeDoubleEndorsementEvidence:
+			o.Data = json.RawMessage{}
+			if err := json.Unmarshal([]byte(op.Data), &o.Data); err != nil {
+				o.Data = nil
 				log.Errorf("explorer op: unmarshal %s data: %v", op.Type, err)
 			}
 		default:
 			if op.Data != "" {
-				t.Data = json.RawMessage(strconv.Quote(op.Data))
+				o.Data = json.RawMessage(strconv.Quote(op.Data))
 			}
 		}
 	}
 
 	if op.Errors != "" {
-		t.Errors = json.RawMessage(op.Errors)
+		o.Errors = json.RawMessage(op.Errors)
 	}
 
-	// set block hash
+	var blockHash tezos.BlockHash
 	if block != nil {
-		t.BlockHash = block.Hash
+		blockHash = block.Hash
 	} else {
-		if h, err := ctx.Indexer.BlockHashByHeight(ctx.Context, op.Height); err == nil {
-			t.BlockHash = h
-		}
+		blockHash = ctx.Indexer.LookupBlockHash(ctx.Context, op.Height)
 	}
-
-	// set branch hash
-	if op.BranchId != 0 {
-		if h, err := ctx.Indexer.BlockHashById(ctx.Context, op.BranchId); err == nil {
-			t.BranchHash = h
-		}
-	}
-
-	// load params at requested blockchain height; this allows to retrieve unpatched
-	// pre-babylon storage updates
-	viewHeight := util.NonZero64(args.WithHeight(), ctx.Tip.BestHeight)
-	viewParams := ctx.Params
-	if !viewParams.ContainsHeight(viewHeight) {
-		viewParams = ctx.Crawler.ParamsByHeight(viewHeight)
-	}
+	o.BlockHash = blockHash
 
 	if len(op.Parameters) > 0 || len(op.Storage) > 0 {
 		var (
@@ -249,21 +361,20 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 		)
 		if cc == nil || cc.AccountId != op.ReceiverId {
 			cc, err = ctx.Indexer.LookupContractId(ctx.Context, op.ReceiverId)
-			if err != nil {
+			if err != nil && op.IsContract {
 				log.Errorf("explorer: lookup contract for account %d: %v", op.ReceiverId, err)
 			}
 		}
-		// need parameter and contract types from script, unmarshal and optionally migrate
-		var mgrHash []byte
+		// need parameter and contract types from script
+		// Note: post babylon scripts (params, storage types) are migrated!!
 		if cc != nil {
-			if mgr, err := ctx.Indexer.LookupAccountId(ctx, cc.ManagerId); err == nil {
-				mgrHash = mgr.Address().Bytes()
-			}
-			script, err = cc.LoadScript(ctx.Tip, viewHeight, mgrHash)
+			script, err = cc.LoadScript()
 			if err != nil {
 				log.Errorf("explorer: script unmarshal: %v", err)
 			}
 		}
+
+		o.Entrypoint = IntPtr(op.Entrypoint)
 
 		// set params
 		if len(op.Parameters) > 0 && script != nil {
@@ -271,176 +382,175 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 			if err := callParams.UnmarshalBinary(op.Parameters); err != nil {
 				log.Errorf("explorer op: unmarshal %s params: %v", op.Type, err)
 			}
-			// ps, _ := json.Marshal(params)
-			// log.Infof("explorer op: %s entrypoint: %s params: %s", t.Hash, params.Entrypoint, ps)
+			// log.Infof("explorer op: %s entrypoint: %s params: %s", o.Hash, callParams.Entrypoint, callParams.Value.Dump())
+			// log.Infof("explorer op: script: %s", script.Code.Param.Dump())
 
 			// find entrypoint
 			ep, prim, err := callParams.MapEntrypoint(script)
 			if err != nil {
-				log.Errorf("explorer op: %s: %v", t.Hash, err)
+				log.Errorf("explorer op: %s: %v", o.Hash, err)
 				ps, _ := json.Marshal(callParams)
 				log.Errorf("params: %s", ps)
 			} else {
-				t.Parameters = &ExplorerParameters{
+				// log.Infof("explorer op: using entrypoint: %s params: %s", ep.Call, ep.Prim.Dump())
+				o.Parameters = &ExplorerParameters{
 					Entrypoint: callParams.Entrypoint, // from params, e.g. "default"
 					Id:         ep.Id,
 					Branch:     ep.Branch,
 					Call:       ep.Call,
-				}
-				t.Parameters.Value = &micheline.BigMapValue{
-					Type:  ep.Prim,
-					Value: prim,
+					Value:      micheline.NewValue(ep.Type(), prim),
 				}
 				// only render params when type check did not fail / fix type
-				if op.Status == chain.OpStatusFailed {
-					if _, err := json.Marshal(t.Parameters.Value); err != nil {
-						log.Debugf("Ignoring param render error on failed call %s: %v", op.Hash, err)
-						t.Parameters.Value.Type = t.Parameters.Value.Value.BuildType()
+				if op.Status == tezos.OpStatusFailed {
+					if _, err := json.Marshal(o.Parameters.Value); err != nil {
+						// log.Infof("Ignoring param render error on failed call %s: %v", op.Hash, err)
+						o.Parameters.Value.FixType()
 					}
 				}
 				if args.WithPrim() {
-					t.Parameters.Prim = prim
+					o.Parameters.Prim = &prim
 				}
-				if args.WithUnpack() && prim.IsPackedAny() {
-					if pr, err := prim.UnpackAny(); err == nil {
-						t.Parameters.ValueUnpacked = &micheline.BigMapValue{
-							Type:  pr.BuildType(),
-							Value: pr,
-						}
+				if args.WithUnpack() && o.Parameters.Value.IsPackedAny() {
+					if up, err := o.Parameters.Value.UnpackAll(); err == nil {
+						o.Parameters.Value = up
 					}
 				}
 			}
 		}
 
 		if len(op.Storage) > 0 && script != nil && cc != nil {
-			prim := &micheline.Prim{}
+			prim := micheline.Prim{}
 			if err := prim.UnmarshalBinary(op.Storage); err != nil {
 				log.Errorf("explorer op: unmarshal %s storage: %v", op.Type, err)
 			}
-			// already patched to view height
-			typ := script.Code.Storage.Args[0]
+			// storage type is patched post-Babylon, but pre-Babylon storage
+			// updates are unpatched
+			typ := script.StorageType()
 
-			// upgrade pre-babylon storage to adher to post-babylon spec change
-			if cc.NeedsBabylonUpgrade(viewParams, op.Height) {
-				prim = prim.MigrateToBabylonStorage(mgrHash)
+			// always output post-babylon storage
+			// upgrade pre-babylon storage value to post-babylon spec
+			if cc.NeedsBabylonUpgrade(ctx.Params) && ctx.Params.IsPreBabylonHeight(op.Height) {
+				if acc, err := ctx.Indexer.LookupAccountId(ctx, cc.CreatorId); err == nil {
+					prim = prim.MigrateToBabylonStorage(acc.Address().Bytes())
+				}
 			}
-			t.Storage = &ExplorerStorageValue{
-				Meta: ExplorerStorageMeta{
+
+			o.Storage = &ExplorerStorageValue{
+				Value: micheline.NewValue(typ, prim),
+			}
+			if args.WithMeta() {
+				o.Storage.Meta = &ExplorerStorageMeta{
 					Contract: cc.String(),
 					Time:     op.Timestamp,
 					Height:   op.Height,
-					Block:    t.BlockHash,
-				},
-				Value: &micheline.BigMapValue{
-					Type:  typ,
-					Value: prim,
-				},
+					Block:    blockHash,
+				}
 			}
 			if args.WithPrim() {
-				t.Storage.Prim = prim
+				o.Storage.Prim = &prim
 			}
-			if args.WithUnpack() && prim.IsPackedAny() {
-				if pr, err := prim.UnpackAny(); err == nil {
-					t.Storage.ValueUnpacked = &micheline.BigMapValue{
-						Type:  pr.BuildType(),
-						Value: pr,
-					}
+			if args.WithUnpack() && o.Storage.Value.IsPackedAny() {
+				if up, err := o.Storage.Value.UnpackAll(); err == nil {
+					o.Storage.Value = up
 				}
 			}
 		}
 	}
 
-	if len(op.BigMapDiff) > 0 {
+	if len(op.BigmapDiff) > 0 {
 		var (
-			alloc            *model.BigMapItem
-			keyType, valType *micheline.Prim
+			alloc            *model.BigmapItem
+			keyType, valType micheline.Type
+			err              error
 		)
-		bmd := make(micheline.BigMapDiff, 0)
-		if err := bmd.UnmarshalBinary(op.BigMapDiff); err != nil {
-			log.Errorf("explorer op: unmarshal %s bigmap: %v", op.Type, err)
+		bmd := make(micheline.BigmapDiff, 0)
+		if err := bmd.UnmarshalBinary(op.BigmapDiff); err != nil {
+			log.Errorf("%s: unmarshal %s bigmap: %v", op.Hash, op.Type, err)
 		}
-		t.BigMapDiff = &ExplorerBigMapUpdateList{
-			diff: make([]ExplorerBigMapUpdate, 0, len(bmd)),
+		o.BigmapDiff = &ExplorerBigmapUpdateList{
+			diff: make([]ExplorerBigmapUpdate, 0, len(bmd)),
 		}
 		for _, v := range bmd {
 			// need bigmap type to unbox and convert keys
-			if alloc == nil || alloc.BigMapId != v.Id {
-				if v.Id < 0 {
-					// temp bigmaps, we lack types due to missing context :/
-					// so we must guess
-					alloc = &model.BigMapItem{
-						BigMapId: v.Id,
+			if alloc == nil || alloc.BigmapId != v.Id {
+				lookupId := v.Id
+				switch v.Action {
+				case micheline.DiffActionAlloc:
+					if v.Id < 0 {
+						cache[lookupId] = model.NewBigmapItem(op, cc, v, 0, 0, 0)
 					}
-					keyType = nil
-					valType = nil
-				} else {
-					var err error
-					alloc, _, err = ctx.Indexer.LookupBigmap(ctx.Context, v.Id, false)
+				case micheline.DiffActionCopy:
+					lookupId = v.SourceId
+				}
+				a, ok := cache[lookupId]
+				if ok {
+					alloc, ok = a.(*model.BigmapItem)
+				}
+				if !ok {
+					alloc, _, err = ctx.Indexer.LookupBigmap(ctx.Context, lookupId, false)
 					if err != nil {
-						log.Errorf("explorer op: unmarshal bigmap %d alloc: %v", v.Id, err)
+						// skip (happens only when listing internal contract calls)
+						log.Debugf("%s: unmarshal bigmap %d alloc: %v", op.Hash, lookupId, err)
 						continue
 					}
-					keyType, err = alloc.GetKeyType()
-					if err != nil {
-						log.Errorf("explorer op: bigmap key type unmarshal: %v", err)
-						continue
-					}
-					valType, err = alloc.GetValueType()
-					if err != nil {
-						log.Errorf("explorer op: bigmap value type unmarshal: %v", err)
-						continue
-					}
+					cache[lookupId] = alloc
+				}
+				if v.Action == micheline.DiffActionCopy {
+					cache[v.DestId] = alloc
+				}
+				keyType, err = alloc.GetKeyType()
+				if err != nil {
+					log.Errorf("%s: bigmap key type unmarshal: %v", op.Hash, err)
+					continue
+				}
+				valType, err = alloc.GetValueType()
+				if err != nil {
+					log.Errorf("%s: bigmap value type unmarshal: %v", op.Hash, err)
+					continue
 				}
 			}
 
-			upd := ExplorerBigMapUpdate{
-				Action: v.Action,
-				ExplorerBigmapValue: ExplorerBigmapValue{
-					Meta: ExplorerBigmapMeta{
-						Contract:     t.Receiver.String(),
-						BigMapId:     alloc.BigMapId,
-						UpdateTime:   op.Timestamp,
-						UpdateHeight: op.Height,
-						UpdateBlock:  t.BlockHash,
-					},
-				},
+			upd := ExplorerBigmapUpdate{
+				Action:   v.Action,
+				BigmapId: v.Id,
+			}
+			if args.WithMeta() {
+				upd.ExplorerBigmapValue.Meta = &ExplorerBigmapMeta{
+					Contract:     *o.Receiver,
+					BigmapId:     v.Id,
+					UpdateTime:   op.Timestamp,
+					UpdateHeight: op.Height,
+					UpdateBlock:  blockHash,
+				}
 			}
 			switch v.Action {
 			case micheline.DiffActionUpdate:
-				// temporary bigmap updates lack type info
-				if keyType == nil {
+				// temporary bigmap updates may lack type info
+				if !keyType.IsValid() {
 					keyType = v.Key.BuildType()
 				}
-				if valType == nil {
+				if !valType.IsValid() {
 					valType = v.Value.BuildType()
 				}
 				// regular bigmap updates
-				k := v.MapKeyAs(keyType)
-				upd.Key = k
-				upd.KeyHash = &v.KeyHash
-				upd.KeyBinary = k.Encode()
-				upd.Value = &micheline.BigMapValue{
-					Type:  valType,
-					Value: v.Value,
-				}
+				upd.Key = v.GetKeyPtr(keyType)
+				kh := v.KeyHash
+				upd.KeyHash = &kh
+				upd.Value = micheline.NewValuePtr(valType, v.Value)
 				if args.WithPrim() {
-					upd.Prim = &ExplorerBigmapKeyValue{
-						Key:   k.Prim(),
-						Value: v.Value,
-					}
+					upd.KeyPrim = upd.Key.PrimPtr()
+					vp := v.Value
+					upd.ValuePrim = &vp
 				}
 				if args.WithUnpack() {
-					if v.Value.IsPackedAny() {
-						if pr, err := v.Value.UnpackAny(); err == nil {
-							upd.ValueUnpacked = &micheline.BigMapValue{
-								Type:  pr.BuildType(),
-								Value: pr,
-							}
+					if upd.Value.IsPackedAny() {
+						if up, err := upd.Value.UnpackAll(); err == nil {
+							upd.Value = &up
 						}
 					}
-					if k.IsPacked() {
-						if upd.KeyUnpacked, err = k.UnpackKey(); err == nil {
-							upd.KeyPretty = upd.KeyUnpacked.String()
+					if upd.Key.IsPacked() {
+						if up, err := upd.Key.Unpack(); err == nil {
+							upd.Key = &up
 						}
 					}
 				}
@@ -449,87 +559,81 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 				// remove may be a bigmap removal without key
 				if v.Key.OpCode != micheline.I_EMPTY_BIG_MAP {
 					// temporary bigmap updates lack type info
-					if keyType == nil {
+					if !keyType.IsValid() {
 						keyType = v.Key.BuildType()
 					}
-					k := v.MapKeyAs(keyType)
-					upd.Key = k
+					upd.Key = v.GetKeyPtr(keyType)
 					upd.KeyHash = &v.KeyHash
-					upd.KeyBinary = k.Encode()
 					if args.WithPrim() {
-						upd.Prim = &ExplorerBigmapKeyValue{
-							Key: k.Prim(),
-						}
+						upd.KeyPrim = upd.Key.PrimPtr()
 					}
 					if args.WithUnpack() {
-						if k.IsPacked() {
-							if upd.KeyUnpacked, err = k.UnpackKey(); err == nil {
-								upd.KeyPretty = upd.KeyUnpacked.String()
+						if upd.Key.IsPacked() {
+							if up, err := upd.Key.Unpack(); err == nil {
+								upd.Key = &up
 							}
 						}
 					}
 				}
 
 			case micheline.DiffActionAlloc:
-				// no unboxed value, just types
-				// bmt := micheline.BigMapType(*v.ValueType)
-				enc := v.Encoding()
-				upd.KeyEncoding = &enc
-				upd.KeyType = (*micheline.BigMapType)(v.KeyType)
-				upd.ValueType = (*micheline.BigMapType)(v.ValueType)
+				upd.KeyType = micheline.NewType(v.KeyType).TypedefPtr(micheline.CONST_KEY)
+				upd.ValueType = micheline.NewType(v.ValueType).TypedefPtr(micheline.CONST_VALUE)
 				if args.WithPrim() {
-					upd.Prim = &ExplorerBigmapKeyValue{
-						KeyType:   v.KeyType,
-						ValueType: v.ValueType,
-					}
+					kt := v.KeyType.Clone()
+					upd.KeyTypePrim = &kt
+					vt := v.ValueType.Clone()
+					upd.ValueTypePrim = &vt
 				}
 
 			case micheline.DiffActionCopy:
-				// no unboxed value, just types
-				bmd := alloc.BigMapDiff()
-				upd.KeyEncoding = &alloc.KeyEncoding
-				upd.KeyType = (*micheline.BigMapType)(bmd.KeyType)
-				upd.ValueType = (*micheline.BigMapType)(bmd.ValueType)
+				allocDiff := alloc.BigmapDiff()
+				upd.BigmapId = v.DestId
+				upd.KeyType = micheline.NewType(allocDiff.KeyType).TypedefPtr(micheline.CONST_KEY)
+				upd.ValueType = micheline.NewType(allocDiff.ValueType).TypedefPtr(micheline.CONST_VALUE)
 				upd.SourceId = v.SourceId
 				upd.DestId = v.DestId
-				upd.ExplorerBigmapValue.Meta.BigMapId = v.DestId
+				if v.DestId < 0 {
+					cache[v.DestId] = alloc
+				}
+				if args.WithMeta() {
+					upd.ExplorerBigmapValue.Meta.BigmapId = v.DestId
+				}
 				if args.WithPrim() {
-					upd.Prim = &ExplorerBigmapKeyValue{
-						KeyType:   bmd.KeyType,
-						ValueType: bmd.ValueType,
-					}
+					kt := allocDiff.KeyType.Clone()
+					upd.KeyTypePrim = &kt
+					vt := allocDiff.ValueType.Clone()
+					upd.ValueTypePrim = &vt
 				}
 			}
-			t.BigMapDiff.diff = append(t.BigMapDiff.diff, upd)
+			o.BigmapDiff.diff = append(o.BigmapDiff.diff, upd)
 		}
 	}
 
-	// cache blocks in the reorg safety zone only until next block is expected
-	if op.Height+chain.MaxBranchDepth >= ctx.Tip.BestHeight {
-		t.expires = ctx.Tip.BestTime.Add(p.TimeBetweenBlocks[0])
-	}
+	// cache until next block is expected
+	o.expires = ctx.Tip.BestTime.Add(p.TimeBetweenBlocks[0])
 
-	return t
+	return o
 }
 
-func (t ExplorerOp) LastModified() time.Time {
-	return t.Timestamp
+func (o ExplorerOp) LastModified() time.Time {
+	return o.Timestamp
 }
 
-func (t ExplorerOp) Expires() time.Time {
-	return t.expires
+func (o ExplorerOp) Expires() time.Time {
+	return o.expires
 }
 
-func (t ExplorerOp) RESTPrefix() string {
+func (o ExplorerOp) RESTPrefix() string {
 	return "/explorer/op"
 }
 
-func (t ExplorerOp) RESTPath(r *mux.Router) string {
-	path, _ := r.Get("op").URLPath("ident", t.Hash.String())
+func (o ExplorerOp) RESTPath(r *mux.Router) string {
+	path, _ := r.Get("op").URLPath("ident", o.Hash.String())
 	return path.String()
 }
 
-func (t ExplorerOp) RegisterDirectRoutes(r *mux.Router) error {
+func (o ExplorerOp) RegisterDirectRoutes(r *mux.Router) error {
 	return nil
 }
 
@@ -540,43 +644,44 @@ func (t ExplorerOp) RegisterRoutes(r *mux.Router) error {
 }
 
 // used when listing ops in block/account/contract context
-type ExplorerOpsRequest struct {
-	ExplorerListRequest // offset, limit, cursor, order
+type OpsRequest struct {
+	ListRequest // offset, limit, cursor, order
 
-	Block  string `schema:"block"`  // height or hash for time-lock
-	Since  string `schema:"since"`  // block hash or height for updates
-	Unpack bool   `schema:"unpack"` // unpack packed key/values
-	Prim   bool   `schema:"prim"`   // for prim/value rendering
-	Meta   bool   `schema:"meta"`   // include account metadata
+	Block    string        `schema:"block"`    // height or hash for time-lock
+	Since    string        `schema:"since"`    // block hash or height for updates
+	Unpack   bool          `schema:"unpack"`   // unpack packed key/values
+	Prim     bool          `schema:"prim"`     // for prim/value rendering
+	Meta     bool          `schema:"meta"`     // include account metadata
+	Rights   bool          `schema:"rights"`   // include block rights
+	Collapse bool          `schema:"collapse"` // collapse batch lists and internal ops
+	Sender   tezos.Address `schema:"sender"`
+	Receiver tezos.Address `schema:"receiver"`
 
 	// decoded type condition
 	TypeMode pack.FilterMode `schema:"-"`
-	TypeList []int64         `schema:"-"`
+	TypeList []tezos.OpType  `schema:"-"`
 
 	// decoded values
 	BlockHeight int64           `schema:"-"`
-	BlockHash   chain.BlockHash `schema:"-"`
+	BlockHash   tezos.BlockHash `schema:"-"`
 	SinceHeight int64           `schema:"-"`
-	SinceHash   chain.BlockHash `schema:"-"`
+	SinceHash   tezos.BlockHash `schema:"-"`
 }
 
-func (r *ExplorerOpsRequest) WithPrim() bool {
-	return r != nil && r.Prim
-}
-
-func (r *ExplorerOpsRequest) WithUnpack() bool {
-	return r != nil && r.Unpack
-}
-
-func (r *ExplorerOpsRequest) WithHeight() int64 {
+func (r *OpsRequest) WithPrim() bool   { return r != nil && r.Prim }
+func (r *OpsRequest) WithUnpack() bool { return r != nil && r.Unpack }
+func (r *OpsRequest) WithHeight() int64 {
 	if r != nil {
 		return r.BlockHeight
 	}
 	return 0
 }
+func (r *OpsRequest) WithMeta() bool     { return r != nil && r.Meta }
+func (r *OpsRequest) WithRights() bool   { return r != nil && r.Rights }
+func (r *OpsRequest) WithCollapse() bool { return r != nil && r.Collapse }
 
 // implement ParsableRequest interface
-func (r *ExplorerOpsRequest) Parse(ctx *ApiContext) {
+func (r *OpsRequest) Parse(ctx *ApiContext) {
 	// lock to specific block hash or height
 	if len(r.Block) > 0 {
 		b, err := ctx.Indexer.LookupBlock(ctx.Context, r.Block)
@@ -637,15 +742,25 @@ func (r *ExplorerOpsRequest) Parse(ctx *ApiContext) {
 		}
 		// check op types and convert to []int64 for use in condition
 		for _, t := range strings.Split(val[0], ",") {
-			typ := chain.ParseOpType(t)
+			typ := tezos.ParseOpType(t)
 			if !typ.IsValid() {
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid operation type '%s'", t), nil))
 			}
-			r.TypeList = append(r.TypeList, int64(typ))
+			r.TypeList = append(r.TypeList, typ)
 		}
 		// allow constructs of form `type=a,b`
-		if len(r.TypeList) > 1 && r.TypeMode == pack.FilterModeEqual {
-			r.TypeMode = pack.FilterModeIn
+		if len(r.TypeList) > 1 {
+			if r.TypeMode == pack.FilterModeEqual {
+				r.TypeMode = pack.FilterModeIn
+			}
+		} else {
+			// check for single value mode `type.in=a`
+			switch r.TypeMode {
+			case pack.FilterModeIn:
+				r.TypeMode = pack.FilterModeEqual
+			case pack.FilterModeNotIn:
+				r.TypeMode = pack.FilterModeNotEqual
+			}
 		}
 	}
 }
@@ -659,8 +774,10 @@ func loadOps(ctx *ApiContext) []*model.Op {
 			switch err {
 			case index.ErrNoOpEntry:
 				panic(ENotFound(EC_RESOURCE_NOTFOUND, "no such operation", err))
-			case etl.ErrInvalidHash, index.ErrInvalidOpID:
+			case etl.ErrInvalidHash:
 				panic(EBadRequest(EC_RESOURCE_ID_MALFORMED, "invalid operation hash", err))
+			case index.ErrInvalidOpID:
+				panic(EBadRequest(EC_RESOURCE_ID_MALFORMED, "invalid event id", err))
 			default:
 				panic(EInternal(EC_DATABASE, err.Error(), nil))
 			}
@@ -670,15 +787,16 @@ func loadOps(ctx *ApiContext) []*model.Op {
 }
 
 func ReadOp(ctx *ApiContext) (interface{}, int) {
-	args := &ExplorerOpsRequest{}
+	args := &OpsRequest{}
 	ctx.ParseRequestArgs(args)
 	ops := loadOps(ctx)
 	resp := &ExplorerOpList{
-		list:    make([]*ExplorerOp, 0, len(ops)),
+		list:    make([]*ExplorerOp, 0),
 		expires: ctx.Now.Add(maxCacheExpires),
 	}
+	cache := make(map[int64]interface{})
 	for _, v := range ops {
-		resp.list = append(resp.list, NewExplorerOp(ctx, v, nil, nil, args))
+		resp.Append(NewExplorerOp(ctx, v, nil, nil, args, cache), args.WithCollapse())
 	}
 	return resp, http.StatusOK
 }

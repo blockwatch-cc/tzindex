@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"time"
 
+	"blockwatch.cc/tzgo/rpc"
 	"blockwatch.cc/tzindex/etl"
-	"blockwatch.cc/tzindex/rpc"
 )
 
 type Config struct {
@@ -75,9 +75,8 @@ type HttpConfig struct {
 	Port                int           `json:"port"`
 	Scheme              string        `json:"scheme"`
 	Host                string        `json:"host"`
-	MaxWorkers          int           `json:"workers"`
-	MaxQueue            int           `json:"queue"`
-	TimeoutHeader       string        `json:"timeout_header"`
+	MaxWorkers          int           `json:"max_workers"`
+	MaxQueue            int           `json:"max_queue"`
 	ReadTimeout         time.Duration `json:"read_timeout"`
 	HeaderTimeout       time.Duration `json:"header_timeout"`
 	WriteTimeout        time.Duration `json:"write_timeout"`
@@ -87,6 +86,7 @@ type HttpConfig struct {
 	MaxListCount        uint          `json:"max_list_count"`
 	DefaultExploreCount uint          `json:"default_explore_count"`
 	MaxExploreCount     uint          `json:"max_explore_count"`
+	MaxSeriesDuration   time.Duration `json:"max_series_duration"`
 	CorsEnable          bool          `json:"cors_enable"`
 	CorsOrigin          string        `json:"cors_origin"`
 	CorsAllowHeaders    string        `json:"cors_allow_headers"`
@@ -110,16 +110,16 @@ func NewHttpConfig() HttpConfig {
 		Scheme:              "http",
 		MaxWorkers:          50,
 		MaxQueue:            200,
-		TimeoutHeader:       "",
 		HeaderTimeout:       2 * time.Second,  // header timeout
 		ReadTimeout:         5 * time.Second,  // header+body timeout
-		WriteTimeout:        15 * time.Second, // response deadline
+		WriteTimeout:        90 * time.Second, // response deadline
 		KeepAlive:           90 * time.Second, // timeout for idle connections
-		ShutdownTimeout:     15 * time.Second, // grafecul shutdown deadline
+		ShutdownTimeout:     30 * time.Second, // grafecul shutdown deadline
 		DefaultListCount:    500,
 		MaxListCount:        5000,
 		DefaultExploreCount: 20,
 		MaxExploreCount:     100,
+		MaxSeriesDuration:   90 * 24 * time.Hour,
 	}
 }
 

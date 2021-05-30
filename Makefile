@@ -8,9 +8,10 @@ BUILD_VERSION ?= $(shell git describe --always --tags --dirty)
 BUILD_COMMIT ?= $(shell git rev-parse --short HEAD)
 BUILD_IMAGE := blockwatch/$(BUILD_TARGET):$(BUILD_VERSION)
 BUILD_LATEST := blockwatch/$(BUILD_TARGET):latest
-export BUILD_TARGET BUILD_VERSION BUILD_COMMIT BUILD_IMAGE BUILD_LATEST
+BUILD_TAG ?= master
+export BUILD_TAG BUILD_TARGET BUILD_VERSION BUILD_COMMIT BUILD_IMAGE BUILD_LATEST
 
-BUILD_FLAGS := --build-arg BUILD_TARGET=$(BUILD_TARGET) --build-arg BUILD_COMMIT=$(BUILD_COMMIT) --build-arg BUILD_VERSION=$(BUILD_VERSION)
+BUILD_FLAGS := --build-arg BUILD_TARGET=$(BUILD_TARGET) --build-arg BUILD_COMMIT=$(BUILD_COMMIT) --build-arg BUILD_VERSION=$(BUILD_VERSION) --build-arg BUILD_TAG=$(BUILD_TAG)
 
 all: build
 
@@ -18,7 +19,7 @@ build:
 	@echo $@
 	go clean
 	go mod download
-	CGO_ENABLED=0 go build -a -o ./${BUILD_TARGET} -ldflags "-w -X ${REPO}/cmd.VERSION=${BUILD_VERSION} -X ${REPO}/cmd.GITCOMMIT=${BUILD_COMMIT}" ${BUILD_TARGET}.go
+	CGO_ENABLED=0 go build -a -o ./ -ldflags "-w -X ${REPO}/cmd.VERSION=${BUILD_VERSION} -X ${REPO}/cmd.GITCOMMIT=${BUILD_COMMIT}" ./cmd/...
 
 image:
 	@echo $@

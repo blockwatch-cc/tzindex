@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/util"
 )
 
 func (c *Crawler) SnapshotRequest(ctx context.Context) error {
@@ -131,14 +130,14 @@ func (c *Crawler) snapshot_locked(ctx context.Context) error {
 		return err
 	}
 
-	// dump index db's
-	dbs := make([]*pack.DB, 0)
+	// dump index and report db's
+	dbs := []*pack.DB{}
 	for _, v := range c.indexer.indexes {
 		dbs = append(dbs, v.DB())
 	}
 	for _, db := range dbs {
-		if util.InterruptRequested(ctx) {
-			return ctx.Err()
+		if interruptRequested(ctx) {
+			return errInterruptRequested
 		}
 		if db == nil {
 			continue

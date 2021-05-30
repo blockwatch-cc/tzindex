@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -7,7 +7,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strconv"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -22,11 +23,12 @@ type RestServer struct {
 	srv        *http.Server
 	dispatcher *Dispatcher
 	cfg        *Config
-	shutdown   bool
+	shutdown   atomic.Value
+	offline    atomic.Value
 }
 
 var (
-	UserAgent           = "Blockwatch-tzindex/1.0"
+	UserAgent           = "Blockwatch-TzIndex/1.0"
 	ApiVersion          string
 	debugHttp           bool
 	srv                 *RestServer
@@ -71,21 +73,32 @@ func New(cfg *Config) (*RestServer, error) {
 			ErrorLog:          log.Logger(),
 		},
 	}
-
+	srv.shutdown.Store(false)
+	srv.offline.Store(false)
 	return srv, nil
 }
 
 func (s *RestServer) IsShutdown() bool {
-	return s.shutdown
+	return s.shutdown.Load().(bool)
+}
+
+func (s *RestServer) IsOffline() bool {
+	return s.offline.Load().(bool)
+}
+
+func (s *RestServer) SetOffline(off bool) {
+	s.offline.Store(off)
 }
 
 func (s *RestServer) Start() {
+	// run the server dispatcher
 	s.dispatcher = NewDispatcher(s.cfg.Http.MaxWorkers, s.cfg.Http.MaxQueue)
 	s.dispatcher.Run()
+
 	go func() {
 		log.Info("Starting HTTP server at ", s.cfg.Http.Address())
 		if err := s.srv.ListenAndServe(); err != nil {
-			if !s.shutdown {
+			if !s.IsShutdown() {
 				log.Fatal(err)
 			}
 		}
@@ -94,7 +107,7 @@ func (s *RestServer) Start() {
 
 func (s *RestServer) Stop() {
 	log.Info("Stopping HTTP server.")
-	s.shutdown = true
+	s.shutdown.Store(true)
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.Http.ShutdownTimeout)
 	defer cancel()
 	if err := s.srv.Shutdown(ctx); err != nil {
@@ -127,14 +140,16 @@ func wrapper(f ApiCall) func(http.ResponseWriter, *http.Request) {
 		)
 
 		// use configured request timeout as default
-		timeout := srv.cfg.Http.ReadTimeout + srv.cfg.Http.WriteTimeout
+		timeout := srv.cfg.Http.WriteTimeout
 
-		// try reading upstream request timeout hint
-		if th := r.Header.Get(srv.cfg.Http.TimeoutHeader); th != "" {
-			if d, err := strconv.ParseInt(th, 10, 64); err == nil {
-				timeout = time.Duration(d) * time.Millisecond
+		// skip timeout on internal routes /debug and /system
+		if strings.HasPrefix(r.URL.Path, "/") {
+			switch strings.Split(r.URL.Path, "/")[1] {
+			case "system", "debug":
+				timeout = 0
 			}
 		}
+
 		if timeout > 0 {
 			ctx, cancel = context.WithTimeout(r.Context(), timeout)
 		} else {
@@ -143,6 +158,7 @@ func wrapper(f ApiCall) func(http.ResponseWriter, *http.Request) {
 		defer cancel()
 
 		api := NewContext(ctx, r, w, f, srv)
+
 		// schedule call processing, will return 429 on full queue
 		select {
 		case jobQueue <- api:

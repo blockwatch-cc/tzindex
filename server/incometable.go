@@ -16,7 +16,7 @@ import (
 	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 )
@@ -48,10 +48,10 @@ func init() {
 // configurable marshalling helper
 type Income struct {
 	model.Income
-	verbose bool            `csv:"-" pack:"-"` // cond. marshal
-	columns util.StringList `csv:"-" pack:"-"` // cond. cols & order when brief
-	params  *chain.Params   `csv:"-" pack:"-"` // blockchain amount conversion
-	ctx     *ApiContext     `csv:"-" pack:"-"`
+	verbose bool            // cond. marshal
+	columns util.StringList // cond. cols & order when brief
+	params  *tezos.Params   // blockchain amount conversion
+	ctx     *ApiContext
 }
 
 func (r *Income) MarshalJSON() ([]byte, error) {
@@ -109,7 +109,7 @@ func (c *Income) MarshalJSONVerbose() ([]byte, error) {
 		RowId:                  c.RowId,
 		Cycle:                  c.Cycle,
 		AccountId:              c.AccountId.Value(),
-		Address:                lookupAddress(c.ctx, c.AccountId).String(),
+		Address:                c.ctx.Indexer.LookupAddress(c.ctx, c.AccountId).String(),
 		Rolls:                  c.Rolls,
 		Balance:                c.params.ConvertValue(c.Balance),
 		Delegated:              c.params.ConvertValue(c.Delegated),
@@ -145,8 +145,8 @@ func (c *Income) MarshalJSONVerbose() ([]byte, error) {
 		LostAccusationDeposits: c.params.ConvertValue(c.LostAccusationDeposits),
 		LostRevelationFees:     c.params.ConvertValue(c.LostRevelationFees),
 		LostRevelationRewards:  c.params.ConvertValue(c.LostRevelationRewards),
-		StartTime:              c.ctx.Indexer.BlockTime(c.ctx.Context, c.params.CycleStartHeight(c.Cycle)),
-		EndTime:                c.ctx.Indexer.BlockTime(c.ctx.Context, c.params.CycleEndHeight(c.Cycle)),
+		StartTime:              c.ctx.Indexer.LookupBlockTime(c.ctx.Context, c.params.CycleStartHeight(c.Cycle)),
+		EndTime:                c.ctx.Indexer.LookupBlockTime(c.ctx.Context, c.params.CycleEndHeight(c.Cycle)),
 	}
 	return json.Marshal(inc)
 }
@@ -164,7 +164,7 @@ func (c *Income) MarshalJSONBrief() ([]byte, error) {
 		case "account_id":
 			buf = strconv.AppendUint(buf, c.AccountId.Value(), 10)
 		case "address":
-			buf = strconv.AppendQuote(buf, lookupAddress(c.ctx, c.AccountId).String())
+			buf = strconv.AppendQuote(buf, c.ctx.Indexer.LookupAddress(c.ctx, c.AccountId).String())
 		case "rolls":
 			buf = strconv.AppendInt(buf, int64(c.Rolls), 10)
 		case "balance":
@@ -236,9 +236,9 @@ func (c *Income) MarshalJSONBrief() ([]byte, error) {
 		case "lost_revelation_rewards":
 			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.LostRevelationRewards), 'f', dec, 64)
 		case "start_time":
-			buf = strconv.AppendInt(buf, c.ctx.Indexer.BlockTimeMs(c.ctx.Context, c.params.CycleStartHeight(c.Cycle)), 10)
+			buf = strconv.AppendInt(buf, c.ctx.Indexer.LookupBlockTimeMs(c.ctx.Context, c.params.CycleStartHeight(c.Cycle)), 10)
 		case "end_time":
-			buf = strconv.AppendInt(buf, c.ctx.Indexer.BlockTimeMs(c.ctx.Context, c.params.CycleEndHeight(c.Cycle)), 10)
+			buf = strconv.AppendInt(buf, c.ctx.Indexer.LookupBlockTimeMs(c.ctx.Context, c.params.CycleEndHeight(c.Cycle)), 10)
 		default:
 			continue
 		}
@@ -262,7 +262,7 @@ func (c *Income) MarshalCSV() ([]string, error) {
 		case "account_id":
 			res[i] = strconv.FormatUint(c.AccountId.Value(), 10)
 		case "address":
-			res[i] = strconv.Quote(lookupAddress(c.ctx, c.AccountId).String())
+			res[i] = strconv.Quote(c.ctx.Indexer.LookupAddress(c.ctx, c.AccountId).String())
 		case "rolls":
 			res[i] = strconv.FormatInt(int64(c.Rolls), 10)
 		case "balance":
@@ -334,9 +334,9 @@ func (c *Income) MarshalCSV() ([]string, error) {
 		case "lost_revelation_rewards":
 			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.LostRevelationRewards), 'f', dec, 64)
 		case "start_time":
-			res[i] = strconv.Quote(c.ctx.Indexer.BlockTime(c.ctx.Context, c.params.CycleStartHeight(c.Cycle)).Format(time.RFC3339))
+			res[i] = strconv.Quote(c.ctx.Indexer.LookupBlockTime(c.ctx.Context, c.params.CycleStartHeight(c.Cycle)).Format(time.RFC3339))
 		case "end_time":
-			res[i] = strconv.Quote(c.ctx.Indexer.BlockTime(c.ctx.Context, c.params.CycleEndHeight(c.Cycle)).Format(time.RFC3339))
+			res[i] = strconv.Quote(c.ctx.Indexer.LookupBlockTime(c.ctx.Context, c.params.CycleEndHeight(c.Cycle)).Format(time.RFC3339))
 		default:
 			continue
 		}
@@ -376,11 +376,10 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 
 	// build table query
 	q := pack.Query{
-		Name:       ctx.RequestID,
-		Fields:     table.Fields().Select(srcNames...),
-		Limit:      int(args.Limit),
-		Conditions: make(pack.ConditionList, 0),
-		Order:      args.Order,
+		Name:   ctx.RequestID,
+		Fields: table.Fields().Select(srcNames...),
+		Limit:  int(args.Limit),
+		Order:  args.Order,
 	}
 
 	// build dynamic filter conditions from query (will panic on error)
@@ -395,7 +394,7 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			}
 		}
 		switch prefix {
-		case "columns", "limit", "order", "verbose":
+		case "columns", "limit", "order", "verbose", "filename":
 			// skip these fields
 		case "cursor":
 			// add row id condition: id > cursor (new cursor == last row id)
@@ -407,7 +406,7 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
+			q.Conditions.AddAndCondition(&pack.Condition{
 				Field: table.Fields().Pk(),
 				Mode:  cursorMode,
 				Value: id,
@@ -422,7 +421,7 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				// single-address lookup and compile condition
-				addr, err := chain.ParseAddress(val[0])
+				addr, err := tezos.ParseAddress(val[0])
 				if err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
@@ -432,7 +431,7 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				// Note: when not found we insert an always false condition
 				if acc == nil || acc.RowId == 0 {
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find("A"), // account id
 						Mode:  mode,
 						Value: uint64(math.MaxUint64),
@@ -440,10 +439,10 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 					})
 				} else {
 					// add addr id as extra fund_flow condition
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find("A"), // account id
 						Mode:  mode,
-						Value: acc.RowId.Value(),
+						Value: acc.RowId,
 						Raw:   val[0], // debugging aid
 					})
 				}
@@ -451,7 +450,7 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(v)
+					addr, err := tezos.ParseAddress(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
@@ -468,7 +467,7 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("A"), // account id
 					Mode:  mode,
 					Value: ids,
@@ -509,10 +508,10 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 					if prefix == "start_time" {
 						cmode = pack.FilterModeGte
 					}
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find("c"), // cycle
 						Mode:  cmode,
-						Value: params.CycleFromHeight(ctx.Indexer.BlockHeightFromTime(ctx.Context, tm.Time())),
+						Value: params.CycleFromHeight(ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, tm.Time())),
 						Raw:   v,
 					})
 					// skip further parsing
@@ -549,7 +548,7 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions = append(q.Conditions, cond)
+					q.Conditions.AddAndCondition(&cond)
 				}
 			}
 		}
@@ -560,11 +559,11 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		lastId uint64
 	)
 
-	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
-	defer func() {
-		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	}()
+	// start := time.Now()
+	// ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
+	// defer func() {
+	// 	ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
+	// }()
 
 	// prepare return type marshalling
 	inc := &Income{
@@ -616,7 +615,7 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		})
 		// close JSON bracket
 		io.WriteString(ctx.ResponseWriter, "]")
-		ctx.Log.Tracef("JSON encoded %d rows", count)
+		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":
 		enc := csv.NewEncoder(ctx.ResponseWriter)
@@ -641,7 +640,7 @@ func StreamIncomeTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				return nil
 			})
 		}
-		ctx.Log.Tracef("CSV Encoded %d rows", count)
+		// ctx.Log.Tracef("CSV Encoded %d rows", count)
 	}
 
 	// without new records, cursor remains the same as input (may be empty)

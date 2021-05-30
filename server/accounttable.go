@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -18,8 +18,7 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/packdb/vec"
-	"blockwatch.cc/tzindex/chain"
-	"blockwatch.cc/tzindex/etl"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 )
@@ -42,10 +41,11 @@ func init() {
 	accAllAliases = fields.Aliases()
 
 	// add extra translations for accounts
-	accSourceNames["address"] = "-"
 	accSourceNames["delegate"] = "D"
-	accSourceNames["manager"] = "M"
-	accSourceNames["pubkey"] = "-"
+	accSourceNames["creator"] = "M"
+	accSourceNames["manager"] = "M"    // DEPRECATED
+	accSourceNames["manager_id"] = "M" // DEPRECATED
+	accSourceNames["first_seen_time"] = "0"
 	accSourceNames["first_seen_time"] = "0"
 	accSourceNames["last_seen_time"] = "l"
 	accSourceNames["first_in_time"] = "i"
@@ -54,14 +54,17 @@ func init() {
 	accSourceNames["last_out_time"] = "O"
 	accSourceNames["delegated_since_time"] = "+"
 	accSourceNames["delegate_since_time"] = "*"
-	accSourceNames["rich_rank"] = "-"
-	accSourceNames["flow_rank"] = "-"
-	accSourceNames["traffic_rank"] = "-"
+	accSourceNames["delegate_until_time"] = "*"
+	accSourceNames["next_bake_height"] = "-"
+	accSourceNames["next_bake_priority"] = "-"
+	accSourceNames["next_bake_time"] = "-"
+	accSourceNames["next_endorse_height"] = "-"
+	accSourceNames["next_endorse_time"] = "-"
+	accSourceNames["is_spendable"] = "-" // made internal in v8
+	accSourceNames["is_delegatable"] = "-"
 	accAllAliases = append(accAllAliases, []string{
-		"address",
 		"delegate",
-		"manager",
-		"pubkey",
+		"creator",
 		"first_seen_time",
 		"last_seen_time",
 		"first_in_time",
@@ -70,30 +73,22 @@ func init() {
 		"last_out_time",
 		"delegated_since_time",
 		"delegate_since_time",
-		"rich_rank",
-		"flow_rank",
-		"traffic_rank",
+		"delegate_until_time",
+		"next_bake_height",
+		"next_bake_priority",
+		"next_bake_time",
+		"next_endorse_height",
+		"next_endorse_time",
 	}...)
-	// hide some internal fields (don't let CSV encoder pick them up)
-	for _, v := range []string{"hash", "pubkey_hash", "pubkey_type"} {
-		for i, n := range accAllAliases {
-			if n == v {
-				accAllAliases = append(accAllAliases[:i], accAllAliases[i+1:]...)
-				break
-			}
-		}
-	}
 }
 
 // configurable marshalling helper
 type Account struct {
 	model.Account
-	verbose bool                              `csv:"-" pack:"-"` // cond. marshal
-	columns util.StringList                   `csv:"-" pack:"-"` // cond. cols & order when brief
-	params  *chain.Params                     `csv:"-" pack:"-"` // blockchain amount conversion
-	addrs   map[model.AccountID]chain.Address `csv:"-" pack:"-"` // address map
-	ctx     *ApiContext                       `csv:"-" pack:"-"`
-	ranking *etl.AccountRanking               `csv:"-" pack:"-"`
+	verbose bool            // cond. marshal
+	columns util.StringList // cond. cols & order when brief
+	params  *tezos.Params   // blockchain amount conversion
+	ctx     *ApiContext
 }
 
 func (a *Account) MarshalJSON() ([]byte, error) {
@@ -106,91 +101,85 @@ func (a *Account) MarshalJSON() ([]byte, error) {
 
 func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 	acc := struct {
-		RowId              uint64  `json:"row_id"`
-		Address            string  `json:"address"`
-		AddressType        string  `json:"address_type"`
-		DelegateId         uint64  `json:"delegate_id"`
-		Delegate           string  `json:"delegate"`
-		ManagerId          uint64  `json:"manager_id"`
-		Manager            string  `json:"manager"`
-		Pubkey             string  `json:"pubkey"`
-		FirstIn            int64   `json:"first_in"`
-		FirstOut           int64   `json:"first_out"`
-		FirstSeen          int64   `json:"first_seen"`
-		LastIn             int64   `json:"last_in"`
-		LastOut            int64   `json:"last_out"`
-		LastSeen           int64   `json:"last_seen"`
-		DelegatedSince     int64   `json:"delegated_since"`
-		DelegateSince      int64   `json:"delegate_since"`
-		TotalReceived      float64 `json:"total_received"`
-		TotalSent          float64 `json:"total_sent"`
-		TotalBurned        float64 `json:"total_burned"`
-		TotalFeesPaid      float64 `json:"total_fees_paid"`
-		TotalRewardsEarned float64 `json:"total_rewards_earned"`
-		TotalFeesEarned    float64 `json:"total_fees_earned"`
-		TotalLost          float64 `json:"total_lost"`
-		FrozenDeposits     float64 `json:"frozen_deposits"`
-		FrozenRewards      float64 `json:"frozen_rewards"`
-		FrozenFees         float64 `json:"frozen_fees"`
-		UnclaimedBalance   float64 `json:"unclaimed_balance"`
-		SpendableBalance   float64 `json:"spendable_balance"`
-		DelegatedBalance   float64 `json:"delegated_balance"`
-		TotalDelegations   int64   `json:"total_delegations"`
-		ActiveDelegations  int64   `json:"active_delegations"`
-		IsFunded           bool    `json:"is_funded"`
-		IsActivated        bool    `json:"is_activated"`
-		IsVesting          bool    `json:"is_vesting"`
-		IsSpendable        bool    `json:"is_spendable"`
-		IsDelegatable      bool    `json:"is_delegatable"`
-		IsDelegated        bool    `json:"is_delegated"`
-		IsRevealed         bool    `json:"is_revealed"`
-		IsDelegate         bool    `json:"is_delegate"`
-		IsActiveDelegate   bool    `json:"is_active_delegate"`
-		IsContract         bool    `json:"is_contract"`
-		BlocksBaked        int     `json:"blocks_baked"`
-		BlocksMissed       int     `json:"blocks_missed"`
-		BlocksStolen       int     `json:"blocks_stolen"`
-		BlocksEndorsed     int     `json:"blocks_endorsed"`
-		SlotsEndorsed      int     `json:"slots_endorsed"`
-		SlotsMissed        int     `json:"slots_missed"`
-		NOps               int     `json:"n_ops"`
-		NOpsFailed         int     `json:"n_ops_failed"`
-		NTx                int     `json:"n_tx"`
-		NDelegation        int     `json:"n_delegation"`
-		NOrigination       int     `json:"n_origination"`
-		NProposal          int     `json:"n_proposal"`
-		NBallot            int     `json:"n_ballot"`
-		TokenGenMin        int64   `json:"token_gen_min"`
-		TokenGenMax        int64   `json:"token_gen_max"`
-		GracePeriod        int64   `json:"grace_period"`
-		// BakerVersion       string    `json:"baker_version"`
-		FirstSeenTime      int64  `json:"first_seen_time"`
-		LastSeenTime       int64  `json:"last_seen_time"`
-		FirstInTime        int64  `json:"first_in_time"`
-		LastInTime         int64  `json:"last_in_time"`
-		FirstOutTime       int64  `json:"first_out_time"`
-		LastOutTime        int64  `json:"last_out_time"`
-		DelegatedSinceTime int64  `json:"delegated_since_time"`
-		DelegateSinceTime  int64  `json:"delegate_since_time"`
-		RichRank           int    `json:"rich_rank"`
-		FlowRank           int    `json:"flow_rank"`
-		TrafficRank        int    `json:"traffic_rank"`
-		CallStats          string `json:"call_stats"`
-		// NextBakeHeight     int64     `json:"next_bake_height"`
-		// NextBakePriority   int       `json:"next_bake_priority"`
-		// NextBakeTime       time.Time `json:"next_bake_time"`
-		// NextEndorseHeight  int64     `json:"next_endorse_height"`
-		// NextEndorseTime    time.Time `json:"next_endorse_time"`
+		RowId              uint64    `json:"row_id"`
+		Address            string    `json:"address"`
+		AddressType        string    `json:"address_type"`
+		DelegateId         uint64    `json:"delegate_id"`
+		Delegate           string    `json:"delegate"`
+		CreatorId          uint64    `json:"creator_id"`
+		Creator            string    `json:"creator"`
+		Pubkey             tezos.Key `json:"pubkey"`
+		FirstIn            int64     `json:"first_in"`
+		FirstOut           int64     `json:"first_out"`
+		FirstSeen          int64     `json:"first_seen"`
+		LastIn             int64     `json:"last_in"`
+		LastOut            int64     `json:"last_out"`
+		LastSeen           int64     `json:"last_seen"`
+		DelegatedSince     int64     `json:"delegated_since"`
+		DelegateSince      int64     `json:"delegate_since"`
+		DelegateUntil      int64     `json:"delegate_until"`
+		TotalReceived      float64   `json:"total_received"`
+		TotalSent          float64   `json:"total_sent"`
+		TotalBurned        float64   `json:"total_burned"`
+		TotalFeesPaid      float64   `json:"total_fees_paid"`
+		TotalRewardsEarned float64   `json:"total_rewards_earned"`
+		TotalFeesEarned    float64   `json:"total_fees_earned"`
+		TotalLost          float64   `json:"total_lost"`
+		FrozenDeposits     float64   `json:"frozen_deposits"`
+		FrozenRewards      float64   `json:"frozen_rewards"`
+		FrozenFees         float64   `json:"frozen_fees"`
+		UnclaimedBalance   float64   `json:"unclaimed_balance"`
+		SpendableBalance   float64   `json:"spendable_balance"`
+		DelegatedBalance   float64   `json:"delegated_balance"`
+		TotalDelegations   int64     `json:"total_delegations"`
+		ActiveDelegations  int64     `json:"active_delegations"`
+		IsFunded           bool      `json:"is_funded"`
+		IsActivated        bool      `json:"is_activated"`
+		IsDelegated        bool      `json:"is_delegated"`
+		IsRevealed         bool      `json:"is_revealed"`
+		IsDelegate         bool      `json:"is_delegate"`
+		IsActiveDelegate   bool      `json:"is_active_delegate"`
+		IsContract         bool      `json:"is_contract"`
+		BlocksBaked        int       `json:"blocks_baked"`
+		BlocksMissed       int       `json:"blocks_missed"`
+		BlocksStolen       int       `json:"blocks_stolen"`
+		BlocksEndorsed     int       `json:"blocks_endorsed"`
+		SlotsEndorsed      int       `json:"slots_endorsed"`
+		SlotsMissed        int       `json:"slots_missed"`
+		NOps               int       `json:"n_ops"`
+		NOpsFailed         int       `json:"n_ops_failed"`
+		NTx                int       `json:"n_tx"`
+		NDelegation        int       `json:"n_delegation"`
+		NOrigination       int       `json:"n_origination"`
+		NProposal          int       `json:"n_proposal"`
+		NBallot            int       `json:"n_ballot"`
+		TokenGenMin        int64     `json:"token_gen_min"`
+		TokenGenMax        int64     `json:"token_gen_max"`
+		GracePeriod        int64     `json:"grace_period"`
+		BakerVersion       string    `json:"baker_version"`
+		FirstSeenTime      int64     `json:"first_seen_time"`
+		LastSeenTime       int64     `json:"last_seen_time"`
+		FirstInTime        int64     `json:"first_in_time"`
+		LastInTime         int64     `json:"last_in_time"`
+		FirstOutTime       int64     `json:"first_out_time"`
+		LastOutTime        int64     `json:"last_out_time"`
+		DelegatedSinceTime int64     `json:"delegated_since_time"`
+		DelegateSinceTime  int64     `json:"delegate_since_time"`
+		DelegateUntilTime  int64     `json:"delegate_until_time"`
+		NextBakeHeight     int64     `json:"next_bake_height"`
+		NextBakePriority   int       `json:"next_bake_priority"`
+		NextBakeTime       time.Time `json:"next_bake_time"`
+		NextEndorseHeight  int64     `json:"next_endorse_height"`
+		NextEndorseTime    time.Time `json:"next_endorse_time"`
 	}{
-		RowId:       a.RowId.Value(),
-		Address:     a.String(),
-		AddressType: a.Type.String(),
-		DelegateId:  a.DelegateId.Value(),
-		Delegate:    a.addrs[a.DelegateId].String(),
-		ManagerId:   a.ManagerId.Value(),
-		Manager:     a.addrs[a.ManagerId].String(),
-		// FIXME
-		Pubkey:             chain.NewHash(a.PubkeyType.KeyType().HashType(), a.PubkeyHash).String(),
+		RowId:              a.RowId.Value(),
+		Address:            a.String(),
+		AddressType:        a.Type.String(),
+		DelegateId:         a.DelegateId.Value(),
+		Delegate:           a.ctx.Indexer.LookupAddress(a.ctx, a.DelegateId).String(),
+		CreatorId:          a.CreatorId.Value(),
+		Creator:            a.ctx.Indexer.LookupAddress(a.ctx, a.CreatorId).String(),
+		Pubkey:             a.Key(),
 		FirstIn:            a.FirstIn,
 		FirstOut:           a.FirstOut,
 		FirstSeen:          a.FirstSeen,
@@ -216,9 +205,6 @@ func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 		ActiveDelegations:  a.ActiveDelegations,
 		IsFunded:           a.IsFunded,
 		IsActivated:        a.IsActivated,
-		IsVesting:          a.IsVesting,
-		IsSpendable:        a.IsSpendable,
-		IsDelegatable:      a.IsDelegatable,
 		IsDelegated:        a.IsDelegated,
 		IsRevealed:         a.IsRevealed,
 		IsDelegate:         a.IsDelegate,
@@ -240,47 +226,40 @@ func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 		TokenGenMin:        a.TokenGenMin,
 		TokenGenMax:        a.TokenGenMax,
 		GracePeriod:        a.GracePeriod,
-		FirstSeenTime:      a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.FirstSeen),
-		LastSeenTime:       a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.LastSeen),
-		FirstInTime:        a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.FirstIn),
-		LastInTime:         a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.LastIn),
-		FirstOutTime:       a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.FirstOut),
-		LastOutTime:        a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.LastOut),
-		DelegatedSinceTime: a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.DelegatedSince),
-		DelegateSinceTime:  a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.DelegateSince),
-		CallStats:          hex.EncodeToString(a.CallStats),
+		FirstSeenTime:      a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.FirstSeen),
+		LastSeenTime:       a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.LastSeen),
+		FirstInTime:        a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.FirstIn),
+		LastInTime:         a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.LastIn),
+		FirstOutTime:       a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.FirstOut),
+		LastOutTime:        a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.LastOut),
+		DelegatedSinceTime: a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.DelegatedSince),
+		DelegateSinceTime:  a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.DelegateSince),
+		DelegateUntilTime:  a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.DelegateUntil),
 	}
-	// if a.BakerVersion > 0 {
-	// 	acc.BakerVersion = hex.EncodeToString(a.GetVersionBytes())
-	// }
-	if a.ranking != nil {
-		if rank, ok := a.ranking.GetAccount(a.RowId); ok {
-			acc.RichRank = rank.RichRank
-			acc.TrafficRank = rank.TrafficRank
-			acc.FlowRank = rank.FlowRank
+	if a.BakerVersion > 0 {
+		acc.BakerVersion = hex.EncodeToString(a.GetVersionBytes())
+	}
+	if a.IsActiveDelegate {
+		height, tm := a.ctx.Tip.BestHeight, a.ctx.Tip.BestTime
+		bh, eh := a.ctx.Indexer.NextRights(a.ctx, a.RowId, height)
+		if bh > 0 {
+			acc.NextBakeHeight = bh
+			acc.NextBakePriority = 0
+			acc.NextBakeTime = tm.Add(a.params.TimeBetweenBlocks[0] * time.Duration(bh-height))
+		}
+		if eh > 0 {
+			acc.NextEndorseHeight = eh
+			acc.NextEndorseTime = tm.Add(a.params.TimeBetweenBlocks[0] * time.Duration(eh-height))
 		}
 	}
-	// if a.IsActiveDelegate {
-	// 	height, tm := a.ctx.Tip.BestHeight, a.ctx.Tip.BestTime
-	// 	bh, eh := a.ctx.Indexer.NextRights(a.ctx, a.RowId, height)
-	// 	if bh > 0 {
-	// 		acc.NextBakeHeight = bh
-	// 		acc.NextBakePriority = 0
-	// 		acc.NextBakeTime = tm.Add(a.params.TimeBetweenBlocks[0] * time.Duration(bh-height))
-	// 	}
-	// 	if eh > 0 {
-	// 		acc.NextEndorseHeight = eh
-	// 		acc.NextEndorseTime = tm.Add(a.params.TimeBetweenBlocks[0] * time.Duration(eh-height))
-	// 	}
-	// }
 	return json.Marshal(acc)
 }
 
 func (a *Account) MarshalJSONBrief() ([]byte, error) {
 	dec := a.params.Decimals
-	var rank *etl.AccountRankingEntry
-	if a.ranking != nil {
-		rank, _ = a.ranking.GetAccount(a.RowId)
+	var nextBakeHeight, nextEndorseHeight int64
+	if a.IsActiveDelegate {
+		nextBakeHeight, nextEndorseHeight = a.ctx.Indexer.NextRights(a.ctx, a.RowId, a.ctx.Tip.BestHeight)
 	}
 	buf := make([]byte, 0, 2048)
 	buf = append(buf, '[')
@@ -296,23 +275,21 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendUint(buf, a.DelegateId.Value(), 10)
 		case "delegate":
 			if a.DelegateId > 0 {
-				buf = strconv.AppendQuote(buf, a.addrs[a.DelegateId].String())
+				buf = strconv.AppendQuote(buf, a.ctx.Indexer.LookupAddress(a.ctx, a.DelegateId).String())
 			} else {
 				buf = append(buf, "null"...)
 			}
-		case "manager_id":
-			buf = strconv.AppendUint(buf, a.ManagerId.Value(), 10)
-		case "manager":
-			if a.ManagerId > 0 {
-				buf = strconv.AppendQuote(buf, a.addrs[a.ManagerId].String())
+		case "creator_id", "manager_id":
+			buf = strconv.AppendUint(buf, a.CreatorId.Value(), 10)
+		case "creator", "manager":
+			if a.CreatorId > 0 {
+				buf = strconv.AppendQuote(buf, a.ctx.Indexer.LookupAddress(a.ctx, a.CreatorId).String())
 			} else {
 				buf = append(buf, "null"...)
 			}
 		case "pubkey":
-			if a.PubkeyType.IsValid() {
-				// FIXME
-				pk := chain.NewHash(a.PubkeyType.KeyType().HashType(), a.PubkeyHash)
-				buf = strconv.AppendQuote(buf, pk.String())
+			if len(a.Pubkey) > 0 {
+				buf = strconv.AppendQuote(buf, a.Key().String())
 			} else {
 				buf = append(buf, "null"...)
 			}
@@ -332,6 +309,8 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, a.DelegatedSince, 10)
 		case "delegate_since":
 			buf = strconv.AppendInt(buf, a.DelegateSince, 10)
+		case "delegate_until":
+			buf = strconv.AppendInt(buf, a.DelegateUntil, 10)
 		case "total_received":
 			buf = strconv.AppendFloat(buf, a.params.ConvertValue(a.TotalReceived), 'f', dec, 64)
 		case "total_sent":
@@ -370,24 +349,6 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 			}
 		case "is_activated":
 			if a.IsActivated {
-				buf = append(buf, '1')
-			} else {
-				buf = append(buf, '0')
-			}
-		case "is_vesting":
-			if a.IsVesting {
-				buf = append(buf, '1')
-			} else {
-				buf = append(buf, '0')
-			}
-		case "is_spendable":
-			if a.IsSpendable {
-				buf = append(buf, '1')
-			} else {
-				buf = append(buf, '0')
-			}
-		case "is_delegatable":
-			if a.IsDelegatable {
 				buf = append(buf, '1')
 			} else {
 				buf = append(buf, '0')
@@ -454,58 +415,40 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, a.TokenGenMax, 10)
 		case "grace_period":
 			buf = strconv.AppendInt(buf, a.GracePeriod, 10)
-		// case "baker_version":
-		// 	if a.BakerVersion > 0 {
-		// 		buf = strconv.AppendQuote(buf, hex.EncodeToString(a.GetVersionBytes()))
-		// 	} else {
-		// 		buf = append(buf, "null"...)
-		// 	}
+		case "baker_version":
+			if a.BakerVersion > 0 {
+				buf = strconv.AppendQuote(buf, hex.EncodeToString(a.GetVersionBytes()))
+			} else {
+				buf = append(buf, "null"...)
+			}
 		case "first_seen_time":
-			buf = strconv.AppendInt(buf, a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.FirstSeen), 10)
+			buf = strconv.AppendInt(buf, a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.FirstSeen), 10)
 		case "last_seen_time":
-			buf = strconv.AppendInt(buf, a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.LastSeen), 10)
+			buf = strconv.AppendInt(buf, a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.LastSeen), 10)
 		case "first_in_time":
-			buf = strconv.AppendInt(buf, a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.FirstIn), 10)
+			buf = strconv.AppendInt(buf, a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.FirstIn), 10)
 		case "last_in_time":
-			buf = strconv.AppendInt(buf, a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.LastIn), 10)
+			buf = strconv.AppendInt(buf, a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.LastIn), 10)
 		case "first_out_time":
-			buf = strconv.AppendInt(buf, a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.FirstOut), 10)
+			buf = strconv.AppendInt(buf, a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.FirstOut), 10)
 		case "last_out_time":
-			buf = strconv.AppendInt(buf, a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.LastOut), 10)
+			buf = strconv.AppendInt(buf, a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.LastOut), 10)
 		case "delegated_since_time":
-			buf = strconv.AppendInt(buf, a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.DelegatedSince), 10)
+			buf = strconv.AppendInt(buf, a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.DelegatedSince), 10)
 		case "delegate_since_time":
-			buf = strconv.AppendInt(buf, a.ctx.Indexer.BlockTimeMs(a.ctx.Context, a.DelegateSince), 10)
-		case "rich_rank":
-			if rank != nil {
-				buf = strconv.AppendInt(buf, int64(rank.RichRank), 10)
-			} else {
-				buf = append(buf, '0')
-			}
-		case "flow_rank":
-			if rank != nil {
-				buf = strconv.AppendInt(buf, int64(rank.FlowRank), 10)
-			} else {
-				buf = append(buf, '0')
-			}
-		case "traffic_rank":
-			if rank != nil {
-				buf = strconv.AppendInt(buf, int64(rank.TrafficRank), 10)
-			} else {
-				buf = append(buf, '0')
-			}
-		case "call_stats":
-			buf = strconv.AppendQuote(buf, hex.EncodeToString(a.CallStats))
-		// case "next_bake_height":
-		// 	buf = strconv.AppendInt(buf, nextBakeHeight, 10)
-		// case "next_bake_priority":
-		// 	buf = append(buf, '0')
-		// case "next_bake_time":
-		// 	buf = strconv.AppendInt(buf, a.ctx.Indexer.BlockTimeMs(a.ctx.Context, nextBakeHeight), 10)
-		// case "next_endorse_height":
-		// 	buf = strconv.AppendInt(buf, nextEndorseHeight, 10)
-		// case "next_endorse_time":
-		// 	buf = strconv.AppendInt(buf, a.ctx.Indexer.BlockTimeMs(a.ctx.Context, nextEndorseHeight), 10)
+			buf = strconv.AppendInt(buf, a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.DelegateSince), 10)
+		case "delegate_until_time":
+			buf = strconv.AppendInt(buf, a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.DelegateUntil), 10)
+		case "next_bake_height":
+			buf = strconv.AppendInt(buf, nextBakeHeight, 10)
+		case "next_bake_priority":
+			buf = append(buf, '0')
+		case "next_bake_time":
+			buf = strconv.AppendInt(buf, a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, nextBakeHeight), 10)
+		case "next_endorse_height":
+			buf = strconv.AppendInt(buf, nextEndorseHeight, 10)
+		case "next_endorse_time":
+			buf = strconv.AppendInt(buf, a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, nextEndorseHeight), 10)
 		default:
 			continue
 		}
@@ -519,9 +462,9 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 
 func (a *Account) MarshalCSV() ([]string, error) {
 	dec := a.params.Decimals
-	var rank *etl.AccountRankingEntry
-	if a.ranking != nil {
-		rank, _ = a.ranking.GetAccount(a.RowId)
+	var nextBakeHeight, nextEndorseHeight int64
+	if a.IsActiveDelegate {
+		nextBakeHeight, nextEndorseHeight = a.ctx.Indexer.NextRights(a.ctx, a.RowId, a.ctx.Tip.BestHeight)
 	}
 	res := make([]string, len(a.columns))
 	for i, v := range a.columns {
@@ -535,15 +478,13 @@ func (a *Account) MarshalCSV() ([]string, error) {
 		case "delegate_id":
 			res[i] = strconv.FormatUint(a.DelegateId.Value(), 10)
 		case "delegate":
-			res[i] = strconv.Quote(a.addrs[a.DelegateId].String())
-		case "manager_id":
-			res[i] = strconv.FormatUint(a.ManagerId.Value(), 10)
-		case "manager":
-			res[i] = strconv.Quote(a.addrs[a.ManagerId].String())
+			res[i] = strconv.Quote(a.ctx.Indexer.LookupAddress(a.ctx, a.DelegateId).String())
+		case "creator_id", "manager_id":
+			res[i] = strconv.FormatUint(a.CreatorId.Value(), 10)
+		case "creator", "manager":
+			res[i] = strconv.Quote(a.ctx.Indexer.LookupAddress(a.ctx, a.CreatorId).String())
 		case "pubkey":
-			// FIXME
-			pk := chain.NewHash(a.PubkeyType.KeyType().HashType(), a.PubkeyHash)
-			res[i] = strconv.Quote(pk.String())
+			res[i] = strconv.Quote(a.Key().String())
 		case "first_in":
 			res[i] = strconv.FormatInt(a.FirstIn, 10)
 		case "first_out":
@@ -560,6 +501,8 @@ func (a *Account) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(a.DelegatedSince, 10)
 		case "delegate_since":
 			res[i] = strconv.FormatInt(a.DelegateSince, 10)
+		case "delegate_until":
+			res[i] = strconv.FormatInt(a.DelegateUntil, 10)
 		case "total_received":
 			res[i] = strconv.FormatFloat(a.params.ConvertValue(a.TotalReceived), 'f', dec, 64)
 		case "total_sent":
@@ -594,12 +537,6 @@ func (a *Account) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatBool(a.IsFunded)
 		case "is_activated":
 			res[i] = strconv.FormatBool(a.IsActivated)
-		case "is_vesting":
-			res[i] = strconv.FormatBool(a.IsVesting)
-		case "is_spendable":
-			res[i] = strconv.FormatBool(a.IsSpendable)
-		case "is_delegatable":
-			res[i] = strconv.FormatBool(a.IsDelegatable)
 		case "is_delegated":
 			res[i] = strconv.FormatBool(a.IsDelegated)
 		case "is_revealed":
@@ -642,56 +579,38 @@ func (a *Account) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(a.TokenGenMax, 10)
 		case "grace_period":
 			res[i] = strconv.FormatInt(a.GracePeriod, 10)
-		// case "baker_version":
-		// 	if a.BakerVersion > 0 {
-		// 		res[i] = strconv.Quote(hex.EncodeToString(a.GetVersionBytes()))
-		// 	}
+		case "baker_version":
+			if a.BakerVersion > 0 {
+				res[i] = strconv.Quote(hex.EncodeToString(a.GetVersionBytes()))
+			}
 		case "first_seen_time":
-			res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, a.FirstSeen).Format(time.RFC3339))
+			res[i] = strconv.Quote(a.ctx.Indexer.LookupBlockTime(a.ctx.Context, a.FirstSeen).Format(time.RFC3339))
 		case "last_seen_time":
-			res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, a.LastSeen).Format(time.RFC3339))
+			res[i] = strconv.Quote(a.ctx.Indexer.LookupBlockTime(a.ctx.Context, a.LastSeen).Format(time.RFC3339))
 		case "first_in_time":
-			res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, a.FirstIn).Format(time.RFC3339))
+			res[i] = strconv.Quote(a.ctx.Indexer.LookupBlockTime(a.ctx.Context, a.FirstIn).Format(time.RFC3339))
 		case "last_in_time":
-			res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, a.LastIn).Format(time.RFC3339))
+			res[i] = strconv.Quote(a.ctx.Indexer.LookupBlockTime(a.ctx.Context, a.LastIn).Format(time.RFC3339))
 		case "first_out_time":
-			res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, a.FirstOut).Format(time.RFC3339))
+			res[i] = strconv.Quote(a.ctx.Indexer.LookupBlockTime(a.ctx.Context, a.FirstOut).Format(time.RFC3339))
 		case "last_out_time":
-			res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, a.LastOut).Format(time.RFC3339))
+			res[i] = strconv.Quote(a.ctx.Indexer.LookupBlockTime(a.ctx.Context, a.LastOut).Format(time.RFC3339))
 		case "delegated_since_time":
-			res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, a.DelegatedSince).Format(time.RFC3339))
+			res[i] = strconv.Quote(a.ctx.Indexer.LookupBlockTime(a.ctx.Context, a.DelegatedSince).Format(time.RFC3339))
 		case "delegate_since_time":
-			res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, a.DelegateSince).Format(time.RFC3339))
-		case "rich_rank":
-			if rank != nil {
-				res[i] = strconv.FormatInt(int64(rank.RichRank), 10)
-			} else {
-				res[i] = "0"
-			}
-		case "flow_rank":
-			if rank != nil {
-				res[i] = strconv.FormatInt(int64(rank.FlowRank), 10)
-			} else {
-				res[i] = "0"
-			}
-		case "traffic_rank":
-			if rank != nil {
-				res[i] = strconv.FormatInt(int64(rank.TrafficRank), 10)
-			} else {
-				res[i] = "0"
-			}
-		case "call_stats":
-			res[i] = strconv.Quote(hex.EncodeToString(a.CallStats))
-		// case "next_bake_height":
-		// 	res[i] = strconv.FormatInt(nextBakeHeight, 10)
-		// case "next_bake_priority":
-		// 	res[i] = "0"
-		// case "next_bake_time":
-		// 	res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, nextBakeHeight).Format(time.RFC3339))
-		// case "next_endorse_height":
-		// 	res[i] = strconv.FormatInt(nextEndorseHeight, 10)
-		// case "next_endorse_time":
-		// 	res[i] = strconv.Quote(a.ctx.Indexer.BlockTime(a.ctx.Context, nextEndorseHeight).Format(time.RFC3339))
+			res[i] = strconv.Quote(a.ctx.Indexer.LookupBlockTime(a.ctx.Context, a.DelegateSince).Format(time.RFC3339))
+		case "delegate_until_time":
+			res[i] = strconv.Quote(a.ctx.Indexer.LookupBlockTime(a.ctx.Context, a.DelegateUntil).Format(time.RFC3339))
+		case "next_bake_height":
+			res[i] = strconv.FormatInt(nextBakeHeight, 10)
+		case "next_bake_priority":
+			res[i] = "0"
+		case "next_bake_time":
+			res[i] = strconv.Quote(a.ctx.Indexer.LookupBlockTime(a.ctx.Context, nextBakeHeight).Format(time.RFC3339))
+		case "next_endorse_height":
+			res[i] = strconv.FormatInt(nextEndorseHeight, 10)
+		case "next_endorse_time":
+			res[i] = strconv.Quote(a.ctx.Indexer.LookupBlockTime(a.ctx.Context, nextEndorseHeight).Format(time.RFC3339))
 		default:
 			continue
 		}
@@ -710,11 +629,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 	}
 
 	// translate long column names to short names used in pack tables
-	var (
-		srcNames     []string
-		needAccountT bool
-		needRanking  bool
-	)
+	var srcNames []string
 	if len(args.Columns) > 0 {
 		// resolve short column names
 		srcNames = make([]string, 0, len(args.Columns))
@@ -724,16 +639,8 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("unknown column '%s'", v), nil))
 			}
 			switch v {
-			case "manager", "delegate":
-				needAccountT = true
-			case "rich_rank", "flow_rank", "traffic_rank":
-				needRanking = true
-			case "pubkey":
-				srcNames = append(srcNames, "k") // pubkey hash
-				srcNames = append(srcNames, "K") // pubkey type
-			case "address":
-				srcNames = append(srcNames, "H") // hash
-				srcNames = append(srcNames, "t") // type
+			case "next_bake_height", "next_bake_priority", "next_bake_time", "next_endorse_height", "next_endorse_time":
+				srcNames = append(srcNames, "v") // is_active_delegate
 			case "first_seen_time":
 				srcNames = append(srcNames, "0") // first_seen
 			case "last_seen_time":
@@ -753,10 +660,6 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 			case "delegate_until_time":
 				srcNames = append(srcNames, "/") // delegate_until
 			}
-			if args.Verbose {
-				needAccountT = true
-				needRanking = true
-			}
 			if n != "-" {
 				srcNames = append(srcNames, n)
 			}
@@ -765,22 +668,21 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 		// use all table columns in order and reverse lookup their long names
 		srcNames = table.Fields().Names()
 		args.Columns = accAllAliases
-		needAccountT = true
 	}
 
 	// build table query
 	q := pack.Query{
-		Name:       ctx.RequestID,
-		Fields:     table.Fields().Select(srcNames...),
-		Limit:      int(args.Limit),
-		Conditions: make(pack.ConditionList, 0),
-		Order:      args.Order,
+		Name:   ctx.RequestID,
+		Fields: table.Fields().Select(srcNames...),
+		Limit:  int(args.Limit),
+		Order:  args.Order,
 	}
 
 	// build dynamic filter conditions from query (will panic on error)
 	for key, val := range ctx.Request.URL.Query() {
 		keys := strings.Split(key, ".")
 		prefix := keys[0]
+		field := accSourceNames[prefix]
 		mode := pack.FilterModeEqual
 		if len(keys) > 1 {
 			mode = pack.ParseFilterMode(keys[1])
@@ -789,7 +691,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 			}
 		}
 		switch prefix {
-		case "columns", "limit", "order", "verbose":
+		case "columns", "limit", "order", "verbose", "filename":
 			// skip these fields
 		case "cursor":
 			// add row id condition: id > cursor (new cursor == last row id)
@@ -801,7 +703,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
+			q.Conditions.AddAndCondition(&pack.Condition{
 				Field: table.Fields().Pk(),
 				Mode:  cursorMode,
 				Value: id,
@@ -810,34 +712,43 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 		case "address":
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
-				// single-address lookup and compile condition
-				addr, err := chain.ParseAddress(val[0])
+				addr, err := tezos.ParseAddress(val[0])
 				if err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
-					Field: table.Fields().Find("H"),
-					Mode:  mode,
-					Value: addr.Hash,
-					Raw:   val[0], // debugging aid
-				}, pack.Condition{
-					Field: table.Fields().Find("t"),
-					Mode:  mode,
-					Value: int64(addr.Type),
-					Raw:   val[0], // debugging aid
-				})
+				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
+				if err != nil && err != index.ErrNoAccountEntry {
+					panic(err)
+				}
+				// Note: when not found we insert an always false condition
+				if acc == nil || acc.RowId == 0 {
+					q.Conditions.AddAndCondition(&pack.Condition{
+						Field: table.Fields().Find("I"), // account id
+						Mode:  mode,
+						Value: uint64(math.MaxUint64),
+						Raw:   "account not found", // debugging aid
+					})
+				} else {
+					// add id as extra condition
+					q.Conditions.AddAndCondition(&pack.Condition{
+						Field: table.Fields().Find("I"), // account id
+						Mode:  mode,
+						Value: acc.RowId,
+						Raw:   val[0], // debugging aid
+					})
+				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup (Note: does not check for address type so may
 				// return duplicates)
 				hashes := make([][]byte, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(v)
+					addr, err := tezos.ParseAddress(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
-					hashes = append(hashes, addr.Hash)
+					hashes = append(hashes, addr.Bytes22())
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("H"),
 					Mode:  mode,
 					Value: hashes,
@@ -851,45 +762,69 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 			if mode != pack.FilterModeEqual {
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
-			h, err := chain.ParseHash(val[0])
+			k, err := tezos.ParseKey(val[0])
 			if err != nil {
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid pubkey hash '%s'", val), err))
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
-				Field: table.Fields().Find("k"),
+			q.Conditions.AddAndCondition(&pack.Condition{
+				Field: table.Fields().Find(field),
 				Mode:  pack.FilterModeEqual,
-				Value: h.Hash,
-				Raw:   val[0], // debugging aid
-			}, pack.Condition{
-				Field: table.Fields().Find("K"),
-				Mode:  pack.FilterModeEqual,
-				Value: int64(h.Type),
+				Value: k.Data,
 				Raw:   val[0], // debugging aid
 			})
 
-		case "delegate", "manager":
+		case "baker_version":
+			switch mode {
+			case pack.FilterModeEqual, pack.FilterModeNotEqual:
+				// single-address lookup and compile condition
+				buf, err := hex.DecodeString(val[0])
+				if err != nil {
+					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid interface hash '%s'", val[0]), err))
+				}
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find(field),
+					Mode:  mode,
+					Value: buf,
+					Raw:   val[0], // debugging aid
+				})
+			case pack.FilterModeIn, pack.FilterModeNotIn:
+				// multi-hash lookup
+				hashes := make([][]byte, 0)
+				for _, v := range strings.Split(val[0], ",") {
+					buf, err := hex.DecodeString(v)
+					if err != nil {
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid interface hash '%s'", v), err))
+					}
+					hashes = append(hashes, buf)
+				}
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find(field),
+					Mode:  mode,
+					Value: hashes,
+					Raw:   val[0], // debugging aid
+				})
+			default:
+				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
+			}
+		case "delegate", "manager", "creator":
 			// parse address and lookup id
 			// valid filter modes: eq, in
 			// 1 resolve account_id from account table
 			// 2 add eq/in cond: account_id
 			// 3 cache result in map (for output)
-			field := "D" // delegate
-			if prefix == "manager" {
-				field = "M"
-			}
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty address matches id 0 (== no delegate/manager set)
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find(field), // account id
 						Mode:  mode,
-						Value: uint64(0),
+						Value: 0,
 						Raw:   val[0], // debugging aid
 					})
 				} else {
 					// single-account lookup and compile condition
-					addr, err := chain.ParseAddress(val[0])
+					addr, err := tezos.ParseAddress(val[0])
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
@@ -899,7 +834,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 					}
 					// Note: when not found we insert an always false condition
 					if acc == nil || acc.RowId == 0 {
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find(field), // account id
 							Mode:  mode,
 							Value: uint64(math.MaxUint64),
@@ -907,10 +842,10 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 						})
 					} else {
 						// add id as extra condition
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find(field), // account id
 							Mode:  mode,
-							Value: acc.RowId.Value(),
+							Value: acc.RowId,
 							Raw:   val[0], // debugging aid
 						})
 					}
@@ -919,7 +854,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(v)
+					addr, err := tezos.ParseAddress(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
@@ -936,7 +871,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find(field), // account id
 					Mode:  mode,
 					Value: ids,
@@ -975,7 +910,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 					// consider comma separated lists, convert type to int and back to string list
 					typs := make([]int64, 0)
 					for _, t := range strings.Split(v, ",") {
-						typ := chain.ParseAddressType(t)
+						typ := tezos.ParseAddressType(t)
 						if !typ.IsValid() {
 							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address type '%s'", val[0]), nil))
 						}
@@ -990,7 +925,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions = append(q.Conditions, cond)
+					q.Conditions.AddAndCondition(&cond)
 				}
 			}
 		}
@@ -1001,72 +936,26 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 		lastId uint64
 	)
 
-	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
-	defer func() {
-		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	}()
+	// start := time.Now()
+	// ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
+	// defer func() {
+	// 	ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
+	// }()
 
 	// Step 1: query database
 	res, err := table.Query(ctx, q)
 	if err != nil {
 		panic(EInternal(EC_DATABASE, "query failed", err))
 	}
-	ctx.Log.Tracef("Processing result with %d rows %d cols", res.Rows(), res.Cols())
+	// ctx.Log.Tracef("Processing result with %d rows %d cols", res.Rows(), res.Cols())
 	defer res.Close()
-
-	// Step 2: resolve related accounts using lookup (when requested)
-	accMap := make(map[model.AccountID]chain.Address)
-	if needAccountT && res.Rows() > 0 {
-		// get a unique copy of delegate and manager id columns (clip on request limit)
-		dcol, _ := res.Uint64Column("D")
-		mcol, _ := res.Uint64Column("M")
-		find := vec.UniqueUint64Slice(dcol[:util.Min(len(dcol), int(args.Limit))])
-		find = vec.UniqueUint64Slice(append(find, mcol[:util.Min(len(mcol), int(args.Limit))]...))
-
-		// lookup accounts from id
-		q := pack.Query{
-			Name:   ctx.RequestID + ".account_lookup",
-			Fields: table.Fields().Select("I", "H", "t"),
-			Conditions: pack.ConditionList{pack.Condition{
-				Field: table.Fields().Find("I"),
-				Mode:  pack.FilterModeIn,
-				Value: find,
-			}},
-		}
-		ctx.Log.Tracef("Looking up %d accounts", len(find))
-		type XAcc struct {
-			Id   model.AccountID   `pack:"I,pk"`
-			Hash []byte            `pack:"H"`
-			Type chain.AddressType `pack:"t"`
-		}
-		acc := &XAcc{}
-		err := table.Stream(ctx, q, func(r pack.Row) error {
-			if err := r.Decode(acc); err != nil {
-				return err
-			}
-			accMap[acc.Id] = chain.NewAddress(acc.Type, acc.Hash)
-			return nil
-		})
-		if err != nil {
-			// non-fatal error
-			ctx.Log.Errorf("Account lookup failed: %v", err)
-		}
-	}
-
-	var ranking *etl.AccountRanking
-	if needRanking {
-		ranking, _ = ctx.Indexer.GetRanking(ctx.Context, ctx.Now)
-	}
 
 	// prepare return type marshalling
 	acc := &Account{
 		verbose: args.Verbose,
 		columns: util.StringList(args.Columns),
 		params:  params,
-		addrs:   accMap,
 		ctx:     ctx,
-		ranking: ranking,
 	}
 
 	// prepare response stream
@@ -1111,7 +1000,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 		})
 		// close JSON bracket
 		io.WriteString(ctx.ResponseWriter, "]")
-		ctx.Log.Tracef("JSON encoded %d rows", count)
+		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":
 		enc := csv.NewEncoder(ctx.ResponseWriter)
@@ -1136,7 +1025,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 				return nil
 			})
 		}
-		ctx.Log.Tracef("CSV Encoded %d rows", count)
+		// ctx.Log.Tracef("CSV Encoded %d rows", count)
 	}
 
 	// without new records, cursor remains the same as input (may be empty)

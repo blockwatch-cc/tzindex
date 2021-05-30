@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -18,11 +18,11 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/packdb/vec"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/micheline"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
-	"blockwatch.cc/tzindex/micheline"
 )
 
 var (
@@ -35,7 +35,7 @@ var (
 )
 
 func init() {
-	fields, err := pack.Fields(&model.BigMapItem{})
+	fields, err := pack.Fields(&model.BigmapItem{})
 	if err != nil {
 		log.Fatalf("bigmap field type error: %v\n", err)
 	}
@@ -45,28 +45,19 @@ func init() {
 	// add extra transalations for accounts
 	bigmapSourceNames["address"] = "A"
 	bigmapSourceNames["op"] = "O"
+	bigmapSourceNames["key_id"] = "-"
 	bigmapAllAliases = append(bigmapAllAliases, "address")
 	bigmapAllAliases = append(bigmapAllAliases, "op")
-
-	// hide some internal fields (don't let CSV encoder pick them up)
-	for _, v := range []string{"", "", ""} {
-		for i, n := range bigmapAllAliases {
-			if n == v {
-				bigmapAllAliases = append(bigmapAllAliases[:i], bigmapAllAliases[i+1:]...)
-				break
-			}
-		}
-	}
 }
 
 // configurable marshalling helper
 type BigMapItem struct {
-	model.BigMapItem
-	verbose bool                               `csv:"-" pack:"-"` // cond. marshal
-	columns util.StringList                    `csv:"-" pack:"-"` // cond. cols & order when brief
-	params  *chain.Params                      `csv:"-" pack:"-"` // blockchain amount conversion
-	addrs   map[model.AccountID]chain.Address  `csv:"-" pack:"-"` // address map
-	ops     map[model.OpID]chain.OperationHash `csv:"-" pack:"-"` // op map
+	model.BigmapItem
+	verbose bool                        // cond. marshal
+	columns util.StringList             // cond. cols & order when brief
+	params  *tezos.Params               // blockchain amount conversion
+	ops     map[model.OpID]tezos.OpHash // op map
+	ctx     *ApiContext
 }
 
 func (b *BigMapItem) MarshalJSON() ([]byte, error) {
@@ -79,63 +70,47 @@ func (b *BigMapItem) MarshalJSON() ([]byte, error) {
 
 func (b *BigMapItem) MarshalJSONVerbose() ([]byte, error) {
 	bigmap := struct {
-		RowId       uint64 `json:"row_id"`
-		PrevId      uint64 `json:"prev_id"`
-		Address     string `json:"address"`
-		AccountId   uint64 `json:"account_id"`
-		ContractId  uint64 `json:"contract_id"`
-		OpId        uint64 `json:"op_id"`
-		Op          string `json:"op"`
-		Height      int64  `json:"height"`
-		Timestamp   int64  `json:"time"`
-		BigMapId    int64  `json:"bigmap_id"`
-		Action      string `json:"action"`
-		KeyHash     string `json:"key_hash,omitempty"`
-		KeyType     string `json:"key_type,omitempty"`
-		KeyEncoding string `json:"key_encoding,omitempty"`
-		Key         string `json:"key,omitempty"`
-		Value       string `json:"value,omitempty"`
-		IsReplaced  bool   `json:"is_replaced"`
-		IsDeleted   bool   `json:"is_deleted"`
-		IsCopied    bool   `json:"is_copied"`
+		RowId      uint64 `json:"row_id"`
+		PrevId     uint64 `json:"prev_id"`
+		Address    string `json:"address"`
+		AccountId  uint64 `json:"account_id"`
+		ContractId uint64 `json:"contract_id"`
+		OpId       uint64 `json:"op_id"`
+		Op         string `json:"op"`
+		Height     int64  `json:"height"`
+		Timestamp  int64  `json:"time"`
+		BigmapId   int64  `json:"bigmap_id"`
+		Action     string `json:"action"`
+		KeyHash    string `json:"key_hash,omitempty"`
+		Key        string `json:"key,omitempty"`
+		Value      string `json:"value,omitempty"`
+		IsReplaced bool   `json:"is_replaced"`
+		IsDeleted  bool   `json:"is_deleted"`
+		IsCopied   bool   `json:"is_copied"`
+		Counter    int64  `json:"counter"`
+		NKeys      int64  `json:"n_keys"`
+		Updated    int64  `json:"updated"`
 	}{
-		RowId:       b.RowId,
-		PrevId:      b.PrevId,
-		Address:     b.addrs[b.AccountId].String(),
-		AccountId:   b.AccountId.Value(),
-		ContractId:  b.ContractId,
-		OpId:        b.OpId.Value(),
-		Op:          b.ops[b.OpId].String(),
-		Height:      b.Height,
-		Timestamp:   util.UnixMilliNonZero(b.Timestamp),
-		BigMapId:    b.BigMapId,
-		Action:      b.Action.String(),
-		KeyHash:     chain.NewExprHash(b.KeyHash).String(),
-		KeyType:     b.KeyType.String(),
-		KeyEncoding: b.KeyEncoding.String(),
-		Value:       hex.EncodeToString(b.Value),
-		IsReplaced:  b.IsReplaced,
-		IsDeleted:   b.IsDeleted,
-		IsCopied:    b.IsCopied,
-	}
-	if len(b.Key) > 0 {
-		switch b.Action {
-		case micheline.DiffActionUpdate, micheline.DiffActionRemove:
-			switch b.KeyEncoding {
-			case micheline.PrimInt:
-				var z micheline.Z
-				if err := z.UnmarshalBinary(b.Key); err != nil {
-					return nil, err
-				}
-				bigmap.Key = z.Big().Text(10)
-			case micheline.PrimBytes:
-				bigmap.Key = hex.EncodeToString(b.Key)
-			case micheline.PrimString:
-				bigmap.Key = string(b.Key)
-			}
-		default:
-			bigmap.Key = hex.EncodeToString(b.Key)
-		}
+		RowId:      b.RowId,
+		PrevId:     b.PrevId,
+		Address:    b.ctx.Indexer.LookupAddress(b.ctx, b.AccountId).String(),
+		AccountId:  b.AccountId.Value(),
+		ContractId: b.ContractId.Value(),
+		OpId:       b.OpId.Value(),
+		Op:         b.ops[b.OpId].String(),
+		Height:     b.Height,
+		Timestamp:  util.UnixMilliNonZero(b.Timestamp),
+		BigmapId:   b.BigmapId,
+		Action:     b.Action.String(),
+		KeyHash:    b.GetKeyHash().String(),
+		Key:        hex.EncodeToString(b.Key),
+		Value:      hex.EncodeToString(b.Value),
+		IsReplaced: b.IsReplaced,
+		IsDeleted:  b.IsDeleted,
+		IsCopied:   b.IsCopied,
+		Counter:    b.Counter,
+		NKeys:      b.NKeys,
+		Updated:    b.Updated,
 	}
 	return json.Marshal(bigmap)
 }
@@ -150,11 +125,11 @@ func (b *BigMapItem) MarshalJSONBrief() ([]byte, error) {
 		case "prev_id":
 			buf = strconv.AppendUint(buf, b.PrevId, 10)
 		case "address":
-			buf = strconv.AppendQuote(buf, b.addrs[b.AccountId].String())
+			buf = strconv.AppendQuote(buf, b.ctx.Indexer.LookupAddress(b.ctx, b.AccountId).String())
 		case "account_id":
 			buf = strconv.AppendUint(buf, b.AccountId.Value(), 10)
 		case "contract_id":
-			buf = strconv.AppendUint(buf, b.ContractId, 10)
+			buf = strconv.AppendUint(buf, b.ContractId.Value(), 10)
 		case "op_id":
 			buf = strconv.AppendUint(buf, b.OpId.Value(), 10)
 		case "op":
@@ -164,37 +139,13 @@ func (b *BigMapItem) MarshalJSONBrief() ([]byte, error) {
 		case "time":
 			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(b.Timestamp), 10)
 		case "bigmap_id":
-			buf = strconv.AppendInt(buf, b.BigMapId, 10)
+			buf = strconv.AppendInt(buf, b.BigmapId, 10)
 		case "action":
 			buf = strconv.AppendQuote(buf, b.Action.String())
 		case "key_hash":
-			buf = strconv.AppendQuote(buf, chain.NewExprHash(b.KeyHash).String())
-		case "key_type":
-			buf = strconv.AppendQuote(buf, b.KeyType.String())
-		case "key_encoding":
-			buf = strconv.AppendQuote(buf, b.KeyEncoding.String())
+			buf = strconv.AppendQuote(buf, b.GetKeyHash().String())
 		case "key":
-			if len(b.Key) > 0 {
-				switch b.Action {
-				case micheline.DiffActionUpdate, micheline.DiffActionRemove:
-					switch b.KeyEncoding {
-					case micheline.PrimInt:
-						var z micheline.Z
-						if err := z.UnmarshalBinary(b.Key); err != nil {
-							return nil, err
-						}
-						buf = strconv.AppendQuote(buf, z.Big().Text(10))
-					case micheline.PrimBytes:
-						buf = strconv.AppendQuote(buf, hex.EncodeToString(b.Key))
-					case micheline.PrimString:
-						buf = strconv.AppendQuote(buf, string(b.Key))
-					}
-				default:
-					buf = strconv.AppendQuote(buf, hex.EncodeToString(b.Key))
-				}
-			} else {
-				buf = strconv.AppendQuote(buf, "")
-			}
+			buf = strconv.AppendQuote(buf, hex.EncodeToString(b.Key))
 		case "value":
 			buf = strconv.AppendQuote(buf, hex.EncodeToString(b.Value))
 		case "is_replaced":
@@ -235,11 +186,11 @@ func (b *BigMapItem) MarshalCSV() ([]string, error) {
 		case "prev_id":
 			res[i] = strconv.FormatUint(b.PrevId, 10)
 		case "address":
-			res[i] = strconv.Quote(b.addrs[b.AccountId].String())
+			res[i] = strconv.Quote(b.ctx.Indexer.LookupAddress(b.ctx, b.AccountId).String())
 		case "account_id":
 			res[i] = strconv.FormatUint(b.AccountId.Value(), 10)
 		case "contract_id":
-			res[i] = strconv.FormatUint(b.ContractId, 10)
+			res[i] = strconv.FormatUint(b.ContractId.Value(), 10)
 		case "op_id":
 			res[i] = strconv.FormatUint(b.OpId.Value(), 10)
 		case "op":
@@ -249,37 +200,13 @@ func (b *BigMapItem) MarshalCSV() ([]string, error) {
 		case "time":
 			res[i] = strconv.Quote(b.Timestamp.Format(time.RFC3339))
 		case "bigmap_id":
-			res[i] = strconv.FormatInt(b.BigMapId, 10)
+			res[i] = strconv.FormatInt(b.BigmapId, 10)
 		case "action":
 			res[i] = strconv.Quote(b.Action.String())
 		case "key_hash":
-			res[i] = strconv.Quote(chain.NewExprHash(b.KeyHash).String())
-		case "key_type":
-			res[i] = strconv.Quote(b.KeyType.String())
-		case "key_encoding":
-			res[i] = strconv.Quote(b.KeyEncoding.String())
+			res[i] = strconv.Quote(b.GetKeyHash().String())
 		case "key":
-			if len(b.Key) > 0 {
-				switch b.Action {
-				case micheline.DiffActionUpdate, micheline.DiffActionRemove:
-					switch b.KeyEncoding {
-					case micheline.PrimInt:
-						var z micheline.Z
-						if err := z.UnmarshalBinary(b.Key); err != nil {
-							return nil, err
-						}
-						res[i] = strconv.Quote(z.Big().Text(10))
-					case micheline.PrimBytes:
-						res[i] = strconv.Quote(hex.EncodeToString(b.Key))
-					case micheline.PrimString:
-						res[i] = strconv.Quote(string(b.Key))
-					}
-				default:
-					res[i] = strconv.Quote(hex.EncodeToString(b.Key))
-				}
-			} else {
-				res[i] = strconv.Quote("")
-			}
+			res[i] = strconv.Quote(hex.EncodeToString(b.Key))
 		case "value":
 			res[i] = strconv.Quote(hex.EncodeToString(b.Value))
 		case "is_replaced":
@@ -297,16 +224,12 @@ func (b *BigMapItem) MarshalCSV() ([]string, error) {
 
 func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	// fetch chain params at current height
-	params := ctx.Crawler.ParamsByHeight(-1)
+	params := ctx.Params
 
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
 	if err != nil {
 		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", args.Table), err))
-	}
-	accountT, err := ctx.Indexer.Table(index.AccountTableKey)
-	if err != nil {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", index.AccountTableKey), err))
 	}
 	opT, err := ctx.Indexer.Table(index.OpTableKey)
 	if err != nil {
@@ -316,8 +239,8 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 	// translate long column names to short names used in pack tables
 	var (
 		srcNames     []string
-		needAccountT bool
 		needOpT      bool
+		needBigmapId bool
 	)
 	if len(args.Columns) > 0 {
 		// resolve short column names
@@ -331,15 +254,13 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 				srcNames = append(srcNames, n)
 			}
 			switch v {
-			case "address":
-				needAccountT = true
+			case "key_hash":
+				// key_hash requires bigmap_id(s) to genrate key_id(s)
+				needBigmapId = true
 			case "op":
 				needOpT = true
-			case "key":
-				srcNames = append(srcNames, "e") // require key_encoding
 			}
 			if args.Verbose {
-				needAccountT = true
 				needOpT = true
 			}
 		}
@@ -347,21 +268,58 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 		// use all table columns in order and reverse lookup their long names
 		srcNames = table.Fields().Names()
 		args.Columns = bigmapAllAliases
-		needAccountT = true
 		needOpT = true
 	}
 
 	// prepare lookup caches
-	accMap := make(map[model.AccountID]chain.Address)
-	opMap := make(map[model.OpID]chain.OperationHash)
+	// accMap := make(map[model.AccountID]tezos.Address)
+	opMap := make(map[model.OpID]tezos.OpHash)
+	bigmapIds := make([]int64, 0)
+
+	// pre-parse bigmap ids required for key_hash lookups
+	// this only works for EQ/IN, panic on other conditions
+	if needBigmapId {
+		for key, val := range ctx.Request.URL.Query() {
+			keys := strings.Split(key, ".")
+			if keys[0] != "bigmap_id" {
+				continue
+			}
+			mode := pack.FilterModeEqual
+			if len(keys) > 1 {
+				mode = pack.ParseFilterMode(keys[1])
+			}
+			switch mode {
+			case pack.FilterModeEqual:
+				// single-bigmap
+				id, err := strconv.ParseInt(val[0], 10, 64)
+				if err != nil {
+					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid bigmap id '%s'", val[0]), err))
+				}
+				bigmapIds = append(bigmapIds, id)
+			case pack.FilterModeIn:
+				// multi-bigmap
+				for _, v := range strings.Split(val[0], ",") {
+					id, err := strconv.ParseInt(v, 10, 64)
+					if err != nil {
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid bigmap id '%s'", v), err))
+					}
+					bigmapIds = append(bigmapIds, id)
+				}
+			default:
+				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for bigmap_id on key_hash query", mode), nil))
+			}
+		}
+		if len(bigmapIds) == 0 {
+			panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("bigmap_id.[eq|in] required for key_hash query"), nil))
+		}
+	}
 
 	// build table query
 	q := pack.Query{
-		Name:       ctx.RequestID,
-		Fields:     table.Fields().Select(srcNames...),
-		Limit:      int(args.Limit),
-		Conditions: make(pack.ConditionList, 0),
-		Order:      args.Order,
+		Name:   ctx.RequestID,
+		Fields: table.Fields().Select(srcNames...),
+		Limit:  int(args.Limit),
+		Order:  args.Order,
 	}
 
 	// build dynamic filter conditions from query (will panic on error)
@@ -377,7 +335,7 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 			}
 		}
 		switch prefix {
-		case "columns", "limit", "order", "verbose":
+		case "columns", "limit", "order", "verbose", "filename":
 			// skip these fields
 		case "cursor":
 			// add row id condition: id > cursor (new cursor == last row id)
@@ -389,7 +347,7 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
+			q.Conditions.AddAndCondition(&pack.Condition{
 				Field: table.Fields().Pk(),
 				Mode:  cursorMode,
 				Value: id,
@@ -400,15 +358,15 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty address matches id 0 (== missing baker)
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find(field), // account id
 						Mode:  pack.FilterModeEqual,
-						Value: uint64(0),
+						Value: 0,
 						Raw:   val[0], // debugging aid
 					})
 				} else {
 					// single-address lookup and compile condition
-					addr, err := chain.ParseAddress(val[0])
+					addr, err := tezos.ParseAddress(val[0])
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
@@ -418,7 +376,7 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 					}
 					// Note: when not found we insert an always false condition
 					if acc == nil || acc.RowId == 0 {
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find(field), // account id
 							Mode:  mode,
 							Value: uint64(math.MaxUint64),
@@ -426,24 +384,19 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 						})
 					} else {
 						// add id as extra condition
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find(field), // account id
 							Mode:  mode,
-							Value: acc.RowId.Value(),
+							Value: acc.RowId,
 							Raw:   val[0], // debugging aid
 						})
-						// add to map
-						if mode == pack.FilterModeEqual {
-							needAccountT = false
-							accMap[acc.RowId] = acc.Address()
-						}
 					}
 				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(v)
+					addr, err := tezos.ParseAddress(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
@@ -457,15 +410,10 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 					}
 					// collect list of account ids
 					ids = append(ids, acc.RowId.Value())
-					// add to map
-					if mode == pack.FilterModeIn {
-						needAccountT = false
-						accMap[acc.RowId] = acc.Address()
-					}
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find(field), // account id
 					Mode:  mode,
 					Value: ids,
@@ -485,10 +433,10 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty op matches id 0 (== missing baker)
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find(field), // op id
 						Mode:  mode,
-						Value: uint64(0),
+						Value: 0,
 						Raw:   val[0], // debugging aid
 					})
 				} else {
@@ -506,7 +454,7 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 					}
 					// Note: when not found we insert an always false condition
 					if op == nil || len(op) == 0 {
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find(field), // op id
 							Mode:  mode,
 							Value: uint64(math.MaxUint64),
@@ -515,11 +463,11 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 					} else {
 						// add op id as extra condition
 						opMap[op[0].RowId] = op[0].Hash.Clone()
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find(field), // op id
 							Mode:  mode,
-							Value: op[0].RowId.Value(), // op slice may contain internal ops
-							Raw:   val[0],              // debugging aid
+							Value: op[0].RowId, // op slice may contain internal ops
+							Raw:   val[0],      // debugging aid
 						})
 						if mode == pack.FilterModeEqual {
 							needOpT = false
@@ -555,7 +503,7 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 				}
 				// Note: when list is empty (no ops were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find(field), // op id
 					Mode:  mode,
 					Value: ids,
@@ -573,23 +521,23 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 				if err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid action '%s'", val[0]), err))
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find(field),
 					Mode:  mode,
-					Value: uint64(action), // it's a byte, which translates to uint64 in packdb
-					Raw:   val[0],         // debugging aid
+					Value: action,
+					Raw:   val[0], // debugging aid
 				})
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-action
-				actions := make([]uint64, 0)
+				actions := make([]int, 0)
 				for _, v := range strings.Split(val[0], ",") {
 					action, err := micheline.ParseDiffAction(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid action '%s'", v), err))
 					}
-					actions = append(actions, uint64(action))
+					actions = append(actions, int(action))
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find(field),
 					Mode:  mode,
 					Value: actions,
@@ -600,135 +548,62 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 			}
 
 		case "key_hash":
+			// this requires a list of bigmaps to be present on the query
+			// we will use these bigmaps to derive key_ids
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				// single-hash
-				h, err := chain.ParseExprHash(val[0])
+				h, err := tezos.ParseExprHash(val[0])
 				if err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid key hash '%s'", val[0]), err))
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
-					Field: table.Fields().Find(field),
-					Mode:  mode,
-					Value: h.Hash.Hash,
-					Raw:   val[0], // debugging aid
-				})
+				if len(bigmapIds) == 1 {
+					// single bigmap
+					q.Conditions.AddAndCondition(&pack.Condition{
+						Field: table.Fields().Find("key_id"),
+						Mode:  mode,
+						Value: model.GetKeyId(bigmapIds[0], h),
+						Raw:   val[0], // debugging aid
+					})
+				} else {
+					// multiple bigmaps
+					if mode == pack.FilterModeEqual {
+						mode = pack.FilterModeIn
+					} else {
+						mode = pack.FilterModeNotIn
+					}
+					keyIds := make([]uint64, 0)
+					for _, bi := range bigmapIds {
+						keyIds = append(keyIds, model.GetKeyId(bi, h))
+					}
+					q.Conditions.AddAndCondition(&pack.Condition{
+						Field: table.Fields().Find("key_id"),
+						Mode:  mode,
+						Value: keyIds,
+						Raw:   val[0], // debugging aid
+					})
+				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-hash lookup
-				hashes := make([][]byte, 0)
+				hashes := make([]tezos.ExprHash, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					h, err := chain.ParseExprHash(v)
+					h, err := tezos.ParseExprHash(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid key hash '%s'", v), err))
 					}
-					hashes = append(hashes, h.Hash.Hash)
+					hashes = append(hashes, h)
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
-					Field: table.Fields().Find(field),
-					Mode:  mode,
-					Value: hashes,
-					Raw:   val[0], // debugging aid
-				})
-			default:
-				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
-			}
-
-		case "key_encoding":
-			switch mode {
-			case pack.FilterModeEqual, pack.FilterModeNotEqual:
-				// single-key
-				typ, err := micheline.ParsePrimType(val[0])
-				if err != nil {
-					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid key encoding '%s'", val[0]), err))
-				}
-				q.Conditions = append(q.Conditions, pack.Condition{
-					Field: table.Fields().Find(field),
-					Mode:  mode,
-					Value: uint64(typ), // byte -> uint64
-					Raw:   val[0],      // debugging aid
-				})
-			case pack.FilterModeIn, pack.FilterModeNotIn:
-				// multi-key lookup
-				typs := make([]uint64, 0)
-				for _, v := range strings.Split(val[0], ",") {
-					typ, err := micheline.ParsePrimType(v)
-					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid key encoding '%s'", v), err))
+				// query hashes x bigmapids
+				keyIds := make([]uint64, 0)
+				for _, bi := range bigmapIds {
+					for _, hh := range hashes {
+						keyIds = append(keyIds, model.GetKeyId(bi, hh))
 					}
-					typs = append(typs, uint64(typ))
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find(field),
 					Mode:  mode,
-					Value: typs,
-					Raw:   val[0], // debugging aid
-				})
-			default:
-				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
-			}
-
-		case "key_type":
-			switch mode {
-			case pack.FilterModeEqual, pack.FilterModeNotEqual:
-				typ, err := micheline.ParseBigMapKeyType(val[0])
-				if err != nil {
-					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid bigmap key type '%s'", val[0]), err))
-				}
-				q.Conditions = append(q.Conditions, pack.Condition{
-					Field: table.Fields().Find(field),
-					Mode:  mode,
-					Value: uint64(typ), // byte -> uint
-					Raw:   val[0],      // debugging aid
-				})
-			case pack.FilterModeIn, pack.FilterModeNotIn:
-				typs := make([]uint64, 0)
-				for _, v := range strings.Split(val[0], ",") {
-					typ, err := micheline.ParseBigMapKeyType(v)
-					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid key type '%s'", v), err))
-					}
-					typs = append(typs, uint64(typ))
-				}
-				q.Conditions = append(q.Conditions, pack.Condition{
-					Field: table.Fields().Find(field),
-					Mode:  mode,
-					Value: typs,
-					Raw:   val[0], // debugging aid
-				})
-			default:
-				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
-			}
-
-		case "key":
-			// try to detect what the key is and convert appropriately
-			keyType := ctx.Request.URL.Query().Get("key_type")
-			switch mode {
-			case pack.FilterModeEqual, pack.FilterModeNotEqual:
-				// single-key
-				key, err := micheline.ParseBigMapKey(keyType, val[0])
-				if err != nil {
-					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid bigmap key '%s'", val[0]), err))
-				}
-				q.Conditions = append(q.Conditions, pack.Condition{
-					Field: table.Fields().Find(field),
-					Mode:  mode,
-					Value: key.Bytes(),
-					Raw:   val[0], // debugging aid
-				})
-			case pack.FilterModeIn, pack.FilterModeNotIn:
-				// multi-key lookup
-				keys := make([][]byte, 0)
-				for _, v := range strings.Split(val[0], ",") {
-					key, err := micheline.ParseBigMapKey(keyType, v)
-					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid key '%s'", v), err))
-					}
-					keys = append(keys, key.Bytes())
-				}
-				q.Conditions = append(q.Conditions, pack.Condition{
-					Field: table.Fields().Find(field),
-					Mode:  mode,
-					Value: keys,
+					Value: keyIds,
 					Raw:   val[0], // debugging aid
 				})
 			default:
@@ -749,7 +624,7 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions = append(q.Conditions, cond)
+					q.Conditions.AddAndCondition(&cond)
 				}
 			}
 		}
@@ -760,85 +635,43 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 		lastId uint64
 	)
 
-	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
-	defer func() {
-		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	}()
+	// start := time.Now()
+	// ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
+	// defer func() {
+	// 	ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
+	// }()
 
 	// Step 1: query database
 	res, err := table.Query(ctx, q)
 	if err != nil {
 		panic(EInternal(EC_DATABASE, "query failed", err))
 	}
-	ctx.Log.Tracef("Processing result with %d rows %d cols", res.Rows(), res.Cols())
+	// ctx.Log.Tracef("Processing result with %d rows %d cols", res.Rows(), res.Cols())
 	defer res.Close()
 
-	// Step 2: resolve related accounts using lookup (when requested)
-	if res.Rows() > 0 && needAccountT {
-		// get a unique copy of account id column (clip on request limit)
-		col, _ := res.Uint64Column("A")
-		find := vec.UniqueUint64Slice(col[:util.Min(len(col), int(args.Limit))])
-
-		// lookup accounts from id
-		q := pack.Query{
-			Name:   ctx.RequestID + ".bigmap_lookup",
-			Fields: accountT.Fields().Select("I", "H", "t"),
-			Conditions: pack.ConditionList{pack.Condition{
-				Field: accountT.Fields().Find("I"),
-				Mode:  pack.FilterModeIn,
-				Value: find,
-			}},
-		}
-		ctx.Log.Tracef("Looking up %d accounts", len(find))
-		type XAcc struct {
-			Id   model.AccountID   `pack:"I,pk"`
-			Hash []byte            `pack:"H"`
-			Type chain.AddressType `pack:"t"`
-		}
-		acc := &XAcc{}
-		err := accountT.Stream(ctx, q, func(r pack.Row) error {
-			if err := r.Decode(acc); err != nil {
-				return err
-			}
-			accMap[acc.Id] = chain.NewAddress(acc.Type, acc.Hash)
-			return nil
-		})
-		if err != nil {
-			// non-fatal error
-			ctx.Log.Errorf("Account lookup failed: %v", err)
-		}
-	}
-
-	// Step 3: resolve related op hashes using lookup (when requested)
+	// Step 2: resolve related op hashes using lookup (when requested)
 	if res.Rows() > 0 && needOpT {
 		// get a unique copy of account id column (clip on request limit)
 		col, _ := res.Uint64Column("O")
 		find := vec.UniqueUint64Slice(col[:util.Min(len(col), int(args.Limit))])
 
 		// lookup accounts from id
-		q := pack.Query{
-			Name:   ctx.RequestID + ".bigmap_lookup",
-			Fields: opT.Fields().Select("I", "H"),
-			Conditions: pack.ConditionList{pack.Condition{
-				Field: opT.Fields().Find("I"),
-				Mode:  pack.FilterModeIn,
-				Value: find,
-			}},
-		}
-		ctx.Log.Tracef("Looking up %d ops", len(find))
+		// ctx.Log.Tracef("Looking up %d ops", len(find))
 		type XOp struct {
-			Id   model.OpID          `pack:"I,pk"`
-			Hash chain.OperationHash `pack:"H"`
+			Id   model.OpID   `pack:"I,pk"`
+			Hash tezos.OpHash `pack:"H"`
 		}
 		op := &XOp{}
-		err := opT.Stream(ctx, q, func(r pack.Row) error {
-			if err := r.Decode(op); err != nil {
-				return err
-			}
-			opMap[op.Id] = op.Hash.Clone()
-			return nil
-		})
+		err = pack.NewQuery(ctx.RequestID+".bigmap_lookup", opT).
+			WithFields("I", "H").
+			AndIn("I", find).
+			Stream(ctx, func(r pack.Row) error {
+				if err := r.Decode(op); err != nil {
+					return err
+				}
+				opMap[op.Id] = op.Hash.Clone()
+				return nil
+			})
 		if err != nil {
 			// non-fatal error
 			ctx.Log.Errorf("Op hash lookup failed: %v", err)
@@ -850,8 +683,8 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 		verbose: args.Verbose,
 		columns: util.StringList(args.Columns),
 		params:  params,
-		addrs:   accMap,
 		ops:     opMap,
+		ctx:     ctx,
 	}
 
 	// prepare response stream
@@ -896,7 +729,7 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 		})
 		// close JSON bracket
 		io.WriteString(ctx.ResponseWriter, "]")
-		ctx.Log.Tracef("JSON encoded %d rows", count)
+		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":
 		enc := csv.NewEncoder(ctx.ResponseWriter)
@@ -921,7 +754,7 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 				return nil
 			})
 		}
-		ctx.Log.Tracef("CSV Encoded %d rows", count)
+		// ctx.Log.Tracef("CSV Encoded %d rows", count)
 	}
 
 	// without new records, cursor remains the same as input (may be empty)

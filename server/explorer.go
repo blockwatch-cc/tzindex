@@ -14,7 +14,7 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
@@ -50,17 +50,10 @@ func (e Explorer) RegisterDirectRoutes(r *mux.Router) error {
 
 func (b Explorer) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/tip", C(GetBlockchainTip)).Methods("GET")
+	r.HandleFunc("/protocols", C(GetBlockchainProtocols)).Methods("GET")
 	r.HandleFunc("/config/{height}", C(GetBlockchainConfig)).Methods("GET")
 	r.HandleFunc("/status", C(GetStatus)).Methods("GET")
 	return nil
-}
-
-// generic list request
-type ExplorerListRequest struct {
-	Limit  uint           `schema:"limit"`
-	Offset uint           `schema:"offset"`
-	Cursor uint64         `schema:"cursor"`
-	Order  pack.OrderType `schema:"order"`
 }
 
 func GetStatus(ctx *ApiContext) (interface{}, int) {
@@ -68,16 +61,15 @@ func GetStatus(ctx *ApiContext) (interface{}, int) {
 }
 
 type BlockchainTip struct {
-	Name        string             `json:"name"`
-	Network     string             `json:"network"`
-	Symbol      string             `json:"symbol"`
-	ChainId     chain.ChainIdHash  `json:"chain_id"`
-	GenesisTime time.Time          `json:"genesis_time"`
-	BestHash    chain.BlockHash    `json:"block_hash"`
-	Timestamp   time.Time          `json:"timestamp"`
-	Height      int64              `json:"height"`
-	Cycle       int64              `json:"cycle"`
-	Deployments []model.Deployment `json:"deployments"`
+	Name        string            `json:"name"`
+	Network     string            `json:"network"`
+	Symbol      string            `json:"symbol"`
+	ChainId     tezos.ChainIdHash `json:"chain_id"`
+	GenesisTime time.Time         `json:"genesis_time"`
+	BestHash    tezos.BlockHash   `json:"block_hash"`
+	Timestamp   time.Time         `json:"timestamp"`
+	Height      int64             `json:"height"`
+	Cycle       int64             `json:"cycle"`
 
 	TotalAccounts  int64 `json:"total_accounts"`
 	FundedAccounts int64 `json:"funded_accounts"`
@@ -95,8 +87,9 @@ type BlockchainTip struct {
 
 	Health int `json:"health"`
 
-	Supply *Supply           `json:"supply"`
-	Status etl.CrawlerStatus `json:"status"`
+	Deployments []model.Deployment `json:"deployments"`
+	Supply      *Supply            `json:"supply"`
+	Status      etl.CrawlerStatus  `json:"status"`
 
 	expires time.Time `json:"-"`
 }
@@ -186,7 +179,6 @@ func buildBlockchainTip(ctx *ApiContext, tip *model.ChainTip) *BlockchainTip {
 		BestHash:    tip.BestHash,
 		Timestamp:   tip.BestTime,
 		Height:      tip.BestHeight,
-		Deployments: tip.Deployments,
 
 		Cycle:          ch.Cycle,
 		TotalOps:       ch.TotalOps,
@@ -211,7 +203,8 @@ func buildBlockchainTip(ctx *ApiContext, tip *model.ChainTip) *BlockchainTip {
 			verbose: true,
 			params:  params,
 		},
-		Status: ctx.Crawler.Status(),
+		Status:      ctx.Crawler.Status(),
+		Deployments: tip.Deployments,
 
 		// expires when next block is expected
 		expires: tip.BestTime.Add(params.TimeBetweenBlocks[0]),
@@ -226,15 +219,20 @@ func annualizedPercent(a, b, days int64) float64 {
 	return diff / float64(days) * 365 / float64(b) * 100.0
 }
 
+func GetBlockchainProtocols(ctx *ApiContext) (interface{}, int) {
+	ct := ctx.Crawler.Tip()
+	return ct.Deployments, http.StatusOK
+}
+
 type BlockchainConfig struct {
 	// chain identity
 	Name        string             `json:"name"`
 	Network     string             `json:"network"`
 	Symbol      string             `json:"symbol"`
-	ChainId     chain.ChainIdHash  `json:"chain_id"`
+	ChainId     tezos.ChainIdHash  `json:"chain_id"`
 	Deployment  int                `json:"deployment"`
 	Version     int                `json:"version"`
-	Protocol    chain.ProtocolHash `json:"protocol"`
+	Protocol    tezos.ProtocolHash `json:"protocol"`
 	StartHeight int64              `json:"start_height"`
 	EndHeight   int64              `json:"end_height"`
 
@@ -401,45 +399,49 @@ func estimateHealth(ctx *ApiContext, height, history int64) int {
 		return 0
 	}
 	b := &model.Block{}
-	err = blocks.Stream(ctx.Context, pack.Query{
-		Name:  "health.blocks",
-		Order: pack.OrderDesc,
-		Limit: int(history),
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: blocks.Fields().Find("h"), // search for height (include orphans)
-			Mode:  pack.FilterModeGt,
-			Value: height - history,
-		}},
-	}, func(r pack.Row) error {
-		if err := r.Decode(b); err != nil {
-			return err
-		}
-		// skip blocks past height (may happen during sync)
-		if b.Height > height {
+	err = pack.NewQuery("health.blocks", blocks).
+		WithDesc().
+		WithLimit(int(history)).
+		AndGt("height", height-history).
+		Stream(ctx.Context, func(r pack.Row) error {
+			if err := r.Decode(b); err != nil {
+				return err
+			}
+			// skip blocks past height (may happen during sync)
+			if b.Height > height {
+				return nil
+			}
+
+			// more weight for recent blocks
+			weight := 1.0 / float64(height-b.Height+1)
+
+			// orphan penalty
+			if b.IsOrphan {
+				health -= orphanPenalty * weight
+				// log.Warnf("Health penalty %.3f due to orphan block at %d", orphanPenalty*weight, b.Height)
+				// don't proceed when orphan
+				return nil
+			}
+
+			// priority penalty
+			health -= float64(b.Priority) * missedPriorityPenalty * weight
+			// if b.Priority > 0 {
+			// 	log.Warnf("Health penalty %.3f due to %d missed priorities at block %d",
+			// 		float64(b.Priority)*missedPriorityPenalty*weight, b.Priority, b.Height)
+			// }
+
+			// endorsement penalty, don't count endorsements for the most recent block
+			if b.Height < nowheight {
+				missed := float64(params.EndorsersPerBlock - b.NSlotsEndorsed)
+				health -= missed * missedEndorsePenalty * weight
+				// if missed > 0 {
+				// 	log.Warnf("Health penalty %.3f due to %d missed endorsements at block %d",
+				// 		missed*missedEndorsePenalty*weight, int(missed), b.Height)
+				// }
+			}
+
 			return nil
-		}
-
-		// more weight for recent blocks
-		weight := 1.0 / float64(height-b.Height+1)
-
-		// orphan penalty
-		if b.IsOrphan {
-			health -= orphanPenalty * weight
-			// don't proceed when orphan
-			return nil
-		}
-
-		// priority penalty
-		health -= float64(b.Priority) * missedPriorityPenalty * weight
-
-		// endorsement penalty, don't count endorsements for the most recent block
-		if b.Height < nowheight {
-			missed := float64(params.EndorsersPerBlock - b.NSlotsEndorsed)
-			health -= missed * missedEndorsePenalty * weight
-		}
-
-		return nil
-	})
+		})
 	if err != nil {
 		log.Errorf("health: block stream: %v", err)
 	}
@@ -455,6 +457,8 @@ func estimateHealth(ctx *ApiContext, height, history int64) int {
 		if delay > t1 {
 			estprio := (delay-t1+t2/2)/t2 + 1
 			health -= float64(estprio) * missedPriorityPenalty
+			// log.Warnf("Health penalty %.3f due to %s overdue next block %d [%d]",
+			// 	float64(estprio)*missedPriorityPenalty, delay, nowheight+1, estprio)
 		}
 	}
 

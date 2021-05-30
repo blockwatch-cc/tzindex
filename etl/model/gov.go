@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 )
 
 // An Election represents a unique voting cycle which may be between 1 and 4
@@ -26,7 +26,7 @@ type Election struct {
 	ProposalId   ProposalID `pack:"P,snappy"      json:"proposal_id"`   // winning proposal id (after first vote)
 	NumPeriods   int        `pack:"n,snappy"      json:"num_periods"`   // number of periods processed (so far)
 	NumProposals int        `pack:"N,snappy"      json:"num_proposals"` // number of sumbitted proposals
-	VotingPeriod int64      `pack:"p,snappy"      json:"voting_perid"`  // protocol (proposal) voting period starting the election
+	VotingPeriod int64      `pack:"p,snappy"      json:"voting_period"` // protocol (proposal) voting period starting the election
 	StartTime    time.Time  `pack:"T,snappy"      json:"start_time"`    // proposal voting period start
 	EndTime      time.Time  `pack:"t,snappy"      json:"end_time"`      // last voting perid end, estimate when open
 	StartHeight  int64      `pack:"H,snappy"      json:"start_height"`  // proposal voting period start block
@@ -59,7 +59,7 @@ func (id ProposalID) Value() uint64 {
 
 type Proposal struct {
 	RowId        ProposalID         `pack:"I,pk,snappy"   json:"row_id"`        // unique id
-	Hash         chain.ProtocolHash `pack:"H,snappy"      json:"hash"`          // unique proposal hash
+	Hash         tezos.ProtocolHash `pack:"H,snappy"      json:"hash"`          // unique proposal hash
 	Height       int64              `pack:"h,snappy"      json:"height"`        // proposal publishing block
 	Time         time.Time          `pack:"T,snappy"      json:"time"`          // proposal publishing time
 	SourceId     AccountID          `pack:"S,snappy"      json:"source_id"`     // proposal publisher
@@ -85,35 +85,35 @@ func (p *Proposal) SetID(id uint64) {
 // or, when closed, the final result of a voting period. Votes contain the
 // cummulative aggregate state at the current block.
 type Vote struct {
-	RowId            uint64                 `pack:"I,pk,snappy" json:"row_id"`              // unique id
-	ElectionId       ElectionID             `pack:"E,snappy"    json:"election_id"`         // related election id
-	ProposalId       ProposalID             `pack:"P,snappy"    json:"proposal_id"`         // related proposal id
-	VotingPeriod     int64                  `pack:"p,snappy"    json:"voting_period"`       // on-chain sequence number
-	VotingPeriodKind chain.VotingPeriodKind `pack:"k,snappy"    json:"voting_period_kind"`  // on-chain period
-	StartTime        time.Time              `pack:"T,snappy"    json:"period_start_time"`   // start time (block time) of voting period
-	EndTime          time.Time              `pack:"t,snappy"    json:"period_end_time"`     // end time (block time), estimate when polls are open
-	StartHeight      int64                  `pack:"H,snappy"    json:"period_start_height"` // start block height of voting period
-	EndHeight        int64                  `pack:"h,snappy"    json:"period_end_height"`   // end block height
-	EligibleRolls    int64                  `pack:"r,snappy"    json:"eligible_rolls"`      // total number of rolls at start of perid
-	EligibleVoters   int64                  `pack:"v,snappy"    json:"eligible_voters"`     // total number of roll owners at start of period
-	QuorumPct        int64                  `pack:"q,snappy"    json:"quorum_pct"`          // required quorum in percent (store as integer with 2 digits)
-	QuorumRolls      int64                  `pack:"Q,snappy"    json:"quorum_rolls"`        // required quorum in rolls (0 for proposal_period)
-	TurnoutRolls     int64                  `pack:"u,snappy"    json:"turnout_rolls"`       // actual participation in rolls
-	TurnoutVoters    int64                  `pack:"U,snappy"    json:"turnout_voters"`      // actual participation in voters
-	TurnoutPct       int64                  `pack:"c,snappy"    json:"turnout_pct"`         // actual participation in percent
-	TurnoutEma       int64                  `pack:"e,snappy"    json:"turnout_ema"`         // EMA (80/20) of participation in percent
-	YayRolls         int64                  `pack:"y,snappy"    json:"yay_rolls"`
-	YayVoters        int64                  `pack:"Y,snappy"    json:"yay_voters"`
-	NayRolls         int64                  `pack:"n,snappy"    json:"nay_rolls"`
-	NayVoters        int64                  `pack:"N,snappy"    json:"nay_voters"`
-	PassRolls        int64                  `pack:"a,snappy"    json:"pass_rolls"`
-	PassVoters       int64                  `pack:"A,snappy"    json:"pass_voters"`
-	IsOpen           bool                   `pack:"o,snappy"    json:"is_open"`     // flag, polls are open (only current period)
-	IsFailed         bool                   `pack:"f,snappy"    json:"is_failed"`   // flag, failed reaching quorum or supermajority
-	IsDraw           bool                   `pack:"d,snappy"    json:"is_draw"`     // flag, draw between at least two proposals
-	NoProposal       bool                   `pack:"?,snappy"    json:"no_proposal"` // flag, no proposal submitted
-	NoQuorum         bool                   `pack:"!,snappy"    json:"no_quorum"`   // flag, quorum not reached
-	NoMajority       bool                   `pack:"m,snappy"    json:"no_majority"` // flag, supermajority not reached
+	RowId            uint64                 `pack:"I,pk,snappy"     json:"row_id"`              // unique id
+	ElectionId       ElectionID             `pack:"E,snappy"        json:"election_id"`         // related election id
+	ProposalId       ProposalID             `pack:"P,snappy"        json:"proposal_id"`         // related proposal id
+	VotingPeriod     int64                  `pack:"p,snappy"        json:"voting_period"`       // on-chain sequence number
+	VotingPeriodKind tezos.VotingPeriodKind `pack:"k,snappy"        json:"voting_period_kind"`  // on-chain period
+	StartTime        time.Time              `pack:"T,snappy"        json:"period_start_time"`   // start time (block time) of voting period
+	EndTime          time.Time              `pack:"t,snappy"        json:"period_end_time"`     // end time (block time), estimate when polls are open
+	StartHeight      int64                  `pack:"H,snappy"        json:"period_start_height"` // start block height of voting period
+	EndHeight        int64                  `pack:"h,snappy"        json:"period_end_height"`   // end block height
+	EligibleRolls    int64                  `pack:"r,snappy"        json:"eligible_rolls"`      // total number of rolls at start of perid
+	EligibleVoters   int64                  `pack:"v,snappy"        json:"eligible_voters"`     // total number of roll owners at start of period
+	QuorumPct        int64                  `pack:"q,snappy"        json:"quorum_pct"`          // required quorum in percent (store as integer with 2 digits)
+	QuorumRolls      int64                  `pack:"Q,snappy"        json:"quorum_rolls"`        // required quorum in rolls (0 for proposal_period)
+	TurnoutRolls     int64                  `pack:"u,snappy"        json:"turnout_rolls"`       // actual participation in rolls
+	TurnoutVoters    int64                  `pack:"U,snappy"        json:"turnout_voters"`      // actual participation in voters
+	TurnoutPct       int64                  `pack:"c,snappy"        json:"turnout_pct"`         // actual participation in percent
+	TurnoutEma       int64                  `pack:"e,snappy"        json:"turnout_ema"`         // EMA (80/20) of participation in percent
+	YayRolls         int64                  `pack:"y,snappy"        json:"yay_rolls"`
+	YayVoters        int64                  `pack:"Y,snappy"        json:"yay_voters"`
+	NayRolls         int64                  `pack:"n,snappy"        json:"nay_rolls"`
+	NayVoters        int64                  `pack:"N,snappy"        json:"nay_voters"`
+	PassRolls        int64                  `pack:"a,snappy"        json:"pass_rolls"`
+	PassVoters       int64                  `pack:"A,snappy"        json:"pass_voters"`
+	IsOpen           bool                   `pack:"o,snappy"        json:"is_open"`     // flag, polls are open (only current period)
+	IsFailed         bool                   `pack:"f,snappy"        json:"is_failed"`   // flag, failed reaching quorum or supermajority
+	IsDraw           bool                   `pack:"d,snappy"        json:"is_draw"`     // flag, draw between at least two proposals
+	NoProposal       bool                   `pack:"?,snappy"        json:"no_proposal"` // flag, no proposal submitted
+	NoQuorum         bool                   `pack:"!,snappy"        json:"no_quorum"`   // flag, quorum not reached
+	NoMajority       bool                   `pack:"m,snappy"        json:"no_majority"` // flag, supermajority not reached
 }
 
 // Ensure Vote implements the pack.Item interface.
@@ -136,13 +136,13 @@ type Ballot struct {
 	ElectionId       ElectionID             `pack:"E,snappy"     json:"election_id"`        // related election id
 	ProposalId       ProposalID             `pack:"P,snappy"     json:"proposal_id"`        // related proposal id
 	VotingPeriod     int64                  `pack:"p,snappy"     json:"voting_period"`      // on-chain sequence number
-	VotingPeriodKind chain.VotingPeriodKind `pack:"k,snappy"     json:"voting_period_kind"` // on-chain period
+	VotingPeriodKind tezos.VotingPeriodKind `pack:"k,snappy"     json:"voting_period_kind"` // on-chain period
 	Height           int64                  `pack:"h,snappy"     json:"height"`             // proposal/ballot operation block height
 	Time             time.Time              `pack:"T,snappy"     json:"time"`               // proposal/ballot operation block time
 	SourceId         AccountID              `pack:"S,snappy"     json:"source_id"`          // voting account
 	OpId             OpID                   `pack:"O,snappy"     json:"op_id"`              // proposal/ballot operation id
 	Rolls            int64                  `pack:"r,snappy"     json:"rolls"`              // number of rolls for voter (at beginning of voting period)
-	Ballot           chain.BallotVote       `pack:"b,snappy"     json:"ballot"`             // yay, nay, pass; proposal period uses yay only
+	Ballot           tezos.BallotVote       `pack:"b,snappy"     json:"ballot"`             // yay, nay, pass; proposal period uses yay only
 }
 
 // Ensure Ballot implements the pack.Item interface.
@@ -160,7 +160,7 @@ type Voter struct {
 	RowId     AccountID
 	Rolls     int64
 	Stake     int64
-	Ballot    chain.BallotVote
+	Ballot    tezos.BallotVote
 	HasVoted  bool
 	Time      time.Time
 	Proposals []ProposalID

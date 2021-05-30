@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -17,7 +17,7 @@ import (
 	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 )
@@ -39,7 +39,7 @@ func init() {
 	rightSourceNames = fields.NameMapReverse()
 	rightAllAliases = fields.Aliases()
 
-	// add extra transalations
+	// add extra translations
 	rightSourceNames["address"] = "A"
 	rightSourceNames["time"] = "-"
 	rightAllAliases = append(rightAllAliases, "address")
@@ -49,11 +49,11 @@ func init() {
 // configurable marshalling helper
 type Right struct {
 	model.Right
-	verbose bool            `csv:"-" pack:"-"` // cond. marshal
-	columns util.StringList `csv:"-" pack:"-"` // cond. cols & order when brief
-	params  *chain.Params   `csv:"-" pack:"-"` // blockchain amount conversion
-	height  int64           `csv:"-" pack:"-"` // best chain height
-	ctx     *ApiContext     `csv:"-" pack:"-"`
+	verbose bool            // cond. marshal
+	columns util.StringList // cond. cols & order when brief
+	params  *tezos.Params   // blockchain amount conversion
+	height  int64           // best chain height
+	ctx     *ApiContext
 }
 
 func (r *Right) MarshalJSON() ([]byte, error) {
@@ -69,7 +69,7 @@ func (r *Right) TimestampMs() int64 {
 		return r.ctx.Tip.BestTime.Add(time.Duration(diff)*r.params.TimeBetweenBlocks[0]).Unix() * 1000
 	}
 	// blocktime cache is lazy initialzed on first use by querying block table
-	return r.ctx.Indexer.BlockTimeMs(context.Background(), r.Height)
+	return r.ctx.Indexer.LookupBlockTimeMs(context.Background(), r.Height)
 }
 
 func (r *Right) Timestamp() time.Time {
@@ -77,7 +77,7 @@ func (r *Right) Timestamp() time.Time {
 		return r.ctx.Tip.BestTime.Add(time.Duration(diff) * r.params.TimeBetweenBlocks[0])
 	}
 	// blocktime cache is lazy initialzed on first use by querying block table
-	return r.ctx.Indexer.BlockTime(context.Background(), r.Height)
+	return r.ctx.Indexer.LookupBlockTime(context.Background(), r.Height)
 }
 
 func (r *Right) MarshalJSONVerbose() ([]byte, error) {
@@ -90,11 +90,13 @@ func (r *Right) MarshalJSONVerbose() ([]byte, error) {
 		Priority       int    `json:"priority"`
 		AccountId      uint64 `json:"account_id"`
 		Address        string `json:"address"`
+		IsUsed         bool   `json:"is_used"`
 		IsLost         bool   `json:"is_lost"`
 		IsStolen       bool   `json:"is_stolen"`
 		IsMissed       bool   `json:"is_missed"`
 		IsSeedRequired bool   `json:"is_seed_required"`
 		IsSeedRevealed bool   `json:"is_seed_revealed"`
+		IsBondMiss     bool   `json:"is_bond_miss"`
 	}{
 		RowId:          r.RowId,
 		Timestamp:      r.TimestampMs(),
@@ -103,12 +105,14 @@ func (r *Right) MarshalJSONVerbose() ([]byte, error) {
 		Type:           r.Type.String(),
 		Priority:       r.Priority,
 		AccountId:      r.AccountId.Value(),
-		Address:        lookupAddress(r.ctx, r.AccountId).String(),
+		Address:        r.ctx.Indexer.LookupAddress(r.ctx, r.AccountId).String(),
+		IsUsed:         r.IsUsed,
 		IsLost:         r.IsLost,
 		IsStolen:       r.IsStolen,
 		IsMissed:       r.IsMissed,
 		IsSeedRequired: r.IsSeedRequired,
 		IsSeedRevealed: r.IsSeedRevealed,
+		IsBondMiss:     r.IsBondMiss,
 	}
 	return json.Marshal(right)
 }
@@ -133,7 +137,13 @@ func (r *Right) MarshalJSONBrief() ([]byte, error) {
 		case "account_id":
 			buf = strconv.AppendUint(buf, r.AccountId.Value(), 10)
 		case "address":
-			buf = strconv.AppendQuote(buf, lookupAddress(r.ctx, r.AccountId).String())
+			buf = strconv.AppendQuote(buf, r.ctx.Indexer.LookupAddress(r.ctx, r.AccountId).String())
+		case "is_used":
+			if r.IsUsed {
+				buf = append(buf, '1')
+			} else {
+				buf = append(buf, '0')
+			}
 		case "is_lost":
 			if r.IsLost {
 				buf = append(buf, '1')
@@ -160,6 +170,12 @@ func (r *Right) MarshalJSONBrief() ([]byte, error) {
 			}
 		case "is_seed_revealed":
 			if r.IsSeedRevealed {
+				buf = append(buf, '1')
+			} else {
+				buf = append(buf, '0')
+			}
+		case "is_bond_miss":
+			if r.IsBondMiss {
 				buf = append(buf, '1')
 			} else {
 				buf = append(buf, '0')
@@ -194,7 +210,9 @@ func (r *Right) MarshalCSV() ([]string, error) {
 		case "account_id":
 			res[i] = strconv.FormatUint(r.AccountId.Value(), 10)
 		case "address":
-			res[i] = strconv.Quote(lookupAddress(r.ctx, r.AccountId).String())
+			res[i] = strconv.Quote(r.ctx.Indexer.LookupAddress(r.ctx, r.AccountId).String())
+		case "is_used":
+			res[i] = strconv.FormatBool(r.IsUsed)
 		case "is_lost":
 			res[i] = strconv.FormatBool(r.IsLost)
 		case "is_stolen":
@@ -205,6 +223,8 @@ func (r *Right) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatBool(r.IsSeedRequired)
 		case "is_seed_revealed":
 			res[i] = strconv.FormatBool(r.IsSeedRevealed)
+		case "is_bond_miss":
+			res[i] = strconv.FormatBool(r.IsBondMiss)
 		default:
 			continue
 		}
@@ -213,7 +233,7 @@ func (r *Right) MarshalCSV() ([]string, error) {
 }
 
 func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
-	// use chain params at current height
+	// fetch chain params at current height
 	params := ctx.Params
 
 	// access table
@@ -244,11 +264,10 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 
 	// build table query
 	q := pack.Query{
-		Name:       ctx.RequestID,
-		Fields:     table.Fields().Select(srcNames...),
-		Limit:      int(args.Limit),
-		Conditions: make(pack.ConditionList, 0),
-		Order:      args.Order,
+		Name:   ctx.RequestID,
+		Fields: table.Fields().Select(srcNames...),
+		Limit:  int(args.Limit),
+		Order:  args.Order,
 	}
 
 	// build dynamic filter conditions from query (will panic on error)
@@ -263,7 +282,7 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			}
 		}
 		switch prefix {
-		case "columns", "limit", "order", "verbose":
+		case "columns", "limit", "order", "verbose", "filename":
 			// skip these fields
 		case "cursor":
 			// add row id condition: id > cursor (new cursor == last row id)
@@ -275,7 +294,7 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
+			q.Conditions.AddAndCondition(&pack.Condition{
 				Field: table.Fields().Pk(),
 				Mode:  cursorMode,
 				Value: id,
@@ -302,18 +321,18 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				from, to := cond.From.(time.Time), cond.To.(time.Time)
 				var fromBlock, toBlock int64
 				if !from.After(bestTime) {
-					fromBlock = ctx.Indexer.BlockHeightFromTime(ctx.Context, from)
+					fromBlock = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, from)
 				} else {
 					nDiff := int64(from.Sub(bestTime) / params.TimeBetweenBlocks[0])
 					fromBlock = bestHeight + nDiff
 				}
 				if !to.After(bestTime) {
-					toBlock = ctx.Indexer.BlockHeightFromTime(ctx.Context, to)
+					toBlock = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, to)
 				} else {
 					nDiff := int64(to.Sub(bestTime) / params.TimeBetweenBlocks[0])
 					toBlock = bestHeight + nDiff
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("h"), // height
 					Mode:  cond.Mode,
 					From:  fromBlock,
@@ -325,13 +344,13 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				valueBlocks := make([]int64, 0)
 				for _, v := range cond.Value.([]time.Time) {
 					if !v.After(bestTime) {
-						valueBlocks = append(valueBlocks, ctx.Indexer.BlockHeightFromTime(ctx.Context, v))
+						valueBlocks = append(valueBlocks, ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, v))
 					} else {
 						nDiff := int64(v.Sub(bestTime) / params.TimeBetweenBlocks[0])
 						valueBlocks = append(valueBlocks, bestHeight+nDiff)
 					}
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("h"), // height
 					Mode:  cond.Mode,
 					Value: valueBlocks,
@@ -343,12 +362,12 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				valueTime := cond.Value.(time.Time)
 				var valueBlock int64
 				if !valueTime.After(bestTime) {
-					valueBlock = ctx.Indexer.BlockHeightFromTime(ctx.Context, valueTime)
+					valueBlock = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, valueTime)
 				} else {
 					nDiff := int64(valueTime.Sub(bestTime) / params.TimeBetweenBlocks[0])
 					valueBlock = bestHeight + nDiff
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("h"), // height
 					Mode:  cond.Mode,
 					Value: valueBlock,
@@ -357,17 +376,36 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			}
 
 		case "type":
-			// parse only the first value
-			typ := chain.ParseRightType(val[0])
-			if !typ.IsValid() {
-				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid right type '%s'", val[0]), nil))
+			switch mode {
+			case pack.FilterModeEqual, pack.FilterModeNotEqual:
+				typ := tezos.ParseRightType(val[0])
+				if !typ.IsValid() {
+					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid right type '%s'", val[0]), nil))
+				}
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find("t"),
+					Mode:  pack.FilterModeEqual,
+					Value: typ,
+					Raw:   val[0], // debugging aid
+				})
+
+			case pack.FilterModeIn, pack.FilterModeNotIn:
+				typs := make([]int, 0)
+				for _, v := range strings.Split(val[0], ",") {
+					typ := tezos.ParseRightType(v)
+					if !typ.IsValid() {
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid right type '%s'", v), nil))
+					}
+					typs = append(typs, int(typ))
+				}
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find("t"),
+					Mode:  mode,
+					Value: typs,
+					Raw:   val[0], // debugging aid
+				})
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
-				Field: table.Fields().Find("t"),
-				Mode:  pack.FilterModeEqual,
-				Value: int64(typ),
-				Raw:   val[0], // debugging aid
-			})
+
 		case "address":
 			// parse address and lookup id
 			// valid filter modes: eq, in
@@ -377,7 +415,7 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				// single-address lookup and compile condition
-				addr, err := chain.ParseAddress(val[0])
+				addr, err := tezos.ParseAddress(val[0])
 				if err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
@@ -387,7 +425,7 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				// Note: when not found we insert an always false condition
 				if acc == nil || acc.RowId == 0 {
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find("A"), // acc id
 						Mode:  mode,
 						Value: uint64(math.MaxUint64),
@@ -395,10 +433,10 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 					})
 				} else {
 					// add addr id as extra fund_flow condition
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find("A"), // acc id
 						Mode:  mode,
-						Value: acc.RowId.Value(),
+						Value: acc.RowId,
 						Raw:   val[0], // debugging aid
 					})
 				}
@@ -406,7 +444,7 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(v)
+					addr, err := tezos.ParseAddress(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
@@ -423,7 +461,7 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("A"), // acc id
 					Mode:  mode,
 					Value: ids,
@@ -453,7 +491,7 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions = append(q.Conditions, cond)
+					q.Conditions.AddAndCondition(&cond)
 				}
 			}
 		}
@@ -464,11 +502,11 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		lastId uint64
 	)
 
-	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
-	defer func() {
-		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	}()
+	// start := time.Now()
+	// ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
+	// defer func() {
+	// 	ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
+	// }()
 
 	// prepare return type marshalling
 	right := &Right{
@@ -521,7 +559,7 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		})
 		// close JSON bracket
 		io.WriteString(ctx.ResponseWriter, "]")
-		ctx.Log.Tracef("JSON encoded %d rows", count)
+		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":
 		enc := csv.NewEncoder(ctx.ResponseWriter)
@@ -546,7 +584,7 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				return nil
 			})
 		}
-		ctx.Log.Tracef("CSV Encoded %d rows", count)
+		// ctx.Log.Tracef("CSV Encoded %d rows", count)
 	}
 
 	// without new records, cursor remains the same as input (may be empty)

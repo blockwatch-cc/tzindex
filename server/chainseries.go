@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -6,15 +6,12 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strconv"
 	"time"
 
-	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
 )
 
@@ -30,18 +27,77 @@ func init() {
 	}
 	// strip row_id (first field)
 	chainSeriesNames = util.StringList(fields.Aliases()[1:])
+	chainSeriesNames.AddUnique("count")
 }
 
 // configurable marshalling helper
 type ChainSeries struct {
 	model.Chain
-	verbose bool            `csv:"-" pack:"-"` // cond. marshal
-	columns util.StringList `csv:"-" pack:"-"` // cond. cols & order when brief
-	params  *chain.Params   `csv:"-" pack:"-"` // blockchain amount conversion
+
+	columns util.StringList // cond. cols & order when brief
+	params  *tezos.Params   // blockchain amount conversion
+	verbose bool            // cond. marshal
+	null    bool
+}
+
+var _ SeriesBucket = (*ChainSeries)(nil)
+
+func (s *ChainSeries) Init(params *tezos.Params, columns []string, verbose bool) {
+	s.params = params
+	s.columns = columns
+	s.verbose = verbose
+}
+
+func (s *ChainSeries) IsEmpty() bool {
+	return s.Chain.Height == 0 || s.Chain.Timestamp.IsZero()
+}
+
+func (s *ChainSeries) Add(m SeriesModel) {
+	o := m.(*model.Chain)
+	s.Chain = *o
 }
 
 func (c *ChainSeries) Reset() {
 	c.Chain.Timestamp = time.Time{}
+	c.null = false
+}
+
+func (c *ChainSeries) Null(ts time.Time) SeriesBucket {
+	c.Reset()
+	c.Timestamp = ts
+	c.null = true
+	return c
+}
+
+func (s *ChainSeries) Zero(ts time.Time) SeriesBucket {
+	s.Reset()
+	s.Timestamp = ts
+	return s
+}
+
+func (s *ChainSeries) SetTime(ts time.Time) SeriesBucket {
+	s.Timestamp = ts
+	return s
+}
+
+func (s *ChainSeries) Time() time.Time {
+	return s.Timestamp
+}
+
+func (s *ChainSeries) Clone() SeriesBucket {
+	c := &ChainSeries{
+		Chain: s.Chain,
+	}
+	c.columns = s.columns
+	c.params = s.params
+	c.verbose = s.verbose
+	c.null = s.null
+	return c
+}
+
+func (s *ChainSeries) Interpolate(m SeriesBucket, ts time.Time) SeriesBucket {
+	// unused, sematically there is one chain table entry per block
+	return s
 }
 
 func (c *ChainSeries) MarshalJSON() ([]byte, error) {
@@ -57,6 +113,7 @@ func (c *ChainSeries) MarshalJSONVerbose() ([]byte, error) {
 		Height             int64 `json:"height"`
 		Cycle              int64 `json:"cycle"`
 		Timestamp          int64 `json:"time"`
+		Count              int   `json:"count"`
 		TotalAccounts      int64 `json:"total_accounts"`
 		TotalImplicit      int64 `json:"total_implicit"`
 		TotalManaged       int64 `json:"total_managed"`
@@ -96,6 +153,7 @@ func (c *ChainSeries) MarshalJSONVerbose() ([]byte, error) {
 		Height:             c.Height,
 		Cycle:              c.Cycle,
 		Timestamp:          util.UnixMilliNonZero(c.Timestamp),
+		Count:              1,
 		TotalAccounts:      c.TotalAccounts,
 		TotalImplicit:      c.TotalImplicit,
 		TotalManaged:       c.TotalManaged,
@@ -139,85 +197,96 @@ func (c *ChainSeries) MarshalJSONBrief() ([]byte, error) {
 	buf := make([]byte, 0, 2048)
 	buf = append(buf, '[')
 	for i, v := range c.columns {
-		switch v {
-		case "height":
-			buf = strconv.AppendInt(buf, c.Height, 10)
-		case "cycle":
-			buf = strconv.AppendInt(buf, c.Cycle, 10)
-		case "time":
-			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(c.Timestamp), 10)
-		case "total_accounts":
-			buf = strconv.AppendInt(buf, c.TotalAccounts, 10)
-		case "total_implicit":
-			buf = strconv.AppendInt(buf, c.TotalImplicit, 10)
-		case "total_managed":
-			buf = strconv.AppendInt(buf, c.TotalManaged, 10)
-		case "total_contracts":
-			buf = strconv.AppendInt(buf, c.TotalContracts, 10)
-		case "total_ops":
-			buf = strconv.AppendInt(buf, c.TotalOps, 10)
-		case "total_contract_ops":
-			buf = strconv.AppendInt(buf, c.TotalContractOps, 10)
-		case "total_activations":
-			buf = strconv.AppendInt(buf, c.TotalActivations, 10)
-		case "total_seed_nonce_revelations":
-			buf = strconv.AppendInt(buf, c.TotalSeedNonces, 10)
-		case "total_endorsements":
-			buf = strconv.AppendInt(buf, c.TotalEndorsements, 10)
-		case "total_double_baking_evidences":
-			buf = strconv.AppendInt(buf, c.TotalDoubleBake, 10)
-		case "total_double_endorsement_evidences":
-			buf = strconv.AppendInt(buf, c.TotalDoubleEndorse, 10)
-		case "total_delegations":
-			buf = strconv.AppendInt(buf, c.TotalDelegations, 10)
-		case "total_reveals":
-			buf = strconv.AppendInt(buf, c.TotalReveals, 10)
-		case "total_originations":
-			buf = strconv.AppendInt(buf, c.TotalOriginations, 10)
-		case "total_transactions":
-			buf = strconv.AppendInt(buf, c.TotalTransactions, 10)
-		case "total_proposals":
-			buf = strconv.AppendInt(buf, c.TotalProposals, 10)
-		case "total_ballots":
-			buf = strconv.AppendInt(buf, c.TotalBallots, 10)
-		case "total_storage_bytes":
-			buf = strconv.AppendInt(buf, c.TotalStorageBytes, 10)
-		case "total_paid_bytes":
-			buf = strconv.AppendInt(buf, c.TotalPaidBytes, 10)
-		case "total_used_bytes":
-			buf = strconv.AppendInt(buf, c.TotalUsedBytes, 10)
-		case "total_orphans":
-			buf = strconv.AppendInt(buf, c.TotalOrphans, 10)
-		case "funded_accounts":
-			buf = strconv.AppendInt(buf, c.FundedAccounts, 10)
-		case "unclaimed_accounts":
-			buf = strconv.AppendInt(buf, c.UnclaimedAccounts, 10)
-		case "total_delegators":
-			buf = strconv.AppendInt(buf, c.TotalDelegators, 10)
-		case "active_delegators":
-			buf = strconv.AppendInt(buf, c.ActiveDelegators, 10)
-		case "inactive_delegators":
-			buf = strconv.AppendInt(buf, c.InactiveDelegators, 10)
-		case "total_delegates":
-			buf = strconv.AppendInt(buf, c.TotalDelegates, 10)
-		case "active_delegates":
-			buf = strconv.AppendInt(buf, c.ActiveDelegates, 10)
-		case "inactive_delegates":
-			buf = strconv.AppendInt(buf, c.InactiveDelegates, 10)
-		case "zero_delegates":
-			buf = strconv.AppendInt(buf, c.ZeroDelegates, 10)
-		case "self_delegates":
-			buf = strconv.AppendInt(buf, c.SelfDelegates, 10)
-		case "single_delegates":
-			buf = strconv.AppendInt(buf, c.SingleDelegates, 10)
-		case "multi_delegates":
-			buf = strconv.AppendInt(buf, c.MultiDelegates, 10)
-		case "rolls":
-			buf = strconv.AppendInt(buf, c.Rolls, 10)
-		case "roll_owners":
-			buf = strconv.AppendInt(buf, c.RollOwners, 10)
-		default:
-			continue
+		if c.null {
+			switch v {
+			case "time":
+				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(c.Timestamp), 10)
+			default:
+				buf = append(buf, null...)
+			}
+		} else {
+			switch v {
+			case "height":
+				buf = strconv.AppendInt(buf, c.Height, 10)
+			case "cycle":
+				buf = strconv.AppendInt(buf, c.Cycle, 10)
+			case "time":
+				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(c.Timestamp), 10)
+			case "count":
+				buf = strconv.AppendInt(buf, 1, 10)
+			case "total_accounts":
+				buf = strconv.AppendInt(buf, c.TotalAccounts, 10)
+			case "total_implicit":
+				buf = strconv.AppendInt(buf, c.TotalImplicit, 10)
+			case "total_managed":
+				buf = strconv.AppendInt(buf, c.TotalManaged, 10)
+			case "total_contracts":
+				buf = strconv.AppendInt(buf, c.TotalContracts, 10)
+			case "total_ops":
+				buf = strconv.AppendInt(buf, c.TotalOps, 10)
+			case "total_contract_ops":
+				buf = strconv.AppendInt(buf, c.TotalContractOps, 10)
+			case "total_activations":
+				buf = strconv.AppendInt(buf, c.TotalActivations, 10)
+			case "total_seed_nonce_revelations":
+				buf = strconv.AppendInt(buf, c.TotalSeedNonces, 10)
+			case "total_endorsements":
+				buf = strconv.AppendInt(buf, c.TotalEndorsements, 10)
+			case "total_double_baking_evidences":
+				buf = strconv.AppendInt(buf, c.TotalDoubleBake, 10)
+			case "total_double_endorsement_evidences":
+				buf = strconv.AppendInt(buf, c.TotalDoubleEndorse, 10)
+			case "total_delegations":
+				buf = strconv.AppendInt(buf, c.TotalDelegations, 10)
+			case "total_reveals":
+				buf = strconv.AppendInt(buf, c.TotalReveals, 10)
+			case "total_originations":
+				buf = strconv.AppendInt(buf, c.TotalOriginations, 10)
+			case "total_transactions":
+				buf = strconv.AppendInt(buf, c.TotalTransactions, 10)
+			case "total_proposals":
+				buf = strconv.AppendInt(buf, c.TotalProposals, 10)
+			case "total_ballots":
+				buf = strconv.AppendInt(buf, c.TotalBallots, 10)
+			case "total_storage_bytes":
+				buf = strconv.AppendInt(buf, c.TotalStorageBytes, 10)
+			case "total_paid_bytes":
+				buf = strconv.AppendInt(buf, c.TotalPaidBytes, 10)
+			case "total_used_bytes":
+				buf = strconv.AppendInt(buf, c.TotalUsedBytes, 10)
+			case "total_orphans":
+				buf = strconv.AppendInt(buf, c.TotalOrphans, 10)
+			case "funded_accounts":
+				buf = strconv.AppendInt(buf, c.FundedAccounts, 10)
+			case "unclaimed_accounts":
+				buf = strconv.AppendInt(buf, c.UnclaimedAccounts, 10)
+			case "total_delegators":
+				buf = strconv.AppendInt(buf, c.TotalDelegators, 10)
+			case "active_delegators":
+				buf = strconv.AppendInt(buf, c.ActiveDelegators, 10)
+			case "inactive_delegators":
+				buf = strconv.AppendInt(buf, c.InactiveDelegators, 10)
+			case "total_delegates":
+				buf = strconv.AppendInt(buf, c.TotalDelegates, 10)
+			case "active_delegates":
+				buf = strconv.AppendInt(buf, c.ActiveDelegates, 10)
+			case "inactive_delegates":
+				buf = strconv.AppendInt(buf, c.InactiveDelegates, 10)
+			case "zero_delegates":
+				buf = strconv.AppendInt(buf, c.ZeroDelegates, 10)
+			case "self_delegates":
+				buf = strconv.AppendInt(buf, c.SelfDelegates, 10)
+			case "single_delegates":
+				buf = strconv.AppendInt(buf, c.SingleDelegates, 10)
+			case "multi_delegates":
+				buf = strconv.AppendInt(buf, c.MultiDelegates, 10)
+			case "rolls":
+				buf = strconv.AppendInt(buf, c.Rolls, 10)
+			case "roll_owners":
+				buf = strconv.AppendInt(buf, c.RollOwners, 10)
+			default:
+				continue
+			}
 		}
 		if i < len(c.columns)-1 {
 			buf = append(buf, ',')
@@ -230,6 +299,15 @@ func (c *ChainSeries) MarshalJSONBrief() ([]byte, error) {
 func (c *ChainSeries) MarshalCSV() ([]string, error) {
 	res := make([]string, len(c.columns))
 	for i, v := range c.columns {
+		if c.null {
+			switch v {
+			case "time":
+				res[i] = strconv.Quote(c.Timestamp.Format(time.RFC3339))
+			default:
+				continue
+			}
+
+		}
 		switch v {
 		case "height":
 			res[i] = strconv.FormatInt(c.Height, 10)
@@ -237,6 +315,8 @@ func (c *ChainSeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(c.Cycle, 10)
 		case "time":
 			res[i] = strconv.Quote(c.Timestamp.Format(time.RFC3339))
+		case "count":
+			res[i] = strconv.FormatInt(1, 10)
 		case "total_accounts":
 			res[i] = strconv.FormatInt(c.TotalAccounts, 10)
 		case "total_implicit":
@@ -314,10 +394,7 @@ func (c *ChainSeries) MarshalCSV() ([]string, error) {
 	return res, nil
 }
 
-func StreamChainSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
-	// use chain params at current height
-	params := ctx.Params
-
+func (s *ChainSeries) BuildQuery(ctx *ApiContext, args *SeriesRequest) pack.Query {
 	// access table
 	table, err := ctx.Indexer.Table(args.Series)
 	if err != nil {
@@ -334,6 +411,10 @@ func StreamChainSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) 
 	// resolve short column names
 	srcNames = make([]string, 0, len(args.Columns))
 	for _, v := range args.Columns {
+		// ignore count column
+		if v == "count" {
+			continue
+		}
 		// ignore non-series columns
 		if !chainSeriesNames.Contains(v) {
 			panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid time-series column '%s'", v), nil))
@@ -348,164 +429,8 @@ func StreamChainSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) 
 	}
 
 	// build table query, no dynamic filter conditions
-	q := pack.Query{
-		Name:   ctx.RequestID,
-		Fields: table.Fields().Select(srcNames...),
-		Order:  args.Order,
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: table.Fields().Find("T"), // time
-				Mode:  pack.FilterModeRange,
-				From:  args.From.Time(),
-				To:    args.To.Time(),
-				Raw:   args.From.String() + " - " + args.To.String(), // debugging aid
-			},
-		},
-	}
-
-	var count int
-	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Series)
-	defer func() {
-		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	}()
-
-	// prepare for source and return type marshalling
-	cs := &ChainSeries{params: params, verbose: args.Verbose, columns: args.Columns}
-	cm := &model.Chain{}
-	window := args.Collapse.Duration()
-	nextBucketTime := args.From.Add(window).Time()
-	mul := 1
-	if args.Order == pack.OrderDesc {
-		mul = 0
-	}
-
-	// prepare response stream
-	ctx.StreamResponseHeaders(http.StatusOK, mimetypes[args.Format])
-
-	switch args.Format {
-	case "json":
-		enc := json.NewEncoder(ctx.ResponseWriter)
-		enc.SetIndent("", "")
-		enc.SetEscapeHTML(false)
-
-		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
-		// close JSON array on panic
-		defer func() {
-			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
-				panic(e)
-			}
-		}()
-
-		// run query and stream results
-		var needComma bool
-
-		// stream from database, result is assumed to be in timestamp order
-		err = table.Stream(ctx, q, func(r pack.Row) error {
-			if err := r.Decode(cm); err != nil {
-				return err
-			}
-
-			// output SupplySeries when valid and time has crossed next boundary
-			if !cs.Timestamp.IsZero() && (cm.Timestamp.Before(nextBucketTime) != (mul == 1)) {
-				// output current data
-				if needComma {
-					io.WriteString(ctx.ResponseWriter, ",")
-				} else {
-					needComma = true
-				}
-				if err := enc.Encode(cs); err != nil {
-					return err
-				}
-				count++
-				if args.Limit > 0 && count == int(args.Limit) {
-					return io.EOF
-				}
-				cs.Reset()
-			}
-
-			// init next time window from data
-			if cs.Timestamp.IsZero() {
-				cs.Timestamp = cm.Timestamp.Truncate(window)
-				nextBucketTime = cs.Timestamp.Add(window * time.Duration(mul))
-			}
-
-			// keep latest data
-			cs.Chain = *cm
-			return nil
-		})
-		// don't handle error here, will be picked up by trailer
-		if err == nil {
-			// output last series element
-			if !cs.Timestamp.IsZero() {
-				if needComma {
-					io.WriteString(ctx.ResponseWriter, ",")
-				}
-				err = enc.Encode(cs)
-				if err == nil {
-					count++
-				}
-			}
-		}
-
-		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
-		ctx.Log.Tracef("JSON encoded %d rows", count)
-
-	case "csv":
-		enc := csv.NewEncoder(ctx.ResponseWriter)
-		// use custom header columns and order
-		if len(args.Columns) > 0 {
-			err = enc.EncodeHeader(args.Columns, nil)
-		}
-		if err == nil {
-			// stream from database, result order is assumed to be in timestamp order
-			err = table.Stream(ctx, q, func(r pack.Row) error {
-				if err := r.Decode(cm); err != nil {
-					return err
-				}
-
-				// output SupplySeries when valid and time has crossed next boundary
-				if !cs.Timestamp.IsZero() && (cm.Timestamp.Before(nextBucketTime) != (mul == 1)) {
-					// output accumulated data
-					if err := enc.EncodeRecord(cs); err != nil {
-						return err
-					}
-					count++
-					if args.Limit > 0 && count == int(args.Limit) {
-						return io.EOF
-					}
-					cs.Reset()
-				}
-
-				// init next time window from data
-				if cs.Timestamp.IsZero() {
-					cs.Timestamp = cm.Timestamp.Truncate(window)
-					nextBucketTime = cs.Timestamp.Add(window * time.Duration(mul))
-				}
-
-				// keep latest data
-				cs.Chain = *cm
-				return nil
-			})
-			if err == nil {
-				// output last series element
-				if !cs.Timestamp.IsZero() {
-					err = enc.EncodeRecord(cs)
-					if err == nil {
-						count++
-					}
-				}
-			}
-		}
-		ctx.Log.Tracef("CSV Encoded %d rows", count)
-	}
-
-	// write error (except EOF), cursor and count as http trailer
-	ctx.StreamTrailer("", count, err)
-
-	// streaming return
-	return nil, -1
+	return pack.NewQuery(ctx.RequestID, table).
+		WithFields(srcNames...).
+		WithOrder(args.Order).
+		AndRange("time", args.From.Time(), args.To.Time())
 }

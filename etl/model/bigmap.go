@@ -4,114 +4,122 @@
 package model
 
 import (
+	"encoding/binary"
 	"errors"
 	"sync"
 	"time"
 
+	"github.com/cespare/xxhash"
+
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/tzindex/chain"
-	"blockwatch.cc/tzindex/micheline"
+	"blockwatch.cc/tzgo/micheline"
+	"blockwatch.cc/tzgo/tezos"
 )
 
-var ENoBigMapAlloc = errors.New("bigmap item is not an allocation")
+var ENoBigmapAlloc = errors.New("bigmap item is not an allocation")
 
 var bigmapPool = &sync.Pool{
-	New: func() interface{} { return new(BigMapItem) },
+	New: func() interface{} { return new(BigmapItem) },
 }
 
-type BigMapItem struct {
-	RowId       uint64               `pack:"I,pk,snappy"   json:"row_id"`       // internal: id
-	PrevId      uint64               `pack:"P,snappy"      json:"prev_id"`      // row_id of previous value that's updated
-	AccountId   AccountID            `pack:"A,snappy"      json:"account_id"`   // account table entry for contract
-	ContractId  uint64               `pack:"C,snappy"      json:"contract_id"`  // contract table entry
-	OpId        OpID                 `pack:"O,snappy"      json:"op_id"`        // operation id that created/updated/deleted the entry
-	Height      int64                `pack:"h,snappy"      json:"height"`       // creation/update/deletion time
-	Timestamp   time.Time            `pack:"T,snappy"      json:"time"`         // creation/update/deletion height
-	BigMapId    int64                `pack:"B,snappy"      json:"bigmap_id"`    // id of the bigmap
-	Action      micheline.DiffAction `pack:"a,snappy"      json:"action"`       // action
-	KeyHash     []byte               `pack:"H"             json:"key_hash"`     // not compressedn because random
-	KeyEncoding micheline.PrimType   `pack:"e,snappy"      json:"key_encoding"` // type of the key encoding
-	KeyType     micheline.OpCode     `pack:"t,snappy"      json:"key_type"`     // type of the key encoding
-	Key         []byte               `pack:"k,snappy"      json:"key"`          // key bytes: int: big.Int, string or []byte
-	Value       []byte               `pack:"v,snappy"      json:"value"`        // value bytes: binary encoded micheline.Prim
-	IsReplaced  bool                 `pack:"r,snappy"      json:"is_replaced"`  // flag to indicate this entry has been replaced by a newer entry
-	IsDeleted   bool                 `pack:"d,snappy"      json:"is_deleted"`   // flag to indicate this key has been deleted
-	IsCopied    bool                 `pack:"c,snappy"      json:"is_copied"`    // flag to indicate this key has been copied
-	Counter     int64                `pack:"n,snappy"      json:"-"`            // running update counter
-	NKeys       int64                `pack:"z,snappy"      json:"-"`            // current number of active keys
-	Updated     int64                `pack:"u,snappy"      json:"-"`            // height at which this entry was replaced
+type BigmapItem struct {
+	RowId      uint64               `pack:"I,pk,snappy"   json:"row_id"`      // internal: id
+	KeyId      uint64               `pack:"K,snappy"      json:"key_id"`      // xxhash(BigmapId, KeyHash)
+	PrevId     uint64               `pack:"P,snappy"      json:"prev_id"`     // row_id of previous value that's updated
+	AccountId  AccountID            `pack:"A,snappy"      json:"account_id"`  // account table entry for contract
+	ContractId ContractID           `pack:"C,snappy"      json:"contract_id"` // contract table entry
+	OpId       OpID                 `pack:"O,snappy"      json:"op_id"`       // operation id that created/updated/deleted the entry
+	Height     int64                `pack:"h,snappy"      json:"height"`      // creation/update/deletion time
+	Timestamp  time.Time            `pack:"T,snappy"      json:"time"`        // creation/update/deletion height
+	BigmapId   int64                `pack:"B,snappy"      json:"bigmap_id"`   // id of the bigmap
+	Action     micheline.DiffAction `pack:"a,snappy"      json:"action"`      // action
+	Key        []byte               `pack:"k,snappy"      json:"key"`         // key bytes: int: big.Int, string or []byte
+	Value      []byte               `pack:"v,snappy"      json:"value"`       // value bytes: binary encoded micheline.Prim
+	IsReplaced bool                 `pack:"r,snappy"      json:"is_replaced"` // flag to indicate this entry has been replaced by a newer entry
+	IsDeleted  bool                 `pack:"d,snappy"      json:"is_deleted"`  // flag to indicate this key has been deleted
+	IsCopied   bool                 `pack:"c,snappy"      json:"is_copied"`   // flag to indicate this key has been copied
+	Counter    int64                `pack:"n,snappy"      json:"-"`           // running update counter
+	NKeys      int64                `pack:"z,snappy"      json:"-"`           // current number of active keys
+	Updated    int64                `pack:"u,snappy"      json:"-"`           // height at which this entry was replaced
 }
 
-// Ensure BigMapItem implements the pack.Item interface.
-var _ pack.Item = (*BigMapItem)(nil)
+// Ensure BigmapItem implements the pack.Item interface.
+var _ pack.Item = (*BigmapItem)(nil)
 
-func (m *BigMapItem) ID() uint64 {
+func (m *BigmapItem) ID() uint64 {
 	return m.RowId
 }
 
-func (m *BigMapItem) SetID(id uint64) {
+func (m *BigmapItem) SetID(id uint64) {
 	m.RowId = id
 }
 
-func AllocBigMapItem() *BigMapItem {
-	return bigmapPool.Get().(*BigMapItem)
+func AllocBigmapItem() *BigmapItem {
+	return bigmapPool.Get().(*BigmapItem)
 }
 
-func (b *BigMapItem) GetKeyAs(typ *micheline.Prim) (*micheline.BigMapKey, error) {
-	return micheline.DecodeBigMapKey(typ, b.Key)
+func GetKeyId(bigmapid int64, kh tezos.ExprHash) uint64 {
+	var buf [40]byte
+	binary.BigEndian.PutUint64(buf[:], uint64(bigmapid))
+	copy(buf[8:], kh.Hash.Hash)
+	return xxhash.Sum64(buf[:])
 }
 
-func (b *BigMapItem) GetKeyType() (*micheline.Prim, error) {
+func (b *BigmapItem) GetKey(typ micheline.Type) (micheline.Key, error) {
+	return micheline.DecodeKey(typ, b.Key)
+}
+
+func (b *BigmapItem) GetKeyHash() tezos.ExprHash {
+	switch b.Action {
+	case micheline.DiffActionAlloc, micheline.DiffActionCopy:
+		return tezos.ExprHash{}
+	}
+	return micheline.KeyHash(b.Key)
+}
+
+func (b *BigmapItem) GetKeyType() (micheline.Type, error) {
+	var typ micheline.Type
 	if b.Action != micheline.DiffActionAlloc {
-		return nil, ENoBigMapAlloc
+		return typ, ENoBigmapAlloc
 	}
-	p := &micheline.Prim{}
-	if err := p.UnmarshalBinary(b.Key); err != nil {
-		return nil, err
-	}
-	return p, nil
+	err := typ.UnmarshalBinary(b.Key)
+	return typ, err
 }
 
-func (b *BigMapItem) GetValueType() (*micheline.Prim, error) {
+func (b *BigmapItem) GetValueType() (micheline.Type, error) {
+	var typ micheline.Type
 	if b.Action != micheline.DiffActionAlloc {
-		return nil, ENoBigMapAlloc
+		return typ, ENoBigmapAlloc
 	}
-	p := &micheline.Prim{}
-	if err := p.UnmarshalBinary(b.Value); err != nil {
-		return nil, err
-	}
-	return p, nil
+	err := typ.UnmarshalBinary(b.Value)
+	return typ, err
 }
 
 // assuming BigMapDiffElem.Action is update or remove (copy & alloc are handled below)
-func NewBigMapItem(o *Op, cc *Contract, b micheline.BigMapDiffElem, keyType micheline.OpCode, prev uint64, counter, nkeys int64) *BigMapItem {
-	m := AllocBigMapItem()
+func NewBigmapItem(o *Op, cc *Contract, b micheline.BigmapDiffElem, prev uint64, counter, nkeys int64) *BigmapItem {
+	m := AllocBigmapItem()
 	m.PrevId = prev
 	m.AccountId = cc.AccountId
 	m.ContractId = cc.RowId
 	m.OpId = o.RowId
 	m.Height = o.Height
 	m.Timestamp = o.Timestamp
-	m.BigMapId = b.Id
+	m.BigmapId = b.Id
 	m.Action = b.Action
 	m.Counter = counter
 	m.NKeys = nkeys
 	m.Updated = 0
 	switch b.Action {
 	case micheline.DiffActionUpdate, micheline.DiffActionRemove:
-		m.KeyHash = b.KeyHash.Hash.Hash
-		m.KeyType = keyType
-		m.KeyEncoding = b.Encoding()
 		m.Key, _ = b.Key.MarshalBinary()
 		m.IsDeleted = b.Action == micheline.DiffActionRemove
 		if !m.IsDeleted {
 			m.Value, _ = b.Value.MarshalBinary()
 		}
+		m.KeyId = GetKeyId(b.Id, b.KeyHash)
 
 	case micheline.DiffActionAlloc:
 		m.Key, _ = b.KeyType.MarshalBinary()
-		m.KeyType = b.KeyType.OpCode
-		m.KeyEncoding = b.Encoding()
 		m.Value, _ = b.ValueType.MarshalBinary()
 
 	case micheline.DiffActionCopy:
@@ -121,18 +129,16 @@ func NewBigMapItem(o *Op, cc *Contract, b micheline.BigMapDiffElem, keyType mich
 }
 
 // assuming BigMapDiffElem.Action is alloc
-func CopyBigMapAlloc(b *BigMapItem, o *Op, cc *Contract, dst, counter, nkeys int64) *BigMapItem {
-	m := AllocBigMapItem()
+func CopyBigMapAlloc(b *BigmapItem, o *Op, cc *Contract, dst, counter, nkeys int64) *BigmapItem {
+	m := AllocBigmapItem()
 	m.PrevId = b.RowId
 	m.AccountId = cc.AccountId
 	m.ContractId = cc.RowId
 	m.OpId = o.RowId
 	m.Height = o.Height
 	m.Timestamp = o.Timestamp
-	m.BigMapId = dst
+	m.BigmapId = dst
 	m.Action = micheline.DiffActionAlloc
-	m.KeyType = b.KeyType
-	m.KeyEncoding = b.KeyEncoding
 	m.Key = make([]byte, len(b.Key))
 	copy(m.Key, b.Key)
 	m.Value = make([]byte, len(b.Value))
@@ -145,20 +151,16 @@ func CopyBigMapAlloc(b *BigMapItem, o *Op, cc *Contract, dst, counter, nkeys int
 }
 
 // assuming BigMapDiffElem.Action is copy
-func CopyBigMapValue(b *BigMapItem, o *Op, cc *Contract, dst, counter, nkeys int64) *BigMapItem {
-	m := AllocBigMapItem()
+func CopyBigMapValue(b *BigmapItem, o *Op, cc *Contract, dst, counter, nkeys int64) *BigmapItem {
+	m := AllocBigmapItem()
 	m.PrevId = b.RowId
 	m.AccountId = cc.AccountId
 	m.ContractId = cc.RowId
 	m.OpId = o.RowId
 	m.Height = o.Height
 	m.Timestamp = o.Timestamp
-	m.BigMapId = dst
+	m.BigmapId = dst
 	m.Action = micheline.DiffActionUpdate
-	m.KeyType = b.KeyType
-	m.KeyEncoding = b.KeyEncoding
-	m.KeyHash = make([]byte, len(b.KeyHash))
-	copy(m.KeyHash, b.KeyHash)
 	m.Key = make([]byte, len(b.Key))
 	copy(m.Key, b.Key)
 	m.Value = make([]byte, len(b.Value))
@@ -170,30 +172,30 @@ func CopyBigMapValue(b *BigMapItem, o *Op, cc *Contract, dst, counter, nkeys int
 	return m
 }
 
-func (m *BigMapItem) BigMapDiff() micheline.BigMapDiffElem {
-	var d micheline.BigMapDiffElem
+func (m *BigmapItem) BigmapDiff() micheline.BigmapDiffElem {
+	var d micheline.BigmapDiffElem
 	d.Action = m.Action
-	d.Id = m.BigMapId
+	d.Id = m.BigmapId
 
 	// unpack action-specific fields
 	switch m.Action {
 	case micheline.DiffActionUpdate, micheline.DiffActionRemove:
-		d.KeyHash = chain.NewExprHash(m.KeyHash)
-		d.Key = &micheline.Prim{}
+		d.KeyHash = m.GetKeyHash()
+		d.Key = micheline.Prim{}
 		_ = d.Key.UnmarshalBinary(m.Key)
 		if m.Action != micheline.DiffActionRemove {
-			d.Value = &micheline.Prim{}
+			d.Value = micheline.Prim{}
 			_ = d.Value.UnmarshalBinary(m.Value)
 		}
 
 	case micheline.DiffActionAlloc:
-		d.KeyType = &micheline.Prim{}
+		d.KeyType = micheline.Prim{}
 		_ = d.KeyType.UnmarshalBinary(m.Key) // encoded prim is stored as []byte
-		d.ValueType = &micheline.Prim{}
+		d.ValueType = micheline.Prim{}
 		_ = d.ValueType.UnmarshalBinary(m.Value)
 
 	case micheline.DiffActionCopy:
-		d.DestId = m.BigMapId
+		d.DestId = m.BigmapId
 		var z micheline.Z
 		_ = z.UnmarshalBinary(m.Value)
 		d.SourceId = z.Int64()
@@ -201,22 +203,19 @@ func (m *BigMapItem) BigMapDiff() micheline.BigMapDiffElem {
 	return d
 }
 
-func (m *BigMapItem) Free() {
+func (m *BigmapItem) Free() {
 	m.Reset()
 	bigmapPool.Put(m)
 }
 
-func (m *BigMapItem) Reset() {
+func (m *BigmapItem) Reset() {
 	m.RowId = 0
 	m.AccountId = 0
 	m.ContractId = 0
 	m.OpId = 0
 	m.Height = 0
 	m.Timestamp = time.Time{}
-	m.BigMapId = 0
-	m.KeyHash = nil
-	m.KeyType = 0
-	m.KeyEncoding = 0
+	m.BigmapId = 0
 	m.Key = nil
 	m.Value = nil
 	m.IsReplaced = false

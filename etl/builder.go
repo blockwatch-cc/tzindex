@@ -4,26 +4,25 @@
 package etl
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/packdb/vec"
+	"blockwatch.cc/tzgo/rpc"
+	"blockwatch.cc/tzgo/tezos"
 
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzindex/etl/cache"
 	"blockwatch.cc/tzindex/etl/index"
 	. "blockwatch.cc/tzindex/etl/model"
-	"blockwatch.cc/tzindex/rpc"
 )
 
 type Builder struct {
 	idx        *Indexer                // storage reference
 	accHashMap map[uint64]*Account     // hash(acc_hash) -> *Account (both known and new accounts)
 	accMap     map[AccountID]*Account  // id -> *Account (both known and new accounts)
-	dlgHashMap map[uint64]*Account     // delegates by hash
-	dlgMap     map[AccountID]*Account  // delegates by id
+	accCache   *cache.AccountCache     // cache for non-delegate accounts
+	dlgHashMap map[uint64]*Account     // bakers by hash
+	dlgMap     map[AccountID]*Account  // bakers by id
 	conMap     map[AccountID]*Contract // smart contracts by account id
 
 	// build state
@@ -36,11 +35,12 @@ type Builder struct {
 	branches  map[string]*Block
 }
 
-func NewBuilder(idx *Indexer, c *rpc.Client, validate bool) *Builder {
+func NewBuilder(idx *Indexer, cachesz int, c *rpc.Client, validate bool) *Builder {
 	return &Builder{
 		idx:        idx,
 		accHashMap: make(map[uint64]*Account),
 		accMap:     make(map[AccountID]*Account),
+		accCache:   cache.NewAccountCache(cachesz),
 		dlgMap:     make(map[AccountID]*Account),
 		dlgHashMap: make(map[uint64]*Account),
 		conMap:     make(map[AccountID]*Contract),
@@ -52,15 +52,30 @@ func NewBuilder(idx *Indexer, c *rpc.Client, validate bool) *Builder {
 	}
 }
 
-func (b *Builder) Params(height int64) *chain.Params {
+func (b *Builder) Params(height int64) *tezos.Params {
 	return b.idx.ParamsByHeight(height)
 }
 
+func (b *Builder) IsLightMode() bool {
+	return b.idx.lightMode
+}
+
+func (b *Builder) ClearCache() {
+	b.accCache.Purge()
+}
+
+func (b *Builder) CacheStats() map[string]interface{} {
+	stats := make(map[string]interface{})
+	stats["accounts"] = b.accCache.Stats()
+	return stats
+}
+
 func (b *Builder) RegisterDelegate(acc *Account, activate bool) {
-	// remove from regular account maps
-	hashkey := accountHashKey(acc)
+	// remove from cache and regular account maps
+	hashkey := b.accCache.AccountHashKey(acc)
 	delete(b.accMap, acc.RowId)
 	delete(b.accHashMap, hashkey)
+	b.accCache.Drop(acc)
 
 	// update state
 	acc.IsDelegate = true
@@ -69,7 +84,7 @@ func (b *Builder) RegisterDelegate(acc *Account, activate bool) {
 	acc.InitGracePeriod(b.block.Cycle, b.block.Params)
 	acc.IsDirty = true
 
-	isMagic := v001MagicDelegateSet.Contains(acc.Address())
+	isMagic := v001MagicDelegateFilter.Contains(acc.Address())
 
 	// only activate when explicitly requested
 	if activate || isMagic {
@@ -89,16 +104,18 @@ func (b *Builder) RegisterDelegate(acc *Account, activate bool) {
 
 // only called ofrom rollback and bug fix code
 func (b *Builder) UnregisterDelegate(acc *Account) {
+	// reset delegate state
 	acc.DelegateId = 0
 	acc.IsDelegate = false
 	acc.IsActiveDelegate = false
 	acc.DelegateSince = 0
+	acc.DelegateUntil = 0
 	acc.TotalDelegations = 0
 	acc.ActiveDelegations = 0
 	acc.GracePeriod = 0
 	acc.IsDirty = true
 	// move from delegate map to accounts
-	hashkey := accountHashKey(acc)
+	hashkey := b.accCache.AccountHashKey(acc)
 	b.accMap[acc.RowId] = acc
 	b.accHashMap[hashkey] = acc
 	delete(b.dlgMap, acc.RowId)
@@ -112,20 +129,20 @@ func (b *Builder) ActivateDelegate(acc *Account) {
 
 func (b *Builder) DeactivateDelegate(acc *Account) {
 	acc.IsActiveDelegate = false
-	// acc.DelegateUntil = b.block.Height
+	acc.DelegateUntil = b.block.Height
 	acc.IsDirty = true
 }
 
-func (b *Builder) AccountByAddress(addr chain.Address) (*Account, bool) {
-	key := addressHashKey(addr)
+func (b *Builder) AccountByAddress(addr tezos.Address) (*Account, bool) {
+	key := b.accCache.AddressHashKey(addr)
 	// lookup delegate accounts first
 	acc, ok := b.dlgHashMap[key]
-	if ok && acc.Type == addr.Type && bytes.Compare(acc.Hash, addr.Hash) == 0 {
+	if ok && acc.Type == addr.Type && acc.Hash.Equal(addr) {
 		return acc, true
 	}
 	// lookup regular accounts second
 	acc, ok = b.accHashMap[key]
-	if ok && acc.Type == addr.Type && bytes.Compare(acc.Hash, addr.Hash) == 0 {
+	if ok && acc.Type == addr.Type && acc.Hash.Equal(addr) {
 		return acc, true
 	}
 	return nil, false
@@ -142,7 +159,6 @@ func (b *Builder) AccountById(id AccountID) (*Account, bool) {
 }
 
 func (b *Builder) ContractById(id AccountID) (*Contract, bool) {
-	// lookup regular accounts second
 	con, ok := b.conMap[id]
 	return con, ok
 }
@@ -151,7 +167,6 @@ func (b *Builder) LoadContractByAccountId(ctx context.Context, id AccountID) (*C
 	if con, ok := b.conMap[id]; ok {
 		return con, nil
 	}
-	// try loading from index
 	con, err := b.idx.LookupContractId(ctx, id)
 	if err != nil {
 		return nil, err
@@ -160,7 +175,7 @@ func (b *Builder) LoadContractByAccountId(ctx context.Context, id AccountID) (*C
 	return con, nil
 }
 
-func (b *Builder) BranchByHash(h chain.BlockHash) (*Block, bool) {
+func (b *Builder) BranchByHash(h tezos.BlockHash) (*Block, bool) {
 	branch, ok := b.branches[h.String()]
 	return branch, ok
 }
@@ -177,11 +192,11 @@ func (b *Builder) Contracts() map[AccountID]*Contract {
 	return b.conMap
 }
 
-func (b *Builder) Rights(typ chain.RightType) []Right {
+func (b *Builder) Rights(typ tezos.RightType) []Right {
 	switch typ {
-	case chain.RightTypeBaking:
+	case tezos.RightTypeBaking:
 		return b.baking
-	case chain.RightTypeEndorsing:
+	case tezos.RightTypeEndorsing:
 		return b.endorsing
 	default:
 		return nil
@@ -228,19 +243,20 @@ func (b *Builder) Init(ctx context.Context, tip *ChainTip, c *rpc.Client) error 
 		return err
 	}
 
-	// to make our crawler happy, we also expose the last block on load
+	// to make our crawler happy, we also expose the last block
+	// on load, so any reports can be republished if necessary
 	b.block = b.parent
 
-	// load all registered delegates; Note: if we ever want to change this
-	// the cache strategy needs to be reworked because delegates are kept
-	// out of the cache
+	// load all registered bakers; Note: if we ever want to change this,
+	// the cache strategy needs to be reworked (because bakers are not kept
+	// in regular cache)
 	if dlgs, err := b.idx.ListAllDelegates(ctx); err != nil {
 		return err
 	} else {
-		log.Debugf("Loaded %d total delegates", len(dlgs))
+		// log.Debugf("Loaded %d total bakers", len(dlgs))
 		for _, acc := range dlgs {
 			b.dlgMap[acc.RowId] = acc
-			b.dlgHashMap[accountHashKey(acc)] = acc
+			b.dlgHashMap[b.accCache.AccountHashKey(acc)] = acc
 		}
 	}
 
@@ -279,9 +295,10 @@ func (b *Builder) Build(ctx context.Context, tz *Bundle) (*Block, error) {
 		return nil, fmt.Errorf("build stage 4: %v", err)
 	}
 
-	// 5  validity checks (expensive)
+	// 5  sanity checks
 	if b.validate {
 		if err := b.CheckState(ctx); err != nil {
+			b.DumpState()
 			return nil, fmt.Errorf("build stage 5: %v", err)
 		}
 	}
@@ -300,9 +317,16 @@ func (b *Builder) Clean() {
 		acc.IsNew = false
 		acc.WasFunded = false
 
-		// keep delegates out of cache
+		// keep bakers out of cache
 		if acc.IsDelegate && !acc.MustDelete {
 			continue
+		}
+
+		// cache funded accounts only
+		if acc.IsFunded && !acc.MustDelete {
+			b.accCache.Add(acc)
+		} else {
+			b.accCache.Drop(acc)
 		}
 	}
 
@@ -328,7 +352,7 @@ func (b *Builder) Clean() {
 
 	// clear branches (keep most recent 64 blocks only)
 	for n, v := range b.branches {
-		if v.Height < b.block.Height-64 {
+		if v.Height < b.block.Height-tezos.MaxBranchDepth {
 			v.Free()
 			delete(b.branches, n)
 		}
@@ -341,14 +365,17 @@ func (b *Builder) Clean() {
 
 // remove state on error
 func (b *Builder) Purge() {
+	// flush cash
+	b.accCache.Purge()
+
 	// clear build state
 	b.accHashMap = make(map[uint64]*Account)
 	b.accMap = make(map[AccountID]*Account)
+	b.conMap = make(map[AccountID]*Contract)
 
 	// clear delegate state
 	b.dlgHashMap = make(map[uint64]*Account)
 	b.dlgMap = make(map[AccountID]*Account)
-	b.conMap = make(map[AccountID]*Contract)
 
 	// clear branches (keep most recent 64 blocks only)
 	for _, v := range b.branches {
@@ -403,7 +430,6 @@ func (b *Builder) BuildReorg(ctx context.Context, tz *Bundle, parent *Block) (*B
 			return nil, fmt.Errorf("build stage 5: %v", err)
 		}
 	}
-
 	return b.block, nil
 }
 
@@ -417,6 +443,14 @@ func (b *Builder) CleanReorg() {
 		acc.IsDirty = false
 		acc.IsNew = false
 		acc.WasFunded = false
+
+		// keep bakers out of cache
+		if acc.IsDelegate && !acc.MustDelete {
+			continue
+		}
+
+		// add to cache, will be free'd on eviction
+		b.accCache.Add(acc)
 	}
 
 	// clear build state
@@ -457,22 +491,22 @@ func (b *Builder) CleanReorg() {
 //
 func (b *Builder) InitAccounts(ctx context.Context) error {
 	// collect unique accounts/addresses
-	addresses := make(util.StringList, 0)
+	addresses := tezos.NewAddressSet()
 
-	// guard against unknown deactivated delegates
+	// guard against unknown deactivated bakers
 	for _, v := range b.block.TZ.Block.Metadata.BalanceUpdates {
 		addr := v.Address()
 		if _, ok := b.AccountByAddress(addr); !ok && addr.IsValid() {
-			addresses.AddUnique(addr.String())
+			addresses.AddUnique(addr)
 		}
 	}
 
-	// add unknown deactivated delegates (from parent block: we're deactivating
+	// add unknown deactivated bakers (from parent block: we're deactivating
 	// AFTER a block has been fully indexed at the start of the next block)
 	if b.parent != nil {
 		for _, v := range b.parent.TZ.Block.Metadata.Deactivated {
 			if _, ok := b.AccountByAddress(v); !ok {
-				addresses.AddUnique(v.String())
+				addresses.AddUnique(v)
 			}
 		}
 	}
@@ -484,7 +518,7 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 			// init branches
 			br := oh.Branch.String()
 			if _, ok := b.branches[br]; !ok {
-				branch, err := b.idx.BlockByHash(ctx, oh.Branch, b.block.Height-chain.MaxBranchDepth, b.block.Height)
+				branch, err := b.idx.BlockByHash(ctx, oh.Branch, b.block.Height-tezos.MaxBranchDepth, b.block.Height)
 				if err != nil {
 					return fmt.Errorf("op [%d:%d]: invalid branch %s: %v", oh.Branch, err)
 				}
@@ -493,88 +527,91 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 			// parse operations
 			for op_c, op := range oh.Contents {
 				switch kind := op.OpKind(); kind {
-				case chain.OpTypeActivateAccount:
+				case tezos.OpTypeActivateAccount:
 					// need to search for blinded key
+					// account may already be activated and this is a second claim
+					// don't look for and allocate new account, this happens in
+					// op processing
 					aop := op.(*rpc.AccountActivationOp)
-					bkey, err := chain.BlindAddress(aop.Pkh, aop.Secret)
+					bkey, err := tezos.BlindAddress(aop.Pkh, aop.Secret)
 					if err != nil {
 						return fmt.Errorf("activation op [%d:%d]: blinded address creation failed: %v",
 							op_n, op_c, err)
 					}
-					addresses.AddUnique(bkey.String())
+					addresses.AddUnique(bkey)
 
-				case chain.OpTypeBallot:
-					// deactivated delegates can still cast votes
+				case tezos.OpTypeBallot:
+					// deactivated bakers can still cast votes
 					addr := op.(*rpc.BallotOp).Source
 					if _, ok := b.AccountByAddress(addr); !ok {
-						addresses.AddUnique(addr.String())
+						addresses.AddUnique(addr)
 					}
 
-				case chain.OpTypeDelegation:
+				case tezos.OpTypeDelegation:
 					del := op.(*rpc.DelegationOp)
-					addresses.AddUnique(del.Source.String())
+					addresses.AddUnique(del.Source)
 
-					// deactive delegates may not be in map
+					// deactive bakers may not be in map
 					if del.Delegate.IsValid() {
 						if _, ok := b.AccountByAddress(del.Delegate); !ok {
-							addresses.AddUnique(del.Delegate.String())
+							addresses.AddUnique(del.Delegate)
 						}
 					}
 
-				case chain.OpTypeDoubleBakingEvidence:
+				case tezos.OpTypeDoubleBakingEvidence:
 					// empty
 
-				case chain.OpTypeDoubleEndorsementEvidence:
+				case tezos.OpTypeDoubleEndorsementEvidence:
 					// empty
 
-				case chain.OpTypeEndorsement:
-					// deactive delegates may not be in map
+				case tezos.OpTypeEndorsement:
+					// deactive bakers may not be in map
 					end := op.(*rpc.EndorsementOp)
 					if _, ok := b.AccountByAddress(end.Metadata.Address()); !ok {
-						addresses.AddUnique(end.Metadata.Address().String())
+						addresses.AddUnique(end.Metadata.Address())
 					}
 
-				case chain.OpTypeOrigination:
+				case tezos.OpTypeOrigination:
 					orig := op.(*rpc.OriginationOp)
-					addresses.AddUnique(orig.Source.String())
+					addresses.AddUnique(orig.Source)
 					if m := orig.Manager(); m.IsValid() {
-						addresses.AddUnique(m.String())
+						addresses.AddUnique(m)
 					}
 					for _, v := range orig.Metadata.Result.OriginatedContracts {
-						addresses.AddUnique(v.String())
+						addresses.AddUnique(v)
 					}
 					if orig.Delegate != nil {
 						if _, ok := b.AccountByAddress(*orig.Delegate); !ok {
-							addresses.AddUnique(orig.Delegate.String())
+							addresses.AddUnique(*orig.Delegate)
 						}
 					}
 
-				case chain.OpTypeProposals:
-					// deactivated delegates can still send proposals
+				case tezos.OpTypeProposals:
+					// deactivated bakers can still send proposals
 					addr := op.(*rpc.ProposalsOp).Source
 					if _, ok := b.AccountByAddress(addr); !ok {
-						addresses.AddUnique(addr.String())
+						addresses.AddUnique(addr)
 					}
 
-				case chain.OpTypeReveal:
-					addresses.AddUnique(op.(*rpc.RevelationOp).Source.String())
+				case tezos.OpTypeReveal:
+					addresses.AddUnique(op.(*rpc.RevelationOp).Source)
 
-				case chain.OpTypeSeedNonceRevelation:
+				case tezos.OpTypeSeedNonceRevelation:
 					// not necessary because this is done by the baker
 
-				case chain.OpTypeTransaction:
+				case tezos.OpTypeTransaction:
 					tx := op.(*rpc.TransactionOp)
-					addresses.AddUnique(tx.Source.String())
-					addresses.AddUnique(tx.Destination.String())
+					addresses.AddUnique(tx.Source)
+					addresses.AddUnique(tx.Destination)
 					for _, res := range tx.Metadata.InternalResults {
 						if res.Destination != nil {
-							addresses.AddUnique(res.Destination.String())
+							addresses.AddUnique(*res.Destination)
 						}
 						if res.Delegate != nil {
-							addresses.AddUnique(res.Delegate.String())
+							addresses.AddUnique(*res.Delegate)
 						}
 						for _, v := range res.Result.OriginatedContracts {
-							addresses.AddUnique(v.String())
+							addresses.AddUnique(v)
 						}
 					}
 				}
@@ -583,7 +620,7 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 		}
 	}
 
-	// collect unknown/unloaded delegates for lookup or creation
+	// collect unknown/unloaded bakers for lookup or creation
 	unknownDelegateIds := make([]uint64, 0)
 
 	// fetch baking and endorsing rights for this block
@@ -592,48 +629,24 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		q := pack.Query{
-			Name:   "etl.rights.search",
-			Fields: table.Fields(),
-			Conditions: pack.ConditionList{
-				pack.Condition{
-					Field: table.Fields().Find("h"), // height
-					Mode:  pack.FilterModeEqual,
-					Value: b.block.Height,
-				},
-				pack.Condition{
-					Field: table.Fields().Find("t"), // type
-					Mode:  pack.FilterModeEqual,
-					Value: int64(chain.RightTypeBaking),
-				},
-			},
-		}
-		right := Right{}
-		err = table.Stream(ctx, q, func(r pack.Row) error {
-			if err := r.Decode(&right); err != nil {
-				return err
-			}
-			b.baking = append(b.baking, right)
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-		// endorsements are for block-1
-		q.Conditions[0].Value = b.block.Height - 1
-		q.Conditions[1].Value = int64(chain.RightTypeEndorsing)
-		err = table.Stream(ctx, q, func(r pack.Row) error {
-			if err := r.Decode(&right); err != nil {
-				return err
-			}
-			b.endorsing = append(b.endorsing, right)
-			return nil
-		})
+		err = pack.NewQuery("etl.rights.search", table).
+			AndEqual("height", b.block.Height).
+			AndEqual("type", tezos.RightTypeBaking).
+			Execute(ctx, &b.baking)
 		if err != nil {
 			return err
 		}
 
-		// collect from rights: on genesis and when deactivated, delegates are not in map
+		// endorsements are for block-1
+		err = pack.NewQuery("etl.rights.search", table).
+			AndEqual("height", b.block.Height-1).
+			AndEqual("type", tezos.RightTypeEndorsing).
+			Execute(ctx, &b.endorsing)
+		if err != nil {
+			return err
+		}
+
+		// collect from rights: on genesis and when deactivated, bakers are not in map
 		for _, r := range b.baking {
 			if _, ok := b.AccountById(r.AccountId); !ok {
 				unknownDelegateIds = append(unknownDelegateIds, r.AccountId.Value())
@@ -648,13 +661,15 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 
 	// collect from future cycle rights when available
 	for _, r := range b.block.TZ.Baking {
-		if _, ok := b.AccountByAddress(r.Delegate); !ok {
-			addresses.AddUnique(r.Delegate.String())
+		a := r.Address()
+		if _, ok := b.AccountByAddress(a); !ok {
+			addresses.AddUnique(a)
 		}
 	}
 	for _, r := range b.block.TZ.Endorsing {
-		if _, ok := b.AccountByAddress(r.Delegate); !ok {
-			addresses.AddUnique(r.Delegate.String())
+		a := r.Address()
+		if _, ok := b.AccountByAddress(a); !ok {
+			addresses.AddUnique(a)
 		}
 	}
 
@@ -662,46 +677,58 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 	if b.parent != nil {
 		parentProtocol := b.parent.TZ.Block.Metadata.Protocol
 		blockProtocol := b.block.TZ.Block.Metadata.Protocol
-		if !parentProtocol.IsEqual(blockProtocol) {
+		if !parentProtocol.Equal(blockProtocol) {
 			for n, _ := range b.block.Params.Invoices {
-				addresses.AddUnique(n)
+				if a, err := tezos.ParseAddress(n); err == nil {
+					addresses.AddUnique(a)
+				}
 			}
 		}
 	}
 
-	// delegation to inactive delegates is not explicitly forbidden, so
+	// delegation to inactive bakers is not explicitly forbidden, so
 	// we have to check if any inactive (or deactivated) delegate is still
 	// referenced
 
 	// search cached accounts and build map
-	hashes := make([][]byte, 0)
-	for _, v := range addresses {
-		if len(v) == 0 {
+	lookup := make([][]byte, 0)
+	for _, v := range addresses.Map() {
+		if !v.IsValid() {
 			continue
-		}
-		addr, err := chain.ParseAddress(v)
-		if err != nil {
-			return fmt.Errorf("addr decode for '%s' failed: %v", v, err)
 		}
 
-		// skip delegates
-		hashKey := addressHashKey(addr)
-		if _, ok := b.dlgHashMap[hashKey]; ok {
-			continue
-		}
-		// skip duplicate addresses
-		if _, ok := b.accHashMap[hashKey]; ok {
-			continue
-		}
-		// create tentative new account and schedule for lookup
-		acc := NewAccount(addr)
-		acc.FirstSeen = b.block.Height
-		acc.LastSeen = b.block.Height
-		hashes = append(hashes, addr.Hash)
+		// lookup in cache first
+		hashKey, acc, ok := b.accCache.GetAddress(v)
+		if ok {
+			b.accHashMap[hashKey] = acc
+			b.accMap[acc.RowId] = acc
 
-		// store in map, will be overwritten when resolved from db
-		// or kept as new address when this is the first time we see it
-		b.accHashMap[hashKey] = acc
+			// collect unknown bakers when referenced
+			if acc.DelegateId > 0 {
+				if _, ok := b.AccountById(acc.DelegateId); !ok {
+					unknownDelegateIds = append(unknownDelegateIds, acc.DelegateId.Value())
+				}
+			}
+
+		} else {
+			// skip bakers
+			if _, ok := b.dlgHashMap[hashKey]; ok {
+				continue
+			}
+			// skip duplicate addresses
+			if _, ok := b.accHashMap[hashKey]; ok {
+				continue
+			}
+
+			// when not found, create a new account and schedule for lookup
+			acc = NewAccount(v)
+			acc.FirstSeen = b.block.Height
+			acc.LastSeen = b.block.Height
+			lookup = append(lookup, v.Bytes22())
+			// store in map, will be overwritten when resolved from db
+			// or kept as new address when this is the first time we see it
+			b.accHashMap[hashKey] = acc
+		}
 	}
 
 	// lookup addr by hashes (non-existent addrs are expected to not resolve)
@@ -709,63 +736,47 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if len(hashes) > 0 {
-		q := pack.Query{
-			Name:   "etl.addr_hash.search",
-			Fields: table.Fields(),
-			Conditions: pack.ConditionList{pack.Condition{
-				Field: table.Fields().Find("H"),
-				Mode:  pack.FilterModeIn,
-				Value: hashes,
-			}},
-		}
-		err = table.Stream(ctx, q, func(r pack.Row) error {
-			acc := AllocAccount()
-			if err := r.Decode(acc); err != nil {
-				return err
-			}
+	if len(lookup) > 0 {
+		err = pack.NewQuery("etl.addr_hash.search", table).
+			AndIn("address", lookup).
+			Stream(ctx, func(r pack.Row) error {
+				acc := AllocAccount()
+				if err := r.Decode(acc); err != nil {
+					return err
+				}
 
-			// skip delegates (should have not been looked up in the first place)
-			if acc.IsDelegate {
-				acc.Free()
+				// skip bakers (should have not been looked up in the first place)
+				if acc.IsDelegate {
+					acc.Free()
+					return nil
+				}
+
+				// collect unknown bakers when referenced
+				if acc.DelegateId > 0 {
+					if _, ok := b.AccountById(acc.DelegateId); !ok {
+						unknownDelegateIds = append(unknownDelegateIds, acc.DelegateId.Value())
+					}
+				}
+
+				hashKey := b.accCache.AccountHashKey(acc)
+
+				// return temp addrs to pool (Note: don't free addrs loaded from cache!)
+				if tmp, ok := b.accHashMap[hashKey]; ok && tmp.RowId == 0 {
+					tmp.Free()
+				}
+				// this overwrites temp address in map
+				b.accHashMap[hashKey] = acc
+				b.accMap[acc.RowId] = acc
+
 				return nil
-			}
-
-			// collect unknown delegates when referenced
-			if acc.DelegateId > 0 && acc.DelegateId != acc.RowId {
-				if _, ok := b.AccountById(acc.DelegateId); !ok {
-					unknownDelegateIds = append(unknownDelegateIds, acc.DelegateId.Value())
-				}
-			}
-
-			hashKey := accountHashKey(acc)
-
-			// sanity check for hash collisions (unlikely when we use type+hash)
-			if a, ok := b.accHashMap[hashKey]; ok {
-				if bytes.Compare(a.Hash, acc.Hash) != 0 {
-					return fmt.Errorf("Hash collision: account %s (%d) h=%x and %s (%d) h=%x have same hash %d",
-						a, a.RowId, a.Hash, acc, acc.RowId, acc.Hash, hashKey)
-				}
-			}
-
-			// return temp addrs to pool (Note: don't free addrs loaded from cache!)
-			if tmp, ok := b.accHashMap[hashKey]; ok && tmp.RowId == 0 {
-				tmp.Free()
-			}
-			// this overwrites temp address in map
-			b.accHashMap[hashKey] = acc
-			b.accMap[acc.RowId] = acc
-
-			return nil
-		})
+			})
 		if err != nil {
 			return err
 		}
 	}
 
-	// lookup inactive delegates
+	// lookup inactive bakers
 	if len(unknownDelegateIds) > 0 {
-		unknownDelegateIds = vec.UniqueUint64Slice(unknownDelegateIds)
 		err := table.StreamLookup(ctx, unknownDelegateIds, func(r pack.Row) error {
 			acc := AllocAccount()
 			if err := r.Decode(acc); err != nil {
@@ -777,8 +788,9 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 				acc.Free()
 				return nil
 			}
+			// log.Warnf("Found unregistered baker %d %s", acc.RowId, acc)
 			// handle like a regular account, overwrite account map
-			hashKey := accountHashKey(acc)
+			hashKey := b.accCache.AccountHashKey(acc)
 			b.accHashMap[hashKey] = acc
 			b.accMap[acc.RowId] = acc
 			return nil
@@ -789,14 +801,18 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 	}
 
 	// collect new addrs and bulk insert to generate ids
-	// Note: due to random map walk in Go, address id allocation will be
-	//       non-deterministic, also deletion of addresses on reorgs makes
-	//       it non-deterministic, so we assume this is OK here; however
-	//       address id's are not interchangable between two versions of the
-	//       accounts table. Keep this in mind for downstream use!
+	// Note: due to random map walk in Go, address id allocation is non-deterministic,
+	//       since address deletion on reorgs is also non-deterministic, we don't give
+	//       any guarantee about row_ids. In fact, they may even differ between
+	//       multiple instances of the indexer who saw different reorgs.
+	//       Keep this in mind for downstream use of ids and databases!
 	newacc := make([]pack.Item, 0)
 	for _, v := range b.accHashMap {
 		if v.IsNew {
+			if v.RowId > 0 {
+				log.Warnf("Existing account %d %s with NEW flag", v.RowId, v)
+				continue
+			}
 			newacc = append(newacc, v)
 		}
 	}
@@ -820,7 +836,7 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 	// handle upgrades and end of cycle events right before processing the next block
 	if b.parent != nil {
-		// first step: handle deactivated delegates from parent block
+		// first step: handle deactivated bakers from parent block
 		// this is idempotent
 		if b.block.Params.IsCycleStart(b.block.Height) && b.block.Height > 0 {
 			// deactivate based on grace period
@@ -849,6 +865,7 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 						log.Warnf("Delegate %s forcefully deactivated with grace period %d at cycle %d",
 							acc, acc.GracePeriod, b.block.Cycle-1)
 						b.DeactivateDelegate(acc)
+						// return fmt.Errorf("deactivate: found non-deactivated delegate %s", v)
 					}
 				}
 			}
@@ -857,7 +874,7 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 		// check for new protocol
 		parentProtocol := b.parent.TZ.Block.Metadata.Protocol
 		blockProtocol := b.block.TZ.Block.Metadata.Protocol
-		if !parentProtocol.IsEqual(blockProtocol) {
+		if !parentProtocol.Equal(blockProtocol) {
 			if !rollback {
 				// register new protocol (will save as new deployment)
 				log.Infof("New protocol %s detected at %d", blockProtocol, b.block.Height)
@@ -880,7 +897,7 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 
 			// fix bugs by updating state
 			if !rollback {
-				err := b.FixUpgradeBugs(ctx, prevparams, nextparams)
+				err := b.MigrateProtocol(ctx, prevparams, nextparams)
 				if err != nil {
 					return err
 				}
@@ -911,8 +928,8 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 		b.block.Baker = baker
 		b.block.BakerId = baker.RowId
 
-		// // update baker software version from block nonce
-		// baker.SetVersion(b.block.Nonce)
+		// update baker software version from block nonce
+		baker.SetVersion(b.block.Nonce)
 
 		// handle grace period
 		if baker.IsActiveDelegate {
@@ -920,7 +937,7 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 		} else {
 			// reset after inactivity
 			baker.IsActiveDelegate = true
-			// baker.DelegateUntil = 0
+			baker.DelegateUntil = 0
 			baker.InitGracePeriod(b.block.Cycle, b.block.Params)
 		}
 		if !rollback {
@@ -986,47 +1003,47 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 		for op_p, oh := range ol {
 			for op_c, o := range oh.Contents {
 				switch kind := o.OpKind(); kind {
-				case chain.OpTypeActivateAccount:
+				case tezos.OpTypeActivateAccount:
 					if err := b.AppendActivationOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
-				case chain.OpTypeBallot:
+				case tezos.OpTypeBallot:
 					if err := b.AppendBallotOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
-				case chain.OpTypeDelegation:
+				case tezos.OpTypeDelegation:
 					if err := b.AppendDelegationOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
-				case chain.OpTypeDoubleBakingEvidence:
+				case tezos.OpTypeDoubleBakingEvidence:
 					if err := b.AppendDoubleBakingOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
-				case chain.OpTypeDoubleEndorsementEvidence:
+				case tezos.OpTypeDoubleEndorsementEvidence:
 					if err := b.AppendDoubleEndorsingOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
-				case chain.OpTypeEndorsement:
+				case tezos.OpTypeEndorsement:
 					if err := b.AppendEndorsementOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
-				case chain.OpTypeOrigination:
+				case tezos.OpTypeOrigination:
 					if err := b.AppendOriginationOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
-				case chain.OpTypeProposals:
+				case tezos.OpTypeProposals:
 					if err := b.AppendProposalsOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
-				case chain.OpTypeReveal:
+				case tezos.OpTypeReveal:
 					if err := b.AppendRevealOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
-				case chain.OpTypeSeedNonceRevelation:
+				case tezos.OpTypeSeedNonceRevelation:
 					if err := b.AppendSeedNonceOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
-				case chain.OpTypeTransaction:
+				case tezos.OpTypeTransaction:
 					if err := b.AppendTransactionOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
 						return err
 					}
@@ -1041,7 +1058,7 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 func (b *Builder) ApplyInvoices(ctx context.Context) error {
 	var count int
 	for n, v := range b.block.Params.Invoices {
-		addr, err := chain.ParseAddress(n)
+		addr, err := tezos.ParseAddress(n)
 		if err != nil {
 			return fmt.Errorf("decoding invoice address %s: %v", n, err)
 		}
@@ -1055,7 +1072,7 @@ func (b *Builder) ApplyInvoices(ctx context.Context) error {
 		if err := b.AppendInvoiceOp(ctx, acc, v, count); err != nil {
 			return err
 		}
-		log.Debugf("invoice: %s %f", acc, b.block.Params.ConvertValue(v))
+		// log.Debugf("invoice: %s %f", acc, b.block.Params.ConvertValue(v))
 		count++
 	}
 	return nil
@@ -1064,7 +1081,7 @@ func (b *Builder) ApplyInvoices(ctx context.Context) error {
 func (b *Builder) RollbackInvoices(ctx context.Context) error {
 	var count int
 	for n, v := range b.block.Params.Invoices {
-		addr, err := chain.ParseAddress(n)
+		addr, err := tezos.ParseAddress(n)
 		if err != nil {
 			return fmt.Errorf("decoding invoice address %s: %v", n, err)
 		}
@@ -1131,18 +1148,24 @@ func (b *Builder) UpdateStats(ctx context.Context) error {
 		if acc.IsNew || acc.LastSeen != b.block.Height {
 			continue
 		}
-		// skip undelegated accounts and self-delegates
+		// skip undelegated accounts and self-bakers
 		if !acc.IsDelegated || acc.DelegateId == acc.RowId {
 			continue
 		}
-		dlg, _ := b.AccountById(acc.DelegateId)
-		dlg.IsDirty = true
+		dlg, ok := b.AccountById(acc.DelegateId)
+		if !ok {
+			// in rare circumstances an account has an invalid delegate set
+			log.Errorf("Missing delegate %d for account %s", acc.DelegateId, acc)
+			continue
+		}
 		if !acc.IsFunded && acc.WasFunded {
 			// remove active delegation
 			dlg.ActiveDelegations--
+			dlg.IsDirty = true
 		} else if acc.IsFunded && !acc.WasFunded {
 			// re-add active delegation
 			dlg.ActiveDelegations++
+			dlg.IsDirty = true
 		}
 	}
 
@@ -1161,12 +1184,12 @@ func (b *Builder) UpdateStats(ctx context.Context) error {
 		}
 
 		for _, op := range b.block.Ops {
-			if op.Type != chain.OpTypeEndorsement {
+			if op.Type != tezos.OpTypeEndorsement {
 				continue
 			}
 			o, _ := b.block.GetRpcOp(op.OpL, op.OpP, op.OpC)
 			eop := o.(*rpc.EndorsementOp)
-			acc, _ := b.AccountByAddress(eop.Metadata.Delegate)
+			acc, _ := b.AccountByAddress(eop.Metadata.Address())
 			num, _ := erights[acc.RowId]
 			erights[acc.RowId] = num - len(eop.Metadata.Slots)
 		}
@@ -1242,14 +1265,15 @@ func (b *Builder) RollbackStats(ctx context.Context) error {
 		}
 		if acc.IsDelegated && acc.DelegateId != acc.RowId {
 			dlg, _ := b.AccountById(acc.DelegateId)
-			dlg.IsDirty = true
 			if !acc.IsFunded && acc.WasFunded {
 				// remove active delegation
 				dlg.ActiveDelegations--
+				dlg.IsDirty = true
 			}
 			if acc.IsFunded && !acc.WasFunded {
 				// re-add active delegation
 				dlg.ActiveDelegations++
+				dlg.IsDirty = true
 			}
 		}
 	}

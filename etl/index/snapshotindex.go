@@ -16,7 +16,7 @@ import (
 
 const (
 	SnapshotPackSizeLog2    = 15 // =32k packs ~ 3M unpacked
-	SnapshotJournalSizeLog2 = 17 // =128k entries for busy blockchains
+	SnapshotJournalSizeLog2 = 16 // =64k entries for busy blockchains
 	SnapshotCacheSize       = 2  // minimum
 	SnapshotFillLevel       = 100
 	SnapshotIndexKey        = "snapshot"
@@ -130,7 +130,10 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *Block, builde
 	}
 
 	// first snapshot (0 based) is block 255 (0 based index) in a cycle
-	// for governance, snapshot 15 (at end of cycle == start of voting period is used)
+	// snapshot 15 is without unfrozen rewards from end-of-cycle block
+	// for governance we use snapshot 15 (at end of cycle == start of voting period)
+	// but adjust for unfrozen rewards because technically the voting snapshot
+	// happens after unfreeze
 	sn := ((block.Height - block.Params.BlocksPerRollSnapshot) % block.Params.BlocksPerCycle) / block.Params.BlocksPerRollSnapshot
 	isCycleEnd := block.Params.IsCycleEnd(block.Height)
 
@@ -140,19 +143,12 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *Block, builde
 		return err
 	}
 
-	// snapshot all active delegates with at least 1 roll
-	q := pack.Query{
-		Name:    "snapshot.accounts",
-		NoCache: true,
-		Fields:  table.Fields().Select("I", "D", "d", "v", "s", "z", "Y", "~", "a", "*", "P"),
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: table.Fields().Find("v"), // is active delegate
-				Mode:  pack.FilterModeEqual,
-				Value: true,
-			},
-		},
-	}
+	// snapshot all active delegates with at least 1 roll (deactivation happens at
+	// start of the next cycle, so here bakers are still active)
+	q := pack.NewQuery("snapshot_bakers", table).
+		WithoutCache().
+		WithFields("I", "D", "d", "v", "s", "z", "Y", "~", "a", "*", "P").
+		AndEqual("is_active_delegate", true)
 	type XAccount struct {
 		Id                AccountID `pack:"I"`
 		DelegateId        AccountID `pack:"D"`
@@ -163,16 +159,16 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *Block, builde
 		FrozenFees        int64     `pack:"Y"`
 		DelegatedBalance  int64     `pack:"~"`
 		ActiveDelegations int64     `pack:"a"`
-		DelegatedSince    int64     `pack:"+"`
 		DelegateSince     int64     `pack:"*"`
 		GracePeriod       int64     `pack:"P"`
-		UnclaimedBalance  int64     `pack:"U"`
-		IsVesting         bool      `pack:"V"`
+		// used for second query only
+		DelegatedSince   int64 `pack:"+"`
+		UnclaimedBalance int64 `pack:"U"`
 	}
 	a := &XAccount{}
 	rollOwners := make([]uint64, 0, block.Chain.RollOwners)
 	ins := make([]pack.Item, 0, int(block.Chain.FundedAccounts)) // hint
-	err = table.Stream(ctx, q, func(r pack.Row) error {
+	err = q.Stream(ctx, func(r pack.Row) error {
 		if err := r.Decode(a); err != nil {
 			return err
 		}
@@ -238,51 +234,36 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *Block, builde
 
 	// snapshot all delegating accounts with non-zero balance that reference one of the
 	// roll owners
-	q = pack.Query{
-		Name:    "snapshot.accounts",
-		NoCache: true,
-		Fields:  table.Fields().Select("I", "D", "s", "+", "U", "V"),
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: table.Fields().Find("f"), // is funded
-				Mode:  pack.FilterModeEqual,
-				Value: true,
-			},
-			pack.Condition{
-				Field: table.Fields().Find("D"), // delegates to a roll owner
-				Mode:  pack.FilterModeIn,
-				Value: rollOwners,
-			},
-		},
-	}
-	err = table.Stream(ctx, q, func(r pack.Row) error {
-		if err := r.Decode(a); err != nil {
-			return err
-		}
-		// skip all self-delegations because the're already handled above
-		if a.Id == a.DelegateId {
+	err = pack.NewQuery("snapshot_delegators", table).
+		WithoutCache().
+		WithFields("I", "D", "s", "+", "U").
+		AndEqual("is_funded", true).
+		AndIn("delegate_id", rollOwners).
+		Stream(ctx, func(r pack.Row) error {
+			if err := r.Decode(a); err != nil {
+				return err
+			}
+			// skip all self-delegations because the're already handled above
+			if a.Id == a.DelegateId {
+				return nil
+			}
+			snap := NewSnapshot()
+			snap.Height = block.Height
+			snap.Cycle = block.Cycle
+			snap.Timestamp = block.Timestamp
+			snap.Index = sn
+			snap.Rolls = 0
+			snap.AccountId = a.Id
+			snap.DelegateId = a.DelegateId
+			snap.IsDelegate = false
+			snap.IsActive = false
+			snap.Balance = a.SpendableBalance
+			snap.Delegated = 0
+			snap.NDelegations = 0
+			snap.Since = a.DelegatedSince
+			ins = append(ins, snap)
 			return nil
-		}
-		snap := NewSnapshot()
-		snap.Height = block.Height
-		snap.Cycle = block.Cycle
-		snap.Timestamp = block.Timestamp
-		snap.Index = sn
-		snap.Rolls = 0
-		snap.AccountId = a.Id
-		snap.DelegateId = a.DelegateId
-		snap.IsDelegate = false
-		snap.IsActive = false
-		snap.Balance = a.SpendableBalance
-		if a.IsVesting {
-			snap.Balance += a.UnclaimedBalance
-		}
-		snap.Delegated = 0
-		snap.NDelegations = 0
-		snap.Since = a.DelegatedSince
-		ins = append(ins, snap)
-		return nil
-	})
+		})
 	if err != nil {
 		return err
 	}
@@ -302,62 +283,58 @@ func (idx *SnapshotIndex) DisconnectBlock(ctx context.Context, block *Block, _ B
 }
 
 func (idx *SnapshotIndex) DeleteBlock(ctx context.Context, height int64) error {
-	log.Debugf("Rollback deleting snapshots at height %d", height)
-	q := pack.Query{
-		Name: "etl.snapshot.delete",
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: idx.table.Fields().Find("h"),
-			Mode:  pack.FilterModeEqual,
-			Value: height,
-		}},
-	}
-	_, err := idx.table.Delete(ctx, q)
+	// log.Debugf("Rollback deleting snapshots at height %d", height)
+	_, err := pack.NewQuery("etl.snapshot.delete", idx.table).
+		AndEqual("height", height).
+		Delete(ctx)
 	return err
 }
 
 func (idx *SnapshotIndex) UpdateCycleSnapshot(ctx context.Context, block *Block) error {
 	// update all snapshot rows at snapshot cycle & index
 	snap := block.TZ.Snapshot
-	q := pack.Query{
-		Name:    "snapshot.update",
-		NoCache: true,
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: idx.table.Fields().Find("c"), // cycle
-				Mode:  pack.FilterModeEqual,
-				Value: snap.Cycle - (block.Params.PreservedCycles + 2), // adjust to source snapshot cycle
-			},
-			pack.Condition{
-				Field: idx.table.Fields().Find("i"), // index
-				Mode:  pack.FilterModeEqual,
-				Value: snap.RollSnapshot, // the selected index
-			},
-		},
-	}
-	// fetch all rows from table, updating contents
-	rows := make([]pack.Item, 0, 1024)
-	err := idx.table.Stream(ctx, q, func(r pack.Row) error {
-		s := NewSnapshot()
-		if err := r.Decode(s); err != nil {
-			return err
-		}
-		s.IsSelected = true
-		rows = append(rows, s)
-		return nil
-	})
+	// fetch all rows from table, updating contents and removing all non-required
+	// snapshot rows to save table space; keep bakers in the last snapshot in a cycle
+	// for governance purposes
+	keepIndex := block.Params.MaxSnapshotIndex()
+	upd := make([]pack.Item, 0)
+	del := make([]uint64, 0)
+	err := pack.NewQuery("snapshot.update", idx.table).
+		WithoutCache().
+		AndEqual("cycle", snap.Cycle-(block.Params.PreservedCycles+2)). // adjust to source snapshot cycle
+		Stream(ctx, func(r pack.Row) error {
+			s := NewSnapshot()
+			if err := r.Decode(s); err != nil {
+				return err
+			}
+			if s.Index == snap.RollSnapshot {
+				s.IsSelected = true
+				upd = append(upd, s)
+			} else if s.Index != keepIndex || !s.IsDelegate {
+				del = append(del, s.RowId)
+				s.Free()
+			}
+			return nil
+		})
 	if err != nil {
 		return err
 	}
 	// store update
-	if err := idx.table.Update(ctx, rows); err != nil {
+	if err := idx.table.Update(ctx, upd); err != nil {
 		return err
 	}
-	// FIXME: consider flushing the table for sorted results after update
-	// if this becomes a problem
-
+	log.Debugf("Snapshot: deleting %d unused snapshots from cycle %d at block %d [%d]",
+		len(del), block.Cycle-1, block.Height, block.Cycle)
+	if err := idx.table.DeleteIds(ctx, del); err != nil {
+		return err
+	}
 	// free allocations
-	for _, v := range rows {
+	for _, v := range upd {
 		v.(*Snapshot).Free()
+	}
+	// compact
+	if err := idx.table.Compact(ctx); err != nil {
+		return err
 	}
 	return nil
 }

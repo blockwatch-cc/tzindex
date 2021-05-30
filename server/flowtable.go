@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -17,7 +17,7 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/packdb/vec"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
@@ -52,11 +52,11 @@ func init() {
 // configurable marshalling helper
 type Flow struct {
 	model.Flow
-	verbose bool                               `csv:"-" pack:"-"` // cond. marshal
-	columns util.StringList                    `csv:"-" pack:"-"` // cond. cols & order when brief
-	params  *chain.Params                      `csv:"-" pack:"-"` // blockchain amount conversion
-	addrs   map[model.AccountID]chain.Address  `csv:"-" pack:"-"` // address map
-	ops     map[model.OpID]chain.OperationHash `csv:"-" pack:"-"` // op map
+	verbose bool                        // cond. marshal
+	columns util.StringList             // cond. cols & order when brief
+	params  *tezos.Params               // blockchain amount conversion
+	ops     map[model.OpID]tezos.OpHash // op map
+	ctx     *ApiContext
 }
 
 func (f *Flow) MarshalJSON() ([]byte, error) {
@@ -93,6 +93,8 @@ func (f *Flow) MarshalJSONVerbose() ([]byte, error) {
 		IsBurned       bool    `json:"is_burned"`
 		IsFrozen       bool    `json:"is_frozen"`
 		IsUnfrozen     bool    `json:"is_unfrozen"`
+		IsShielded     bool    `json:"is_shielded"`
+		IsUnshielded   bool    `json:"is_unshielded"`
 		TokenGenMin    int64   `json:"token_gen_min"`
 		TokenGenMax    int64   `json:"token_gen_max"`
 		TokenAge       int64   `json:"token_age"`
@@ -109,10 +111,10 @@ func (f *Flow) MarshalJSONVerbose() ([]byte, error) {
 		OpL:            f.OpL,
 		OpP:            f.OpP,
 		AccountId:      f.AccountId.Value(),
-		Account:        f.addrs[f.AccountId].String(),
+		Account:        f.ctx.Indexer.LookupAddress(f.ctx, f.AccountId).String(),
 		AccountType:    f.AddressType.String(),
 		CounterPartyId: f.CounterPartyId.Value(),
-		CounterParty:   f.addrs[f.CounterPartyId].String(),
+		CounterParty:   f.ctx.Indexer.LookupAddress(f.ctx, f.CounterPartyId).String(),
 		Category:       f.Category.String(),
 		Operation:      f.Operation.String(),
 		AmountIn:       f.params.ConvertValue(f.AmountIn),
@@ -121,6 +123,8 @@ func (f *Flow) MarshalJSONVerbose() ([]byte, error) {
 		IsBurned:       f.IsBurned,
 		IsFrozen:       f.IsFrozen,
 		IsUnfrozen:     f.IsUnfrozen,
+		IsShielded:     f.IsShielded,
+		IsUnshielded:   f.IsUnshielded,
 		TokenGenMin:    f.TokenGenMin,
 		TokenGenMax:    f.TokenGenMax,
 		TokenAge:       f.TokenAge,
@@ -159,13 +163,13 @@ func (f *Flow) MarshalJSONBrief() ([]byte, error) {
 		case "account_id":
 			buf = strconv.AppendUint(buf, f.AccountId.Value(), 10)
 		case "address":
-			buf = strconv.AppendQuote(buf, f.addrs[f.AccountId].String())
+			buf = strconv.AppendQuote(buf, f.ctx.Indexer.LookupAddress(f.ctx, f.AccountId).String())
 		case "address_type":
 			buf = strconv.AppendQuote(buf, f.AddressType.String())
 		case "counterparty_id":
 			buf = strconv.AppendUint(buf, f.CounterPartyId.Value(), 10)
 		case "counterparty":
-			buf = strconv.AppendQuote(buf, f.addrs[f.CounterPartyId].String())
+			buf = strconv.AppendQuote(buf, f.ctx.Indexer.LookupAddress(f.ctx, f.CounterPartyId).String())
 		case "category":
 			buf = strconv.AppendQuote(buf, f.Category.String())
 		case "operation":
@@ -194,6 +198,18 @@ func (f *Flow) MarshalJSONBrief() ([]byte, error) {
 			}
 		case "is_unfrozen":
 			if f.IsUnfrozen {
+				buf = append(buf, '1')
+			} else {
+				buf = append(buf, '0')
+			}
+		case "is_shielded":
+			if f.IsShielded {
+				buf = append(buf, '1')
+			} else {
+				buf = append(buf, '0')
+			}
+		case "is_unshielded":
+			if f.IsUnshielded {
 				buf = append(buf, '1')
 			} else {
 				buf = append(buf, '0')
@@ -245,13 +261,13 @@ func (f *Flow) MarshalCSV() ([]string, error) {
 		case "account_id":
 			res[i] = strconv.FormatUint(f.AccountId.Value(), 10)
 		case "address":
-			res[i] = strconv.Quote(f.addrs[f.AccountId].String())
+			res[i] = strconv.Quote(f.ctx.Indexer.LookupAddress(f.ctx, f.AccountId).String())
 		case "address_type":
 			res[i] = strconv.Quote(f.AddressType.String())
 		case "counterparty_id":
 			res[i] = strconv.FormatUint(f.CounterPartyId.Value(), 10)
 		case "counterparty":
-			res[i] = strconv.Quote(f.addrs[f.CounterPartyId].String())
+			res[i] = strconv.Quote(f.ctx.Indexer.LookupAddress(f.ctx, f.CounterPartyId).String())
 		case "category":
 			res[i] = strconv.Quote(f.Category.String())
 		case "operation":
@@ -268,6 +284,10 @@ func (f *Flow) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatBool(f.IsFrozen)
 		case "is_unfrozen":
 			res[i] = strconv.FormatBool(f.IsUnfrozen)
+		case "is_shielded":
+			res[i] = strconv.FormatBool(f.IsShielded)
+		case "is_unshielded":
+			res[i] = strconv.FormatBool(f.IsUnshielded)
 		case "token_gen_min":
 			res[i] = strconv.FormatInt(f.TokenGenMin, 10)
 		case "token_gen_max":
@@ -290,10 +310,6 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	if err != nil {
 		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", args.Table), err))
 	}
-	accountT, err := ctx.Indexer.Table(index.AccountTableKey)
-	if err != nil {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", index.AccountTableKey), err))
-	}
 	opT, err := ctx.Indexer.Table(index.OpTableKey)
 	if err != nil {
 		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", index.OpTableKey), err))
@@ -301,9 +317,8 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 
 	// translate long column names to short names used in pack tables
 	var (
-		needAccountT bool
-		needOpT      bool
-		srcNames     []string
+		needOpT  bool
+		srcNames []string
 	)
 	if len(args.Columns) > 0 {
 		// resolve short column names
@@ -316,9 +331,6 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			if n != "-" {
 				srcNames = append(srcNames, n)
 			}
-			if args.Verbose || v == "address" || v == "counterparty" {
-				needAccountT = true
-			}
 			if args.Verbose || v == "op" {
 				needOpT = true
 			}
@@ -327,20 +339,18 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		// use all table columns in order and reverse lookup their long names
 		srcNames = table.Fields().Names()
 		args.Columns = flowAllAliases
-		needAccountT = true
 		needOpT = true
 	}
 
 	// build table query
 	q := pack.Query{
-		Name:       ctx.RequestID,
-		Fields:     table.Fields().Select(srcNames...),
-		Limit:      int(args.Limit),
-		Conditions: make(pack.ConditionList, 0),
-		Order:      args.Order,
+		Name:   ctx.RequestID,
+		Fields: table.Fields().Select(srcNames...),
+		Limit:  int(args.Limit),
+		Order:  args.Order,
 	}
-	accMap := make(map[model.AccountID]chain.Address)
-	opMap := make(map[model.OpID]chain.OperationHash)
+	// accMap := make(map[model.AccountID]tezos.Address)
+	opMap := make(map[model.OpID]tezos.OpHash)
 
 	// build dynamic filter conditions from query (will panic on error)
 	for key, val := range ctx.Request.URL.Query() {
@@ -354,7 +364,7 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			}
 		}
 		switch prefix {
-		case "columns", "limit", "order", "verbose":
+		case "columns", "limit", "order", "verbose", "filename":
 			// skip these fields
 		case "cursor":
 			// add row id condition: id > cursor (new cursor == last row id)
@@ -366,7 +376,7 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
+			q.Conditions.AddAndCondition(&pack.Condition{
 				Field: table.Fields().Pk(),
 				Mode:  cursorMode,
 				Value: id,
@@ -381,7 +391,7 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				// single-address lookup and compile condition
-				addr, err := chain.ParseAddress(val[0])
+				addr, err := tezos.ParseAddress(val[0])
 				if err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
@@ -391,7 +401,7 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				// Note: when not found we insert an always false condition
 				if acc == nil || acc.RowId == 0 {
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find(field), // account id
 						Mode:  mode,
 						Value: uint64(math.MaxUint64),
@@ -399,10 +409,10 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 					})
 				} else {
 					// add id as extra condition
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find(field), // account id
 						Mode:  mode,
-						Value: acc.RowId.Value(),
+						Value: acc.RowId,
 						Raw:   val[0], // debugging aid
 					})
 				}
@@ -410,7 +420,7 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(v)
+					addr, err := tezos.ParseAddress(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
@@ -427,7 +437,7 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find(field), // account id
 					Mode:  mode,
 					Value: ids,
@@ -446,10 +456,10 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty op matches id 0 (== missing baker)
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find("D"), // op id
 						Mode:  mode,
-						Value: uint64(0),
+						Value: 0,
 						Raw:   val[0], // debugging aid
 					})
 				} else {
@@ -467,7 +477,7 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 					}
 					// Note: when not found we insert an always false condition
 					if op == nil || len(op) == 0 {
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find("D"), // op id
 							Mode:  mode,
 							Value: uint64(math.MaxUint64),
@@ -475,11 +485,11 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 						})
 					} else {
 						opMap[op[0].RowId] = op[0].Hash.Clone()
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find("D"), // op id
 							Mode:  mode,
-							Value: op[0].RowId.Value(), // op slice may contain internal ops
-							Raw:   val[0],              // debugging aid
+							Value: op[0].RowId, // op slice may contain internal ops
+							Raw:   val[0],      // debugging aid
 						})
 					}
 				}
@@ -509,7 +519,7 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				// Note: when list is empty (no ops were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("D"), // op id
 					Mode:  mode,
 					Value: ids,
@@ -548,54 +558,54 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 					v = strings.Join(fvals, ",")
 				case "address_type":
 					// consider comma separated lists, convert type to int and back to string list
-					typs := make([]int64, 0)
+					typs := make([]uint8, 0)
 					for _, t := range strings.Split(v, ",") {
-						typ := chain.ParseAddressType(t)
+						typ := tezos.ParseAddressType(t)
 						if !typ.IsValid() {
 							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid account type '%s'", val[0]), nil))
 						}
-						typs = append(typs, int64(typ))
+						typs = append(typs, uint8(typ))
 					}
 					styps := make([]string, 0)
-					for _, i := range vec.UniqueInt64Slice(typs) {
-						styps = append(styps, strconv.FormatInt(i, 10))
+					for _, i := range vec.UniqueUint8Slice(typs) {
+						styps = append(styps, strconv.FormatUint(uint64(i), 10))
 					}
 					v = strings.Join(styps, ",")
 				case "category":
 					// consider comma separated lists, convert type to int and back to string list
-					typs := make([]int64, 0)
+					typs := make([]uint8, 0)
 					for _, t := range strings.Split(v, ",") {
 						typ := model.ParseFlowCategory(t)
 						if !typ.IsValid() {
 							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid category '%s'", val[0]), nil))
 						}
-						typs = append(typs, int64(typ))
+						typs = append(typs, uint8(typ))
 					}
 					styps := make([]string, 0)
-					for _, i := range vec.UniqueInt64Slice(typs) {
-						styps = append(styps, strconv.FormatInt(i, 10))
+					for _, i := range vec.UniqueUint8Slice(typs) {
+						styps = append(styps, strconv.FormatUint(uint64(i), 10))
 					}
 					v = strings.Join(styps, ",")
 				case "operation":
 					// consider comma separated lists, convert type to int and back to string list
-					typs := make([]int64, 0)
+					typs := make([]uint8, 0)
 					for _, t := range strings.Split(v, ",") {
 						typ := model.ParseFlowType(t)
 						if !typ.IsValid() {
 							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid operation '%s'", val[0]), nil))
 						}
-						typs = append(typs, int64(typ))
+						typs = append(typs, uint8(typ))
 					}
 					styps := make([]string, 0)
-					for _, i := range vec.UniqueInt64Slice(typs) {
-						styps = append(styps, strconv.FormatInt(i, 10))
+					for _, i := range vec.UniqueUint8Slice(typs) {
+						styps = append(styps, strconv.FormatUint(uint64(i), 10))
 					}
 					v = strings.Join(styps, ",")
 				}
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions = append(q.Conditions, cond)
+					q.Conditions.AddAndCondition(&cond)
 				}
 			}
 		}
@@ -606,59 +616,21 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		lastId uint64
 	)
 
-	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
-	defer func() {
-		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	}()
+	// start := time.Now()
+	// ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
+	// defer func() {
+	// 	ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
+	// }()
 
 	// Step 1: query database
 	res, err := table.Query(ctx, q)
 	if err != nil {
 		panic(EInternal(EC_DATABASE, "query failed", err))
 	}
-	ctx.Log.Tracef("Processing result with %d rows %d cols", res.Rows(), res.Cols())
+	// ctx.Log.Tracef("Processing result with %d rows %d cols", res.Rows(), res.Cols())
 	defer res.Close()
 
-	// Step 2: resolve accounts using lookup (when requested)
-	if needAccountT && res.Rows() > 0 {
-		// get a unique copy of account and origin id columns (clip on request limit)
-		acol, _ := res.Uint64Column("A")
-		ocol, _ := res.Uint64Column("R")
-		find := vec.UniqueUint64Slice(acol[:util.Min(len(acol), int(args.Limit))])
-		find = vec.UniqueUint64Slice(append(find, ocol[:util.Min(len(ocol), int(args.Limit))]...))
-
-		// lookup accounts from id
-		q := pack.Query{
-			Name:   ctx.RequestID + ".flow_account_lookup",
-			Fields: accountT.Fields().Select("I", "H", "t"),
-			Conditions: pack.ConditionList{pack.Condition{
-				Field: accountT.Fields().Find("I"),
-				Mode:  pack.FilterModeIn,
-				Value: find,
-			}},
-		}
-		ctx.Log.Tracef("Looking up %d accounts", len(find))
-		type XAcc struct {
-			Id   model.AccountID   `pack:"I,pk"`
-			Hash []byte            `pack:"H"`
-			Type chain.AddressType `pack:"t"`
-		}
-		acc := &XAcc{}
-		err := accountT.Stream(ctx, q, func(r pack.Row) error {
-			if err := r.Decode(acc); err != nil {
-				return err
-			}
-			accMap[acc.Id] = chain.NewAddress(acc.Type, acc.Hash)
-			return nil
-		})
-		if err != nil {
-			// non-fatal error
-			ctx.Log.Errorf("Account lookup failed: %v", err)
-		}
-	}
-
-	// Step 3: resolve ops using lookup (when requested)
+	// Step 2: resolve ops using lookup (when requested)
 	if needOpT && res.Rows() > 0 {
 		// get a unique copy of op id column (clip on request limit)
 		ucol, _ := res.Uint64Column("D")
@@ -676,28 +648,22 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 
 		if len(find) > 0 {
 			// lookup ops from id
-			q := pack.Query{
-				Name:   ctx.RequestID + ".flow_op_lookup",
-				Fields: opT.Fields().Select("I", "H"),
-				Conditions: pack.ConditionList{pack.Condition{
-					Field: accountT.Fields().Find("I"),
-					Mode:  pack.FilterModeIn,
-					Value: find,
-				}},
-			}
-			ctx.Log.Tracef("Looking up %d ops", len(find))
+			// ctx.Log.Tracef("Looking up %d ops", len(find))
 			type XOp struct {
-				Id   model.OpID          `pack:"I,pk"`
-				Hash chain.OperationHash `pack:"H"`
+				Id   model.OpID   `pack:"I,pk"`
+				Hash tezos.OpHash `pack:"H"`
 			}
-			op := &XOp{}
-			err := opT.Stream(ctx, q, func(r pack.Row) error {
-				if err := r.Decode(op); err != nil {
-					return err
-				}
-				opMap[op.Id] = op.Hash.Clone()
-				return nil
-			})
+			err = pack.NewQuery(ctx.RequestID+".flow_op_lookup", opT).
+				WithFields("I", "H").
+				AndIn("I", find).
+				Stream(ctx, func(r pack.Row) error {
+					op := &XOp{}
+					if err := r.Decode(op); err != nil {
+						return err
+					}
+					opMap[op.Id] = op.Hash.Clone()
+					return nil
+				})
 			if err != nil {
 				// non-fatal error
 				ctx.Log.Errorf("Op lookup failed: %v", err)
@@ -710,8 +676,8 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		verbose: args.Verbose,
 		columns: util.StringList(args.Columns),
 		params:  params,
-		addrs:   accMap,
 		ops:     opMap,
+		ctx:     ctx,
 	}
 
 	// prepare response stream
@@ -756,7 +722,7 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		})
 		// close JSON bracket
 		io.WriteString(ctx.ResponseWriter, "]")
-		ctx.Log.Tracef("JSON encoded %d rows", count)
+		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":
 		enc := csv.NewEncoder(ctx.ResponseWriter)
@@ -781,7 +747,7 @@ func StreamFlowTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				return nil
 			})
 		}
-		ctx.Log.Tracef("CSV Encoded %d rows", count)
+		// ctx.Log.Tracef("CSV Encoded %d rows", count)
 	}
 
 	// without new records, cursor remains the same as input (may be empty)

@@ -26,6 +26,7 @@
 	},
 	"crawler": {
 		"queue": 100,
+		"cache_size_log2": 12,
 		"snapshot_path": "./db/xtz/snapshots",
 		"snapshot_blocks": [],
 		"snapshot_interval": 0
@@ -76,12 +77,38 @@
 			"cache_size": 2
 		},
 		"bigmap": {
-			"cache_size": 2
+			"cache_size": 128
 		},
 		"bigmap_index": {
-			"cache_size": 16
+			"cache_size": 128
  		}
  	},
+	"metadata": {
+		"validate": true,
+		"extensions": [{
+			"namespace": "custom",
+			"schema": {
+				"$schema": "http://json-schema.org/draft/2019-09/schema#",
+				"$id": "https://example.com/schemas/custom.json",
+				"title": "Private Extension",
+			    "description": "A private metadata extension.",
+				"type": "object",
+				"required": ["name", "active"],
+				"properties": {
+					"name": {
+					  "type": "string"
+			  		},
+					"active": {
+					  "type": "boolean"
+			  		},
+					"time": {
+					  "type": "string",
+					  "format": "date-time"
+			  		}
+			  	}
+			}
+		}]
+	},
 	"rpc": {
 		"host": "127.0.0.1",
 		"port": 8732,

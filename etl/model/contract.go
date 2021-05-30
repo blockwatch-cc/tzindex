@@ -4,95 +4,135 @@
 package model
 
 import (
+	"encoding/binary"
+	"fmt"
+	"strconv"
 	"sync"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/tzindex/chain"
-	"blockwatch.cc/tzindex/micheline"
-	"blockwatch.cc/tzindex/rpc"
+	"blockwatch.cc/packdb/util"
+	"blockwatch.cc/tzgo/micheline"
+	"blockwatch.cc/tzgo/rpc"
+	"blockwatch.cc/tzgo/tezos"
 )
 
 var contractPool = &sync.Pool{
 	New: func() interface{} { return new(Contract) },
 }
 
-// Contract holds code and info about smart contracts on the Tezos blockchain.
-type Contract struct {
-	RowId         uint64    `pack:"I,pk,snappy"   json:"row_id"`
-	Hash          []byte    `pack:"H"             json:"hash"`
-	AccountId     AccountID `pack:"A,snappy"      json:"account_id"`
-	ManagerId     AccountID `pack:"M,snappy"      json:"manager_id"`
-	Height        int64     `pack:"h,snappy"      json:"height"`
-	Fee           int64     `pack:"f,snappy"      json:"fee"`
-	GasLimit      int64     `pack:"l,snappy"      json:"gas_limit"`
-	GasUsed       int64     `pack:"G,snappy"      json:"gas_used"`
-	GasPrice      float64   `pack:"g,convert,precision=5,snappy"   json:"gas_price"`
-	StorageLimit  int64     `pack:"s,snappy"      json:"storage_limit"`
-	StorageSize   int64     `pack:"z,snappy"      json:"storage_size"`
-	StoragePaid   int64     `pack:"y,snappy"      json:"storage_paid"`
-	Script        []byte    `pack:"S,snappy"      json:"script"`
-	IsSpendable   bool      `pack:"p,snappy"      json:"is_spendable"`   // manager can move funds without running any code
-	IsDelegatable bool      `pack:"d,snappy"      json:"is_delegatable"` // manager can delegate funds
-	OpL           int       `pack:"L,snappy"      json:"op_l"`
-	OpP           int       `pack:"P,snappy"      json:"op_p"`
-	OpI           int       `pack:"i,snappy"      json:"op_i"`
-	InterfaceHash []byte    `pack:"F,snappy"      json:"iface_hash"`
+type ContractID uint64
+
+func (id ContractID) Value() uint64 {
+	return uint64(id)
 }
 
-// Ensure Account implements the pack.Item interface.
+// Contract holds code and info about smart contracts on the Tezos blockchain.
+type Contract struct {
+	RowId         ContractID           `pack:"I,pk,snappy"   json:"row_id"`
+	Hash          tezos.Address        `pack:"H"             json:"address"`
+	AccountId     AccountID            `pack:"A,snappy"      json:"account_id"`
+	CreatorId     AccountID            `pack:"C,snappy"      json:"creator_id"`
+	FirstSeen     int64                `pack:"f,snappy"      json:"first_seen"`
+	LastSeen      int64                `pack:"l,snappy"      json:"last_seen"`
+	IsSpendable   bool                 `pack:"p,snappy"      json:"is_spendable"`
+	IsDelegatable bool                 `pack:"?,snappy"      json:"is_delegatable"`
+	StorageSize   int64                `pack:"z,snappy"      json:"storage_size"`
+	StoragePaid   int64                `pack:"y,snappy"      json:"storage_paid"`
+	Script        []byte               `pack:"s,snappy"      json:"script"`
+	Storage       []byte               `pack:"g,snappy"      json:"storage"`
+	InterfaceHash []byte               `pack:"i,snappy"      json:"iface_hash"`
+	CodeHash      []byte               `pack:"c,snappy"      json:"code_hash"`
+	CallStats     []byte               `pack:"S,snappy"      json:"call_stats"`
+	Features      micheline.Features   `pack:"F,snappy"      json:"features"`
+	Interfaces    micheline.Interfaces `pack:"n,snappy"      json:"interfaces"`
+
+	IsDirty bool              `pack:"-" json:"-"` // indicates an update happened
+	script  *micheline.Script `pack:"-" json:"-"` // cached decoded script
+	IsNew   bool              `pack:"-" json:"-"` // new contract, used during migration
+}
+
+// Ensure Contract implements the pack.Item interface.
 var _ pack.Item = (*Contract)(nil)
 
 // assuming the op was successful!
-func NewContract(acc *Account, oop *rpc.OriginationOp, l, p int) *Contract {
+func NewContract(acc *Account, oop *rpc.OriginationOp, op *Op) *Contract {
 	c := AllocContract()
 	c.Hash = acc.Hash
 	c.AccountId = acc.RowId
-	c.ManagerId = acc.ManagerId
-	c.Height = acc.FirstSeen
-	c.Fee = oop.Fee
-	c.GasLimit = oop.GasLimit
-	c.StorageLimit = oop.StorageLimit
+	c.CreatorId = acc.CreatorId
+	c.FirstSeen = op.Height
+	c.LastSeen = op.Height
 	res := oop.Metadata.Result
-	c.GasUsed = res.ConsumedGas
-	if c.GasUsed > 0 && c.Fee > 0 {
-		c.GasPrice = float64(c.Fee) / float64(c.GasUsed)
-	}
+	c.IsSpendable = acc.IsSpendable
+	c.IsDelegatable = acc.IsDelegatable
 	c.StorageSize = res.StorageSize
 	c.StoragePaid = res.PaidStorageSizeDiff
 	if oop.Script != nil {
 		c.Script, _ = oop.Script.MarshalBinary()
+		c.Storage, _ = oop.Script.Storage.MarshalBinary()
 		c.InterfaceHash = oop.Script.InterfaceHash()
+		c.CodeHash = oop.Script.CodeHash()
+		c.Features = oop.Script.Features()
+		c.Interfaces = oop.Script.Interfaces()
 		ep, _ := oop.Script.Entrypoints(false)
-		acc.CallStats = make([]byte, 4*len(ep))
+		c.CallStats = make([]byte, 4*len(ep))
 	}
-	c.IsSpendable = acc.IsSpendable
-	c.IsDelegatable = acc.IsDelegatable
-	c.OpL = l
-	c.OpP = p
-	c.OpI = 0
+	c.IsNew = true
+	c.IsDirty = true
 	return c
 }
 
-func NewInternalContract(acc *Account, iop *rpc.InternalResult, l, p, i int) *Contract {
+func NewInternalContract(acc *Account, iop *rpc.InternalResult, op *Op) *Contract {
 	c := AllocContract()
 	c.Hash = acc.Hash
 	c.AccountId = acc.RowId
-	c.ManagerId = acc.ManagerId
-	c.Height = acc.FirstSeen
+	c.CreatorId = acc.CreatorId
+	c.FirstSeen = op.Height
+	c.LastSeen = op.Height
 	res := iop.Result
-	c.GasUsed = res.ConsumedGas
+	c.IsSpendable = acc.IsSpendable
+	c.IsDelegatable = acc.IsDelegatable
 	c.StorageSize = res.StorageSize
 	c.StoragePaid = res.PaidStorageSizeDiff
 	if iop.Script != nil {
 		c.Script, _ = iop.Script.MarshalBinary()
+		c.Storage, _ = iop.Script.Storage.MarshalBinary()
 		c.InterfaceHash = iop.Script.InterfaceHash()
+		c.CodeHash = iop.Script.CodeHash()
+		c.Features = iop.Script.Features()
+		c.Interfaces = iop.Script.Interfaces()
 		ep, _ := iop.Script.Entrypoints(false)
-		acc.CallStats = make([]byte, 4*len(ep))
+		c.CallStats = make([]byte, 4*len(ep))
 	}
-	c.OpL = l
-	c.OpP = p
-	c.OpI = i
+	c.IsNew = true
+	c.IsDirty = true
 	return c
+}
+
+// create manager.tz contract, used during migration only
+func NewManagerTzContract(a *Account, height int64) (*Contract, error) {
+	c := AllocContract()
+	c.Hash = a.Hash.Clone()
+	c.AccountId = a.RowId
+	c.CreatorId = a.CreatorId
+	c.FirstSeen = a.FirstSeen
+	c.LastSeen = height
+	c.IsSpendable = a.IsSpendable
+	c.IsDelegatable = a.IsDelegatable
+	script, _ := micheline.MakeManagerScript(a.Address().Bytes())
+	c.Script, _ = script.MarshalBinary()
+	c.Storage, _ = script.Storage.MarshalBinary()
+	c.InterfaceHash = script.InterfaceHash()
+	c.CodeHash = script.CodeHash()
+	c.Features = script.Features()
+	c.Interfaces = script.Interfaces()
+	c.StorageSize = 232           // fixed 232 bytes
+	c.StoragePaid = 0             // noone paid for this
+	c.CallStats = make([]byte, 8) // 2 entrypoints, 'do' (0) and 'default' (1)
+	binary.BigEndian.PutUint32(c.CallStats[4:8], uint32(a.NTx))
+	c.IsNew = true
+	c.IsDirty = true
+	return c, nil
 }
 
 func AllocContract() *Contract {
@@ -105,81 +145,270 @@ func (c *Contract) Free() {
 }
 
 func (c Contract) ID() uint64 {
-	return c.RowId
+	return uint64(c.RowId)
 }
 
 func (c *Contract) SetID(id uint64) {
-	c.RowId = id
+	c.RowId = ContractID(id)
 }
 
 func (c Contract) String() string {
-	s, _ := chain.EncodeAddress(chain.AddressTypeContract, c.Hash)
-	return s
-}
-
-// origination operation must exist and code must be available
-func (c Contract) IsNonExist() bool {
-	return len(c.Script) == 0 && c.OpL == 0 && !c.IsDelegatable && !c.IsSpendable
+	return c.Hash.String()
 }
 
 func (c *Contract) Reset() {
 	c.RowId = 0
-	c.Hash = nil
+	c.Hash = tezos.Address{}
 	c.AccountId = 0
-	c.ManagerId = 0
-	c.Height = 0
-	c.GasLimit = 0
-	c.GasUsed = 0
-	c.GasPrice = 0
-	c.StorageLimit = 0
+	c.CreatorId = 0
+	c.FirstSeen = 0
+	c.LastSeen = 0
+	c.IsSpendable = false
+	c.IsDelegatable = false
 	c.StorageSize = 0
 	c.StoragePaid = 0
 	c.Script = nil
-	c.IsSpendable = false
-	c.IsDelegatable = false
-	c.OpL = 0
-	c.OpP = 0
-	c.OpI = 0
+	c.Storage = nil
 	c.InterfaceHash = nil
+	c.CodeHash = nil
+	c.CallStats = nil
+	c.Features = 0
+	c.Interfaces = nil
+	c.IsDirty = false
+	c.IsNew = false
+	c.script = nil
 }
 
-func (c *Contract) NeedsBabylonUpgrade(p *chain.Params, height int64) bool {
+// update storage size and size paid
+func (c *Contract) Update(op *Op) {
+	c.LastSeen = op.Height
+	c.StorageSize = op.StorageSize
+	c.StoragePaid += op.StoragePaid
+	c.IncCallStats(op.Entrypoint)
+	if op.Storage != nil {
+		// careful: will recycle on builder cleanup
+		c.Storage = op.Storage
+	}
+	c.IsDirty = true
+}
+
+func (c *Contract) Rollback(drop, last *Op) {
+	if last != nil {
+		c.LastSeen = last.Height
+		c.StorageSize = last.StorageSize
+		if last.Storage != nil {
+			c.Storage = last.Storage
+		}
+	} else {
+		// back to origination
+		c.Storage, _ = c.script.Storage.MarshalBinary()
+		c.LastSeen = c.FirstSeen
+		c.StorageSize = int64(len(c.Storage)) // FIXME: is this correct?
+	}
+	c.StoragePaid -= drop.StoragePaid
+	c.DecCallStats(drop.Entrypoint)
+	c.IsDirty = true
+}
+
+func (c *Contract) ListCallStats() map[string]int {
+	// list entrypoint names first
+	script, err := c.LoadScript()
+	if err != nil {
+		return nil
+	}
+
+	ep, err := script.Entrypoints(false)
+	if err != nil {
+		return nil
+	}
+
+	// sort entrypoint map by id, we only need names here
+	byId := make([]string, len(ep))
+	for _, v := range ep {
+		byId[v.Id] = v.Call
+	}
+
+	res := make(map[string]int, len(c.CallStats)>>2)
+	for i, name := range byId {
+		res[name] = int(binary.BigEndian.Uint32(c.CallStats[i*4:]))
+	}
+	return res
+}
+
+func (c *Contract) ListFeatures() micheline.Features {
+	script, err := c.LoadScript()
+	if err != nil {
+		return 0
+	}
+	return script.Features()
+}
+
+func (c *Contract) ListInterfaces() micheline.Interfaces {
+	script, err := c.LoadScript()
+	if err != nil {
+		return nil
+	}
+	return script.Interfaces()
+}
+
+func (c *Contract) NamedBigmaps(ids []int64) map[string]int64 {
+	if len(ids) == 0 {
+		return nil
+	}
+	script, err := c.LoadScript()
+	if err != nil {
+		return nil
+	}
+	named := make(map[string]int64)
+	bigmaps, _ := script.Code.Storage.FindOpCodes(micheline.T_BIG_MAP)
+	for i := 0; i < util.Min(len(ids), len(bigmaps)); i++ {
+		n := bigmaps[i].GetVarAnnoAny()
+		if n == "" {
+			n = strconv.Itoa(i)
+		}
+		named[n] = ids[i]
+	}
+	return named
+}
+
+// stats are stored as uint32 in a byte slice limit entrypoint count to 255
+func (c *Contract) IncCallStats(entrypoint int) {
+	offs := entrypoint * 4
+	if cap(c.CallStats) <= offs+4 {
+		// grow slice if necessary
+		buf := make([]byte, offs+4)
+		copy(buf, c.CallStats)
+		c.CallStats = buf
+	}
+	c.CallStats = c.CallStats[0:util.Max(len(c.CallStats), offs+4)]
+	val := binary.BigEndian.Uint32(c.CallStats[offs:])
+	binary.BigEndian.PutUint32(c.CallStats[offs:], val+1)
+	c.IsDirty = true
+}
+
+func (c *Contract) DecCallStats(entrypoint int) {
+	offs := entrypoint * 4
+	if cap(c.CallStats) <= offs+4 {
+		// grow slice if necessary
+		buf := make([]byte, offs+4)
+		copy(buf, c.CallStats)
+		c.CallStats = buf
+	}
+	c.CallStats = c.CallStats[0:util.Max(len(c.CallStats), offs+4)]
+	val := binary.BigEndian.Uint32(c.CallStats[offs:])
+	binary.BigEndian.PutUint32(c.CallStats[offs:], val-1)
+	c.IsDirty = true
+}
+
+// upgrade smart contracts from before babylon
+// - patch code and storage
+// - only applies to mainnet contracts originated before babylon
+// - don't upgrade when query height < babylon to return old params/storage format
+func (c *Contract) NeedsBabylonUpgrade(p *tezos.Params) bool {
 	// babylon activation
-	isEligible := p.IsMainnet() && p.Version >= 5 && height < 655361
+	isEligible := p.IsPostBabylon() && p.IsPreBabylonHeight(c.FirstSeen)
 	// contract upgrade criteria
 	isEligible = isEligible && (c.IsSpendable || (!c.IsSpendable && c.IsDelegatable))
 	return isEligible
 }
 
-// loads script and upgrades to babylon on-the-fly if originated earlier
-func (c *Contract) LoadScript(tip *ChainTip, height int64, manager []byte) (*micheline.Script, error) {
-	script := micheline.NewScript()
+func (c *Contract) NeedsBabylonDowngrade(p *tezos.Params, height int64) bool {
+	return p.IsPreBabylonHeight(height) && c.NeedsBabylonUpgrade(p)
+}
 
-	// patch empty manager.tz
+func (c *Contract) PreBabylonType(p *tezos.Params) micheline.Type {
+	s, _ := c.LoadScript()
+	typ := s.StorageType()
+
+	if !p.IsPreBabylonHeight(c.FirstSeen) {
+		return typ
+	}
+
+	if !(c.IsSpendable || (!c.IsSpendable && c.IsDelegatable)) {
+		return typ
+	}
+
+	typ = micheline.NewType(typ.Args[1])
+	typ.Prim.Anno = nil
+	return typ
+}
+
+func (c *Contract) UpgradeToBabylon(p *tezos.Params, a *Account) error {
+	if !c.NeedsBabylonUpgrade(p) {
+		return nil
+	}
+
+	// extend call stats array by moving existing stats
+	offs := 1
+	if !c.IsSpendable && c.IsDelegatable {
+		offs++
+	}
+	newcs := make([]byte, offs*4+len(c.CallStats))
+	copy(newcs[offs*4:], c.CallStats)
+	c.CallStats = newcs
+
+	// unmarshal script
+	script := micheline.NewScript()
+	err := script.UnmarshalBinary(c.Script)
+	if err != nil {
+		return err
+	}
+
+	// need manager (creator)
+	mgrHash := a.Address().Bytes()
+
+	// migrate script
+	switch true {
+	case c.IsSpendable:
+		script.MigrateToBabylonAddDo(mgrHash)
+		c.InterfaceHash = script.InterfaceHash()
+		c.CodeHash = script.CodeHash()
+	case !c.IsSpendable && c.IsDelegatable:
+		script.MigrateToBabylonSetDelegate(mgrHash)
+		c.InterfaceHash = script.InterfaceHash()
+		c.CodeHash = script.CodeHash()
+	}
+	c.Features = script.Features()
+	c.Interfaces = script.Interfaces()
+
+	// marshal script
+	c.Script, err = script.MarshalBinary()
+	if err != nil {
+		return err
+	}
+
+	// unmarshal initial storage
+	storage := micheline.Prim{}
+	if err := storage.UnmarshalBinary(c.Storage); err != nil {
+		return err
+	}
+	storage = storage.MigrateToBabylonStorage(mgrHash)
+	c.Storage, err = storage.MarshalBinary()
+	if err != nil {
+		return err
+	}
+
+	c.IsDirty = true
+	return nil
+}
+
+// loads script and upgrades to babylon on-the-fly if originated earlier
+func (c *Contract) LoadScript() (*micheline.Script, error) {
+	// already migrated and cached?
+	if c.script != nil {
+		return c.script, nil
+	}
+
+	// should not happen
 	if len(c.Script) == 0 {
-		if tip.ChainId.IsEqual(chain.Mainnet) && height >= 655361 && c.Height < 655361 {
-			return micheline.MakeManagerScript(manager)
-		}
-		// empty script before Babylon
-		return nil, nil
+		return nil, fmt.Errorf("empty script on %s", c.String())
 	}
 
 	// unmarshal script
-	if err := script.UnmarshalBinary(c.Script); err != nil {
+	s := micheline.NewScript()
+	if err := s.UnmarshalBinary(c.Script); err != nil {
 		return nil, err
 	}
-
-	// must upgrade?
-	// - only applies to mainnet and contracts originated before babylon
-	// - don't upgrade when requested height is < babylon so we can handle
-	//   old params/storage properly
-	if tip.ChainId.IsEqual(chain.Mainnet) && height >= 655361 && c.Height < 655361 {
-		switch true {
-		case c.IsSpendable:
-			script.MigrateToBabylonAddDo(manager)
-		case !c.IsSpendable && c.IsDelegatable:
-			script.MigrateToBabylonSetDelegate(manager)
-		}
-	}
-	return script, nil
+	c.script = s
+	return s, nil
 }

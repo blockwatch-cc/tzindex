@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"github.com/gorilla/mux"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
+	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzindex/etl"
 
 	"github.com/echa/config"
@@ -47,6 +50,7 @@ func (t SystemRequest) RegisterDirectRoutes(r *mux.Router) error {
 
 func (t SystemRequest) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/tables", C(GetTableStats)).Methods("GET")
+	r.HandleFunc("/caches", C(GetCacheStats)).Methods("GET")
 	r.HandleFunc("/mem", C(GetMemStats)).Methods("GET")
 	r.HandleFunc("/config", C(GetConfig)).Methods("GET")
 	r.HandleFunc("/purge", C(PurgeCaches)).Methods("PUT")
@@ -56,11 +60,20 @@ func (t SystemRequest) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/gc", C(GcDatabases)).Methods("PUT")
 	r.HandleFunc("/rollback", C(RollbackDatabases)).Methods("PUT")
 	r.HandleFunc("/log/{subsystem}/{level}", C(UpdateLog)).Methods("PUT")
+	r.HandleFunc("/dump/{table}/{part}", C(DumpTable)).Methods("PUT")
 	return nil
 }
 
 func GetTableStats(ctx *ApiContext) (interface{}, int) {
 	return ctx.Indexer.TableStats(), http.StatusOK
+}
+
+func GetCacheStats(ctx *ApiContext) (interface{}, int) {
+	cs := ctx.Crawler.CacheStats()
+	for n, v := range ctx.Indexer.CacheStats() {
+		cs[n] = v
+	}
+	return cs, http.StatusOK
 }
 
 func GetMemStats(ctx *ApiContext) (interface{}, int) {
@@ -73,7 +86,6 @@ func GetConfig(ctx *ApiContext) (interface{}, int) {
 
 func PurgeCaches(ctx *ApiContext) (interface{}, int) {
 	purgeCycleStore()
-	purgeAddrStore()
 	purgeTipStore()
 	purgeGovStore()
 	return nil, http.StatusNoContent
@@ -126,6 +138,8 @@ func UpdateLog(ctx *ApiContext) (interface{}, int) {
 		key = "JRPC"
 	case "server":
 		key = "SRVR"
+	case "report":
+		key = "REPO"
 	case "micheline":
 		key = "MICH"
 	default:
@@ -155,5 +169,60 @@ func RollbackDatabases(ctx *ApiContext) (interface{}, int) {
 	if err := ctx.Crawler.Rollback(ctx.Context, args.Height, args.Force); err != nil {
 		panic(EInternal(EC_DATABASE, "rollback failed", err))
 	}
+	return nil, http.StatusNoContent
+}
+
+func DumpTable(ctx *ApiContext) (interface{}, int) {
+	tname, _ := mux.Vars(ctx.Request)["table"]
+	pname, _ := mux.Vars(ctx.Request)["part"]
+	table, err := ctx.Indexer.Table(tname)
+	if err != nil {
+		panic(ENotFound(EC_RESOURCE_NOTFOUND, "no such table", nil))
+	}
+
+	spath := config.GetString("crawler.snapshot_path")
+	if spath == "" {
+		panic(EForbidden(EC_ACCESS_READONLY, "snapshots and dumps disabled, set crawler.snapshot_path to enable", nil))
+	}
+
+	switch pname {
+	case "blocks", "journal", "table", "index", "data":
+		// OK
+	default:
+		panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("undefined table part '%s'", pname), nil))
+	}
+
+	fname := fmt.Sprintf("%s-%s-%s.dump", tname, pname, ctx.Now.Format("2006-01-02T15:04:05"))
+	f, err := os.Create(filepath.Join(spath, fname))
+	if err != nil {
+		panic(EInternal(EC_SERVER, "cannot create dump file", err))
+	}
+	defer f.Close()
+
+	switch pname {
+	case "blocks":
+		err = table.DumpPackBlocks(f, 0)
+	case "journal":
+		err = table.DumpJournal(f, 0)
+	case "table":
+		err = table.DumpPackHeaders(f, 0)
+	case "index":
+		err = table.DumpIndexPackHeaders(f, 0)
+	case "data":
+		for i := 0; ; i++ {
+			err2 := table.DumpPack(f, i, 0)
+			if err2 == pack.ErrPackNotFound {
+				break
+			}
+			if err2 != nil {
+				err = err2
+				break
+			}
+		}
+	}
+	if err != nil {
+		panic(EInternal(EC_SERVER, "dump failed", err))
+	}
+
 	return nil, http.StatusNoContent
 }

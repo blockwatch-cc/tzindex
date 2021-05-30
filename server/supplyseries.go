@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -6,15 +6,12 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strconv"
 	"time"
 
-	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
 )
 
@@ -30,18 +27,77 @@ func init() {
 	}
 	// strip row_id (first field)
 	supplySeriesNames = util.StringList(fields.Aliases()[1:])
+	supplySeriesNames.AddUnique("count")
 }
 
 // configurable marshalling helper
 type SupplySeries struct {
 	model.Supply
-	verbose bool            `csv:"-" pack:"-"` // cond. marshal
-	columns util.StringList `csv:"-" pack:"-"` // cond. cols & order when brief
-	params  *chain.Params   `csv:"-" pack:"-"` // blockchain amount conversion
+
+	columns util.StringList // cond. cols & order when brief
+	params  *tezos.Params   // blockchain amount conversion
+	verbose bool            // cond. marshal
+	null    bool
+}
+
+var _ SeriesBucket = (*SupplySeries)(nil)
+
+func (s *SupplySeries) Init(params *tezos.Params, columns []string, verbose bool) {
+	s.params = params
+	s.columns = columns
+	s.verbose = verbose
+}
+
+func (s *SupplySeries) IsEmpty() bool {
+	return s.Supply.Height == 0 || s.Supply.Timestamp.IsZero()
+}
+
+func (s *SupplySeries) Add(m SeriesModel) {
+	o := m.(*model.Supply)
+	s.Supply = *o
 }
 
 func (s *SupplySeries) Reset() {
 	s.Supply.Timestamp = time.Time{}
+	s.null = false
+}
+
+func (s *SupplySeries) Null(ts time.Time) SeriesBucket {
+	s.Reset()
+	s.Timestamp = ts
+	s.null = true
+	return s
+}
+
+func (s *SupplySeries) Zero(ts time.Time) SeriesBucket {
+	s.Reset()
+	s.Timestamp = ts
+	return s
+}
+
+func (s *SupplySeries) SetTime(ts time.Time) SeriesBucket {
+	s.Timestamp = ts
+	return s
+}
+
+func (s *SupplySeries) Time() time.Time {
+	return s.Timestamp
+}
+
+func (s *SupplySeries) Clone() SeriesBucket {
+	c := &SupplySeries{
+		Supply: s.Supply,
+	}
+	c.columns = s.columns
+	c.params = s.params
+	c.verbose = s.verbose
+	c.null = s.null
+	return c
+}
+
+func (s *SupplySeries) Interpolate(m SeriesBucket, ts time.Time) SeriesBucket {
+	// unused, sematically there is one supply table entry per block
+	return s
 }
 
 func (s *SupplySeries) MarshalJSON() ([]byte, error) {
@@ -57,14 +113,14 @@ func (s *SupplySeries) MarshalJSONVerbose() ([]byte, error) {
 		Height              int64     `json:"height"`
 		Cycle               int64     `json:"cycle"`
 		Timestamp           time.Time `json:"time"`
+		Count               int       `json:"count"`
 		Total               float64   `json:"total"`
 		Activated           float64   `json:"activated"`
 		Unclaimed           float64   `json:"unclaimed"`
-		Vested              float64   `json:"vested"`
-		Unvested            float64   `json:"unvested"`
-		Circulating         float64   `json:"circulating"`
+		Liquid              float64   `json:"liquid"`
 		Delegated           float64   `json:"delegated"`
 		Staking             float64   `json:"staking"`
+		Shielded            float64   `json:"shielded"`
 		ActiveDelegated     float64   `json:"active_delegated"`
 		ActiveStaking       float64   `json:"active_staking"`
 		InactiveDelegated   float64   `json:"inactive_delegated"`
@@ -88,14 +144,14 @@ func (s *SupplySeries) MarshalJSONVerbose() ([]byte, error) {
 		Height:              s.Height,
 		Cycle:               s.Cycle,
 		Timestamp:           s.Timestamp,
+		Count:               1,
 		Total:               s.params.ConvertValue(s.Total),
 		Activated:           s.params.ConvertValue(s.Activated),
 		Unclaimed:           s.params.ConvertValue(s.Unclaimed),
-		Vested:              s.params.ConvertValue(s.Vested),
-		Unvested:            s.params.ConvertValue(s.Unvested),
-		Circulating:         s.params.ConvertValue(s.Circulating),
+		Liquid:              s.params.ConvertValue(s.Liquid),
 		Delegated:           s.params.ConvertValue(s.Delegated),
 		Staking:             s.params.ConvertValue(s.Staking),
+		Shielded:            s.params.ConvertValue(s.Shielded),
 		ActiveDelegated:     s.params.ConvertValue(s.ActiveDelegated),
 		ActiveStaking:       s.params.ConvertValue(s.ActiveStaking),
 		InactiveDelegated:   s.params.ConvertValue(s.InactiveDelegated),
@@ -124,69 +180,78 @@ func (s *SupplySeries) MarshalJSONBrief() ([]byte, error) {
 	buf := make([]byte, 0, 2048)
 	buf = append(buf, '[')
 	for i, v := range s.columns {
-		switch v {
-		case "height":
-			buf = strconv.AppendInt(buf, s.Height, 10)
-		case "cycle":
-			buf = strconv.AppendInt(buf, s.Cycle, 10)
-		case "time":
-			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(s.Timestamp), 10)
-		case "total":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Total), 'f', dec, 64)
-		case "activated":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Activated), 'f', dec, 64)
-		case "unclaimed":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Unclaimed), 'f', dec, 64)
-		case "vested":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Vested), 'f', dec, 64)
-		case "unvested":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Unvested), 'f', dec, 64)
-		case "circulating":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Circulating), 'f', dec, 64)
-		case "delegated":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Delegated), 'f', dec, 64)
-		case "staking":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Staking), 'f', dec, 64)
-		case "active_delegated":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.ActiveDelegated), 'f', dec, 64)
-		case "active_staking":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.ActiveStaking), 'f', dec, 64)
-		case "inactive_delegated":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.InactiveDelegated), 'f', dec, 64)
-		case "inactive_staking":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.InactiveStaking), 'f', dec, 64)
-		case "minted":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Minted), 'f', dec, 64)
-		case "minted_baking":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.MintedBaking), 'f', dec, 64)
-		case "minted_endorsing":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.MintedEndorsing), 'f', dec, 64)
-		case "minted_seeding":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.MintedSeeding), 'f', dec, 64)
-		case "minted_airdrop":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.MintedAirdrop), 'f', dec, 64)
-		case "burned":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Burned), 'f', dec, 64)
-		case "burned_double_baking":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedDoubleBaking), 'f', dec, 64)
-		case "burned_double_endorse":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedDoubleEndorse), 'f', dec, 64)
-		case "burned_origination":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedOrigination), 'f', dec, 64)
-		case "burned_implicit":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedImplicit), 'f', dec, 64)
-		case "burned_seed_miss":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedSeedMiss), 'f', dec, 64)
-		case "frozen":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Frozen), 'f', dec, 64)
-		case "frozen_deposits":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.FrozenDeposits), 'f', dec, 64)
-		case "frozen_rewards":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.FrozenRewards), 'f', dec, 64)
-		case "frozen_fees":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.FrozenFees), 'f', dec, 64)
-		default:
-			continue
+		if s.null {
+			switch v {
+			case "time":
+				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(s.Timestamp), 10)
+			default:
+				buf = append(buf, null...)
+			}
+		} else {
+			switch v {
+			case "height":
+				buf = strconv.AppendInt(buf, s.Height, 10)
+			case "cycle":
+				buf = strconv.AppendInt(buf, s.Cycle, 10)
+			case "time":
+				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(s.Timestamp), 10)
+			case "count":
+				buf = strconv.AppendInt(buf, 1, 10)
+			case "total":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Total), 'f', dec, 64)
+			case "activated":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Activated), 'f', dec, 64)
+			case "unclaimed":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Unclaimed), 'f', dec, 64)
+			case "liquid":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Liquid), 'f', dec, 64)
+			case "delegated":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Delegated), 'f', dec, 64)
+			case "staking":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Staking), 'f', dec, 64)
+			case "shielded":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Shielded), 'f', dec, 64)
+			case "active_delegated":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.ActiveDelegated), 'f', dec, 64)
+			case "active_staking":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.ActiveStaking), 'f', dec, 64)
+			case "inactive_delegated":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.InactiveDelegated), 'f', dec, 64)
+			case "inactive_staking":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.InactiveStaking), 'f', dec, 64)
+			case "minted":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Minted), 'f', dec, 64)
+			case "minted_baking":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.MintedBaking), 'f', dec, 64)
+			case "minted_endorsing":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.MintedEndorsing), 'f', dec, 64)
+			case "minted_seeding":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.MintedSeeding), 'f', dec, 64)
+			case "minted_airdrop":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.MintedAirdrop), 'f', dec, 64)
+			case "burned":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Burned), 'f', dec, 64)
+			case "burned_double_baking":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedDoubleBaking), 'f', dec, 64)
+			case "burned_double_endorse":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedDoubleEndorse), 'f', dec, 64)
+			case "burned_origination":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedOrigination), 'f', dec, 64)
+			case "burned_implicit":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedImplicit), 'f', dec, 64)
+			case "burned_seed_miss":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedSeedMiss), 'f', dec, 64)
+			case "frozen":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Frozen), 'f', dec, 64)
+			case "frozen_deposits":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.FrozenDeposits), 'f', dec, 64)
+			case "frozen_rewards":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.FrozenRewards), 'f', dec, 64)
+			case "frozen_fees":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.FrozenFees), 'f', dec, 64)
+			default:
+				continue
+			}
 		}
 		if i < len(s.columns)-1 {
 			buf = append(buf, ',')
@@ -200,6 +265,14 @@ func (s *SupplySeries) MarshalCSV() ([]string, error) {
 	dec := s.params.Decimals
 	res := make([]string, len(s.columns))
 	for i, v := range s.columns {
+		if s.null {
+			switch v {
+			case "time":
+				res[i] = strconv.Quote(s.Timestamp.Format(time.RFC3339))
+			default:
+				continue
+			}
+		}
 		switch v {
 		case "height":
 			res[i] = strconv.FormatInt(s.Height, 10)
@@ -207,22 +280,22 @@ func (s *SupplySeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(s.Cycle, 10)
 		case "time":
 			res[i] = strconv.Quote(s.Timestamp.Format(time.RFC3339))
+		case "count":
+			res[i] = strconv.FormatInt(1, 10)
 		case "total":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Total), 'f', dec, 64)
 		case "activated":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Activated), 'f', dec, 64)
 		case "unclaimed":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Unclaimed), 'f', dec, 64)
-		case "vested":
-			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Vested), 'f', dec, 64)
-		case "unvested":
-			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Unvested), 'f', dec, 64)
-		case "circulating":
-			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Circulating), 'f', dec, 64)
+		case "liquid":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Liquid), 'f', dec, 64)
 		case "delegated":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Delegated), 'f', dec, 64)
 		case "staking":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Staking), 'f', dec, 64)
+		case "shielded":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Shielded), 'f', dec, 64)
 		case "active_delegated":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.ActiveDelegated), 'f', dec, 64)
 		case "active_staking":
@@ -268,10 +341,7 @@ func (s *SupplySeries) MarshalCSV() ([]string, error) {
 	return res, nil
 }
 
-func StreamSupplySeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
-	// use chain params at current height
-	params := ctx.Params
-
+func (s *SupplySeries) BuildQuery(ctx *ApiContext, args *SeriesRequest) pack.Query {
 	// access table
 	table, err := ctx.Indexer.Table(args.Series)
 	if err != nil {
@@ -288,6 +358,10 @@ func StreamSupplySeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int)
 	// resolve short column names
 	srcNames = make([]string, 0, len(args.Columns))
 	for _, v := range args.Columns {
+		// ignore count column
+		if v == "count" {
+			continue
+		}
 		// ignore non-series columns
 		if !supplySeriesNames.Contains(v) {
 			panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid time-series column '%s'", v), nil))
@@ -302,164 +376,8 @@ func StreamSupplySeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int)
 	}
 
 	// build table query, no dynamic filter conditions
-	q := pack.Query{
-		Name:   ctx.RequestID,
-		Fields: table.Fields().Select(srcNames...),
-		Order:  args.Order,
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: table.Fields().Find("T"), // time
-				Mode:  pack.FilterModeRange,
-				From:  args.From.Time(),
-				To:    args.To.Time(),
-				Raw:   args.From.String() + " - " + args.To.String(), // debugging aid
-			},
-		},
-	}
-
-	var count int
-	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Series)
-	defer func() {
-		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	}()
-
-	// prepare for source and return type marshalling
-	ss := &SupplySeries{params: params, verbose: args.Verbose, columns: args.Columns}
-	sm := &model.Supply{}
-	window := args.Collapse.Duration()
-	nextBucketTime := args.From.Add(window).Time()
-	mul := 1
-	if args.Order == pack.OrderDesc {
-		mul = 0
-	}
-
-	// prepare response stream
-	ctx.StreamResponseHeaders(http.StatusOK, mimetypes[args.Format])
-
-	switch args.Format {
-	case "json":
-		enc := json.NewEncoder(ctx.ResponseWriter)
-		enc.SetIndent("", "")
-		enc.SetEscapeHTML(false)
-
-		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
-		// close JSON array on panic
-		defer func() {
-			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
-				panic(e)
-			}
-		}()
-
-		// run query and stream results
-		var needComma bool
-
-		// stream from database, result is assumed to be in timestamp order
-		err = table.Stream(ctx, q, func(r pack.Row) error {
-			if err := r.Decode(sm); err != nil {
-				return err
-			}
-
-			// output SupplySeries when valid and time has crossed next boundary
-			if !ss.Timestamp.IsZero() && (sm.Timestamp.Before(nextBucketTime) != (mul == 1)) {
-				// output current data
-				if needComma {
-					io.WriteString(ctx.ResponseWriter, ",")
-				} else {
-					needComma = true
-				}
-				if err := enc.Encode(ss); err != nil {
-					return err
-				}
-				count++
-				if args.Limit > 0 && count == int(args.Limit) {
-					return io.EOF
-				}
-				ss.Reset()
-			}
-
-			// init next time window from data
-			if ss.Timestamp.IsZero() {
-				ss.Timestamp = sm.Timestamp.Truncate(window)
-				nextBucketTime = ss.Timestamp.Add(window * time.Duration(mul))
-			}
-
-			// keep latest data
-			ss.Supply = *sm
-			return nil
-		})
-		// don't handle error here, will be picked up by trailer
-		if err == nil {
-			// output last series element
-			if !ss.Timestamp.IsZero() {
-				if needComma {
-					io.WriteString(ctx.ResponseWriter, ",")
-				}
-				err = enc.Encode(ss)
-				if err == nil {
-					count++
-				}
-			}
-		}
-
-		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
-		ctx.Log.Tracef("JSON encoded %d rows", count)
-
-	case "csv":
-		enc := csv.NewEncoder(ctx.ResponseWriter)
-		// use custom header columns and order
-		if len(args.Columns) > 0 {
-			err = enc.EncodeHeader(args.Columns, nil)
-		}
-		if err == nil {
-			// stream from database, result order is assumed to be in timestamp order
-			err = table.Stream(ctx, q, func(r pack.Row) error {
-				if err := r.Decode(sm); err != nil {
-					return err
-				}
-
-				// output SupplySeries when valid and time has crossed next boundary
-				if !ss.Timestamp.IsZero() && (sm.Timestamp.Before(nextBucketTime) != (mul == 1)) {
-					// output accumulated data
-					if err := enc.EncodeRecord(ss); err != nil {
-						return err
-					}
-					count++
-					if args.Limit > 0 && count == int(args.Limit) {
-						return io.EOF
-					}
-					ss.Reset()
-				}
-
-				// init next time window from data
-				if ss.Timestamp.IsZero() {
-					ss.Timestamp = sm.Timestamp.Truncate(window)
-					nextBucketTime = ss.Timestamp.Add(window * time.Duration(mul))
-				}
-
-				// keep latest data
-				ss.Supply = *sm
-				return nil
-			})
-			if err == nil {
-				// output last series element
-				if !ss.Timestamp.IsZero() {
-					err = enc.EncodeRecord(ss)
-					if err == nil {
-						count++
-					}
-				}
-			}
-		}
-		ctx.Log.Tracef("CSV Encoded %d rows", count)
-	}
-
-	// write error (except EOF), cursor and count as http trailer
-	ctx.StreamTrailer("", count, err)
-
-	// streaming return
-	return nil, -1
+	return pack.NewQuery(ctx.RequestID, table).
+		WithFields(srcNames...).
+		WithOrder(args.Order).
+		AndRange("time", args.From.Time(), args.To.Time())
 }

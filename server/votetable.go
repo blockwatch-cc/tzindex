@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -16,7 +16,7 @@ import (
 	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 )
@@ -45,9 +45,9 @@ func init() {
 // configurable marshalling helper
 type Vote struct {
 	model.Vote
-	verbose bool            `csv:"-" pack:"-"` // cond. marshal
-	columns util.StringList `csv:"-" pack:"-"` // cond. cols & order when brief
-	ctx     *ApiContext     `csv:"-" pack:"-"`
+	verbose bool            // cond. marshal
+	columns util.StringList // cond. cols & order when brief
+	ctx     *ApiContext
 }
 
 func (v *Vote) MarshalJSON() ([]byte, error) {
@@ -325,11 +325,10 @@ func StreamVoteTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 
 	// build table query
 	q := pack.Query{
-		Name:       ctx.RequestID,
-		Fields:     table.Fields().Select(srcNames...),
-		Limit:      int(args.Limit),
-		Conditions: make(pack.ConditionList, 0),
-		Order:      args.Order,
+		Name:   ctx.RequestID,
+		Fields: table.Fields().Select(srcNames...),
+		Limit:  int(args.Limit),
+		Order:  args.Order,
 	}
 
 	// build dynamic filter conditions from query (will panic on error)
@@ -344,7 +343,7 @@ func StreamVoteTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			}
 		}
 		switch prefix {
-		case "columns", "limit", "order", "verbose":
+		case "columns", "limit", "order", "verbose", "filename":
 			// skip these fields
 		case "cursor":
 			// add row id condition: id > cursor (new cursor == last row id)
@@ -356,7 +355,7 @@ func StreamVoteTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
+			q.Conditions.AddAndCondition(&pack.Condition{
 				Field: table.Fields().Pk(),
 				Mode:  cursorMode,
 				Value: id,
@@ -371,15 +370,15 @@ func StreamVoteTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty hash matches id 0 (== missing proposal)
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find("P"), // proposal id
 						Mode:  mode,
-						Value: uint64(0),
+						Value: 0,
 						Raw:   val[0], // debugging aid
 					})
 				} else {
 					// single-proposal lookup and compile condition
-					h, err := chain.ParseProtocolHash(val[0])
+					h, err := tezos.ParseProtocolHash(val[0])
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", val[0]), err))
 					}
@@ -389,7 +388,7 @@ func StreamVoteTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 					}
 					// Note: when not found we insert an always false condition
 					if prop == nil || prop.RowId == 0 {
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find("P"), // proposal id
 							Mode:  mode,
 							Value: uint64(math.MaxUint64),
@@ -397,10 +396,10 @@ func StreamVoteTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 						})
 					} else {
 						// add proto id as extra condition
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find("P"), // proposal id
 							Mode:  mode,
-							Value: prop.RowId.Value(),
+							Value: prop.RowId,
 							Raw:   val[0], // debugging aid
 						})
 					}
@@ -409,7 +408,7 @@ func StreamVoteTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				// multi-proposal lookup and compile condition
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					h, err := chain.ParseProtocolHash(v)
+					h, err := tezos.ParseProtocolHash(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", v), err))
 					}
@@ -426,7 +425,7 @@ func StreamVoteTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				// Note: when list is empty (no proposal was found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("P"), // proposal id
 					Mode:  mode,
 					Value: ids,
@@ -449,7 +448,7 @@ func StreamVoteTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions = append(q.Conditions, cond)
+					q.Conditions.AddAndCondition(&cond)
 				}
 			}
 		}
@@ -460,11 +459,11 @@ func StreamVoteTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		lastId uint64
 	)
 
-	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
-	defer func() {
-		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	}()
+	// start := time.Now()
+	// ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
+	// defer func() {
+	// 	ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
+	// }()
 
 	// prepare return type marshalling
 	vote := &Vote{
@@ -516,7 +515,7 @@ func StreamVoteTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 
 		// close JSON bracket
 		io.WriteString(ctx.ResponseWriter, "]")
-		ctx.Log.Tracef("JSON encoded %d rows", count)
+		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":
 		enc := csv.NewEncoder(ctx.ResponseWriter)
@@ -541,7 +540,7 @@ func StreamVoteTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				return nil
 			})
 		}
-		ctx.Log.Tracef("CSV Encoded %d rows", count)
+		// ctx.Log.Tracef("CSV Encoded %d rows", count)
 	}
 
 	// without new records, cursor remains the same as input (may be empty)

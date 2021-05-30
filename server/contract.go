@@ -4,19 +4,23 @@
 package server
 
 import (
+	"bytes"
 	"encoding/hex"
+	"fmt"
 	"github.com/gorilla/mux"
+	"io"
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
-	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/packdb/vec"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/packdb/pack"
+	"blockwatch.cc/tzgo/micheline"
+	"blockwatch.cc/tzgo/tezos"
+	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
-	"blockwatch.cc/tzindex/micheline"
 )
 
 func init() {
@@ -26,109 +30,75 @@ func init() {
 var _ RESTful = (*ExplorerContract)(nil)
 
 type ExplorerContract struct {
-	Address            string    `json:"address"`
-	Manager            string    `json:"manager"`
-	Delegate           string    `json:"delegate"`
-	Height             int64     `json:"height"`
-	Fee                float64   `json:"fee"`
-	GasLimit           int64     `json:"gas_limit"`
-	GasUsed            int64     `json:"gas_used"`
-	GasPrice           float64   `json:"gas_price"`
-	StorageLimit       int64     `json:"storage_limit"`
-	StorageSize        int64     `json:"storage_size"`
-	StoragePaid        int64     `json:"storage_paid"`
-	IsFunded           bool      `json:"is_funded"`
-	IsVesting          bool      `json:"is_vesting"`
-	IsSpendable        bool      `json:"is_spendable"`
-	IsDelegatable      bool      `json:"is_delegatable"`
-	IsDelegated        bool      `json:"is_delegated"`
-	FirstIn            int64     `json:"first_in"`
-	FirstOut           int64     `json:"first_out"`
-	LastIn             int64     `json:"last_in"`
-	LastOut            int64     `json:"last_out"`
-	FirstSeen          int64     `json:"first_seen"`
-	LastSeen           int64     `json:"last_seen"`
-	DelegatedSince     int64     `json:"delegated_since"`
-	FirstInTime        time.Time `json:"first_in_time"`
-	FirstOutTime       time.Time `json:"first_out_time"`
-	LastInTime         time.Time `json:"last_in_time"`
-	LastOutTime        time.Time `json:"last_out_time"`
-	FirstSeenTime      time.Time `json:"first_seen_time"`
-	LastSeenTime       time.Time `json:"last_seen_time"`
-	DelegatedSinceTime time.Time `json:"delegated_since_time"`
-	NOps               int       `json:"n_ops"`
-	NOpsFailed         int       `json:"n_ops_failed"`
-	NTx                int       `json:"n_tx"`
-	NDelegation        int       `json:"n_delegation"`
-	NOrigination       int       `json:"n_origination"`
-	TokenGenMin        int64     `json:"token_gen_min"`
-	TokenGenMax        int64     `json:"token_gen_max"`
-	BigMapIds          []int64   `json:"bigmap_ids"`
-	OpL                int       `json:"op_l"`
-	OpP                int       `json:"op_p"`
-	OpI                int       `json:"op_i"`
-	InterfaceHash      string    `json:"iface_hash"`
-	CallStats          []int     `json:"call_stats"`
+	Address       string                       `json:"address"`
+	Creator       string                       `json:"creator"`
+	Delegate      string                       `json:"delegate"`
+	StorageSize   int64                        `json:"storage_size"`
+	StoragePaid   int64                        `json:"storage_paid"`
+	FirstSeen     int64                        `json:"first_seen"`
+	LastSeen      int64                        `json:"last_seen"`
+	FirstSeenTime time.Time                    `json:"first_seen_time"`
+	LastSeenTime  time.Time                    `json:"last_seen_time"`
+	NOps          int                          `json:"n_ops"`
+	NOpsFailed    int                          `json:"n_ops_failed"`
+	BigMaps       map[string]int64             `json:"bigmaps,omitempty"`
+	InterfaceHash string                       `json:"iface_hash"`
+	CodeHash      string                       `json:"code_hash"`
+	CallStats     map[string]int               `json:"call_stats"`
+	Features      micheline.Features           `json:"features"`
+	Interfaces    micheline.Interfaces         `json:"interfaces"`
+	Metadata      map[string]*ExplorerMetadata `json:"metadata,omitempty"`
 
 	expires time.Time `json:"-"`
 }
 
-func NewExplorerContract(ctx *ApiContext, c *model.Contract, a *model.Account, details bool) *ExplorerContract {
+func NewExplorerContract(ctx *ApiContext, c *model.Contract, a *model.Account, args Options) *ExplorerContract {
 	p := ctx.Params
 	cc := &ExplorerContract{
-		Address:        a.String(),
-		Height:         c.Height,
-		Fee:            p.ConvertValue(c.Fee),
-		GasLimit:       c.GasLimit,
-		GasUsed:        c.GasUsed,
-		GasPrice:       c.GasPrice,
-		StorageLimit:   c.StorageLimit,
-		StorageSize:    c.StorageSize,
-		StoragePaid:    c.StoragePaid,
-		IsFunded:       a.IsFunded,
-		IsVesting:      a.IsVesting,
-		IsSpendable:    a.IsSpendable,
-		IsDelegatable:  a.IsDelegatable,
-		IsDelegated:    a.IsDelegated,
-		FirstIn:        a.FirstIn,
-		FirstOut:       a.FirstOut,
-		LastIn:         a.LastIn,
-		LastOut:        a.LastOut,
-		FirstSeen:      a.FirstSeen,
-		LastSeen:       a.LastSeen,
-		DelegatedSince: a.DelegatedSince,
-		NOps:           a.NOps,
-		NOpsFailed:     a.NOpsFailed,
-		NTx:            a.NTx,
-		NDelegation:    a.NDelegation,
-		NOrigination:   a.NOrigination,
-		TokenGenMin:    a.TokenGenMin,
-		TokenGenMax:    a.TokenGenMax,
-		OpL:            c.OpL,
-		OpP:            c.OpP,
-		OpI:            c.OpI,
-		InterfaceHash:  hex.EncodeToString(c.InterfaceHash),
-		CallStats:      a.ListCallStats(),
-		expires:        ctx.Tip.BestTime.Add(p.TimeBetweenBlocks[0]),
+		Address:       a.String(),
+		StorageSize:   c.StorageSize,
+		StoragePaid:   c.StoragePaid,
+		FirstSeen:     a.FirstSeen,
+		LastSeen:      a.LastSeen,
+		NOps:          a.NOps,
+		NOpsFailed:    a.NOpsFailed,
+		InterfaceHash: hex.EncodeToString(c.InterfaceHash),
+		CodeHash:      hex.EncodeToString(c.CodeHash),
+		CallStats:     c.ListCallStats(),
+		Features:      c.ListFeatures(),
+		Interfaces:    c.ListInterfaces(),
+		expires:       ctx.Tip.BestTime.Add(p.TimeBetweenBlocks[0]),
 	}
 
 	// resolve block times
-	cc.FirstInTime = ctx.Indexer.BlockTime(ctx.Context, a.FirstIn)
-	cc.FirstOutTime = ctx.Indexer.BlockTime(ctx.Context, a.FirstOut)
-	cc.LastInTime = ctx.Indexer.BlockTime(ctx.Context, a.LastIn)
-	cc.LastOutTime = ctx.Indexer.BlockTime(ctx.Context, a.LastOut)
-	cc.FirstSeenTime = ctx.Indexer.BlockTime(ctx.Context, a.FirstSeen)
-	cc.LastSeenTime = ctx.Indexer.BlockTime(ctx.Context, a.LastSeen)
-	cc.DelegatedSinceTime = ctx.Indexer.BlockTime(ctx.Context, a.DelegatedSince)
+	cc.FirstSeenTime = ctx.Indexer.LookupBlockTime(ctx.Context, a.FirstSeen)
+	cc.LastSeenTime = ctx.Indexer.LookupBlockTime(ctx.Context, a.LastSeen)
 
-	var err error
-	cc.BigMapIds, err = ctx.Indexer.ListContractBigMapIds(ctx.Context, a.RowId)
-	if err != nil {
+	// map bigmap ids to storage annotation names
+	if ids, err := ctx.Indexer.ListContractBigMapIds(ctx.Context, a.RowId); err == nil {
+		cc.BigMaps = c.NamedBigmaps(ids)
+	} else {
 		log.Errorf("explorer contract: cannot load bigmap ids: %v", err)
 	}
-	vec.Int64Sorter(cc.BigMapIds).Sort()
-	cc.Manager = lookupAddress(ctx, a.ManagerId).String()
-	cc.Delegate = lookupAddress(ctx, a.DelegateId).String()
+	cc.Creator = ctx.Indexer.LookupAddress(ctx, a.CreatorId).String()
+	cc.Delegate = ctx.Indexer.LookupAddress(ctx, a.DelegateId).String()
+
+	// add metadata
+	if args.WithMeta() {
+		cc.Metadata = make(map[string]*ExplorerMetadata)
+		if md, ok := lookupMetadataById(ctx, a.RowId, 0, false); ok {
+			cc.Metadata[cc.Address] = md
+		}
+		// fetch baker metadata for delegators
+		if a.IsDelegated {
+			if md, ok := lookupMetadataById(ctx, a.DelegateId, 0, false); ok {
+				cc.Metadata[cc.Delegate] = md
+			}
+		}
+		if md, ok := lookupMetadataById(ctx, c.CreatorId, 0, false); ok {
+			cc.Metadata[cc.Creator] = md
+		}
+	}
 
 	return cc
 }
@@ -157,7 +127,7 @@ func (b ExplorerContract) RegisterDirectRoutes(r *mux.Router) error {
 func (b ExplorerContract) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/{ident}", C(ReadContract)).Methods("GET").Name("contract")
 	r.HandleFunc("/{ident}/calls", C(ReadContractCalls)).Methods("GET")
-	r.HandleFunc("/{ident}/manager", C(ReadContractManager)).Methods("GET")
+	r.HandleFunc("/{ident}/creator", C(ReadContractCreator)).Methods("GET")
 	r.HandleFunc("/{ident}/script", C(ReadContractScript)).Methods("GET")
 	r.HandleFunc("/{ident}/storage", C(ReadContractStorage)).Methods("GET")
 	return nil
@@ -165,35 +135,39 @@ func (b ExplorerContract) RegisterRoutes(r *mux.Router) error {
 }
 
 type ContractRequest struct {
-	ExplorerListRequest // offset, limit, cursor, order
+	ListRequest // offset, limit, cursor, order
 
-	Block      string `schema:"block"`      // height or hash for time-lock
-	Since      string `schema:"since"`      // block hash or height for updates
-	Unpack     bool   `schema:"unpack"`     // unpack packed key/values
-	Prim       bool   `schema:"prim"`       // for prim/value rendering
-	Entrypoint string `schema:"entrypoint"` // name, num or branch
+	Block    string        `schema:"block"`    // height or hash for time-lock
+	Since    string        `schema:"since"`    // block hash or height for updates
+	Unpack   bool          `schema:"unpack"`   // unpack packed key/values
+	Prim     bool          `schema:"prim"`     // for prim/value rendering
+	Meta     bool          `schema:"meta"`     // include account metadata
+	Collapse bool          `schema:"collapse"` // collapse internal calls
+	Sender   tezos.Address `schema:"sender"`   // sender address
+
+	// decoded entrypoint condition (list of name, num or branch)
+	EntrypointMode pack.FilterMode `schema:"-"`
+	EntrypointCond string          `schema:"-"`
 
 	// decoded values
 	BlockHeight int64           `schema:"-"`
-	BlockHash   chain.BlockHash `schema:"-"`
+	BlockHash   tezos.BlockHash `schema:"-"`
 	SinceHeight int64           `schema:"-"`
-	SinceHash   chain.BlockHash `schema:"-"`
+	SinceHash   tezos.BlockHash `schema:"-"`
 }
 
-func (r *ContractRequest) WithPrim() bool {
-	return r != nil && r.Prim
-}
-
-func (r *ContractRequest) WithUnpack() bool {
-	return r != nil && r.Unpack
-}
-
+func (r *ContractRequest) WithPrim() bool   { return r != nil && r.Prim }
+func (r *ContractRequest) WithUnpack() bool { return r != nil && r.Unpack }
 func (r *ContractRequest) WithHeight() int64 {
 	if r != nil {
 		return r.BlockHeight
 	}
 	return 0
 }
+
+func (r *ContractRequest) WithMeta() bool     { return r != nil && r.Meta }
+func (r *ContractRequest) WithRights() bool   { return false }
+func (r *ContractRequest) WithCollapse() bool { return r != nil && r.Collapse }
 
 func (r *ContractRequest) Parse(ctx *ApiContext) {
 	if len(r.Block) > 0 {
@@ -238,13 +212,44 @@ func (r *ContractRequest) Parse(ctx *ApiContext) {
 		r.SinceHeight = b.Height
 		r.SinceHash = b.Hash.Clone()
 	}
+	// filter by entrypoint condition
+	for key, val := range ctx.Request.URL.Query() {
+		keys := strings.Split(key, ".")
+		if keys[0] != "entrypoint" {
+			continue
+		}
+		// parse mode
+		r.EntrypointMode = pack.FilterModeEqual
+		if len(keys) > 1 {
+			r.EntrypointMode = pack.ParseFilterMode(keys[1])
+			if !r.EntrypointMode.IsValid() {
+				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid entrypoint filter mode '%s'", keys[1]), nil))
+			}
+		}
+		// use entrypoint condition list as is (will be parsed later)
+		r.EntrypointCond = val[0]
+		// allow constructs of form `entrypoint=a,b`
+		if strings.Contains(r.EntrypointCond, ",") {
+			if r.EntrypointMode == pack.FilterModeEqual {
+				r.EntrypointMode = pack.FilterModeIn
+			}
+		} else {
+			// check for single value mode  `entrypoint.in=a`
+			switch r.EntrypointMode {
+			case pack.FilterModeIn:
+				r.EntrypointMode = pack.FilterModeEqual
+			case pack.FilterModeNotIn:
+				r.EntrypointMode = pack.FilterModeNotEqual
+			}
+		}
+	}
 }
 
 func loadContract(ctx *ApiContext) *model.Contract {
 	if ccIdent, ok := mux.Vars(ctx.Request)["ident"]; !ok || ccIdent == "" {
 		panic(EBadRequest(EC_RESOURCE_ID_MISSING, "missing contract address", nil))
 	} else {
-		addr, err := chain.ParseAddress(ccIdent)
+		addr, err := tezos.ParseAddress(ccIdent)
 		if err != nil {
 			panic(EBadRequest(EC_RESOURCE_ID_MALFORMED, "invalid address", err))
 		}
@@ -262,6 +267,8 @@ func loadContract(ctx *ApiContext) *model.Contract {
 }
 
 func ReadContract(ctx *ApiContext) (interface{}, int) {
+	args := &AccountRequest{}
+	ctx.ParseRequestArgs(args)
 	cc := loadContract(ctx)
 	acc, err := ctx.Indexer.LookupAccountId(ctx, cc.AccountId)
 	if err != nil {
@@ -272,7 +279,7 @@ func ReadContract(ctx *ApiContext) (interface{}, int) {
 			panic(EInternal(EC_DATABASE, err.Error(), nil))
 		}
 	}
-	return NewExplorerContract(ctx, cc, acc, true), http.StatusOK
+	return NewExplorerContract(ctx, cc, acc, args), http.StatusOK
 }
 
 // list incoming transaction with data
@@ -289,82 +296,99 @@ func ReadContractCalls(ctx *ApiContext) (interface{}, int) {
 			panic(EInternal(EC_DATABASE, err.Error(), nil))
 		}
 	}
+
+	r := etl.ListRequest{
+		Account: acc,
+		Mode:    args.EntrypointMode,
+		Since:   args.SinceHeight,
+		Until:   args.BlockHeight,
+		Offset:  args.Offset,
+		Limit:   ctx.Cfg.ClampExplore(args.Limit),
+		Cursor:  args.Cursor,
+		Order:   args.Order,
+	}
+
+	if args.Sender.IsValid() {
+		if a, err := ctx.Indexer.LookupAccount(ctx.Context, args.Sender); err != nil {
+			panic(ENotFound(EC_RESOURCE_NOTFOUND, "no such sender account", err))
+		} else {
+			r.SenderId = a.RowId
+		}
+	}
+
 	// parse entrypoint filter
 	// - name (eg. "default")
 	// - branch (eg. "RRL")
 	// - id (eg. 5)
-	ep := -1
-	if args.Entrypoint != "" {
-		// ignore matching errors
-		isBranch, err := regexp.MatchString(`^[RL]+$`, args.Entrypoint)
-		isNum, err := regexp.MatchString(`^[\d]+$`, args.Entrypoint)
-		switch true {
-		case isNum:
-			ep, err = strconv.Atoi(args.Entrypoint)
-			if err != nil {
-				panic(EBadRequest(EC_RESOURCE_ID_MALFORMED, "invalid entrypoint id", err))
-			}
-		case isBranch:
-			fallthrough
-		default:
-			// need manager hash
-			var mgrHash []byte
-			if mgr, err := ctx.Indexer.LookupAccountId(ctx, cc.ManagerId); err == nil {
-				mgrHash = mgr.Address().Bytes()
-			}
-			script, err := cc.LoadScript(ctx.Tip, args.BlockHeight, mgrHash)
-			if err != nil {
-				panic(EInternal(EC_SERVER, "script unmarshal failed", err))
-			}
-			eps, err := script.Entrypoints(false)
-			if err != nil {
-				panic(EInternal(EC_SERVER, "script entrypoint parsing failed", err))
-			}
-			if isBranch {
-				e, ok := eps.FindBranch(args.Entrypoint)
-				if !ok {
-					panic(EBadRequest(EC_RESOURCE_ID_MALFORMED, "missing entrypoint", err))
+	r.Entrypoints = make([]int64, 0)
+	if len(args.EntrypointCond) > 0 {
+		script, err := cc.LoadScript()
+		if err != nil {
+			panic(EInternal(EC_SERVER, "script unmarshal failed", err))
+		}
+		scriptEntrypoints, err := script.Entrypoints(false)
+		if err != nil {
+			panic(EInternal(EC_SERVER, "script entrypoint parsing failed", err))
+		}
+
+		// parse entrypoint list
+		for _, v := range strings.Split(args.EntrypointCond, ",") {
+			// ignore matching errors
+			isBranch, _ := regexp.MatchString(`^[RL/]+$`, v)
+			isNum, _ := regexp.MatchString(`^[\d]+$`, v)
+			switch true {
+			case isNum:
+				ep, err := strconv.Atoi(v)
+				if err != nil {
+					panic(EBadRequest(EC_RESOURCE_ID_MALFORMED, fmt.Sprintf("invalid entrypoint id %s", v), err))
 				}
-				ep = e.Id
-			} else {
-				e, ok := eps[args.Entrypoint]
-				if !ok {
-					panic(EBadRequest(EC_RESOURCE_ID_MALFORMED, "missing entrypoint", err))
+				r.Entrypoints = append(r.Entrypoints, int64(ep))
+			case isBranch:
+				fallthrough
+			default:
+				if isBranch {
+					e, ok := scriptEntrypoints.FindBranch(v)
+					if !ok {
+						panic(EBadRequest(EC_RESOURCE_ID_MALFORMED, fmt.Sprintf("missing entrypoint branch %s", v), err))
+					}
+					r.Entrypoints = append(r.Entrypoints, int64(e.Id))
+				} else {
+					e, ok := scriptEntrypoints[v]
+					if !ok {
+						panic(EBadRequest(EC_RESOURCE_ID_MALFORMED, fmt.Sprintf("missing entrypoint %s", v), err))
+					}
+					r.Entrypoints = append(r.Entrypoints, int64(e.Id))
 				}
-				ep = e.Id
 			}
 		}
 	}
 
-	ops, err := ctx.Indexer.ListContractCalls(
-		ctx,
-		acc.RowId,
-		ep,
-		util.Max64(args.SinceHeight, acc.FirstSeen-1), // since, until are optional
-		util.Min64(args.BlockHeight, acc.LastSeen),
-		args.Offset,
-		ctx.Cfg.ClampExplore(args.Limit), // offset, limit (optional)
-		args.Cursor,
-		args.Order,
-	)
+	ops, err := ctx.Indexer.ListContractCalls(ctx, r)
 	if err != nil {
 		panic(EInternal(EC_DATABASE, "cannot read contract calls", err))
 	}
 
 	// we reuse explorer ops here
-	eops := make([]*ExplorerOp, len(ops))
-	for i, v := range ops {
-		eops[i] = NewExplorerOp(ctx, v, nil, cc, args)
+	resp := &ExplorerOpList{
+		list:    make([]*ExplorerOp, 0),
+		expires: ctx.Tip.BestTime.Add(ctx.Params.TimeBetweenBlocks[0]),
 	}
-	return eops, http.StatusOK
+	cache := make(map[int64]interface{})
+	for _, v := range ops {
+		resp.Append(NewExplorerOp(ctx, v, nil, cc, args, cache), args.WithCollapse())
+	}
+
+	return resp, http.StatusOK
 }
 
-func ReadContractManager(ctx *ApiContext) (interface{}, int) {
+func ReadContractCreator(ctx *ApiContext) (interface{}, int) {
+	args := &AccountRequest{}
+	ctx.ParseRequestArgs(args)
 	cc := loadContract(ctx)
-	if cc.ManagerId == 0 {
-		panic(ENotFound(EC_RESOURCE_NOTFOUND, "no manager for this contract", nil))
+	if cc.CreatorId == 0 {
+		panic(ENotFound(EC_RESOURCE_NOTFOUND, "no creator for this contract", nil))
 	}
-	acc, err := ctx.Indexer.LookupAccountId(ctx, cc.ManagerId)
+	acc, err := ctx.Indexer.LookupAccountId(ctx, cc.CreatorId)
 	if err != nil {
 		switch err {
 		case index.ErrNoAccountEntry:
@@ -373,12 +397,12 @@ func ReadContractManager(ctx *ApiContext) (interface{}, int) {
 			panic(EInternal(EC_DATABASE, err.Error(), nil))
 		}
 	}
-	return NewExplorerAccount(ctx, acc, false), http.StatusOK
+	return NewExplorerAccount(ctx, acc, args), http.StatusOK
 }
 
 type ExplorerScript struct {
 	Script      *micheline.Script     `json:"script,omitempty"`
-	Type        micheline.BigMapType  `json:"storage_type"`
+	Type        micheline.Typedef     `json:"storage_type"`
 	Entrypoints micheline.Entrypoints `json:"entrypoints"`
 	modified    time.Time             `json:"-"`
 }
@@ -393,26 +417,19 @@ func ReadContractScript(ctx *ApiContext) (interface{}, int) {
 	ctx.ParseRequestArgs(args)
 	cc := loadContract(ctx)
 
-	// check for non-existent contracts
-	if cc.IsNonExist() {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, "non-existing contract", nil))
-	}
-
 	// unmarshal and optionally migrate script
 	if args.BlockHeight == 0 {
 		args.BlockHeight = ctx.Tip.BestHeight
 	}
 
-	// need manager hash
-	var mgrHash []byte
-	if cc.ManagerId > 0 {
-		if mgr, err := ctx.Indexer.LookupAccountId(ctx, cc.ManagerId); err == nil {
-			mgrHash = mgr.Address().Bytes()
-		}
-	}
-	script, err := cc.LoadScript(ctx.Tip, args.BlockHeight, mgrHash)
+	script, err := cc.LoadScript()
 	if err != nil {
 		panic(EInternal(EC_SERVER, "script unmarshal failed", err))
+	}
+
+	// empty script before babylon is OK
+	if script == nil {
+		return nil, http.StatusNoContent
 	}
 
 	ep, err := script.Entrypoints(args.WithPrim())
@@ -422,9 +439,9 @@ func ReadContractScript(ctx *ApiContext) (interface{}, int) {
 
 	resp := &ExplorerScript{
 		Script:      script,
-		Type:        script.StorageType(),
+		Type:        script.StorageType().Typedef("storage"),
 		Entrypoints: ep,
-		modified:    ctx.Indexer.BlockTime(ctx.Context, cc.Height),
+		modified:    ctx.Indexer.LookupBlockTime(ctx.Context, cc.FirstSeen),
 	}
 	if !args.WithPrim() {
 		resp.Script = nil
@@ -438,110 +455,116 @@ func ReadContractStorage(ctx *ApiContext) (interface{}, int) {
 	ctx.ParseRequestArgs(args)
 	cc := loadContract(ctx)
 
-	// check for non-existent contracts
-	if cc.IsNonExist() {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, "non-existing contract", nil))
-	}
-
-	if args.BlockHeight > 0 && args.BlockHeight < cc.Height {
+	if args.BlockHeight > 0 && args.BlockHeight < cc.FirstSeen {
 		panic(ENotFound(EC_RESOURCE_NOTFOUND, "empty storage before origination", nil))
 	}
 
-	var mgrHash []byte
-	if mgr, err := ctx.Indexer.LookupAccountId(ctx, cc.ManagerId); err == nil {
-		mgrHash = mgr.Address().Bytes()
+	// unmarshal script, post-babylon migration has been applied
+	script, err := cc.LoadScript()
+	if err != nil {
+		panic(EInternal(EC_SERVER, "script unmarshal failed", err))
 	}
 
+	// type is always the most recently upgraded type stored in contract table
 	var (
-		prim     *micheline.Prim
-		typ      *micheline.Prim
-		ts       time.Time
-		opHeight int64
+		prim         micheline.Prim = micheline.Prim{}
+		typ          micheline.Type = script.StorageType()
+		ts           time.Time
+		height       int64
+		patchBigmaps bool
 	)
 
-	// result rendering as of height
-	tip := ctx.Tip
-	viewHeight := util.NonZero64(args.BlockHeight, tip.BestHeight)
-
-	// find most recent incoming call before height (or now when zero)
-	op, err := ctx.Indexer.FindLastCall(
-		ctx.Context,
-		cc.AccountId,
-		viewHeight,
-	)
-	if err != nil {
-		if err != index.ErrNoOpEntry {
-			panic(EInternal(EC_DATABASE, err.Error(), nil))
-		} else {
-			// unmarshal and optionally migrate script to reflect state at user-defined
-			// view height or origination height
-			script, err := cc.LoadScript(tip, viewHeight, mgrHash)
-			if err != nil {
-				panic(EInternal(EC_SERVER, "script unmarshal failed", err))
-			}
-			// use storage init from origination, may contain full bigmap definition
-			// Note: the original storage is already patched
-			if script != nil {
-				prim = script.Storage
-				typ = script.Code.Storage.Args[0]
-			}
-			opHeight = cc.Height
-			ts = ctx.Indexer.BlockTime(ctx.Context, cc.Height)
+	if args.BlockHeight == 0 || args.BlockHeight >= cc.LastSeen {
+		// most recent storage is now stored in contract table!
+		height = cc.LastSeen
+		if err := prim.UnmarshalBinary(cc.Storage); err != nil {
+			log.Errorf("explorer: storage unmarshal in contract %s: %v", cc, err)
 		}
+		// when data is loaded from origination, we must patch bigmap pointers
+		patchBigmaps = cc.FirstSeen == cc.LastSeen && bytes.Count(cc.CallStats, []byte{0}) == len(cc.CallStats)
+		ts = ctx.Indexer.LookupBlockTime(ctx.Context, height)
 	} else {
-		// unmarshal latest storage update from op, contains bigmap reference
-		prim = &micheline.Prim{}
+		// find earlier incoming call before height
+		op, err := ctx.Indexer.FindLastCall(
+			ctx.Context,
+			cc.AccountId,
+			cc.FirstSeen,
+			args.BlockHeight,
+		)
+		if err != nil && err != index.ErrNoOpEntry {
+			panic(EInternal(EC_DATABASE, err.Error(), nil))
+		}
+
+		// when no most recent call exists, load from origination
+		if op == nil {
+			op, err = ctx.Indexer.FindOrigination(ctx, cc.AccountId, cc.FirstSeen)
+			if err != nil {
+				panic(EInternal(EC_DATABASE, err.Error(), nil))
+			}
+			patchBigmaps = true
+		}
+
+		// unmarshal from op
+		height = op.Height
+		ts = op.Timestamp
 		if err := prim.UnmarshalBinary(op.Storage); err != nil {
 			log.Errorf("explorer: storage unmarshal in op %s: %v", op.Hash, err)
 		}
-		// load params at user-defined time (or most recent)
-		params := ctx.Params
-		if !params.ContainsHeight(viewHeight) {
-			params = ctx.Crawler.ParamsByHeight(viewHeight)
-		}
-
-		// upgrade pre-babylon storage to adher to post-babylon spec change
-		if cc.NeedsBabylonUpgrade(params, op.Height) {
-			prim = prim.MigrateToBabylonStorage(mgrHash)
-		}
-
-		// unmarshal and optionally migrate script at operation height
-		script, err := cc.LoadScript(tip, viewHeight, mgrHash)
-		if err != nil {
-			panic(EInternal(EC_SERVER, "script unmarshal failed", err))
-		}
-		typ = script.Code.Storage.Args[0]
-		opHeight = op.Height
-		ts = op.Timestamp
 	}
 
-	hash, _ := ctx.Indexer.BlockHashByHeight(ctx.Context, opHeight)
+	// always output post-babylon storage
+	// upgrade pre-babylon storage value to post-babylon spec
+	// if cc.NeedsBabylonUpgrade(ctx.Params) && ctx.Params.IsPreBabylonHeight(height) {
+	// 	if acc, err := ctx.Indexer.LookupAccountId(ctx, cc.CreatorId); err == nil {
+	// 		prim = prim.MigrateToBabylonStorage(acc.Address().Bytes())
+	// 	}
+	// }
+
+	// patch bigmap pointers when storage is loaded from origination
+	if patchBigmaps {
+		if ids, err := ctx.Indexer.ListContractBigMapIds(ctx.Context, cc.AccountId); err == nil && len(ids) > 0 {
+			// Note: This is a heuristic only, and should work in the majority of cases.
+			// Reason is that in value trees we cannot distinguish between bigmaps
+			// and any other container type using PrimSequence as encoding (list, map, set).
+			//
+			// FIXME: If it turns out this generates issues, we could use
+			// paths from the type tree and match the same paths in the value
+			// tree, but due to ambiguities in pair unfolding this method would
+			// in theory not be correct in all possible cases either.
+			prim.Visit(func(p *micheline.Prim) error {
+				if p.LooksLikeContainer() {
+					*p = micheline.NewBigmapRef(ids[0])
+					ids = ids[1:]
+					if len(ids) == 0 {
+						return io.EOF
+					}
+				}
+				return nil
+			})
+		}
+	}
 
 	resp := &ExplorerStorageValue{
-		Meta: ExplorerStorageMeta{
-			Contract: cc.String(),
-			Time:     ts,
-			Height:   opHeight,
-			Block:    hash,
-		},
-		Value: &micheline.BigMapValue{
-			Type:  typ,
-			Value: prim,
-		},
+		Value:    micheline.NewValue(typ, prim),
 		modified: ts,
 		expires:  ctx.Tip.BestTime.Add(ctx.Params.TimeBetweenBlocks[0]),
 	}
-
-	if args.WithPrim() {
-		resp.Prim = prim
+	if args.WithMeta() {
+		resp.Meta = &ExplorerStorageMeta{
+			Contract: cc.String(),
+			Time:     ts,
+			Height:   height,
+			Block:    ctx.Indexer.LookupBlockHash(ctx.Context, height),
+		}
 	}
 
-	if args.WithUnpack() && prim.IsPackedAny() {
-		if p, err := prim.UnpackAny(); err == nil {
-			resp.ValueUnpacked = &micheline.BigMapValue{
-				Type:  p.BuildType(),
-				Value: p,
-			}
+	if args.WithPrim() {
+		resp.Prim = &prim
+	}
+
+	if args.WithUnpack() && resp.Value.IsPackedAny() {
+		if up, err := resp.Value.UnpackAll(); err == nil {
+			resp.Value = up
 		}
 	}
 

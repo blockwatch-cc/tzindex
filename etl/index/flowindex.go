@@ -125,15 +125,9 @@ func (idx *FlowIndex) DisconnectBlock(ctx context.Context, block *Block, _ Block
 }
 
 func (idx *FlowIndex) DeleteBlock(ctx context.Context, height int64) error {
-	log.Debugf("Rollback deleting flows at height %d", height)
-	q := pack.Query{
-		Name: "etl.flow.delete",
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: idx.table.Fields().Find("h"), // block height (!)
-			Mode:  pack.FilterModeEqual,
-			Value: height,
-		}},
-	}
-	_, err := idx.table.Delete(ctx, q)
+	// log.Debugf("Rollback deleting flows at height %d", height)
+	_, err := pack.NewQuery("etl.flow.delete", idx.table).
+		AndEqual("height", height).
+		Delete(ctx)
 	return err
 }

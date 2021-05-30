@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -16,8 +16,7 @@ import (
 	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/packdb/vec"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 )
@@ -51,11 +50,10 @@ func init() {
 // configurable marshalling helper
 type Snapshot struct {
 	model.Snapshot
-	verbose bool                              `csv:"-" pack:"-"` // cond. marshal
-	columns util.StringList                   `csv:"-" pack:"-"` // cond. cols & order when brief
-	params  *chain.Params                     `csv:"-" pack:"-"` // blockchain amount conversion
-	addrs   map[model.AccountID]chain.Address `csv:"-" pack:"-"` // address map
-	ctx     *ApiContext                       `csv:"-" pack:"-"`
+	verbose bool            // cond. marshal
+	columns util.StringList // cond. cols & order when brief
+	params  *tezos.Params   // blockchain amount conversion
+	ctx     *ApiContext
 }
 
 func (s *Snapshot) MarshalJSON() ([]byte, error) {
@@ -95,16 +93,16 @@ func (s *Snapshot) MarshalJSONVerbose() ([]byte, error) {
 		Index:        s.Snapshot.Index,
 		Rolls:        s.Snapshot.Rolls,
 		AccountId:    s.AccountId.Value(),
-		Account:      s.addrs[s.AccountId].String(),
+		Account:      s.ctx.Indexer.LookupAddress(s.ctx, s.AccountId).String(),
 		DelegateId:   s.DelegateId.Value(),
-		Delegate:     lookupAddress(s.ctx, s.DelegateId).String(),
+		Delegate:     s.ctx.Indexer.LookupAddress(s.ctx, s.DelegateId).String(),
 		IsDelegate:   s.IsDelegate,
 		IsActive:     s.IsActive,
 		Balance:      s.params.ConvertValue(s.Balance),
 		Delegated:    s.params.ConvertValue(s.Delegated),
 		NDelegations: s.NDelegations,
 		Since:        s.Since,
-		SinceTime:    s.ctx.Indexer.BlockTimeMs(s.ctx.Context, s.Since),
+		SinceTime:    s.ctx.Indexer.LookupBlockTimeMs(s.ctx.Context, s.Since),
 	}
 	return json.Marshal(snap)
 }
@@ -137,7 +135,7 @@ func (s *Snapshot) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendUint(buf, s.AccountId.Value(), 10)
 		case "address":
 			if s.AccountId > 0 {
-				buf = strconv.AppendQuote(buf, s.addrs[s.AccountId].String())
+				buf = strconv.AppendQuote(buf, s.ctx.Indexer.LookupAddress(s.ctx, s.AccountId).String())
 			} else {
 				buf = append(buf, "null"...)
 			}
@@ -145,7 +143,7 @@ func (s *Snapshot) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendUint(buf, s.DelegateId.Value(), 10)
 		case "delegate":
 			if s.DelegateId > 0 {
-				buf = strconv.AppendQuote(buf, lookupAddress(s.ctx, s.DelegateId).String())
+				buf = strconv.AppendQuote(buf, s.ctx.Indexer.LookupAddress(s.ctx, s.DelegateId).String())
 			} else {
 				buf = append(buf, "null"...)
 			}
@@ -170,7 +168,7 @@ func (s *Snapshot) MarshalJSONBrief() ([]byte, error) {
 		case "since":
 			buf = strconv.AppendInt(buf, s.Since, 10)
 		case "since_time":
-			buf = strconv.AppendInt(buf, s.ctx.Indexer.BlockTimeMs(s.ctx.Context, s.Since), 10)
+			buf = strconv.AppendInt(buf, s.ctx.Indexer.LookupBlockTimeMs(s.ctx.Context, s.Since), 10)
 		default:
 			continue
 		}
@@ -204,11 +202,11 @@ func (s *Snapshot) MarshalCSV() ([]string, error) {
 		case "account_id":
 			res[i] = strconv.FormatUint(s.AccountId.Value(), 10)
 		case "address":
-			res[i] = strconv.Quote(s.addrs[s.AccountId].String())
+			res[i] = strconv.Quote(s.ctx.Indexer.LookupAddress(s.ctx, s.AccountId).String())
 		case "delegate_id":
 			res[i] = strconv.FormatUint(s.DelegateId.Value(), 10)
 		case "delegate":
-			res[i] = strconv.Quote(lookupAddress(s.ctx, s.DelegateId).String())
+			res[i] = strconv.Quote(s.ctx.Indexer.LookupAddress(s.ctx, s.DelegateId).String())
 		case "is_delegate":
 			res[i] = strconv.FormatBool(s.IsDelegate)
 		case "is_active":
@@ -222,7 +220,7 @@ func (s *Snapshot) MarshalCSV() ([]string, error) {
 		case "since":
 			res[i] = strconv.FormatInt(s.Since, 10)
 		case "since_time":
-			res[i] = strconv.Quote(s.ctx.Indexer.BlockTime(s.ctx.Context, s.Since).Format(time.RFC3339))
+			res[i] = strconv.Quote(s.ctx.Indexer.LookupBlockTime(s.ctx.Context, s.Since).Format(time.RFC3339))
 		default:
 			continue
 		}
@@ -239,15 +237,11 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 	if err != nil {
 		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", args.Table), err))
 	}
-	accountT, err := ctx.Indexer.Table(index.AccountTableKey)
-	if err != nil {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", index.AccountTableKey), err))
-	}
 
 	// translate long column names to short names used in pack tables
 	var (
-		srcNames     []string
-		needAccountT bool
+		srcNames []string
+		// needAccountT bool
 	)
 	if len(args.Columns) > 0 {
 		// resolve short column names
@@ -257,13 +251,6 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			if !ok {
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("unknown column '%s'", v), nil))
 			}
-			switch v {
-			case "address":
-				needAccountT = true
-			}
-			if args.Verbose {
-				needAccountT = true
-			}
 			if n != "-" {
 				srcNames = append(srcNames, n)
 			}
@@ -272,16 +259,14 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 		// use all table columns in order and reverse lookup their long names
 		srcNames = table.Fields().Names()
 		args.Columns = snapAllAliases
-		needAccountT = true
 	}
 
 	// build table query
 	q := pack.Query{
-		Name:       ctx.RequestID,
-		Fields:     table.Fields().Select(srcNames...),
-		Limit:      int(args.Limit),
-		Conditions: make(pack.ConditionList, 0),
-		Order:      args.Order,
+		Name:   ctx.RequestID,
+		Fields: table.Fields().Select(srcNames...),
+		Limit:  int(args.Limit),
+		Order:  args.Order,
 	}
 
 	// build dynamic filter conditions from query (will panic on error)
@@ -296,7 +281,7 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			}
 		}
 		switch prefix {
-		case "columns", "limit", "order", "verbose":
+		case "columns", "limit", "order", "verbose", "filename":
 			// skip these fields
 		case "cursor":
 			// add row id condition: id > cursor (new cursor == last row id)
@@ -308,7 +293,7 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
+			q.Conditions.AddAndCondition(&pack.Condition{
 				Field: table.Fields().Pk(),
 				Mode:  cursorMode,
 				Value: id,
@@ -328,15 +313,15 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty address matches id 0 (== no delegate/manager set)
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find(field), // account id
 						Mode:  mode,
-						Value: uint64(0),
+						Value: 0,
 						Raw:   val[0], // debugging aid
 					})
 				} else {
 					// single-account lookup and compile condition
-					addr, err := chain.ParseAddress(val[0])
+					addr, err := tezos.ParseAddress(val[0])
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
@@ -346,7 +331,7 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 					}
 					// Note: when not found we insert an always false condition
 					if acc == nil || acc.RowId == 0 {
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find(field), // account id
 							Mode:  mode,
 							Value: uint64(math.MaxUint64),
@@ -354,10 +339,10 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 						})
 					} else {
 						// add id as extra condition
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find(field), // account id
 							Mode:  mode,
-							Value: acc.RowId.Value(),
+							Value: acc.RowId,
 							Raw:   val[0], // debugging aid
 						})
 					}
@@ -366,7 +351,7 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(v)
+					addr, err := tezos.ParseAddress(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
@@ -383,7 +368,7 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find(field), // account id
 					Mode:  mode,
 					Value: ids,
@@ -414,18 +399,18 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				from, to := cond.From.(time.Time), cond.To.(time.Time)
 				var fromBlock, toBlock int64
 				if !from.After(bestTime) {
-					fromBlock = ctx.Indexer.BlockHeightFromTime(ctx.Context, from)
+					fromBlock = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, from)
 				} else {
 					nDiff := int64(from.Sub(bestTime) / params.TimeBetweenBlocks[0])
 					fromBlock = bestHeight + nDiff
 				}
 				if !to.After(bestTime) {
-					toBlock = ctx.Indexer.BlockHeightFromTime(ctx.Context, to)
+					toBlock = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, to)
 				} else {
 					nDiff := int64(to.Sub(bestTime) / params.TimeBetweenBlocks[0])
 					toBlock = bestHeight + nDiff
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("S"), // since
 					Mode:  cond.Mode,
 					From:  fromBlock,
@@ -437,13 +422,13 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				valueBlocks := make([]int64, 0)
 				for _, v := range cond.Value.([]time.Time) {
 					if !v.After(bestTime) {
-						valueBlocks = append(valueBlocks, ctx.Indexer.BlockHeightFromTime(ctx.Context, v))
+						valueBlocks = append(valueBlocks, ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, v))
 					} else {
 						nDiff := int64(v.Sub(bestTime) / params.TimeBetweenBlocks[0])
 						valueBlocks = append(valueBlocks, bestHeight+nDiff)
 					}
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("S"), // since
 					Mode:  cond.Mode,
 					Value: valueBlocks,
@@ -455,12 +440,12 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				valueTime := cond.Value.(time.Time)
 				var valueBlock int64
 				if !valueTime.After(bestTime) {
-					valueBlock = ctx.Indexer.BlockHeightFromTime(ctx.Context, valueTime)
+					valueBlock = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, valueTime)
 				} else {
 					nDiff := int64(valueTime.Sub(bestTime) / params.TimeBetweenBlocks[0])
 					valueBlock = bestHeight + nDiff
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("S"), // since
 					Mode:  cond.Mode,
 					Value: valueBlock,
@@ -499,7 +484,7 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions = append(q.Conditions, cond)
+					q.Conditions.AddAndCondition(&cond)
 				}
 			}
 		}
@@ -510,62 +495,25 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 		lastId uint64
 	)
 
-	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
-	defer func() {
-		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	}()
+	// start := time.Now()
+	// ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
+	// defer func() {
+	// 	ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
+	// }()
 
 	// Step 1: query database
 	res, err := table.Query(ctx, q)
 	if err != nil {
 		panic(EInternal(EC_DATABASE, "query failed", err))
 	}
-	ctx.Log.Tracef("Processing result with %d rows %d cols", res.Rows(), res.Cols())
+	// ctx.Log.Tracef("Processing result with %d rows %d cols", res.Rows(), res.Cols())
 	defer res.Close()
-
-	// Step 2: resolve related accounts using lookup (when requested)
-	accMap := make(map[model.AccountID]chain.Address)
-	if needAccountT && res.Rows() > 0 {
-		// get a unique copy of account and delegate id columns (clip on request limit)
-		acol, _ := res.Uint64Column("a")
-		find := vec.UniqueUint64Slice(acol[:util.Min(len(acol), int(args.Limit))])
-
-		// lookup accounts from id
-		q := pack.Query{
-			Name:   ctx.RequestID + ".account_lookup",
-			Fields: accountT.Fields().Select("I", "H", "t"),
-			Conditions: pack.ConditionList{pack.Condition{
-				Field: accountT.Fields().Find("I"),
-				Mode:  pack.FilterModeIn,
-				Value: find,
-			}},
-		}
-		type XAcc struct {
-			Id   model.AccountID   `pack:"I,pk"`
-			Hash []byte            `pack:"H"`
-			Type chain.AddressType `pack:"t"`
-		}
-		acc := &XAcc{}
-		err := accountT.Stream(ctx, q, func(r pack.Row) error {
-			if err := r.Decode(acc); err != nil {
-				return err
-			}
-			accMap[acc.Id] = chain.NewAddress(acc.Type, acc.Hash)
-			return nil
-		})
-		if err != nil {
-			// non-fatal error
-			ctx.Log.Errorf("Account lookup failed: %v", err)
-		}
-	}
 
 	// prepare return type marshalling
 	snap := &Snapshot{
 		verbose: args.Verbose,
 		columns: util.StringList(args.Columns),
 		params:  params,
-		addrs:   accMap,
 		ctx:     ctx,
 	}
 
@@ -611,7 +559,7 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 		})
 		// close JSON bracket
 		io.WriteString(ctx.ResponseWriter, "]")
-		ctx.Log.Tracef("JSON encoded %d rows", count)
+		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":
 		enc := csv.NewEncoder(ctx.ResponseWriter)
@@ -636,7 +584,7 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				return nil
 			})
 		}
-		ctx.Log.Tracef("CSV Encoded %d rows", count)
+		// ctx.Log.Tracef("CSV Encoded %d rows", count)
 	}
 
 	// without new records, cursor remains the same as input (may be empty)

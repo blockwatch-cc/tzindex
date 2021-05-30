@@ -16,8 +16,8 @@ import (
 
 var (
 	SupplyPackSizeLog2    = 15 // 32k packs ~3.6M
-	SupplyJournalSizeLog2 = 16 // 65k - can be big, no search required
-	SupplyCacheSize       = 2
+	SupplyJournalSizeLog2 = 16 // 64k - can be big, no search required
+	SupplyCacheSize       = 8  // ~30M
 	SupplyFillLevel       = 100
 	SupplyIndexKey        = "supply"
 	SupplyTableKey        = "supply"
@@ -122,15 +122,9 @@ func (idx *SupplyIndex) DisconnectBlock(ctx context.Context, block *Block, _ Blo
 }
 
 func (idx *SupplyIndex) DeleteBlock(ctx context.Context, height int64) error {
-	log.Debugf("Rollback deleting supply state at height %d", height)
-	q := pack.Query{
-		Name: "etl.supply.delete",
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: idx.table.Fields().Find("h"), // block height (!)
-			Mode:  pack.FilterModeEqual,
-			Value: height,
-		}},
-	}
-	_, err := idx.table.Delete(ctx, q)
+	// log.Debugf("Rollback deleting supply state at height %d", height)
+	_, err := pack.NewQuery("etl.supply.delete", idx.table).
+		AndEqual("height", height).
+		Delete(ctx)
 	return err
 }

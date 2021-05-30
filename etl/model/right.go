@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 )
 
 var rightPool = &sync.Pool{
@@ -16,16 +16,18 @@ var rightPool = &sync.Pool{
 
 type Right struct {
 	RowId          uint64          `pack:"I,pk,snappy"   json:"row_id"`           // unique id
-	Type           chain.RightType `pack:"t,snappy"      json:"type"`             // default accounts
+	Type           tezos.RightType `pack:"t,snappy"      json:"type"`             // default accounts
 	Height         int64           `pack:"h,snappy"      json:"height"`           // bc: block height (also for orphans)
 	Cycle          int64           `pack:"c,snappy"      json:"cycle"`            // bc: block cycle (tezos specific)
 	Priority       int             `pack:"p,snappy"      json:"priority"`         // baking prio or endorsing slot
 	AccountId      AccountID       `pack:"A,snappy"      json:"account_id"`       // original rights holder
+	IsUsed         bool            `pack:"u,snappy"      json:"is_used"`          // owner used this right
 	IsLost         bool            `pack:"l,snappy"      json:"is_lost"`          // owner lost this baking right
 	IsStolen       bool            `pack:"s,snappy"      json:"is_stolen"`        // owner stole this baking right
 	IsMissed       bool            `pack:"m,snappy"      json:"is_missed"`        // owner missed using this endorsement right
 	IsSeedRequired bool            `pack:"R,snappy"      json:"is_seed_required"` // seed nonce must be revealed (height%32==0)
 	IsSeedRevealed bool            `pack:"r,snappy"      json:"is_seed_revealed"` // seed nonce has been revealed in next cycle
+	IsBondMiss     bool            `pack:"b,snappy"      json:"is_bond_miss"`     // right lost due to too low balance to pay bonds
 }
 
 // Ensure Right implements the pack.Item interface.
@@ -55,9 +57,11 @@ func (r *Right) Reset() {
 	r.Cycle = 0
 	r.Priority = 0
 	r.AccountId = 0
+	r.IsUsed = false
 	r.IsLost = false
 	r.IsStolen = false
 	r.IsMissed = false
 	r.IsSeedRequired = false
 	r.IsSeedRevealed = false
+	r.IsBondMiss = false
 }

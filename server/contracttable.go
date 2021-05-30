@@ -17,8 +17,7 @@ import (
 	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/packdb/vec"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 )
@@ -41,19 +40,19 @@ func init() {
 	contractAllAliases = fields.Aliases()
 
 	// add extra transalations for accounts
-	contractSourceNames["address"] = "A"
-	contractSourceNames["manager"] = "M"
-	contractAllAliases = append(contractAllAliases, "address")
-	contractAllAliases = append(contractAllAliases, "manager")
+	contractSourceNames["creator"] = "C"
+	contractSourceNames["is_spendable"] = "-" // hide in v8+
+	contractSourceNames["is_delegatable"] = "-"
+	contractAllAliases = append(contractAllAliases, "creator")
 }
 
 // configurable marshalling helper
 type Contract struct {
 	model.Contract
-	verbose bool                              `csv:"-" pack:"-"` // cond. marshal
-	columns util.StringList                   `csv:"-" pack:"-"` // cond. cols & order when brief
-	params  *chain.Params                     `csv:"-" pack:"-"` // blockchain amount conversion
-	addrs   map[model.AccountID]chain.Address `csv:"-" pack:"-"` // address map
+	verbose bool            // cond. marshal
+	columns util.StringList // cond. cols & order when brief
+	params  *tezos.Params   // blockchain amount conversion
+	ctx     *ApiContext
 }
 
 func (c *Contract) MarshalJSON() ([]byte, error) {
@@ -66,47 +65,43 @@ func (c *Contract) MarshalJSON() ([]byte, error) {
 
 func (c *Contract) MarshalJSONVerbose() ([]byte, error) {
 	contract := struct {
-		RowId         uint64  `json:"row_id"`
-		AccountId     uint64  `json:"account_id"`
-		Account       string  `json:"address"`
-		ManagerId     uint64  `json:"manager_id"`
-		Manager       string  `json:"manager"`
-		Height        int64   `json:"height"`
-		Fee           float64 `json:"fee"`
-		GasLimit      int64   `json:"gas_limit"`
-		GasUsed       int64   `json:"gas_used"`
-		GasPrice      float64 `json:"gas_price"`
-		StorageLimit  int64   `json:"storage_limit"`
-		StorageSize   int64   `json:"storage_size"`
-		StoragePaid   int64   `json:"storage_paid"`
-		Script        string  `json:"script"`
-		IsSpendable   bool    `json:"is_spendable"`
-		IsDelegatable bool    `json:"is_delegatable"`
-		OpL           int     `json:"op_l"`
-		OpP           int     `json:"op_p"`
-		OpI           int     `json:"op_i"`
-		InterfaceHash string  `json:"iface_hash"`
+		RowId         uint64 `json:"row_id"`
+		AccountId     uint64 `json:"account_id"`
+		Address       string `json:"address"`
+		CreatorId     uint64 `json:"creator_id"`
+		Creator       string `json:"creator"`
+		FirstSeen     int64  `json:"first_seen"`
+		LastSeen      int64  `json:"last_seen"`
+		FirstSeenTime int64  `json:"first_seen_time"`
+		LastSeenTime  int64  `json:"last_seen_time"`
+		StorageSize   int64  `json:"storage_size"`
+		StoragePaid   int64  `json:"storage_paid"`
+		Script        string `json:"script"`
+		Storage       string `json:"storage"`
+		InterfaceHash string `json:"iface_hash"`
+		CodeHash      string `json:"code_hash"`
+		CallStats     string `json:"call_stats"`
+		Features      string `json:"features"`
+		Interfaces    string `json:"interfaces"`
 	}{
-		RowId:         c.RowId,
+		RowId:         c.RowId.Value(),
 		AccountId:     c.AccountId.Value(),
-		Account:       c.String(),
-		ManagerId:     c.ManagerId.Value(),
-		Manager:       c.addrs[c.ManagerId].String(),
-		Height:        c.Height,
-		Fee:           c.params.ConvertValue(c.Fee),
-		GasLimit:      c.GasLimit,
-		GasUsed:       c.GasUsed,
-		GasPrice:      c.GasPrice,
-		StorageLimit:  c.StorageLimit,
+		Address:       c.String(),
+		CreatorId:     c.CreatorId.Value(),
+		Creator:       c.ctx.Indexer.LookupAddress(c.ctx, c.CreatorId).String(),
+		FirstSeen:     c.FirstSeen,
+		LastSeen:      c.LastSeen,
+		FirstSeenTime: c.ctx.Indexer.LookupBlockTimeMs(c.ctx.Context, c.FirstSeen),
+		LastSeenTime:  c.ctx.Indexer.LookupBlockTimeMs(c.ctx.Context, c.LastSeen),
 		StorageSize:   c.StorageSize,
 		StoragePaid:   c.StoragePaid,
 		Script:        hex.EncodeToString(c.Script),
-		IsSpendable:   c.IsSpendable,
-		IsDelegatable: c.IsDelegatable,
-		OpL:           c.OpL,
-		OpP:           c.OpP,
-		OpI:           c.OpI,
+		Storage:       hex.EncodeToString(c.Storage),
 		InterfaceHash: hex.EncodeToString(c.InterfaceHash),
+		CodeHash:      hex.EncodeToString(c.CodeHash),
+		CallStats:     hex.EncodeToString(c.CallStats),
+		Features:      c.ListFeatures().String(),
+		Interfaces:    c.ListInterfaces().String(),
 	}
 	return json.Marshal(contract)
 }
@@ -117,27 +112,23 @@ func (c *Contract) MarshalJSONBrief() ([]byte, error) {
 	for i, v := range c.columns {
 		switch v {
 		case "row_id":
-			buf = strconv.AppendUint(buf, c.RowId, 10)
+			buf = strconv.AppendUint(buf, c.RowId.Value(), 10)
 		case "account_id":
 			buf = strconv.AppendUint(buf, c.AccountId.Value(), 10)
 		case "address":
 			buf = strconv.AppendQuote(buf, c.String())
-		case "manager_id":
-			buf = strconv.AppendUint(buf, c.ManagerId.Value(), 10)
-		case "manager":
-			buf = strconv.AppendQuote(buf, c.addrs[c.ManagerId].String())
-		case "height":
-			buf = strconv.AppendInt(buf, c.Height, 10)
-		case "fee":
-			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.Fee), 'f', c.params.Decimals, 64)
-		case "gas_limit":
-			buf = strconv.AppendInt(buf, c.GasLimit, 10)
-		case "gas_used":
-			buf = strconv.AppendInt(buf, c.GasUsed, 10)
-		case "gas_price":
-			buf = strconv.AppendFloat(buf, c.GasPrice, 'f', 3, 64)
-		case "storage_limit":
-			buf = strconv.AppendInt(buf, c.StorageLimit, 10)
+		case "creator_id":
+			buf = strconv.AppendUint(buf, c.CreatorId.Value(), 10)
+		case "creator":
+			buf = strconv.AppendQuote(buf, c.ctx.Indexer.LookupAddress(c.ctx, c.CreatorId).String())
+		case "first_seen":
+			buf = strconv.AppendInt(buf, c.FirstSeen, 10)
+		case "last_seen":
+			buf = strconv.AppendInt(buf, c.LastSeen, 10)
+		case "first_seen_time":
+			buf = strconv.AppendInt(buf, c.ctx.Indexer.LookupBlockTimeMs(c.ctx.Context, c.FirstSeen), 10)
+		case "last_seen_time":
+			buf = strconv.AppendInt(buf, c.ctx.Indexer.LookupBlockTimeMs(c.ctx.Context, c.LastSeen), 10)
 		case "storage_size":
 			buf = strconv.AppendInt(buf, c.StorageSize, 10)
 		case "storage_paid":
@@ -149,30 +140,31 @@ func (c *Contract) MarshalJSONBrief() ([]byte, error) {
 			} else {
 				buf = append(buf, "null"...)
 			}
-		case "is_spendable":
-			if c.IsSpendable {
-				buf = append(buf, '1')
+		case "storage":
+			// code is binary
+			if c.Storage != nil {
+				buf = strconv.AppendQuote(buf, hex.EncodeToString(c.Storage))
 			} else {
-				buf = append(buf, '0')
+				buf = append(buf, "null"...)
 			}
-		case "is_delegatable":
-			if c.IsDelegatable {
-				buf = append(buf, '1')
-			} else {
-				buf = append(buf, '0')
-			}
-		case "op_l":
-			buf = strconv.AppendInt(buf, int64(c.OpL), 10)
-		case "op_p":
-			buf = strconv.AppendInt(buf, int64(c.OpP), 10)
-		case "op_i":
-			buf = strconv.AppendInt(buf, int64(c.OpI), 10)
 		case "iface_hash":
 			if c.InterfaceHash != nil {
 				buf = strconv.AppendQuote(buf, hex.EncodeToString(c.InterfaceHash))
 			} else {
 				buf = append(buf, "null"...)
 			}
+		case "code_hash":
+			if c.CodeHash != nil {
+				buf = strconv.AppendQuote(buf, hex.EncodeToString(c.CodeHash))
+			} else {
+				buf = append(buf, "null"...)
+			}
+		case "call_stats":
+			buf = strconv.AppendQuote(buf, hex.EncodeToString(c.CallStats))
+		case "features":
+			buf = strconv.AppendQuote(buf, c.ListFeatures().String())
+		case "interfaces":
+			buf = strconv.AppendQuote(buf, c.ListInterfaces().String())
 		default:
 			continue
 		}
@@ -189,45 +181,41 @@ func (c *Contract) MarshalCSV() ([]string, error) {
 	for i, v := range c.columns {
 		switch v {
 		case "row_id":
-			res[i] = strconv.FormatUint(c.RowId, 10)
+			res[i] = strconv.FormatUint(c.RowId.Value(), 10)
 		case "account_id":
 			res[i] = strconv.FormatUint(c.AccountId.Value(), 10)
 		case "address":
 			res[i] = strconv.Quote(c.String())
-		case "manager_id":
-			res[i] = strconv.FormatUint(c.ManagerId.Value(), 10)
-		case "manager":
-			res[i] = strconv.Quote(c.addrs[c.ManagerId].String())
-		case "height":
-			res[i] = strconv.FormatInt(c.Height, 10)
-		case "fee":
-			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.Fee), 'f', c.params.Decimals, 64)
-		case "gas_limit":
-			res[i] = strconv.FormatInt(c.GasLimit, 10)
-		case "gas_used":
-			res[i] = strconv.FormatInt(c.GasUsed, 10)
-		case "gas_price":
-			res[i] = strconv.FormatFloat(c.GasPrice, 'f', 3, 64)
-		case "storage_limit":
-			res[i] = strconv.FormatInt(c.StorageLimit, 10)
+		case "creator_id":
+			res[i] = strconv.FormatUint(c.CreatorId.Value(), 10)
+		case "creator":
+			res[i] = strconv.Quote(c.ctx.Indexer.LookupAddress(c.ctx, c.CreatorId).String())
+		case "first_seen":
+			res[i] = strconv.FormatInt(c.FirstSeen, 10)
+		case "last_seen":
+			res[i] = strconv.FormatInt(c.LastSeen, 10)
+		case "first_seen_time":
+			res[i] = strconv.Quote(c.ctx.Indexer.LookupBlockTime(c.ctx.Context, c.FirstSeen).Format(time.RFC3339))
+		case "last_seen_time":
+			res[i] = strconv.Quote(c.ctx.Indexer.LookupBlockTime(c.ctx.Context, c.LastSeen).Format(time.RFC3339))
 		case "storage_size":
 			res[i] = strconv.FormatInt(c.StorageSize, 10)
 		case "storage_paid":
 			res[i] = strconv.FormatInt(c.StoragePaid, 10)
 		case "script":
 			res[i] = strconv.Quote(hex.EncodeToString(c.Script))
-		case "is_spendable":
-			res[i] = strconv.FormatBool(c.IsSpendable)
-		case "is_delegatable":
-			res[i] = strconv.FormatBool(c.IsDelegatable)
-		case "op_l":
-			res[i] = strconv.Itoa(c.OpL)
-		case "op_p":
-			res[i] = strconv.Itoa(c.OpP)
-		case "op_i":
-			res[i] = strconv.Itoa(c.OpI)
+		case "storage":
+			res[i] = strconv.Quote(hex.EncodeToString(c.Storage))
 		case "iface_hash":
 			res[i] = strconv.Quote(hex.EncodeToString(c.InterfaceHash))
+		case "code_hash":
+			res[i] = strconv.Quote(hex.EncodeToString(c.CodeHash))
+		case "call_stats":
+			res[i] = strconv.Quote(hex.EncodeToString(c.CallStats))
+		case "features":
+			res[i] = strconv.Quote(c.ListFeatures().String())
+		case "interfaces":
+			res[i] = strconv.Quote(c.ListInterfaces().String())
 		default:
 			continue
 		}
@@ -244,10 +232,6 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 	if err != nil {
 		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", args.Table), err))
 	}
-	accountT, err := ctx.Indexer.Table(index.AccountTableKey)
-	if err != nil {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", index.AccountTableKey), err))
-	}
 
 	// translate long column names to short names used in pack tables
 	var srcNames []string
@@ -263,8 +247,8 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				continue
 			}
 			switch v {
-			case "address":
-				srcNames = append(srcNames, "H") // hash
+			case "features", "interfaces":
+				srcNames = append(srcNames, "s") // script
 			}
 			srcNames = append(srcNames, n)
 		}
@@ -276,11 +260,10 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 
 	// build table query
 	q := pack.Query{
-		Name:       ctx.RequestID,
-		Fields:     table.Fields().Select(srcNames...),
-		Limit:      int(args.Limit),
-		Conditions: make(pack.ConditionList, 0),
-		Order:      args.Order,
+		Name:   ctx.RequestID,
+		Fields: table.Fields().Select(srcNames...),
+		Limit:  int(args.Limit),
+		Order:  args.Order,
 	}
 
 	// build dynamic filter conditions from query (will panic on error)
@@ -288,6 +271,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 		keys := strings.Split(key, ".")
 		prefix := keys[0]
 		mode := pack.FilterModeEqual
+		field := contractSourceNames[prefix]
 		if len(keys) > 1 {
 			mode = pack.ParseFilterMode(keys[1])
 			if !mode.IsValid() {
@@ -295,7 +279,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			}
 		}
 		switch prefix {
-		case "columns", "limit", "order", "verbose":
+		case "columns", "limit", "order", "verbose", "filename":
 			// skip these fields
 		case "cursor":
 			// add row id condition: id > cursor (new cursor == last row id)
@@ -307,7 +291,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
+			q.Conditions.AddAndCondition(&pack.Condition{
 				Field: table.Fields().Pk(),
 				Mode:  cursorMode,
 				Value: id,
@@ -317,17 +301,17 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				// single-address lookup and compile condition
-				addr, err := chain.ParseAddress(val[0])
+				addr, err := tezos.ParseAddress(val[0])
 				if err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
-				if addr.Type != chain.AddressTypeContract {
+				if addr.Type != tezos.AddressTypeContract {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid contract address '%s'", val[0]), err))
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("H"),
 					Mode:  mode,
-					Value: addr.Hash,
+					Value: addr.Bytes22(),
 					Raw:   val[0], // debugging aid
 				})
 			case pack.FilterModeIn, pack.FilterModeNotIn:
@@ -335,16 +319,16 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				// return duplicates)
 				hashes := make([][]byte, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(v)
+					addr, err := tezos.ParseAddress(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
-					if addr.Type != chain.AddressTypeContract {
+					if addr.Type != tezos.AddressTypeContract {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid contract address '%s'", v), err))
 					}
-					hashes = append(hashes, addr.Hash)
+					hashes = append(hashes, addr.Bytes22())
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("H"),
 					Mode:  mode,
 					Value: hashes,
@@ -354,7 +338,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
 
-		case "manager":
+		case "creator":
 			// parse address and lookup id
 			// valid filter modes: eq, in
 			// 1 resolve account_id from account table
@@ -363,7 +347,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				// single-account lookup and compile condition
-				addr, err := chain.ParseAddress(val[0])
+				addr, err := tezos.ParseAddress(val[0])
 				if err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
@@ -373,18 +357,18 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				}
 				// Note: when not found we insert an always false condition
 				if acc == nil || acc.RowId == 0 {
-					q.Conditions = append(q.Conditions, pack.Condition{
-						Field: table.Fields().Find("M"), // account id
+					q.Conditions.AddAndCondition(&pack.Condition{
+						Field: table.Fields().Find(field), // creator account id
 						Mode:  mode,
 						Value: uint64(math.MaxUint64),
 						Raw:   "account not found", // debugging aid
 					})
 				} else {
 					// add id as extra condition
-					q.Conditions = append(q.Conditions, pack.Condition{
-						Field: table.Fields().Find("M"), // account id
+					q.Conditions.AddAndCondition(&pack.Condition{
+						Field: table.Fields().Find(field), // creator account id
 						Mode:  mode,
-						Value: acc.RowId.Value(),
+						Value: acc.RowId,
 						Raw:   val[0], // debugging aid
 					})
 				}
@@ -392,7 +376,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(v)
+					addr, err := tezos.ParseAddress(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
@@ -409,8 +393,8 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
-					Field: table.Fields().Find("M"), // account id
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find(contractSourceNames[prefix]), // creator account id
 					Mode:  mode,
 					Value: ids,
 					Raw:   val[0], // debugging aid
@@ -418,16 +402,16 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			default:
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
-		case "iface_hash":
+		case "iface_hash", "code_hash":
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				// single-address lookup and compile condition
 				buf, err := hex.DecodeString(val[0])
 				if err != nil {
-					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid interface hash '%s'", val[0]), err))
+					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid hash '%s'", val[0]), err))
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
-					Field: table.Fields().Find("F"),
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find(field),
 					Mode:  mode,
 					Value: buf,
 					Raw:   val[0], // debugging aid
@@ -438,12 +422,12 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				for _, v := range strings.Split(val[0], ",") {
 					buf, err := hex.DecodeString(v)
 					if err != nil {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid interface hash '%s'", v), err))
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid hash '%s'", v), err))
 					}
 					hashes = append(hashes, buf)
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
-					Field: table.Fields().Find("F"),
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find(field),
 					Mode:  mode,
 					Value: hashes,
 					Raw:   val[0], // debugging aid
@@ -463,23 +447,10 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			// the same field name may appear multiple times, in which case conditions
 			// are combined like any other condition with logical AND
 			for _, v := range val {
-				// convert amounts from float to int64
-				switch prefix {
-				case "fee":
-					fvals := make([]string, 0)
-					for _, vv := range strings.Split(v, ",") {
-						fval, err := strconv.ParseFloat(vv, 64)
-						if err != nil {
-							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, vv), err))
-						}
-						fvals = append(fvals, strconv.FormatInt(params.ConvertAmount(fval), 10))
-					}
-					v = strings.Join(fvals, ",")
-				}
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions = append(q.Conditions, cond)
+					q.Conditions.AddAndCondition(&cond)
 				}
 			}
 		}
@@ -490,63 +461,26 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 		lastId uint64
 	)
 
-	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
-	defer func() {
-		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	}()
+	// start := time.Now()
+	// ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
+	// defer func() {
+	// 	ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
+	// }()
 
 	// Step 1: query database
 	res, err := table.Query(ctx, q)
 	if err != nil {
 		panic(EInternal(EC_DATABASE, "query failed", err))
 	}
-	ctx.Log.Tracef("Processing result with %d rows %d cols", res.Rows(), res.Cols())
+	// ctx.Log.Tracef("Processing result with %d rows %d cols", res.Rows(), res.Cols())
 	defer res.Close()
-
-	// Step 2: resolve related accounts using lookup (when requested)
-	accMap := make(map[model.AccountID]chain.Address)
-	if res.Rows() > 0 {
-		// get a unique copy of delegate and manager id columns (clip on request limit)
-		mcol, _ := res.Uint64Column("M")
-		find := vec.UniqueUint64Slice(mcol[:util.Min(len(mcol), int(args.Limit))])
-
-		// lookup accounts from id
-		q := pack.Query{
-			Name:   ctx.RequestID + ".contract_lookup",
-			Fields: accountT.Fields().Select("I", "H", "t"),
-			Conditions: pack.ConditionList{pack.Condition{
-				Field: accountT.Fields().Find("I"),
-				Mode:  pack.FilterModeIn,
-				Value: find,
-			}},
-		}
-		ctx.Log.Tracef("Looking up %d accounts", len(find))
-		type XAcc struct {
-			Id   model.AccountID   `pack:"I,pk"`
-			Hash []byte            `pack:"H"`
-			Type chain.AddressType `pack:"t"`
-		}
-		acc := &XAcc{}
-		err := accountT.Stream(ctx, q, func(r pack.Row) error {
-			if err := r.Decode(acc); err != nil {
-				return err
-			}
-			accMap[acc.Id] = chain.NewAddress(acc.Type, acc.Hash)
-			return nil
-		})
-		if err != nil {
-			// non-fatal error
-			ctx.Log.Errorf("Account lookup failed: %v", err)
-		}
-	}
 
 	// prepare return type marshalling
 	contract := &Contract{
 		verbose: args.Verbose,
 		columns: util.StringList(args.Columns),
 		params:  params,
-		addrs:   accMap,
+		ctx:     ctx,
 	}
 
 	// prepare response stream
@@ -576,6 +510,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			} else {
 				needComma = true
 			}
+			contract.Contract.Reset()
 			if err := r.Decode(contract); err != nil {
 				return err
 			}
@@ -583,7 +518,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				return err
 			}
 			count++
-			lastId = contract.RowId
+			lastId = contract.RowId.Value()
 			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
@@ -591,7 +526,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 		})
 		// close JSON bracket
 		io.WriteString(ctx.ResponseWriter, "]")
-		ctx.Log.Tracef("JSON encoded %d rows", count)
+		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":
 		enc := csv.NewEncoder(ctx.ResponseWriter)
@@ -602,6 +537,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 		if err == nil {
 			// run query and stream results
 			err = res.Walk(func(r pack.Row) error {
+				contract.Contract.Reset()
 				if err := r.Decode(contract); err != nil {
 					return err
 				}
@@ -609,14 +545,14 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 					return err
 				}
 				count++
-				lastId = contract.RowId
+				lastId = contract.RowId.Value()
 				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}
 				return nil
 			})
 		}
-		ctx.Log.Tracef("CSV Encoded %d rows", count)
+		// ctx.Log.Tracef("CSV Encoded %d rows", count)
 	}
 
 	// without new records, cursor remains the same as input (may be empty)

@@ -1,5 +1,32 @@
 # Changelog
 
+## 9.1.0
+
+Performance improvements and new API features from API version `009-2021-04-16`. See our [complete API docu](https://tzstats.com/docs/api).
+
+- 3x better indexing time
+- 5x improved runtime for certain queries
+- 1.5-2x less storage and memory usage due to data pruning
+- next generation smart contract data extraction engine
+
+Updates and New Features
+
+- DB: improved database read and write performance
+- DB: improved database query interfaces and enabled logical OR in queries
+- DB: fixed query bugs that could return non-matching results from journal
+- DB: pruning of unused historic data in rights and snapshots
+- DB: light mode no longer stores endorsement ops
+- ETL: migrate to [TzGo](https://github.com/blockwatch-cc/tzgo) library
+- API: JSON-schema validated metadata for accounts and tokens (use `meta=1` on operations and accounts/contracts to embed)
+- CLI: new `tzalias` command to work with metadata
+
+Breaking changes at a glance
+- API: bigmap and storage type definitions and value layout changed
+- API: block endorser list has been replaced by more detailed rights list (use `rights=1` to include)
+- API: refactored contract data model
+
+For details please consult the API changelog for versions [2021-04-16](https://tzstats.com/docs/api#2021-04-16) and [2021-02-10](https://tzstats.com/docs/api#2021-02-10) (the new v9.1 branch of TzIndex PRO contains all changes from both API upgrades).
+
 ## 9.0.1
 
 - ETL: fix undocumented vesting balance update

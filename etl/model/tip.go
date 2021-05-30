@@ -6,15 +6,15 @@ package model
 import (
 	"time"
 
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 )
 
 // ChainTip reflects the blockchain state at the currently indexed height.
 type ChainTip struct {
 	Name          string            `json:"name"`         // chain name, e.g. Bitcoin
 	Symbol        string            `json:"symbol"`       // chain symbol, e.g. BTC
-	ChainId       chain.ChainIdHash `json:"chain_id"`     // chain identifier (same for all blocks)
-	BestHash      chain.BlockHash   `json:"last_block"`   // The hash of the chain tip block.
+	ChainId       tezos.ChainIdHash `json:"chain_id"`     // chain identifier (same for all blocks)
+	BestHash      tezos.BlockHash   `json:"last_block"`   // The hash of the chain tip block.
 	BestId        uint64            `json:"last_id"`      // The internal blockindex id of the tip block;
 	BestHeight    int64             `json:"height"`       // The height of the tip block.
 	BestTime      time.Time         `json:"timestamp"`    // The timestamp of the tip block.
@@ -25,14 +25,14 @@ type ChainTip struct {
 }
 
 type Deployment struct {
-	Protocol    chain.ProtocolHash `json:"protocol"`
+	Protocol    tezos.ProtocolHash `json:"protocol"`
 	Version     int                `json:"version"`      // protocol version
 	Deployment  int                `json:"deployment"`   // protocol sequence id on indexed chain
 	StartHeight int64              `json:"start_height"` // first block on indexed chain
 	EndHeight   int64              `json:"end_height"`   // last block on indexed chain or -1
 }
 
-func (t *ChainTip) AddDeployment(p *chain.Params) {
+func (t *ChainTip) AddDeployment(p *tezos.Params) {
 	// set end height for previous deployment
 	if l := len(t.Deployments); l > 0 {
 		t.Deployments[l-1].EndHeight = p.StartHeight - 1

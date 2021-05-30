@@ -6,44 +6,119 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/packdb/vec"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 )
 
 var (
-	flowSeriesNames = util.StringList([]string{"time", "amount_in", "amount_out"})
+	flowSeriesNames = util.StringList([]string{"time", "amount_in", "amount_out", "count"})
 )
 
 // configurable marshalling helper
 type FlowSeries struct {
-	Timestamp time.Time     `json:"time"`
-	AmountIn  int64         `json:"amount_in"`
-	AmountOut int64         `json:"amount_out"`
-	params    *chain.Params `csv:"-" pack:"-"`
-	verbose   bool          `csv:"-" pack:"-"`
+	Timestamp time.Time `json:"time"`
+	Count     int       `json:"count"`
+	AmountIn  int64     `json:"amount_in"`
+	AmountOut int64     `json:"amount_out"`
+
+	columns util.StringList // cond. cols & order when brief
+	params  *tezos.Params
+	verbose bool
+	null    bool
 }
 
-func (f *FlowSeries) Reset() {
-	f.Timestamp = time.Time{}
-	f.AmountIn = 0
-	f.AmountOut = 0
+var _ SeriesBucket = (*FlowSeries)(nil)
+
+func (s *FlowSeries) Init(params *tezos.Params, columns []string, verbose bool) {
+	s.params = params
+	s.columns = columns
+	s.verbose = verbose
 }
 
-func (f *FlowSeries) Add(m *model.Flow) {
-	f.AmountIn += m.AmountIn
-	f.AmountOut += m.AmountOut
+func (s *FlowSeries) IsEmpty() bool {
+	return s.Count == 0
+}
+
+func (s *FlowSeries) Add(m SeriesModel) {
+	o := m.(*model.Flow)
+	s.AmountIn += o.AmountIn
+	s.AmountOut += o.AmountOut
+	s.Count++
+}
+
+func (s *FlowSeries) Reset() {
+	s.Timestamp = time.Time{}
+	s.AmountIn = 0
+	s.AmountOut = 0
+	s.Count = 0
+	s.null = false
+}
+
+func (s *FlowSeries) Null(ts time.Time) SeriesBucket {
+	s.Reset()
+	s.Timestamp = ts
+	s.null = true
+	return s
+}
+
+func (s *FlowSeries) Zero(ts time.Time) SeriesBucket {
+	s.Reset()
+	s.Timestamp = ts
+	return s
+}
+
+func (s *FlowSeries) SetTime(ts time.Time) SeriesBucket {
+	s.Timestamp = ts
+	return s
+}
+
+func (s *FlowSeries) Time() time.Time {
+	return s.Timestamp
+}
+
+func (s *FlowSeries) Clone() SeriesBucket {
+	return &FlowSeries{
+		Timestamp: s.Timestamp,
+		AmountIn:  s.AmountIn,
+		AmountOut: s.AmountOut,
+		Count:     s.Count,
+		columns:   s.columns,
+		params:    s.params,
+		verbose:   s.verbose,
+		null:      s.null,
+	}
+}
+
+func (s *FlowSeries) Interpolate(m SeriesBucket, ts time.Time) SeriesBucket {
+	o := m.(*FlowSeries)
+	weight := float64(ts.Sub(s.Timestamp)) / float64(o.Timestamp.Sub(s.Timestamp))
+	if math.IsInf(weight, 1) {
+		weight = 1
+	}
+	switch weight {
+	case 0:
+		return s
+	default:
+		return &FlowSeries{
+			Timestamp: ts,
+			AmountIn:  s.AmountIn + int64(weight*float64(o.AmountIn-s.AmountIn)),
+			AmountOut: s.AmountOut + int64(weight*float64(o.AmountOut-s.AmountOut)),
+			Count:     0,
+			columns:   s.columns,
+			params:    s.params,
+			verbose:   s.verbose,
+			null:      false,
+		}
+	}
 }
 
 func (f *FlowSeries) MarshalJSON() ([]byte, error) {
@@ -57,10 +132,12 @@ func (f *FlowSeries) MarshalJSON() ([]byte, error) {
 func (f *FlowSeries) MarshalJSONVerbose() ([]byte, error) {
 	flow := struct {
 		Timestamp time.Time `json:"time"`
+		Count     int       `json:"count"`
 		AmountIn  float64   `json:"amount_in"`
 		AmountOut float64   `json:"amount_out"`
 	}{
 		Timestamp: f.Timestamp,
+		Count:     f.Count,
 		AmountIn:  f.params.ConvertValue(f.AmountIn),
 		AmountOut: f.params.ConvertValue(f.AmountOut),
 	}
@@ -71,18 +148,29 @@ func (f *FlowSeries) MarshalJSONBrief() ([]byte, error) {
 	dec := f.params.Decimals
 	buf := make([]byte, 0, 2048)
 	buf = append(buf, '[')
-	for i, v := range flowSeriesNames {
-		switch v {
-		case "time":
-			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(f.Timestamp), 10)
-		case "amount_in":
-			buf = strconv.AppendFloat(buf, f.params.ConvertValue(f.AmountIn), 'f', dec, 64)
-		case "amount_out":
-			buf = strconv.AppendFloat(buf, f.params.ConvertValue(f.AmountOut), 'f', dec, 64)
-		default:
-			continue
+	for i, v := range f.columns {
+		if f.null {
+			switch v {
+			case "time":
+				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(f.Timestamp), 10)
+			default:
+				buf = append(buf, null...)
+			}
+		} else {
+			switch v {
+			case "time":
+				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(f.Timestamp), 10)
+			case "count":
+				buf = strconv.AppendInt(buf, int64(f.Count), 10)
+			case "amount_in":
+				buf = strconv.AppendFloat(buf, f.params.ConvertValue(f.AmountIn), 'f', dec, 64)
+			case "amount_out":
+				buf = strconv.AppendFloat(buf, f.params.ConvertValue(f.AmountOut), 'f', dec, 64)
+			default:
+				continue
+			}
 		}
-		if i < len(flowSeriesNames)-1 {
+		if i < len(f.columns)-1 {
 			buf = append(buf, ',')
 		}
 	}
@@ -92,11 +180,22 @@ func (f *FlowSeries) MarshalJSONBrief() ([]byte, error) {
 
 func (f *FlowSeries) MarshalCSV() ([]string, error) {
 	dec := f.params.Decimals
-	res := make([]string, len(flowSeriesNames))
-	for i, v := range flowSeriesNames {
+	res := make([]string, len(f.columns))
+	for i, v := range f.columns {
+		if f.null {
+			switch v {
+			case "time":
+				res[i] = strconv.Quote(f.Timestamp.Format(time.RFC3339))
+			default:
+				continue
+			}
+
+		}
 		switch v {
 		case "time":
-			res[i] = strconv.FormatInt(util.UnixMilliNonZero(f.Timestamp), 10)
+			res[i] = strconv.Quote(f.Timestamp.Format(time.RFC3339))
+		case "count":
+			res[i] = strconv.FormatInt(int64(f.Count), 10)
 		case "amount_in":
 			res[i] = strconv.FormatFloat(f.params.ConvertValue(f.AmountIn), 'f', dec, 64)
 		case "amount_out":
@@ -108,7 +207,7 @@ func (f *FlowSeries) MarshalCSV() ([]string, error) {
 	return res, nil
 }
 
-func StreamFlowSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
+func (s *FlowSeries) BuildQuery(ctx *ApiContext, args *SeriesRequest) pack.Query {
 	// use chain params at current height
 	params := ctx.Params
 
@@ -128,6 +227,10 @@ func StreamFlowSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 	// resolve short column names
 	srcNames = make([]string, 0, len(args.Columns))
 	for _, v := range args.Columns {
+		// ignore count column
+		if v == "count" {
+			continue
+		}
 		// ignore non-series columns
 		if !flowSeriesNames.Contains(v) {
 			panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid time-series column '%s'", v), nil))
@@ -142,20 +245,10 @@ func StreamFlowSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 	}
 
 	// build table query
-	q := pack.Query{
-		Name:   ctx.RequestID,
-		Fields: table.Fields().Select(srcNames...),
-		Order:  args.Order,
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: table.Fields().Find("T"), // time
-				Mode:  pack.FilterModeRange,
-				From:  args.From.Time(),
-				To:    args.To.Time(),
-				Raw:   args.From.String() + " - " + args.To.String(), // debugging aid
-			},
-		},
-	}
+	q := pack.NewQuery(ctx.RequestID, table).
+		WithFields(srcNames...).
+		WithOrder(args.Order).
+		AndRange("time", args.From.Time(), args.To.Time())
 
 	// build dynamic filter conditions from query (will panic on error)
 	for key, val := range ctx.Request.URL.Query() {
@@ -169,7 +262,7 @@ func StreamFlowSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 			}
 		}
 		switch prefix {
-		case "columns", "collapse", "start_date", "end_date", "limit", "order", "verbose":
+		case "columns", "collapse", "start_date", "end_date", "limit", "order", "verbose", "filename", "fill":
 			// skip these fields
 			continue
 
@@ -181,7 +274,7 @@ func StreamFlowSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				// single-address lookup and compile condition
-				addr, err := chain.ParseAddress(val[0])
+				addr, err := tezos.ParseAddress(val[0])
 				if err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
@@ -191,7 +284,7 @@ func StreamFlowSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 				}
 				// Note: when not found we insert an always false condition
 				if acc == nil || acc.RowId == 0 {
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find(field), // account id
 						Mode:  mode,
 						Value: uint64(math.MaxUint64),
@@ -199,10 +292,10 @@ func StreamFlowSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 					})
 				} else {
 					// add id as extra condition
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find(field), // account id
 						Mode:  mode,
-						Value: acc.RowId.Value(),
+						Value: acc.RowId,
 						Raw:   val[0], // debugging aid
 					})
 				}
@@ -210,7 +303,7 @@ func StreamFlowSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(v)
+					addr, err := tezos.ParseAddress(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
@@ -227,7 +320,7 @@ func StreamFlowSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find(field), // account id
 					Mode:  mode,
 					Value: ids,
@@ -257,202 +350,58 @@ func StreamFlowSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 					v = strconv.FormatInt(params.ConvertAmount(fval), 10)
 				case "address_type":
 					// consider comma separated lists, convert type to int and back to string list
-					typs := make([]int64, 0)
+					typs := make([]uint8, 0)
 					for _, t := range strings.Split(v, ",") {
-						typ := chain.ParseAddressType(t)
+						typ := tezos.ParseAddressType(t)
 						if !typ.IsValid() {
 							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid account type '%s'", val[0]), nil))
 						}
-						typs = append(typs, int64(typ))
+						typs = append(typs, uint8(typ))
 					}
 					styps := make([]string, 0)
-					for _, i := range vec.UniqueInt64Slice(typs) {
-						styps = append(styps, strconv.FormatInt(i, 10))
+					for _, i := range vec.UniqueUint8Slice(typs) {
+						styps = append(styps, strconv.FormatUint(uint64(i), 10))
 					}
 					v = strings.Join(styps, ",")
 				case "category":
 					// consider comma separated lists, convert type to int and back to string list
-					typs := make([]int64, 0)
+					typs := make([]uint8, 0)
 					for _, t := range strings.Split(v, ",") {
 						typ := model.ParseFlowCategory(t)
 						if !typ.IsValid() {
 							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid category '%s'", val[0]), nil))
 						}
-						typs = append(typs, int64(typ))
+						typs = append(typs, uint8(typ))
 					}
 					styps := make([]string, 0)
-					for _, i := range vec.UniqueInt64Slice(typs) {
-						styps = append(styps, strconv.FormatInt(i, 10))
+					for _, i := range vec.UniqueUint8Slice(typs) {
+						styps = append(styps, strconv.FormatUint(uint64(i), 10))
 					}
 					v = strings.Join(styps, ",")
 				case "operation":
 					// consider comma separated lists, convert type to int and back to string list
-					typs := make([]int64, 0)
+					typs := make([]uint8, 0)
 					for _, t := range strings.Split(v, ",") {
 						typ := model.ParseFlowType(t)
 						if !typ.IsValid() {
 							panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid operation '%s'", val[0]), nil))
 						}
-						typs = append(typs, int64(typ))
+						typs = append(typs, uint8(typ))
 					}
 					styps := make([]string, 0)
-					for _, i := range vec.UniqueInt64Slice(typs) {
-						styps = append(styps, strconv.FormatInt(i, 10))
+					for _, i := range vec.UniqueUint8Slice(typs) {
+						styps = append(styps, strconv.FormatUint(uint64(i), 10))
 					}
 					v = strings.Join(styps, ",")
 				}
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions = append(q.Conditions, cond)
+					q.Conditions.AddAndCondition(&cond)
 				}
 			}
 		}
 	}
 
-	var count int
-	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Series)
-	defer func() {
-		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	}()
-
-	// prepare for source and return type marshalling
-	fs := &FlowSeries{params: params, verbose: args.Verbose}
-	fm := &model.Flow{}
-	window := args.Collapse.Duration()
-	nextBucketTime := args.From.Add(window).Time()
-	mul := 1
-	if args.Order == pack.OrderDesc {
-		mul = 0
-	}
-
-	// prepare response stream
-	ctx.StreamResponseHeaders(http.StatusOK, mimetypes[args.Format])
-
-	switch args.Format {
-	case "json":
-		enc := json.NewEncoder(ctx.ResponseWriter)
-		enc.SetIndent("", "")
-		enc.SetEscapeHTML(false)
-
-		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
-		// close JSON array on panic
-		defer func() {
-			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
-				panic(e)
-			}
-		}()
-
-		// run query and stream results
-		var needComma bool
-
-		// stream from database, result order is assumed to be in timestamp order
-		err = table.Stream(ctx, q, func(r pack.Row) error {
-			if err := r.Decode(fm); err != nil {
-				return err
-			}
-
-			// output FlowSeries when valid and time has crossed next boundary
-			if !fs.Timestamp.IsZero() && (fm.Timestamp.Before(nextBucketTime) != (mul == 1)) {
-				// output accumulated data
-				if needComma {
-					io.WriteString(ctx.ResponseWriter, ",")
-				} else {
-					needComma = true
-				}
-				if err := enc.Encode(fs); err != nil {
-					return err
-				}
-				count++
-				if args.Limit > 0 && count == int(args.Limit) {
-					return io.EOF
-				}
-				fs.Reset()
-			}
-
-			// init next time window from data
-			if fs.Timestamp.IsZero() {
-				fs.Timestamp = fm.Timestamp.Truncate(window)
-				nextBucketTime = fs.Timestamp.Add(window * time.Duration(mul))
-			}
-
-			// accumulate data in FlowSeries
-			fs.Add(fm)
-			return nil
-		})
-		// don't handle error here, will be picked up by trailer
-		if err == nil {
-			// output last series element
-			if !fs.Timestamp.IsZero() {
-				if needComma {
-					io.WriteString(ctx.ResponseWriter, ",")
-				}
-				err = enc.Encode(fs)
-				if err == nil {
-					count++
-				}
-			}
-		}
-
-		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
-		ctx.Log.Tracef("JSON encoded %d rows", count)
-
-	case "csv":
-		enc := csv.NewEncoder(ctx.ResponseWriter)
-		// use custom header columns and order
-		if len(args.Columns) > 0 {
-			err = enc.EncodeHeader(args.Columns, nil)
-		}
-		if err == nil {
-			// stream from database, result order is assumed to be in timestamp order
-			err = table.Stream(ctx, q, func(r pack.Row) error {
-				if err := r.Decode(fm); err != nil {
-					return err
-				}
-
-				// output FlowSeries when valid and time has crossed next boundary
-				if !fs.Timestamp.IsZero() && (fm.Timestamp.Before(nextBucketTime) != (mul == 1)) {
-					// output accumulated data
-					if err := enc.EncodeRecord(fs); err != nil {
-						return err
-					}
-					count++
-					if args.Limit > 0 && count == int(args.Limit) {
-						return io.EOF
-					}
-					fs.Reset()
-				}
-
-				// init next time window from data
-				if fs.Timestamp.IsZero() {
-					fs.Timestamp = fm.Timestamp.Truncate(window)
-					nextBucketTime = fs.Timestamp.Add(window * time.Duration(mul))
-				}
-
-				// accumulate data in FlowSeries
-				fs.Add(fm)
-				return nil
-			})
-			if err == nil {
-				// output last series element
-				if !fs.Timestamp.IsZero() {
-					err = enc.EncodeRecord(fs)
-					if err == nil {
-						count++
-					}
-				}
-			}
-		}
-		ctx.Log.Tracef("CSV Encoded %d rows", count)
-	}
-
-	// write error (except EOF), cursor and count as http trailer
-	ctx.StreamTrailer("", count, err)
-
-	// streaming return
-	return nil, -1
+	return q
 }

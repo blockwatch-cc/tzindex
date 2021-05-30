@@ -3,7 +3,7 @@
 
 package model
 
-type FlowCategory int
+type FlowCategory byte
 
 const (
 	FlowCategoryRewards    FlowCategory = iota // 0 freezer category
@@ -52,7 +52,7 @@ func (c FlowCategory) String() string {
 	}
 }
 
-type FlowType int
+type FlowType byte
 
 const (
 	FlowTypeActivation      FlowType = iota // 0
@@ -65,10 +65,8 @@ const (
 	FlowTypeBaking                          // 7
 	FlowTypeNonceRevelation                 // 8
 	FlowTypeInternal                        // 9 - used for unfreeze
-	FlowTypeVest                            // 10 - vests amount into same account (ready to spend)
-	FlowTypePour                            // 11 - pours vested amount into other account
-	FlowTypeInvoice                         // 12 - invoice feature
-	FlowTypeAirdrop                         // 13 - Babylon Airdrop
+	FlowTypeInvoice                         // 10 - invoice feature
+	FlowTypeAirdrop                         // 11 - Babylon Airdrop
 	FlowTypeInvalid
 )
 
@@ -94,10 +92,6 @@ func ParseFlowType(s string) FlowType {
 		return FlowTypeNonceRevelation
 	case "internal":
 		return FlowTypeInternal
-	case "vest":
-		return FlowTypeVest
-	case "pour":
-		return FlowTypePour
 	case "invoice":
 		return FlowTypeInvoice
 	case "airdrop":
@@ -133,10 +127,6 @@ func (t FlowType) String() string {
 		return "noncerevelation"
 	case FlowTypeInternal:
 		return "internal"
-	case FlowTypeVest:
-		return "vest"
-	case FlowTypePour:
-		return "pour"
 	case FlowTypeInvoice:
 		return "invoice"
 	case FlowTypeAirdrop:

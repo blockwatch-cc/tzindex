@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -10,10 +10,10 @@ import (
 	"strconv"
 	"time"
 
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/micheline"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
-	"blockwatch.cc/tzindex/micheline"
 )
 
 func init() {
@@ -23,26 +23,29 @@ func init() {
 var _ RESTful = (*ExplorerBigmap)(nil)
 
 type ExplorerBigmap struct {
-	Contract        string                 `json:"contract"`
-	BigMapId        int64                  `json:"bigmap_id"`
-	NUpdates        int64                  `json:"n_updates"`
-	NKeys           int64                  `json:"n_keys"`
-	AllocatedHeight int64                  `json:"alloc_height"`
-	AllocatedBlock  chain.BlockHash        `json:"alloc_block"`
-	AllocatedTime   time.Time              `json:"alloc_time"`
-	UpdatedHeight   int64                  `json:"update_height"`
-	UpdatedBlock    chain.BlockHash        `json:"update_block"`
-	UpdatedTime     time.Time              `json:"update_time"`
-	IsRemoved       bool                   `json:"is_removed,omitempty"` // only include when true
-	Type            micheline.KeyValueType `json:"type"`
+	Contract        string            `json:"contract"`
+	BigmapId        int64             `json:"bigmap_id"`
+	NUpdates        int64             `json:"n_updates"`
+	NKeys           int64             `json:"n_keys"`
+	AllocatedHeight int64             `json:"alloc_height"`
+	AllocatedBlock  tezos.BlockHash   `json:"alloc_block"`
+	AllocatedTime   time.Time         `json:"alloc_time"`
+	UpdatedHeight   int64             `json:"update_height"`
+	UpdatedBlock    tezos.BlockHash   `json:"update_block"`
+	UpdatedTime     time.Time         `json:"update_time"`
+	IsRemoved       bool              `json:"is_removed,omitempty"` // only include when true
+	KeyType         micheline.Typedef `json:"key_type"`
+	ValueType       micheline.Typedef `json:"value_type"`
+	KeyTypePrim     *micheline.Prim   `json:"key_type_prim,omitempty"`
+	ValueTypePrim   *micheline.Prim   `json:"value_type_prim,omitempty"`
 
 	expires time.Time `json:"-"`
 }
 
-func NewExplorerBigMap(ctx *ApiContext, alloc, last *model.BigMapItem) *ExplorerBigmap {
+func NewExplorerBigmap(ctx *ApiContext, alloc, last *model.BigmapItem, args Options) *ExplorerBigmap {
 	m := &ExplorerBigmap{
-		Contract:        lookupAddress(ctx, alloc.AccountId).String(),
-		BigMapId:        alloc.BigMapId,
+		Contract:        ctx.Indexer.LookupAddress(ctx, alloc.AccountId).String(),
+		BigmapId:        alloc.BigmapId,
 		NUpdates:        last.Counter,
 		NKeys:           last.NKeys,
 		AllocatedHeight: alloc.Height,
@@ -52,21 +55,17 @@ func NewExplorerBigMap(ctx *ApiContext, alloc, last *model.BigMapItem) *Explorer
 		IsRemoved:       alloc.IsDeleted,
 		expires:         ctx.Tip.BestTime.Add(ctx.Params.TimeBetweenBlocks[0]),
 	}
-	if h, err := ctx.Indexer.BlockHashByHeight(ctx.Context, alloc.Height); err == nil {
-		m.AllocatedBlock = h
+	m.AllocatedBlock = ctx.Indexer.LookupBlockHash(ctx.Context, alloc.Height)
+	m.UpdatedBlock = ctx.Indexer.LookupBlockHash(ctx.Context, last.Height)
+	var kt, vt micheline.Type
+	kt.UnmarshalBinary(alloc.Key)
+	vt.UnmarshalBinary(alloc.Value)
+	m.KeyType = kt.Typedef(micheline.CONST_KEY)
+	m.ValueType = vt.Typedef(micheline.CONST_VALUE)
+	if args.WithPrim() {
+		m.KeyTypePrim = &kt.Prim
+		m.ValueTypePrim = &vt.Prim
 	}
-	if alloc.Height != last.Height {
-		if h, err := ctx.Indexer.BlockHashByHeight(ctx.Context, last.Height); err == nil {
-			m.UpdatedBlock = h
-		}
-	} else {
-		m.UpdatedBlock = m.AllocatedBlock
-	}
-
-	// extract type from alloc
-	m.Type.KeyType.UnmarshalBinary(alloc.Key)
-	m.Type.ValueType.UnmarshalBinary(alloc.Value)
-
 	return m
 }
 
@@ -75,7 +74,7 @@ func (b ExplorerBigmap) Expires() time.Time      { return b.expires }
 func (b ExplorerBigmap) RESTPrefix() string      { return "/explorer/bigmap" }
 
 func (b ExplorerBigmap) RESTPath(r *mux.Router) string {
-	path, _ := r.Get("bigmap").URLPath("id", strconv.FormatInt(b.BigMapId, 10))
+	path, _ := r.Get("bigmap").URLPath("id", strconv.FormatInt(b.BigmapId, 10))
 	return path.String()
 }
 
@@ -84,32 +83,24 @@ func (b ExplorerBigmap) RegisterDirectRoutes(r *mux.Router) error {
 }
 
 func (b ExplorerBigmap) RegisterRoutes(r *mux.Router) error {
-	r.HandleFunc("/{id}", C(ReadBigMap)).Methods("GET").Name("bigmap")
-	r.HandleFunc("/{id}/type", C(ReadBigMapType)).Methods("GET")
-	r.HandleFunc("/{id}/keys", C(ListBigMapKeys)).Methods("GET")
-	r.HandleFunc("/{id}/values", C(ListBigMapValues)).Methods("GET")
-	r.HandleFunc("/{id}/updates", C(ListBigMapUpdates)).Methods("GET")
-	r.HandleFunc("/{id}/{key}", C(ReadBigMapValue)).Methods("GET")
-	r.HandleFunc("/{id}/{key}/updates", C(ListBigMapKeyUpdates)).Methods("GET")
+	r.HandleFunc("/{id}", C(ReadBigmap)).Methods("GET").Name("bigmap")
+	r.HandleFunc("/{id}/keys", C(ListBigmapKeys)).Methods("GET")
+	r.HandleFunc("/{id}/values", C(ListBigmapValues)).Methods("GET")
+	r.HandleFunc("/{id}/updates", C(ListBigmapUpdates)).Methods("GET")
+	r.HandleFunc("/{id}/{key}/updates", C(ListBigmapKeyUpdates)).Methods("GET")
+	r.HandleFunc("/{id}/{key}", C(ReadBigmapValue)).Methods("GET")
 	return nil
-}
-
-type ExplorerBigmapKeyValue struct {
-	Key       *micheline.Prim `json:"key,omitempty"`
-	Value     *micheline.Prim `json:"value,omitempty"`
-	KeyType   *micheline.Prim `json:"key_type,omitempty"`
-	ValueType *micheline.Prim `json:"value_type,omitempty"`
 }
 
 // type
 type ExplorerBigmapType struct {
-	Contract    string                  `json:"contract"`
-	BigMapId    int64                   `json:"bigmap_id"`
-	KeyType     micheline.BigMapType    `json:"key_type"`
-	KeyEncoding micheline.PrimType      `json:"key_encoding"`
-	ValueType   micheline.BigMapType    `json:"value_type"`
-	Prim        *ExplorerBigmapKeyValue `json:"prim,omitempty"`
-	modified    time.Time               `json:"-"`
+	Contract      string          `json:"contract"`
+	BigmapId      int64           `json:"bigmap_id"`
+	KeyType       micheline.Type  `json:"key_type"`
+	ValueType     micheline.Type  `json:"value_type"`
+	KeyTypePrim   *micheline.Prim `json:"key_type_prim,omitempty"`
+	ValueTypePrim *micheline.Prim `json:"value_type_prim,omitempty"`
+	modified      time.Time       `json:"-"`
 }
 
 func (t ExplorerBigmapType) LastModified() time.Time { return t.modified }
@@ -119,24 +110,24 @@ var _ Resource = (*ExplorerBigmapType)(nil)
 
 // bigmap metadata
 type ExplorerBigmapMeta struct {
-	Contract     string          `json:"contract"`
-	BigMapId     int64           `json:"bigmap_id"`
+	Contract     tezos.Address   `json:"contract"`
+	BigmapId     int64           `json:"bigmap_id"`
 	UpdateTime   time.Time       `json:"time"`
 	UpdateHeight int64           `json:"height"`
-	UpdateBlock  chain.BlockHash `json:"block"`
+	UpdateBlock  tezos.BlockHash `json:"block"`
+	UpdateOp     tezos.OpHash    `json:"op"`
+	Sender       tezos.Address   `json:"sender"`
+	Source       tezos.Address   `json:"source"`
 	IsReplaced   *bool           `json:"is_replaced,omitempty"` // empty in op lists
 	IsRemoved    *bool           `json:"is_removed,omitempty"`
 }
 
 // keys
 type ExplorerBigmapKey struct {
-	Key         *micheline.BigMapKey `json:"key"`
-	KeyHash     chain.ExprHash       `json:"key_hash"`
-	KeyBinary   string               `json:"key_binary"`
-	KeyUnpacked *micheline.BigMapKey `json:"key_unpacked,omitempty"`
-	KeyPretty   string               `json:"key_pretty,omitempty"`
-	Meta        ExplorerBigmapMeta   `json:"meta"`
-	Prim        *micheline.Prim      `json:"prim,omitempty"`
+	Key     micheline.Key       `json:"key"`
+	KeyHash tezos.ExprHash      `json:"key_hash"`
+	Meta    *ExplorerBigmapMeta `json:"meta,omitempty"`
+	Prim    *micheline.Prim     `json:"prim,omitempty"`
 }
 
 type ExplorerBigmapKeyList struct {
@@ -153,17 +144,14 @@ var _ Resource = (*ExplorerBigmapKeyList)(nil)
 
 // values
 type ExplorerBigmapValue struct {
-	Key           *micheline.BigMapKey    `json:"key,omitempty"`
-	KeyHash       *chain.ExprHash         `json:"key_hash,omitempty"`
-	KeyBinary     string                  `json:"key_binary,omitempty"` // omit on alloc updates
-	KeyUnpacked   *micheline.BigMapKey    `json:"key_unpacked,omitempty"`
-	KeyPretty     string                  `json:"key_pretty,omitempty"`
-	Value         *micheline.BigMapValue  `json:"value,omitempty"` // omit on removal updates
-	ValueUnpacked *micheline.BigMapValue  `json:"value_unpacked,omitempty"`
-	Meta          ExplorerBigmapMeta      `json:"meta"`
-	Prim          *ExplorerBigmapKeyValue `json:"prim,omitempty"`
-	modified      time.Time               `json:"-"`
-	expires       time.Time               `json:"-"`
+	Key       *micheline.Key      `json:"key,omitempty"`
+	KeyHash   *tezos.ExprHash     `json:"key_hash,omitempty"`
+	Value     *micheline.Value    `json:"value,omitempty"` // omit on removal updates
+	Meta      *ExplorerBigmapMeta `json:"meta,omitempty"`
+	KeyPrim   *micheline.Prim     `json:"key_prim,omitempty"`
+	ValuePrim *micheline.Prim     `json:"value_prim,omitempty"`
+	modified  time.Time           `json:"-"`
+	expires   time.Time           `json:"-"`
 }
 
 func (t ExplorerBigmapValue) LastModified() time.Time { return t.modified }
@@ -188,17 +176,16 @@ type ExplorerStorageMeta struct {
 	Contract string          `json:"contract"`
 	Time     time.Time       `json:"time"`
 	Height   int64           `json:"height"`
-	Block    chain.BlockHash `json:"block"`
+	Block    tezos.BlockHash `json:"block"`
 }
 
 // storage
 type ExplorerStorageValue struct {
-	Meta          ExplorerStorageMeta    `json:"meta"`
-	Value         *micheline.BigMapValue `json:"value"`
-	ValueUnpacked *micheline.BigMapValue `json:"value_unpacked,omitempty"`
-	Prim          *micheline.Prim        `json:"prim,omitempty"`
-	modified      time.Time              `json:"-"`
-	expires       time.Time              `json:"-"`
+	Meta     *ExplorerStorageMeta `json:"meta,omitempty"`
+	Value    micheline.Value      `json:"value"`
+	Prim     *micheline.Prim      `json:"prim,omitempty"`
+	modified time.Time            `json:"-"`
+	expires  time.Time            `json:"-"`
 }
 
 func (t ExplorerStorageValue) LastModified() time.Time { return t.modified }
@@ -208,41 +195,42 @@ var _ Resource = (*ExplorerBigmapValue)(nil)
 
 // params
 type ExplorerParameters struct {
-	Entrypoint    string                 `json:"entrypoint"`
-	Call          string                 `json:"call"`
-	Branch        string                 `json:"branch"`
-	Id            int                    `json:"id"`
-	Value         *micheline.BigMapValue `json:"value,omitempty"`
-	ValueUnpacked *micheline.BigMapValue `json:"value_unpacked,omitempty"`
-	Prim          *micheline.Prim        `json:"prim,omitempty"`
+	Entrypoint string          `json:"entrypoint"`
+	Call       string          `json:"call"`
+	Branch     string          `json:"branch"`
+	Id         int             `json:"id"`
+	Value      micheline.Value `json:"value"`
+	Prim       *micheline.Prim `json:"prim,omitempty"`
 }
 
 // updates
-type ExplorerBigMapUpdate struct {
+type ExplorerBigmapUpdate struct {
 	ExplorerBigmapValue                      // full value
 	Action              micheline.DiffAction `json:"action"`
+	BigmapId            int64                `json:"bigmap_id"`
 
 	// alloc/copy
-	KeyEncoding *micheline.PrimType   `json:"key_encoding,omitempty"`
-	KeyType     *micheline.BigMapType `json:"key_type,omitempty"`
-	ValueType   *micheline.BigMapType `json:"value_type,omitempty"`
-	SourceId    int64                 `json:"source_big_map,omitempty"`
-	DestId      int64                 `json:"destination_big_map,omitempty"`
+	KeyType       *micheline.Typedef `json:"key_type,omitempty"`
+	ValueType     *micheline.Typedef `json:"value_type,omitempty"`
+	KeyTypePrim   *micheline.Prim    `json:"key_type_prim,omitempty"`
+	ValueTypePrim *micheline.Prim    `json:"value_type_prim,omitempty"`
+	SourceId      int64              `json:"source_big_map,omitempty"`
+	DestId        int64              `json:"destination_big_map,omitempty"`
 }
 
-type ExplorerBigMapUpdateList struct {
-	diff     []ExplorerBigMapUpdate
+type ExplorerBigmapUpdateList struct {
+	diff     []ExplorerBigmapUpdate
 	modified time.Time
 	expires  time.Time
 }
 
-func (l ExplorerBigMapUpdateList) MarshalJSON() ([]byte, error) { return json.Marshal(l.diff) }
-func (l ExplorerBigMapUpdateList) LastModified() time.Time      { return l.modified }
-func (l ExplorerBigMapUpdateList) Expires() time.Time           { return l.expires }
+func (l ExplorerBigmapUpdateList) MarshalJSON() ([]byte, error) { return json.Marshal(l.diff) }
+func (l ExplorerBigmapUpdateList) LastModified() time.Time      { return l.modified }
+func (l ExplorerBigmapUpdateList) Expires() time.Time           { return l.expires }
 
-var _ Resource = (*ExplorerBigMapUpdateList)(nil)
+var _ Resource = (*ExplorerBigmapUpdateList)(nil)
 
-func loadBigmap(ctx *ApiContext, withLast bool) (*model.BigMapItem, *model.BigMapItem) {
+func loadBigmap(ctx *ApiContext, withLast bool) (*model.BigmapItem, *model.BigmapItem) {
 	if id, ok := mux.Vars(ctx.Request)["id"]; !ok || id == "" {
 		panic(EBadRequest(EC_RESOURCE_ID_MISSING, "missing bigmap id", nil))
 	} else {
@@ -253,7 +241,7 @@ func loadBigmap(ctx *ApiContext, withLast bool) (*model.BigMapItem, *model.BigMa
 		a, b, err := ctx.Indexer.LookupBigmap(ctx, i, withLast)
 		if err != nil {
 			switch err {
-			case index.ErrNoBigMapEntry:
+			case index.ErrNoBigmapEntry:
 				panic(ENotFound(EC_RESOURCE_NOTFOUND, "no such bigmap", err))
 			default:
 				panic(EInternal(EC_DATABASE, err.Error(), nil))
@@ -263,67 +251,39 @@ func loadBigmap(ctx *ApiContext, withLast bool) (*model.BigMapItem, *model.BigMa
 	}
 }
 
-func parseBigmapKey(ctx *ApiContext, typ string) *micheline.BigMapKey {
+func parseBigmapKey(ctx *ApiContext, typ micheline.OpCode) (micheline.Key, tezos.ExprHash) {
 	if k, ok := mux.Vars(ctx.Request)["key"]; !ok || k == "" {
 		panic(EBadRequest(EC_RESOURCE_ID_MISSING, "missing bigmap key", nil))
 	} else {
-		key, err := micheline.ParseBigMapKey(typ, k)
+		expr, err := tezos.ParseExprHash(k)
+		if err == nil {
+			return micheline.Key{}, expr
+		}
+		key, err := micheline.ParseKey(typ, k)
 		if err != nil {
 			panic(EBadRequest(EC_RESOURCE_ID_MALFORMED, "invalid bigmap key", err))
 		}
-		return key
+		return key, key.Hash()
 	}
-	return nil
+	// return nil
 }
 
-func ReadBigMap(ctx *ApiContext) (interface{}, int) {
+func ReadBigmap(ctx *ApiContext) (interface{}, int) {
+	args := &ContractRequest{}
+	ctx.ParseRequestArgs(args)
 	alloc, last := loadBigmap(ctx, true)
-	return NewExplorerBigMap(ctx, alloc, last), http.StatusOK
+	return NewExplorerBigmap(ctx, alloc, last, args), http.StatusOK
 }
 
-func ReadBigMapType(ctx *ApiContext) (interface{}, int) {
+func ListBigmapKeys(ctx *ApiContext) (interface{}, int) {
 	args := &ContractRequest{}
 	ctx.ParseRequestArgs(args)
 	alloc, _ := loadBigmap(ctx, false)
 
-	resp := &ExplorerBigmapType{
-		Contract:    lookupAddress(ctx, alloc.AccountId).String(),
-		BigMapId:    alloc.BigMapId,
-		KeyType:     micheline.NewBigMapType(),
-		KeyEncoding: alloc.KeyEncoding,
-		ValueType:   micheline.NewBigMapType(),
-		modified:    alloc.Timestamp,
-	}
-
-	if err := resp.KeyType.UnmarshalBinary(alloc.Key); err != nil {
-		log.Errorf("explorer: bigmap key type unmarshal: %v", err)
-	}
-
-	if err := resp.ValueType.UnmarshalBinary(alloc.Value); err != nil {
-		log.Errorf("explorer: bigmap type unmarshal: %v", err)
-	}
-
-	if args.WithPrim() {
-		resp.Prim = &ExplorerBigmapKeyValue{
-			KeyType:   resp.KeyType.Prim(),
-			ValueType: resp.ValueType.Prim(),
-		}
-	}
-
-	return resp, http.StatusOK
-}
-
-func ListBigMapKeys(ctx *ApiContext) (interface{}, int) {
-	args := &ContractRequest{}
-	ctx.ParseRequestArgs(args)
-	alloc, _ := loadBigmap(ctx, false)
-	addr := lookupAddress(ctx, alloc.AccountId).String()
-
-	items, err := ctx.Indexer.ListBigMapKeys(ctx.Context,
-		alloc.BigMapId,
+	items, err := ctx.Indexer.ListBigmapKeys(ctx.Context,
+		alloc.BigmapId,
 		args.BlockHeight, // all current active keys when 0, historic active keys when > 0
-		chain.ExprHash{},
-		nil,
+		tezos.ExprHash{},
 		args.Offset,
 		ctx.Cfg.ClampExplore(args.Limit),
 	)
@@ -336,43 +296,62 @@ func ListBigMapKeys(ctx *ApiContext) (interface{}, int) {
 		expires: ctx.Tip.BestTime.Add(ctx.Params.TimeBetweenBlocks[0]),
 	}
 
-	blockHashes := make(map[int64]chain.BlockHash)
+	// load ops when metadata is requested
+	var opCache map[model.OpID]*model.Op
+	if args.WithMeta() && len(items) > 0 {
+		opIds := make([]uint64, 0)
+		for _, v := range items {
+			opIds = append(opIds, v.OpId.Value())
+		}
+		ops, err := ctx.Indexer.LookupOpIds(ctx, opIds)
+		if err != nil {
+			log.Errorf("%s: missing ops in %#v", ctx.RequestString(), opIds)
+		} else {
+			opCache = make(map[model.OpID]*model.Op)
+			for _, v := range ops {
+				opCache[v.RowId] = v
+			}
+		}
+	}
 
 	keyType, _ := alloc.GetKeyType()
 	for _, v := range items {
-		k, err := v.GetKeyAs(keyType)
+		k, err := v.GetKey(keyType)
 		if err != nil {
 			log.Errorf("explorer: decode bigmap key: %v", err)
 			continue
 		}
-		h, ok := blockHashes[v.Height]
-		if !ok {
-			if h, err = ctx.Indexer.BlockHashByHeight(ctx.Context, v.Height); err == nil {
-				blockHashes[v.Height] = h
+		key := ExplorerBigmapKey{
+			Key:     k,
+			KeyHash: v.GetKeyHash(),
+		}
+		if args.WithMeta() {
+			key.Meta = &ExplorerBigmapMeta{
+				Contract:     ctx.Indexer.LookupAddress(ctx, alloc.AccountId),
+				BigmapId:     alloc.BigmapId,
+				UpdateTime:   v.Timestamp,
+				UpdateHeight: v.Height,
+				UpdateBlock:  ctx.Indexer.LookupBlockHash(ctx.Context, v.Height),
+				IsReplaced:   BoolPtr(v.IsReplaced),
+				IsRemoved:    BoolPtr(v.IsDeleted),
+			}
+			if op, ok := opCache[v.OpId]; ok {
+				key.Meta.UpdateOp = op.Hash
+				key.Meta.Sender = ctx.Indexer.LookupAddress(ctx, op.SenderId)
+				if op.CreatorId != 0 {
+					key.Meta.Source = ctx.Indexer.LookupAddress(ctx, op.CreatorId)
+				} else {
+					key.Meta.Source = key.Meta.Sender
+				}
 			}
 		}
 
-		key := ExplorerBigmapKey{
-			Key:       k,
-			KeyHash:   chain.NewExprHash(v.KeyHash),
-			KeyBinary: k.Encode(),
-			Meta: ExplorerBigmapMeta{
-				Contract:     addr,
-				BigMapId:     alloc.BigMapId,
-				UpdateTime:   v.Timestamp,
-				UpdateHeight: v.Height,
-				UpdateBlock:  h,
-				IsReplaced:   BoolPtr(v.IsReplaced),
-				IsRemoved:    BoolPtr(v.IsDeleted),
-			},
-		}
-
 		if args.WithPrim() {
-			key.Prim = k.Prim()
+			key.Prim = k.PrimPtr()
 		}
-		if args.WithUnpack() {
-			if key.KeyUnpacked, err = k.UnpackKey(); err == nil {
-				key.KeyPretty = key.KeyUnpacked.String()
+		if args.WithUnpack() && k.IsPacked() {
+			if up, err := k.Unpack(); err == nil {
+				key.Key = up
 			}
 		}
 
@@ -383,22 +362,20 @@ func ListBigMapKeys(ctx *ApiContext) (interface{}, int) {
 	return resp, http.StatusOK
 }
 
-func ListBigMapValues(ctx *ApiContext) (interface{}, int) {
+func ListBigmapValues(ctx *ApiContext) (interface{}, int) {
 	args := &ContractRequest{}
 	ctx.ParseRequestArgs(args)
 	alloc, _ := loadBigmap(ctx, false)
 
-	typ := &micheline.Prim{}
+	var typ micheline.Type
 	if err := typ.UnmarshalBinary(alloc.Value); err != nil {
 		log.Errorf("explorer: bigmap type unmarshal: %v", err)
 	}
-	addr := lookupAddress(ctx, alloc.AccountId).String()
 
-	items, err := ctx.Indexer.ListBigMapKeys(ctx.Context,
-		alloc.BigMapId,
+	items, err := ctx.Indexer.ListBigmapKeys(ctx.Context,
+		alloc.BigmapId,
 		args.BlockHeight, // all current active keys when 0, historic active keys when > 0
-		chain.ExprHash{},
-		nil,
+		tezos.ExprHash{},
 		args.Offset,
 		ctx.Cfg.ClampExplore(args.Limit),
 	)
@@ -406,7 +383,23 @@ func ListBigMapValues(ctx *ApiContext) (interface{}, int) {
 		panic(EInternal(EC_DATABASE, "cannot read bigmap", err))
 	}
 
-	blockHashes := make(map[int64]chain.BlockHash)
+	// load ops when metadata is requested
+	var opCache map[model.OpID]*model.Op
+	if args.WithMeta() && len(items) > 0 {
+		opIds := make([]uint64, 0)
+		for _, v := range items {
+			opIds = append(opIds, v.OpId.Value())
+		}
+		ops, err := ctx.Indexer.LookupOpIds(ctx, opIds)
+		if err != nil {
+			log.Errorf("%s: missing ops in %#v", ctx.RequestString(), opIds)
+		} else {
+			opCache = make(map[model.OpID]*model.Op)
+			for _, v := range ops {
+				opCache[v.RowId] = v
+			}
+		}
+	}
 
 	resp := &ExplorerBigmapValueList{
 		list:    make([]ExplorerBigmapValue, 0, len(items)),
@@ -414,60 +407,56 @@ func ListBigMapValues(ctx *ApiContext) (interface{}, int) {
 	}
 
 	keyType, _ := alloc.GetKeyType()
+	contract := ctx.Indexer.LookupAddress(ctx, alloc.AccountId)
 	for _, v := range items {
-		k, err := v.GetKeyAs(keyType)
+		k, err := v.GetKey(keyType)
 		if err != nil {
 			log.Errorf("explorer: decode bigmap key: %v", err)
 			continue
 		}
-		h, ok := blockHashes[v.Height]
-		if !ok {
-			if h, err = ctx.Indexer.BlockHashByHeight(ctx.Context, v.Height); err == nil {
-				blockHashes[v.Height] = h
-			}
-		}
-
-		prim := &micheline.Prim{}
+		prim := micheline.Prim{}
 		if err = prim.UnmarshalBinary(v.Value); err != nil {
 			log.Errorf("explorer: bigmap value unmarshal: %v", err)
 		}
-		eh := chain.NewExprHash(v.KeyHash)
+		expr := v.GetKeyHash()
 		val := ExplorerBigmapValue{
-			Key:       k,
-			KeyHash:   &eh,
-			KeyBinary: k.Encode(),
-			Meta: ExplorerBigmapMeta{
-				Contract:     addr,
-				BigMapId:     alloc.BigMapId,
+			Key:     &k,
+			KeyHash: &expr,
+			Value:   micheline.NewValuePtr(typ, prim),
+		}
+		if args.WithMeta() {
+			val.Meta = &ExplorerBigmapMeta{
+				Contract:     contract,
+				BigmapId:     alloc.BigmapId,
 				UpdateTime:   v.Timestamp,
 				UpdateHeight: v.Height,
-				UpdateBlock:  h,
+				UpdateBlock:  ctx.Indexer.LookupBlockHash(ctx.Context, v.Height),
 				IsReplaced:   BoolPtr(v.IsReplaced),
 				IsRemoved:    BoolPtr(v.IsDeleted),
-			},
-			Value: &micheline.BigMapValue{
-				Type:  typ,
-				Value: prim,
-			},
-		}
-		if args.WithPrim() {
-			val.Prim = &ExplorerBigmapKeyValue{
-				Key:   k.Prim(),
-				Value: prim,
 			}
-		}
-		if args.WithUnpack() {
-			if prim.IsPackedAny() {
-				if p, err := prim.UnpackAny(); err == nil {
-					val.ValueUnpacked = &micheline.BigMapValue{
-						Type:  p.BuildType(),
-						Value: p,
-					}
+			if op, ok := opCache[v.OpId]; ok {
+				val.Meta.UpdateOp = op.Hash
+				val.Meta.Sender = ctx.Indexer.LookupAddress(ctx, op.SenderId)
+				if op.CreatorId != 0 {
+					val.Meta.Source = ctx.Indexer.LookupAddress(ctx, op.CreatorId)
+				} else {
+					val.Meta.Source = val.Meta.Sender
 				}
 			}
-			if k.IsPacked() {
-				if val.KeyUnpacked, err = k.UnpackKey(); err == nil {
-					val.KeyPretty = val.KeyUnpacked.String()
+		}
+		if args.WithPrim() {
+			val.KeyPrim = k.PrimPtr()
+			val.ValuePrim = &prim
+		}
+		if args.WithUnpack() {
+			if val.Value.IsPackedAny() {
+				if up, err := val.Value.UnpackAll(); err == nil {
+					val.Value = &up
+				}
+			}
+			if val.Key.IsPacked() {
+				if up, err := val.Key.Unpack(); err == nil {
+					val.Key = &up
 				}
 			}
 		}
@@ -478,16 +467,16 @@ func ListBigMapValues(ctx *ApiContext) (interface{}, int) {
 	return resp, http.StatusOK
 }
 
-func ReadBigMapValue(ctx *ApiContext) (interface{}, int) {
+func ReadBigmapValue(ctx *ApiContext) (interface{}, int) {
 	args := &ContractRequest{}
 	ctx.ParseRequestArgs(args)
 
 	// support key and key_hash
 	alloc, _ := loadBigmap(ctx, false)
-	bkey := parseBigmapKey(ctx, alloc.KeyType.String())
-	addr := lookupAddress(ctx, alloc.AccountId).String()
+	keyType, _ := alloc.GetKeyType()
+	_, expr := parseBigmapKey(ctx, keyType.OpCode)
 
-	typ := &micheline.Prim{}
+	var typ micheline.Type
 	if err := typ.UnmarshalBinary(alloc.Value); err != nil {
 		log.Errorf("explorer: bigmap type unmarshal: %v", err)
 	}
@@ -495,11 +484,10 @@ func ReadBigMapValue(ctx *ApiContext) (interface{}, int) {
 	// log.Infof("Looking for bigmap key %s %s bytes=%x hash=%x bin=%x",
 	// 	bkey.Type, bkey.String(), bkey.Bytes(), bkey.Hash, bin)
 
-	items, err := ctx.Indexer.ListBigMapKeys(ctx,
-		alloc.BigMapId,
+	items, err := ctx.Indexer.ListBigmapKeys(ctx,
+		alloc.BigmapId,
 		args.BlockHeight, // current when 0
-		bkey.Hash,
-		bkey.Bytes(),
+		expr,
 		args.Offset,
 		ctx.Cfg.ClampExplore(args.Limit),
 	)
@@ -510,64 +498,72 @@ func ReadBigMapValue(ctx *ApiContext) (interface{}, int) {
 		panic(ENotFound(EC_RESOURCE_NOTFOUND, "no such bigmap key", err))
 	}
 	v := items[0]
-	keyType, _ := alloc.GetKeyType()
-	k, err := v.GetKeyAs(keyType)
+	k, err := v.GetKey(keyType)
 	if err != nil {
 		panic(EInternal(EC_SERVER, "cannot decode bigmap key", err))
 	}
 	// log.Infof("Found bigmap key %s %s bytes=%x hash=%x",
 	// k.Type, k.String(), k.Bytes(), k.Hash)
-	h, err := ctx.Indexer.BlockHashByHeight(ctx.Context, v.Height)
-	if err != nil {
-		panic(EInternal(EC_SERVER, "cannot find block hash", err))
-	}
-
-	prim := &micheline.Prim{}
+	prim := micheline.Prim{}
 	if err = prim.UnmarshalBinary(v.Value); err != nil {
 		log.Errorf("explorer: bigmap value unmarshal: %v", err)
 	}
 
-	eh := chain.NewExprHash(v.KeyHash)
+	// load ops when metadata is requested
+	var opCache map[model.OpID]*model.Op
+	if args.WithMeta() && len(items) > 0 {
+		ops, err := ctx.Indexer.LookupOpIds(ctx, []uint64{v.OpId.Value()})
+		if err != nil {
+			log.Errorf("%s: missing op id %d", ctx.RequestString(), v.OpId)
+		} else {
+			opCache = make(map[model.OpID]*model.Op)
+			for _, v := range ops {
+				opCache[v.RowId] = v
+			}
+		}
+	}
+
+	expr = v.GetKeyHash()
 	resp := &ExplorerBigmapValue{
-		Key:       k,
-		KeyHash:   &eh,
-		KeyBinary: k.Encode(),
-		Meta: ExplorerBigmapMeta{
-			Contract:     addr,
-			BigMapId:     alloc.BigMapId,
-			UpdateTime:   v.Timestamp,
-			UpdateHeight: v.Height,
-			UpdateBlock:  h,
-			IsReplaced:   BoolPtr(v.IsReplaced),
-			IsRemoved:    BoolPtr(v.IsDeleted),
-		},
-		Value: &micheline.BigMapValue{
-			Type:  typ,
-			Value: prim,
-		},
+		Key:      &k,
+		KeyHash:  &expr,
+		Value:    micheline.NewValuePtr(typ, prim),
 		modified: items[0].Timestamp,
 		expires:  ctx.Tip.BestTime.Add(ctx.Params.TimeBetweenBlocks[0]),
 	}
-	if args.WithPrim() {
-		resp.Prim = &ExplorerBigmapKeyValue{
-			Key:   k.Prim(),
-			Value: prim,
+	if args.WithMeta() {
+		resp.Meta = &ExplorerBigmapMeta{
+			Contract:     ctx.Indexer.LookupAddress(ctx, alloc.AccountId),
+			BigmapId:     alloc.BigmapId,
+			UpdateTime:   v.Timestamp,
+			UpdateHeight: v.Height,
+			UpdateBlock:  ctx.Indexer.LookupBlockHash(ctx.Context, v.Height),
+			IsReplaced:   BoolPtr(v.IsReplaced),
+			IsRemoved:    BoolPtr(v.IsDeleted),
 		}
-	}
-	if args.WithUnpack() {
-		if prim.IsPackedAny() {
-			if p, err := prim.UnpackAny(); err == nil {
-				resp.ValueUnpacked = &micheline.BigMapValue{
-					Type:  p.BuildType(),
-					Value: p,
-				}
+		if op, ok := opCache[v.OpId]; ok {
+			resp.Meta.UpdateOp = op.Hash
+			resp.Meta.Sender = ctx.Indexer.LookupAddress(ctx, op.SenderId)
+			if op.CreatorId != 0 {
+				resp.Meta.Source = ctx.Indexer.LookupAddress(ctx, op.CreatorId)
 			} else {
-				log.Warnf("unpack: %v", err)
+				resp.Meta.Source = resp.Meta.Sender
 			}
 		}
-		if k.IsPacked() {
-			if resp.KeyUnpacked, err = k.UnpackKey(); err == nil {
-				resp.KeyPretty = resp.KeyUnpacked.String()
+	}
+	if args.WithPrim() {
+		resp.KeyPrim = k.PrimPtr()
+		resp.ValuePrim = &prim
+	}
+	if args.WithUnpack() {
+		if resp.Value.IsPackedAny() {
+			if up, err := resp.Value.UnpackAll(); err == nil {
+				resp.Value = &up
+			}
+		}
+		if resp.Key.IsPacked() {
+			if up, err := resp.Key.Unpack(); err == nil {
+				resp.Key = &up
 			}
 		}
 	}
@@ -575,23 +571,21 @@ func ReadBigMapValue(ctx *ApiContext) (interface{}, int) {
 	return resp, http.StatusOK
 }
 
-func ListBigMapUpdates(ctx *ApiContext) (interface{}, int) {
+func ListBigmapUpdates(ctx *ApiContext) (interface{}, int) {
 	args := &ContractRequest{}
 	ctx.ParseRequestArgs(args)
 	alloc, _ := loadBigmap(ctx, false)
 
-	typ := &micheline.Prim{}
+	var typ micheline.Type
 	if err := typ.UnmarshalBinary(alloc.Value); err != nil {
 		log.Errorf("explorer: bigmap type unmarshal: %v", err)
 	}
-	addr := lookupAddress(ctx, alloc.AccountId).String()
 
-	items, err := ctx.Indexer.ListBigMapUpdates(ctx.Context,
-		alloc.BigMapId,
+	items, err := ctx.Indexer.ListBigmapUpdates(ctx.Context,
+		alloc.BigmapId,
 		args.SinceHeight+1,
 		args.BlockHeight,
-		chain.ExprHash{},
-		nil,
+		tezos.ExprHash{},
 		args.Offset,
 		ctx.Cfg.ClampExplore(args.Limit),
 	)
@@ -599,74 +593,86 @@ func ListBigMapUpdates(ctx *ApiContext) (interface{}, int) {
 		panic(EInternal(EC_DATABASE, "cannot read bigmap", err))
 	}
 
-	blockHashes := make(map[int64]chain.BlockHash)
+	// load ops when metadata is requested
+	var opCache map[model.OpID]*model.Op
+	if args.WithMeta() && len(items) > 0 {
+		opIds := make([]uint64, 0)
+		for _, v := range items {
+			opIds = append(opIds, v.OpId.Value())
+		}
+		ops, err := ctx.Indexer.LookupOpIds(ctx, opIds)
+		if err != nil {
+			log.Errorf("%s: missing ops in %#v", ctx.RequestString(), opIds)
+		} else {
+			opCache = make(map[model.OpID]*model.Op)
+			for _, v := range ops {
+				opCache[v.RowId] = v
+			}
+		}
+	}
 
-	resp := &ExplorerBigMapUpdateList{
-		diff:    make([]ExplorerBigMapUpdate, 0, len(items)),
+	resp := &ExplorerBigmapUpdateList{
+		diff:    make([]ExplorerBigmapUpdate, 0, len(items)),
 		expires: ctx.Tip.BestTime.Add(ctx.Params.TimeBetweenBlocks[0]),
 	}
 
 	keyType, _ := alloc.GetKeyType()
+	contract := ctx.Indexer.LookupAddress(ctx, alloc.AccountId)
 	for _, v := range items {
-		k, err := v.GetKeyAs(keyType)
+		k, err := v.GetKey(keyType)
 		if err != nil {
 			panic(EInternal(EC_SERVER, "cannot decode bigmap key", err))
 		}
 
-		h, ok := blockHashes[v.Height]
-		if !ok {
-			if h, err = ctx.Indexer.BlockHashByHeight(ctx.Context, v.Height); err == nil {
-				blockHashes[v.Height] = h
-			}
-		}
-
-		eh := chain.NewExprHash(v.KeyHash)
-		upd := ExplorerBigMapUpdate{
-			Action: v.Action,
+		expr := v.GetKeyHash()
+		upd := ExplorerBigmapUpdate{
+			Action:   v.Action,
+			BigmapId: v.BigmapId,
 			ExplorerBigmapValue: ExplorerBigmapValue{
-				Key:       k,
-				KeyHash:   &eh,
-				KeyBinary: k.Encode(),
-				Meta: ExplorerBigmapMeta{
-					Contract:     addr,
-					BigMapId:     alloc.BigMapId,
-					UpdateTime:   v.Timestamp,
-					UpdateHeight: v.Height,
-					UpdateBlock:  h,
-					IsReplaced:   BoolPtr(v.IsReplaced),
-					IsRemoved:    BoolPtr(v.IsDeleted),
-				},
+				Key:     &k,
+				KeyHash: &expr,
 			},
+		}
+		if args.WithMeta() {
+			upd.ExplorerBigmapValue.Meta = &ExplorerBigmapMeta{
+				Contract:     contract,
+				BigmapId:     alloc.BigmapId,
+				UpdateTime:   v.Timestamp,
+				UpdateHeight: v.Height,
+				UpdateBlock:  ctx.Indexer.LookupBlockHash(ctx.Context, v.Height),
+				IsReplaced:   BoolPtr(v.IsReplaced),
+				IsRemoved:    BoolPtr(v.IsDeleted),
+			}
+			if op, ok := opCache[v.OpId]; ok {
+				upd.ExplorerBigmapValue.Meta.UpdateOp = op.Hash
+				upd.ExplorerBigmapValue.Meta.Sender = ctx.Indexer.LookupAddress(ctx, op.SenderId)
+				if op.CreatorId != 0 {
+					upd.ExplorerBigmapValue.Meta.Source = ctx.Indexer.LookupAddress(ctx, op.CreatorId)
+				} else {
+					upd.ExplorerBigmapValue.Meta.Source = upd.ExplorerBigmapValue.Meta.Sender
+				}
+			}
 		}
 		switch v.Action {
 		case micheline.DiffActionUpdate, micheline.DiffActionCopy:
-			prim := &micheline.Prim{}
-			upd.Value = &micheline.BigMapValue{
-				Type:  typ,
-				Value: prim,
-			}
+			prim := micheline.Prim{}
 			if err = prim.UnmarshalBinary(v.Value); err != nil {
 				log.Errorf("explorer: bigmap value unmarshal: %v", err)
 			}
-
+			upd.Value = micheline.NewValuePtr(typ, prim)
 			if args.WithPrim() {
-				upd.Prim = &ExplorerBigmapKeyValue{
-					Key:   k.Prim(),
-					Value: prim,
-				}
+				upd.KeyPrim = k.PrimPtr()
+				upd.ValuePrim = &prim
 			}
 			if args.WithUnpack() {
-				if prim.IsPackedAny() {
-					if p, err := prim.UnpackAny(); err == nil {
-						upd.ValueUnpacked = &micheline.BigMapValue{
-							Type:  p.BuildType(),
-							Value: p,
-						}
+				if upd.Value.IsPackedAny() {
+					if up, err := upd.Value.UnpackAll(); err == nil {
+						upd.Value = &up
 					}
 				}
-				if k.IsPacked() {
-					if upd.KeyUnpacked, err = k.UnpackKey(); err == nil {
-						upd.KeyPretty = upd.KeyUnpacked.String()
+				if upd.Key.IsPacked() {
+					if up, err := upd.Key.Unpack(); err == nil {
+						upd.Key = &up
 					}
 				}
 			}
@@ -678,25 +684,24 @@ func ListBigMapUpdates(ctx *ApiContext) (interface{}, int) {
 	return resp, http.StatusOK
 }
 
-func ListBigMapKeyUpdates(ctx *ApiContext) (interface{}, int) {
+func ListBigmapKeyUpdates(ctx *ApiContext) (interface{}, int) {
 	args := &ContractRequest{}
 	ctx.ParseRequestArgs(args)
 
 	alloc, _ := loadBigmap(ctx, false)
-	key := parseBigmapKey(ctx, alloc.KeyType.String())
-	addr := lookupAddress(ctx, alloc.AccountId).String()
+	keyType, _ := alloc.GetKeyType()
+	_, expr := parseBigmapKey(ctx, keyType.OpCode)
 
-	typ := &micheline.Prim{}
+	var typ micheline.Type
 	if err := typ.UnmarshalBinary(alloc.Value); err != nil {
 		log.Errorf("explorer: bigmap type unmarshal: %v", err)
 	}
 
-	items, err := ctx.Indexer.ListBigMapUpdates(ctx,
-		alloc.BigMapId,
+	items, err := ctx.Indexer.ListBigmapUpdates(ctx,
+		alloc.BigmapId,
 		args.SinceHeight+1,
 		args.BlockHeight,
-		key.Hash,
-		key.Bytes(),
+		expr,
 		args.Offset,
 		ctx.Cfg.ClampExplore(args.Limit),
 	)
@@ -704,73 +709,84 @@ func ListBigMapKeyUpdates(ctx *ApiContext) (interface{}, int) {
 		panic(EInternal(EC_DATABASE, "cannot read bigmap", err))
 	}
 
-	blockHashes := make(map[int64]chain.BlockHash)
+	// load ops when metadata is requested
+	var opCache map[model.OpID]*model.Op
+	if args.WithMeta() && len(items) > 0 {
+		opIds := make([]uint64, 0)
+		for _, v := range items {
+			opIds = append(opIds, v.OpId.Value())
+		}
+		ops, err := ctx.Indexer.LookupOpIds(ctx, opIds)
+		if err != nil {
+			log.Errorf("%s: missing ops in %#v", ctx.RequestString(), opIds)
+		} else {
+			opCache = make(map[model.OpID]*model.Op)
+			for _, v := range ops {
+				opCache[v.RowId] = v
+			}
+		}
+	}
 
-	resp := &ExplorerBigMapUpdateList{
-		diff:    make([]ExplorerBigMapUpdate, 0, len(items)),
+	resp := &ExplorerBigmapUpdateList{
+		diff:    make([]ExplorerBigmapUpdate, 0, len(items)),
 		expires: ctx.Tip.BestTime.Add(ctx.Params.TimeBetweenBlocks[0]),
 	}
-	keyType, _ := alloc.GetKeyType()
+	contract := ctx.Indexer.LookupAddress(ctx, alloc.AccountId)
 	for _, v := range items {
-		k, err := v.GetKeyAs(keyType)
+		k, err := v.GetKey(keyType)
 		if err != nil {
 			panic(EInternal(EC_SERVER, "cannot decode bigmap key", err))
 		}
 
-		h, ok := blockHashes[v.Height]
-		if !ok {
-			if h, err = ctx.Indexer.BlockHashByHeight(ctx.Context, v.Height); err == nil {
-				blockHashes[v.Height] = h
-			}
-		}
-
-		eh := chain.NewExprHash(v.KeyHash)
-		upd := ExplorerBigMapUpdate{
-			Action: v.Action,
+		expr := v.GetKeyHash()
+		upd := ExplorerBigmapUpdate{
+			Action:   v.Action,
+			BigmapId: v.BigmapId,
 			ExplorerBigmapValue: ExplorerBigmapValue{
-				Key:       k,
-				KeyHash:   &eh,
-				KeyBinary: k.Encode(),
-				Meta: ExplorerBigmapMeta{
-					Contract:     addr,
-					BigMapId:     alloc.BigMapId,
-					UpdateTime:   v.Timestamp,
-					UpdateHeight: v.Height,
-					UpdateBlock:  h,
-					IsReplaced:   BoolPtr(v.IsReplaced),
-					IsRemoved:    BoolPtr(v.IsDeleted),
-				},
+				Key:     &k,
+				KeyHash: &expr,
 			},
+		}
+		if args.WithMeta() {
+			upd.ExplorerBigmapValue.Meta = &ExplorerBigmapMeta{
+				Contract:     contract,
+				BigmapId:     alloc.BigmapId,
+				UpdateTime:   v.Timestamp,
+				UpdateHeight: v.Height,
+				UpdateBlock:  ctx.Indexer.LookupBlockHash(ctx.Context, v.Height),
+				IsReplaced:   BoolPtr(v.IsReplaced),
+				IsRemoved:    BoolPtr(v.IsDeleted),
+			}
+			if op, ok := opCache[v.OpId]; ok {
+				upd.ExplorerBigmapValue.Meta.UpdateOp = op.Hash
+				upd.ExplorerBigmapValue.Meta.Sender = ctx.Indexer.LookupAddress(ctx, op.SenderId)
+				if op.CreatorId != 0 {
+					upd.ExplorerBigmapValue.Meta.Source = ctx.Indexer.LookupAddress(ctx, op.CreatorId)
+				} else {
+					upd.ExplorerBigmapValue.Meta.Source = upd.ExplorerBigmapValue.Meta.Sender
+				}
+			}
 		}
 		switch v.Action {
 		case micheline.DiffActionUpdate, micheline.DiffActionCopy:
-			prim := &micheline.Prim{}
-			upd.Value = &micheline.BigMapValue{
-				Type:  typ,
-				Value: prim,
-			}
+			prim := micheline.Prim{}
 			if err = prim.UnmarshalBinary(v.Value); err != nil {
 				log.Errorf("explorer: bigmap value unmarshal: %v", err)
 			}
-
+			upd.Value = micheline.NewValuePtr(typ, prim)
 			if args.WithPrim() {
-				upd.Prim = &ExplorerBigmapKeyValue{
-					Key:   k.Prim(),
-					Value: prim,
-				}
+				upd.KeyPrim = k.PrimPtr()
+				upd.ValuePrim = &prim
 			}
 			if args.WithUnpack() {
-				if prim.IsPackedAny() {
-					if p, err := prim.UnpackAny(); err == nil {
-						upd.ValueUnpacked = &micheline.BigMapValue{
-							Type:  p.BuildType(),
-							Value: p,
-						}
+				if upd.Value.IsPackedAny() {
+					if up, err := upd.Value.UnpackAll(); err == nil {
+						upd.Value = &up
 					}
 				}
-				if k.IsPacked() {
-					if upd.KeyUnpacked, err = k.UnpackKey(); err == nil {
-						upd.KeyPretty = upd.KeyUnpacked.String()
+				if upd.Key.IsPacked() {
+					if up, err := upd.Key.Unpack(); err == nil {
+						upd.Key = &up
 					}
 				}
 			}

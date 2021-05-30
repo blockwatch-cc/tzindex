@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -9,6 +9,8 @@ import (
 	"github.com/gorilla/schema"
 	"net/http/pprof"
 	"time"
+
+	"blockwatch.cc/packdb/pack"
 )
 
 var (
@@ -19,10 +21,13 @@ type ParsableRequest interface {
 	Parse(ctx *ApiContext)
 }
 
-type ContractArg interface {
+type Options interface {
 	WithPrim() bool
 	WithUnpack() bool
 	WithHeight() int64
+	WithMeta() bool
+	WithRights() bool
+	WithCollapse() bool
 }
 
 type Resource interface {
@@ -39,6 +44,22 @@ type RESTful interface {
 
 func BoolPtr(b bool) *bool {
 	return &b
+}
+
+func IntPtr(i int) *int {
+	return &i
+}
+
+func Float64Ptr(f float64) *float64 {
+	return &f
+}
+
+// generic list request
+type ListRequest struct {
+	Limit  uint           `schema:"limit"`
+	Offset uint           `schema:"offset"`
+	Cursor uint64         `schema:"cursor"`
+	Order  pack.OrderType `schema:"order"`
 }
 
 var models = map[string]RESTful{}
@@ -63,7 +84,6 @@ func NewRouter() *mux.Router {
 	}
 
 	// register debug routes directly (i.e. without going through dispatcher)
-	log.Debugf("Registering debug routes")
 	router.HandleFunc("/debug/pprof/", pprof.Index)
 	router.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
 	router.HandleFunc("/debug/pprof/profile", pprof.Profile)
@@ -77,7 +97,6 @@ func NewRouter() *mux.Router {
 	router.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
 	router.Handle("/debug/pprof/block", pprof.Handler("block"))
 	router.Handle("/debug/pprof/mutex", pprof.Handler("mutex"))
-
 	router.PathPrefix("/debug/vars").Handler(expvar.Handler())
 
 	router.PathPrefix("/").HandlerFunc(C(NotFound))

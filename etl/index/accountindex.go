@@ -16,13 +16,13 @@ import (
 )
 
 const (
-	AccountPackSizeLog2         = 15 // =32k packs
-	AccountJournalSizeLog2      = 16 // =64k entries
-	AccountCacheSize            = 4
+	AccountPackSizeLog2         = 15  // =32k packs ~ 3M unpacked
+	AccountJournalSizeLog2      = 17  // =128k entries for busy blockchains
+	AccountCacheSize            = 128 // 192 = 576 MB, 128 = 384MB, 64 = 192M
 	AccountFillLevel            = 100
-	AccountIndexPackSizeLog2    = 15 // =16k packs (32k split size) ~256k unpacked
-	AccountIndexJournalSizeLog2 = 16 // 64k
-	AccountIndexCacheSize       = 8
+	AccountIndexPackSizeLog2    = 15   // =16k packs (32k split size) ~256k unpacked
+	AccountIndexJournalSizeLog2 = 16   // 64k
+	AccountIndexCacheSize       = 1024 // ~256M
 	AccountIndexFillLevel       = 90
 	AccountIndexKey             = "account"
 	AccountTableKey             = "account"
@@ -86,8 +86,8 @@ func (idx *AccountIndex) Create(path, label string, opts interface{}) error {
 	}
 
 	_, err = table.CreateIndexIfNotExists(
-		"hash",
-		fields.Find("H"),   // account hash field (20/32 byte hashes)
+		"address",
+		fields.Find("H"),   // account hash field (21 byte hashes)
 		pack.IndexTypeHash, // hash table, index stores hash(field) -> pk value
 		pack.Options{
 			PackSizeLog2:    util.NonZero(idx.iopts.PackSizeLog2, AccountIndexPackSizeLog2),
@@ -145,15 +145,17 @@ func (idx *AccountIndex) ConnectBlock(ctx context.Context, block *Block, builder
 	upd := make([]pack.Item, 0, len(builder.Accounts()))
 	// regular accounts
 	for _, acc := range builder.Accounts() {
-		if acc.IsDirty {
-			upd = append(upd, acc)
+		if !acc.IsDirty {
+			continue
 		}
+		upd = append(upd, acc)
 	}
 	// delegate accounts
 	for _, acc := range builder.Delegates() {
-		if acc.IsDirty {
-			upd = append(upd, acc)
+		if !acc.IsDirty {
+			continue
 		}
+		upd = append(upd, acc)
 	}
 	return idx.table.Update(ctx, upd)
 }
@@ -185,7 +187,7 @@ func (idx *AccountIndex) DisconnectBlock(ctx context.Context, block *Block, buil
 	if len(del) > 0 {
 		// remove duplicates and sort; returns new slice
 		del = vec.UniqueUint64Slice(del)
-		log.Debugf("Rollback removing accounts %#v", del)
+		// log.Debugf("Rollback removing accounts %#v", del)
 		if err := idx.table.DeleteIds(ctx, del); err != nil {
 			return err
 		}
@@ -203,15 +205,9 @@ func (idx *AccountIndex) DisconnectBlock(ctx context.Context, block *Block, buil
 }
 
 func (idx *AccountIndex) DeleteBlock(ctx context.Context, height int64) error {
-	log.Debugf("Rollback deleting accounts at height %d", height)
-	q := pack.Query{
-		Name: "etl.account.delete",
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: idx.table.Fields().Find("0"), // first seen height (!)
-			Mode:  pack.FilterModeEqual,
-			Value: height,
-		}},
-	}
-	_, err := idx.table.Delete(ctx, q)
+	// log.Debugf("Rollback deleting accounts at height %d", height)
+	_, err := pack.NewQuery("etl.account.delete", idx.table).
+		AndEqual("first_seen", height).
+		Delete(ctx)
 	return err
 }

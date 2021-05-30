@@ -8,14 +8,10 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/store"
-	"blockwatch.cc/packdb/util"
-
-	"blockwatch.cc/tzindex/chain"
-	"blockwatch.cc/tzindex/etl/index"
+	"blockwatch.cc/tzgo/tezos"
 	. "blockwatch.cc/tzindex/etl/model"
 )
 
@@ -30,9 +26,10 @@ type IndexerConfig struct {
 // Indexer defines an index manager that manages and stores multiple indexes.
 type Indexer struct {
 	mu        sync.Mutex
-	times     atomic.Value
-	ranks     atomic.Value
-	rights    atomic.Value
+	blocks    atomic.Value // cache for all block hashes and timestamps
+	ranks     atomic.Value // top addresses (>10tez, 100k = 10 MB)
+	rights    atomic.Value // bitset 400 (bakers) * 6 (cycles) * 4096 (blocks) * 33 (rights)
+	addrs     atomic.Value // all on-chain address hashes by id
 	dbpath    string
 	dbopts    interface{}
 	statedb   store.DB
@@ -54,6 +51,46 @@ func NewIndexer(cfg IndexerConfig) *Indexer {
 		tables:    make(map[string]*pack.Table),
 		lightMode: cfg.LightMode,
 	}
+}
+
+func (m *Indexer) ParamsByHeight(height int64) *tezos.Params {
+	return m.reg.GetParamsByHeight(height)
+}
+
+func (m *Indexer) ParamsByProtocol(proto tezos.ProtocolHash) (*tezos.Params, error) {
+	return m.reg.GetParams(proto)
+}
+
+func (m *Indexer) ParamsByDeployment(v int) (*tezos.Params, error) {
+	return m.reg.GetParamsByDeployment(v)
+}
+
+func (m *Indexer) Table(key string) (*pack.Table, error) {
+	t, ok := m.tables[key]
+	if !ok {
+		return nil, fmt.Errorf("table %s not found", key)
+	}
+	return t, nil
+}
+
+func (m *Indexer) TableStats() map[string]pack.TableStats {
+	stats := make(map[string]pack.TableStats)
+	for _, idx := range m.indexes {
+		for _, t := range idx.Tables() {
+			stats[t.Name()] = t.Stats()
+		}
+	}
+	return stats
+}
+
+func (m *Indexer) MemStats() map[string]pack.TableSizeStats {
+	stats := make(map[string]pack.TableSizeStats)
+	for _, idx := range m.indexes {
+		for _, t := range idx.Tables() {
+			stats[t.Name()] = t.Size()
+		}
+	}
+	return stats
 }
 
 func (m *Indexer) Init(ctx context.Context, tip *ChainTip, mode Mode) error {
@@ -156,6 +193,65 @@ func (m *Indexer) Init(ctx context.Context, tip *ChainTip, mode Mode) error {
 	return nil
 }
 
+func (m *Indexer) Flush(ctx context.Context) error {
+	for _, idx := range m.indexes {
+		for _, t := range idx.Tables() {
+			// log.Debugf("Flushing %s.", t.Name())
+			if err := t.Flush(ctx); err != nil {
+				return err
+			}
+		}
+		if err := m.storeTip(idx.Key()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Indexer) FlushJournals(ctx context.Context) error {
+	for _, idx := range m.indexes {
+		for _, t := range idx.Tables() {
+			// log.Debugf("Flushing %s.", t.Name())
+			if err := t.FlushJournal(ctx); err != nil {
+				return err
+			}
+		}
+		if err := m.storeTip(idx.Key()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Indexer) GC(ctx context.Context, ratio float64) error {
+	if err := m.Flush(ctx); err != nil {
+		return err
+	}
+	if interruptRequested(ctx) {
+		return errInterruptRequested
+	}
+	for _, idx := range m.indexes {
+		for _, t := range idx.Tables() {
+			log.Infof("Compacting %s.", t.Name())
+			if err := t.Compact(ctx); err != nil {
+				return err
+			}
+			if interruptRequested(ctx) {
+				return errInterruptRequested
+			}
+		}
+		db := idx.DB()
+		log.Infof("Garbage collecting %s (%s).", idx.Name(), db.Path())
+		if err := db.GC(ctx, ratio); err != nil {
+			return err
+		}
+		if interruptRequested(ctx) {
+			return errInterruptRequested
+		}
+	}
+	return nil
+}
+
 func (m *Indexer) Close() error {
 	m.tables = nil
 	for _, idx := range m.indexes {
@@ -170,8 +266,13 @@ func (m *Indexer) Close() error {
 	return nil
 }
 
-func (m *Indexer) ConnectProtocol(ctx context.Context, params *chain.Params) error {
+func (m *Indexer) ConnectProtocol(ctx context.Context, params *tezos.Params) error {
+	// update previous protocol end
 	prev := m.reg.GetParamsLatest()
+	// if prev != nil && prev.Version >= params.Version {
+	// 	return fmt.Errorf("new protocol %s version mismatch: latest v%d, new v%d",
+	// 		params.Protocol, prev.Version, params.Version)
+	// }
 	err := m.statedb.Update(func(dbTx store.Tx) error {
 		if prev != nil {
 			prev.EndHeight = params.StartHeight - 1
@@ -188,11 +289,6 @@ func (m *Indexer) ConnectProtocol(ctx context.Context, params *chain.Params) err
 }
 
 func (m *Indexer) ConnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
-	// update block time when synchronized
-	if err := m.updateBlockTime(block); err != nil {
-		return err
-	}
-
 	// insert data
 	for _, t := range m.indexes {
 		key := t.Key()
@@ -203,7 +299,7 @@ func (m *Indexer) ConnectBlock(ctx context.Context, block *Block, builder BlockB
 		}
 
 		// skip when the block is already known
-		if tip.Hash != nil && tip.Hash.String() == block.Hash.String() {
+		if tip.Hash != nil && tip.Hash.Equal(block.Hash) {
 			continue
 		}
 
@@ -216,6 +312,15 @@ func (m *Indexer) ConnectBlock(ctx context.Context, block *Block, builder BlockB
 		tip.Hash = &cloned
 		tip.Height = block.Height
 	}
+
+	// update live caches
+	if err := m.updateBlocks(ctx, block); err != nil {
+		return err
+	}
+	if err := m.updateAddrs(ctx, builder.Accounts()); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -227,7 +332,7 @@ func (m *Indexer) DisconnectBlock(ctx context.Context, block *Block, builder Blo
 			log.Errorf("missing tip for table %s", string(key))
 			continue
 		}
-		if block.Height > 0 && !tip.Hash.IsEqual(block.Hash) {
+		if block.Height > 0 && !tip.Hash.Equal(block.Hash) {
 			continue
 		}
 
@@ -240,6 +345,10 @@ func (m *Indexer) DisconnectBlock(ctx context.Context, block *Block, builder Blo
 		tip.Hash = &cloned
 		tip.Height = block.Height - 1
 	}
+
+	// we don't roll-back caches here because cached data will be overwritten by
+	// roll-forward
+
 	return nil
 }
 
@@ -299,71 +408,8 @@ func (m *Indexer) storeTip(key string) error {
 	if !ok {
 		return nil
 	}
+	// log.Debugf("Storing %s idx tip.", key)
 	return m.statedb.Update(func(dbTx store.Tx) error {
 		return dbStoreIndexTip(dbTx, key, tip)
 	})
-}
-
-// FIXME: simple read-mostly cache for block height ->> unix seconds (uint32)
-// - first timestamp is actual time in unix secs, remainder are offsets in seconds
-// - each entry uses 4 bytes per block, safe until June 2017 + 66 years;
-//   by then Tezos may have reached 34M blocks and the cache is 132MB in size
-func (m *Indexer) buildBlockTimes(ctx context.Context) ([]uint32, error) {
-	times := make([]uint32, 0, 1<<20)
-	blocks, err := m.Table(index.BlockTableKey)
-	if err != nil {
-		return nil, err
-	}
-	type XBlock struct {
-		Timestamp time.Time `pack:"T,snappy"`
-	}
-	q := pack.Query{
-		Name:    "init.block_time",
-		NoCache: true,
-		Fields:  blocks.Fields().Select("T"),
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: blocks.Fields().Find("Z"), // non-orphan blocks only
-				Mode:  pack.FilterModeEqual,
-				Value: false,
-			},
-		},
-	}
-	b := XBlock{}
-	err = blocks.Stream(ctx, q, func(r pack.Row) error {
-		if err := r.Decode(&b); err != nil {
-			return err
-		}
-		if len(times) == 0 {
-			// safe, it's before 2036
-			times = append(times, uint32(b.Timestamp.Unix()))
-		} else {
-			// make sure there's no rounding error
-			tsdiff := b.Timestamp.Unix() - int64(times[0])
-			times = append(times, uint32(tsdiff))
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return times, nil
-}
-
-// only called from single thread in crawler, no locking required
-func (m *Indexer) updateBlockTime(block *Block) error {
-	av := m.times.Load()
-	if av == nil {
-		// not initialized yet
-		return nil
-	}
-	oldTimes := av.([]uint32)
-	newTimes := make([]uint32, len(oldTimes), util.Max(cap(oldTimes), int(block.Height+1)))
-	copy(newTimes, oldTimes)
-	// extend slice and patch time-diff into position
-	newTimes = newTimes[:int(block.Height+1)]
-	tsdiff := block.Timestamp.Unix() - int64(newTimes[0])
-	newTimes[int(block.Height)] = uint32(tsdiff)
-	m.times.Store(newTimes)
-	return nil
 }

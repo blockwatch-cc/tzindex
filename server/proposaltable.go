@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -16,7 +16,7 @@ import (
 	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
@@ -50,9 +50,9 @@ func init() {
 // configurable marshalling helper
 type Proposal struct {
 	model.Proposal
-	verbose bool            `csv:"-" pack:"-"` // cond. marshal
-	columns util.StringList `csv:"-" pack:"-"` // cond. cols & order when brief
-	ctx     *ApiContext     `csv:"-" pack:"-"` // blockchain amount conversion
+	verbose bool            // cond. marshal
+	columns util.StringList // cond. cols & order when brief
+	ctx     *ApiContext     // blockchain amount conversion
 }
 
 func (p *Proposal) MarshalJSON() ([]byte, error) {
@@ -83,7 +83,7 @@ func (p *Proposal) MarshalJSONVerbose() ([]byte, error) {
 		Height:       p.Height,
 		Timestamp:    util.UnixMilliNonZero(p.Time),
 		SourceId:     p.SourceId.Value(),
-		Source:       lookupAddress(p.ctx, p.SourceId).String(),
+		Source:       p.ctx.Indexer.LookupAddress(p.ctx, p.SourceId).String(),
 		OpId:         p.OpId.Value(),
 		Op:           govLookupOpHash(p.ctx, p.OpId).String(),
 		ElectionId:   p.ElectionId.Value(),
@@ -110,7 +110,7 @@ func (p *Proposal) MarshalJSONBrief() ([]byte, error) {
 		case "source_id":
 			buf = strconv.AppendUint(buf, p.SourceId.Value(), 10)
 		case "source":
-			buf = strconv.AppendQuote(buf, lookupAddress(p.ctx, p.SourceId).String())
+			buf = strconv.AppendQuote(buf, p.ctx.Indexer.LookupAddress(p.ctx, p.SourceId).String())
 		case "op_id":
 			buf = strconv.AppendUint(buf, p.OpId.Value(), 10)
 		case "op":
@@ -149,7 +149,7 @@ func (p *Proposal) MarshalCSV() ([]string, error) {
 		case "source_id":
 			res[i] = strconv.FormatUint(p.SourceId.Value(), 10)
 		case "source":
-			res[i] = strconv.Quote(lookupAddress(p.ctx, p.SourceId).String())
+			res[i] = strconv.Quote(p.ctx.Indexer.LookupAddress(p.ctx, p.SourceId).String())
 		case "op_id":
 			res[i] = strconv.FormatUint(p.OpId.Value(), 10)
 		case "op":
@@ -198,11 +198,10 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 
 	// build table query
 	q := pack.Query{
-		Name:       ctx.RequestID,
-		Fields:     table.Fields().Select(srcNames...),
-		Limit:      int(args.Limit),
-		Conditions: make(pack.ConditionList, 0),
-		Order:      args.Order,
+		Name:   ctx.RequestID,
+		Fields: table.Fields().Select(srcNames...),
+		Limit:  int(args.Limit),
+		Order:  args.Order,
 	}
 
 	// build dynamic filter conditions from query (will panic on error)
@@ -217,7 +216,7 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			}
 		}
 		switch prefix {
-		case "columns", "limit", "order", "verbose":
+		case "columns", "limit", "order", "verbose", "filename":
 			// skip these fields
 		case "cursor":
 			// add row id condition: id > cursor (new cursor == last row id)
@@ -229,7 +228,7 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
+			q.Conditions.AddAndCondition(&pack.Condition{
 				Field: table.Fields().Pk(),
 				Mode:  cursorMode,
 				Value: id,
@@ -239,13 +238,13 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			// special hash type to []byte conversion
 			hashes := make([][]byte, len(val))
 			for i, v := range val {
-				h, err := chain.ParseProtocolHash(v)
+				h, err := tezos.ParseProtocolHash(v)
 				if err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", val), err))
 				}
 				hashes[i] = h.Hash.Hash
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
+			q.Conditions.AddAndCondition(&pack.Condition{
 				Field: table.Fields().Find("H"),
 				Mode:  pack.FilterModeIn,
 				Value: hashes,
@@ -260,15 +259,15 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty address matches id 0 (== missing baker)
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find("S"), // source id
 						Mode:  mode,
-						Value: uint64(0),
+						Value: 0,
 						Raw:   val[0], // debugging aid
 					})
 				} else {
 					// single-address lookup and compile condition
-					addr, err := chain.ParseAddress(val[0])
+					addr, err := tezos.ParseAddress(val[0])
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
@@ -278,7 +277,7 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 					}
 					// Note: when not found we insert an always false condition
 					if acc == nil || acc.RowId == 0 {
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find("S"), // source id
 							Mode:  mode,
 							Value: uint64(math.MaxUint64),
@@ -286,10 +285,10 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 						})
 					} else {
 						// add addr id as extra fund_flow condition
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find("S"), // source id
 							Mode:  mode,
-							Value: acc.RowId.Value(),
+							Value: acc.RowId,
 							Raw:   val[0], // debugging aid
 						})
 					}
@@ -298,7 +297,7 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(v)
+					addr, err := tezos.ParseAddress(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
@@ -315,7 +314,7 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("S"), // source id
 					Mode:  mode,
 					Value: ids,
@@ -334,10 +333,10 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty op matches id 0 (== missing baker)
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find("O"), // op id
 						Mode:  mode,
-						Value: uint64(0),
+						Value: 0,
 						Raw:   val[0], // debugging aid
 					})
 				} else {
@@ -355,7 +354,7 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 					}
 					// Note: when not found we insert an always false condition
 					if op == nil || len(op) == 0 {
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find("O"), // op id
 							Mode:  mode,
 							Value: uint64(math.MaxUint64),
@@ -363,11 +362,11 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 						})
 					} else {
 						// add addr id as extra fund_flow condition
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find("O"), // op id
 							Mode:  mode,
-							Value: op[0].RowId.Value(), // op slice may contain internal ops
-							Raw:   val[0],              // debugging aid
+							Value: op[0].RowId, // op slice may contain internal ops
+							Raw:   val[0],      // debugging aid
 						})
 					}
 				}
@@ -396,7 +395,7 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				}
 				// Note: when list is empty (no ops were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("O"), // op id
 					Mode:  mode,
 					Value: ids,
@@ -419,7 +418,7 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions = append(q.Conditions, cond)
+					q.Conditions.AddAndCondition(&cond)
 				}
 			}
 		}
@@ -430,11 +429,11 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 		lastId uint64
 	)
 
-	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
-	defer func() {
-		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	}()
+	// start := time.Now()
+	// ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
+	// defer func() {
+	// 	ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
+	// }()
 
 	// prepare return type marshalling
 	proposal := &Proposal{
@@ -487,7 +486,7 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 
 		// close JSON bracket
 		io.WriteString(ctx.ResponseWriter, "]")
-		ctx.Log.Tracef("JSON encoded %d rows", count)
+		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":
 		enc := csv.NewEncoder(ctx.ResponseWriter)
@@ -512,7 +511,7 @@ func StreamProposalTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				return nil
 			})
 		}
-		ctx.Log.Tracef("CSV Encoded %d rows", count)
+		// ctx.Log.Tracef("CSV Encoded %d rows", count)
 	}
 
 	// without new records, cursor remains the same as input (may be empty)

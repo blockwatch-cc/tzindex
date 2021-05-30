@@ -4,14 +4,17 @@
 package model
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"sync"
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 )
+
+const AccountCacheLineSize = 320 // with padding
 
 var accountPool = &sync.Pool{
 	New: func() interface{} { return new(Account) },
@@ -23,15 +26,24 @@ func (id AccountID) Value() uint64 {
 	return uint64(id)
 }
 
+type AccountRank struct {
+	AccountId    AccountID
+	Balance      int64 // total balance
+	TxVolume24h  int64 // tx volume in+out
+	TxTraffic24h int64 // number of tx in+out
+	RichRank     int   // assigned rank based on balance
+	VolumeRank   int   // assigned rank based on volume
+	TrafficRank  int   // assigned rank based on traffic
+}
+
 // Account is an up-to-date snapshot of the current status. For history look at Flow (balance updates).
 type Account struct {
 	RowId              AccountID         `pack:"I,pk,snappy" json:"row_id"`
-	Hash               []byte            `pack:"H"           json:"hash"`
+	Hash               tezos.Address     `pack:"H"           json:"address"`
 	DelegateId         AccountID         `pack:"D,snappy"    json:"delegate_id"`
-	ManagerId          AccountID         `pack:"M,snappy"    json:"manager_id"`
-	PubkeyHash         []byte            `pack:"k"           json:"pubkey_hash"`
-	PubkeyType         chain.HashType    `pack:"K,snappy"    json:"pubkey_type"`
-	Type               chain.AddressType `pack:"t,snappy"    json:"address_type"`
+	CreatorId          AccountID         `pack:"M,snappy"    json:"creator_id"`
+	Pubkey             []byte            `pack:"k"           json:"pubkey"`
+	Type               tezos.AddressType `pack:"t,snappy"    json:"address_type"`
 	FirstIn            int64             `pack:"i,snappy"    json:"first_in"`
 	FirstOut           int64             `pack:"o,snappy"    json:"first_out"`
 	LastIn             int64             `pack:"J,snappy"    json:"last_in"`
@@ -40,6 +52,7 @@ type Account struct {
 	LastSeen           int64             `pack:"l,snappy"    json:"last_seen"`
 	DelegatedSince     int64             `pack:"+,snappy"    json:"delegated_since"`
 	DelegateSince      int64             `pack:"*,snappy"    json:"delegate_since"`
+	DelegateUntil      int64             `pack:"/,snappy"    json:"delegate_until"`
 	TotalReceived      int64             `pack:"R,snappy"    json:"total_received"`
 	TotalSent          int64             `pack:"S,snappy"    json:"total_sent"`
 	TotalBurned        int64             `pack:"B,snappy"    json:"total_burned"`
@@ -57,7 +70,6 @@ type Account struct {
 	ActiveDelegations  int64             `pack:"a,snappy"    json:"active_delegations"` // with non-zero balance
 	IsFunded           bool              `pack:"f,snappy"    json:"is_funded"`
 	IsActivated        bool              `pack:"A,snappy"    json:"is_activated"` // bc: fundraiser account
-	IsVesting          bool              `pack:"V,snappy"    json:"is_vesting"`   // bc: vesting contract account
 	IsSpendable        bool              `pack:"p,snappy"    json:"is_spendable"` // manager can move funds without running any code
 	IsDelegatable      bool              `pack:"?,snappy"    json:"is_delegatable"`
 	IsDelegated        bool              `pack:"=,snappy"    json:"is_delegated"`
@@ -72,7 +84,7 @@ type Account struct {
 	SlotsEndorsed      int               `pack:"x,snappy"    json:"slots_endorsed"`
 	SlotsMissed        int               `pack:"y,snappy"    json:"slots_missed"`
 	NOps               int               `pack:"1,snappy"    json:"n_ops"`         // stats: successful operation count
-	NOpsFailed         int               `pack:"2,snappy"    json:"n_ops_failed"`  // stats: failed operation coiunt
+	NOpsFailed         int               `pack:"2,snappy"    json:"n_ops_failed"`  // stats: failed operation count
 	NTx                int               `pack:"3,snappy"    json:"n_tx"`          // stats: number of Tx operations
 	NDelegation        int               `pack:"4,snappy"    json:"n_delegation"`  // stats: number of Delegations operations
 	NOrigination       int               `pack:"5,snappy"    json:"n_origination"` // stats: number of Originations operations
@@ -81,7 +93,7 @@ type Account struct {
 	TokenGenMin        int64             `pack:"g,snappy"    json:"token_gen_min"` // hops
 	TokenGenMax        int64             `pack:"G,snappy"    json:"token_gen_max"` // hops
 	GracePeriod        int64             `pack:"P,snappy"    json:"grace_period"`  // deactivation cycle
-	CallStats          []byte            `pack:"C,snappy"    json:"call_stats"`    // per entrypoint call statistics for contracts
+	BakerVersion       uint32            `pack:"N,snappy"    json:"baker_version"` // baker version
 
 	// used during block processing, not stored in DB
 	IsNew      bool `pack:"-" json:"-"` // first seen this block
@@ -93,13 +105,13 @@ type Account struct {
 // Ensure Account implements the pack.Item interface.
 var _ pack.Item = (*Account)(nil)
 
-func NewAccount(addr chain.Address) *Account {
+func NewAccount(addr tezos.Address) *Account {
 	acc := AllocAccount()
 	acc.Type = addr.Type
-	acc.Hash = addr.Hash
+	acc.Hash = addr.Clone()
 	acc.IsNew = true
 	acc.IsDirty = true
-	acc.IsSpendable = addr.Type != chain.AddressTypeContract // tz1/2/3 spendable by default
+	acc.IsSpendable = addr.Type != tezos.AddressTypeContract // tz1/2/3 spendable by default
 	return acc
 }
 
@@ -125,39 +137,32 @@ func (a *Account) SetID(id uint64) {
 }
 
 func (a Account) String() string {
-	s, _ := chain.EncodeAddress(a.Type, a.Hash)
-	return s
+	return a.Hash.String()
 }
 
-func (a Account) Address() chain.Address {
-	return chain.NewAddress(a.Type, a.Hash)
+func (a Account) Address() tezos.Address {
+	return a.Hash
 }
 
-func (a *Account) ManagerContract() (*Contract, error) {
-	if a.Type != chain.AddressTypeContract {
-		return nil, fmt.Errorf("account is not a contract")
+func (a Account) Key() tezos.Key {
+	key := tezos.Key{}
+	if len(a.Pubkey) == 0 {
+		return key
 	}
-	c := AllocContract()
-	c.Hash = make([]byte, len(a.Hash))
-	copy(c.Hash, a.Hash)
-	c.AccountId = a.RowId
-	c.ManagerId = a.ManagerId
-	c.IsSpendable = a.IsSpendable
-	c.IsDelegatable = a.IsDelegatable
-	c.Height = a.FirstSeen
-	return c, nil
+	_ = key.UnmarshalBinary(a.Pubkey)
+	return key
 }
 
 func (a Account) Balance() int64 {
-	b := a.FrozenBalance() + a.SpendableBalance
-	if a.IsVesting {
-		b += a.UnclaimedBalance
-	}
-	return b
+	return a.FrozenBalance() + a.SpendableBalance
 }
 
 func (a Account) FrozenBalance() int64 {
 	return a.FrozenDeposits + a.FrozenFees + a.FrozenRewards
+}
+
+func (a Account) TotalBalance() int64 {
+	return a.SpendableBalance + a.FrozenDeposits + a.FrozenFees
 }
 
 // own balance plus frozen deposits+fees (NOT REWARDS!) plus
@@ -166,20 +171,37 @@ func (a Account) StakingBalance() int64 {
 	return a.FrozenDeposits + a.FrozenFees + a.SpendableBalance + a.DelegatedBalance
 }
 
-func (a Account) Rolls(p *chain.Params) int64 {
+func (a Account) Rolls(p *tezos.Params) int64 {
 	if p.TokensPerRoll == 0 {
 		return 0
 	}
 	return a.StakingBalance() / p.TokensPerRoll
 }
 
+func (a Account) StakingCapacity(p *tezos.Params, netRolls int64) int64 {
+	blockDeposits := p.BlockSecurityDeposit + p.EndorsementSecurityDeposit*int64(p.EndorsersPerBlock)
+	netBond := blockDeposits * p.BlocksPerCycle * (p.PreservedCycles + 1)
+	netStake := netRolls * p.TokensPerRoll
+	// numeric overflow is likely
+	return int64(float64(a.TotalBalance()) * float64(netStake) / float64(netBond))
+}
+
+func (a *Account) SetVersion(nonce uint64) {
+	a.BakerVersion = uint32(nonce >> 32)
+}
+
+func (a *Account) GetVersionBytes() []byte {
+	var b [4]byte
+	binary.BigEndian.PutUint32(b[:], a.BakerVersion)
+	return b[:]
+}
+
 func (a *Account) Reset() {
 	a.RowId = 0
-	a.Hash = nil
+	a.Hash = tezos.Address{}
 	a.DelegateId = 0
-	a.ManagerId = 0
-	a.PubkeyHash = nil
-	a.PubkeyType = 0
+	a.CreatorId = 0
+	a.Pubkey = nil
 	a.Type = 0
 	a.FirstIn = 0
 	a.FirstOut = 0
@@ -189,6 +211,7 @@ func (a *Account) Reset() {
 	a.LastSeen = 0
 	a.DelegatedSince = 0
 	a.DelegateSince = 0
+	a.DelegateUntil = 0
 	a.TotalReceived = 0
 	a.TotalSent = 0
 	a.TotalBurned = 0
@@ -206,7 +229,6 @@ func (a *Account) Reset() {
 	a.ActiveDelegations = 0
 	a.IsFunded = false
 	a.IsActivated = false
-	a.IsVesting = false
 	a.IsSpendable = false
 	a.IsDelegatable = false
 	a.IsDelegated = false
@@ -230,69 +252,25 @@ func (a *Account) Reset() {
 	a.TokenGenMin = 0
 	a.TokenGenMax = 0
 	a.GracePeriod = 0
-	a.CallStats = nil
+	a.BakerVersion = 0
 	a.IsNew = false
 	a.WasFunded = false
 	a.IsDirty = false
 	a.MustDelete = false
 }
 
-func (a *Account) ListCallStats() []int {
-	res := make([]int, len(a.CallStats)>>2)
-	for i, _ := range res {
-		res[i] = int(binary.BigEndian.Uint32(a.CallStats[i*4:]))
-	}
-	return res
-}
-
-func (a *Account) NeedsBabylonUpgrade(p *chain.Params) bool {
-	isEligible := a.PubkeyType == chain.HashTypePkhNocurve && !a.IsContract
+func (a *Account) NeedsBabylonUpgrade(p *tezos.Params) bool {
+	isEligible := a.Type == tezos.AddressTypeContract && !a.IsContract
 	isEligible = isEligible && (a.IsSpendable || (!a.IsSpendable && a.IsDelegatable))
 	return isEligible && p.Version >= 5
 }
 
-func (a *Account) UpgradeToBabylon(p *chain.Params) {
+func (a *Account) UpgradeToBabylon(p *tezos.Params) {
 	if !a.NeedsBabylonUpgrade(p) {
 		return
 	}
-	a.IsDirty = true
 	a.IsContract = true
-
-	// extend call stats array by moving existing stats
-	offs := 1
-	if !a.IsSpendable && a.IsDelegatable {
-		offs++
-	}
-	newcs := make([]byte, 4*offs+len(a.CallStats))
-	copy(newcs[4*offs:], a.CallStats)
-	a.CallStats = newcs
-}
-
-// stats are stored as uint32 in a byte slice limit entrypoint count to 255
-func (a *Account) IncCallStats(entrypoint byte, height int64, params *chain.Params) {
-	offs := int(entrypoint) * 4
-	if cap(a.CallStats) <= offs+4 {
-		// grow slice if necessary
-		buf := make([]byte, offs+4)
-		copy(buf, a.CallStats)
-		a.CallStats = buf
-	}
-	a.CallStats = a.CallStats[0:util.Max(len(a.CallStats), offs+4)]
-	val := binary.BigEndian.Uint32(a.CallStats[offs:])
-	binary.BigEndian.PutUint32(a.CallStats[offs:], val+1)
-}
-
-func (a *Account) DecCallStats(entrypoint byte, height int64, params *chain.Params) {
-	offs := int(entrypoint) * 4
-	if cap(a.CallStats) <= offs+4 {
-		// grow slice if necessary
-		buf := make([]byte, offs+4)
-		copy(buf, a.CallStats)
-		a.CallStats = buf
-	}
-	a.CallStats = a.CallStats[0:util.Max(len(a.CallStats), offs+4)]
-	val := binary.BigEndian.Uint32(a.CallStats[offs:])
-	binary.BigEndian.PutUint32(a.CallStats[offs:], val-1)
+	a.IsDirty = true
 }
 
 func (a *Account) UpdateBalanceN(flows []*Flow) error {
@@ -376,14 +354,6 @@ func (a *Account) UpdateBalance(f *Flow) error {
 					"activated amount %d", a.RowId, a, a.UnclaimedBalance, f.AmountIn)
 			}
 			a.UnclaimedBalance -= f.AmountIn
-			a.TokenGenMin = 1
-			a.TokenGenMax = util.Max64(a.TokenGenMax, 1)
-		case FlowTypeVest:
-			if a.UnclaimedBalance+a.SpendableBalance < f.AmountIn {
-				return fmt.Errorf("acc.update id %d %s total balance %d is smaller than "+
-					"vested amount %d", a.RowId, a, a.UnclaimedBalance+a.SpendableBalance, f.AmountIn)
-			}
-			a.UnclaimedBalance = util.Max64(a.UnclaimedBalance-f.AmountIn, 0)
 			a.TokenGenMin = 1
 			a.TokenGenMax = util.Max64(a.TokenGenMax, 1)
 		}
@@ -499,7 +469,7 @@ func (a *Account) RollbackBalance(f *Flow) error {
 			// 	a.TokenGenMax = util.Max64(a.TokenGenMax, f.TokenGenMax+1)
 			// 	a.TokenGenMin = util.NonZeroMin64(a.TokenGenMin, f.TokenGenMin+1)
 			// }
-		case FlowTypeVest, FlowTypeActivation:
+		case FlowTypeActivation:
 			a.UnclaimedBalance += f.AmountIn
 		}
 		a.SpendableBalance -= f.AmountIn - f.AmountOut
@@ -513,19 +483,171 @@ func (a *Account) RollbackBalance(f *Flow) error {
 	}
 
 	// skip activity updates (too complex to track previous in/out heights)
-	// and rely on subsequent block updates, we still set LastSeen to the current
-	// block
+	// and rely on subsequent block updates, we still set LastSeen to the current block
 	a.IsFunded = (a.FrozenBalance() + a.SpendableBalance + a.UnclaimedBalance) > 0
 	a.LastSeen = util.Min64(f.Height, util.Max64N(a.LastIn, a.LastOut))
 	return nil
 }
 
 // init 11 cycles ahead of current cycle
-func (a *Account) InitGracePeriod(cycle int64, params *chain.Params) {
+func (a *Account) InitGracePeriod(cycle int64, params *tezos.Params) {
 	a.GracePeriod = cycle + 2*params.PreservedCycles + 1 // (11)
 }
 
 // keep initial (+11) max grace period, otherwise cycle + 6
-func (a *Account) UpdateGracePeriod(cycle int64, params *chain.Params) {
+func (a *Account) UpdateGracePeriod(cycle int64, params *tezos.Params) {
 	a.GracePeriod = util.Max64(cycle+params.PreservedCycles+1, a.GracePeriod)
+}
+
+func (a Account) MarshalBinary() ([]byte, error) {
+	le := binary.LittleEndian
+	buf := bytes.NewBuffer(make([]byte, 0, 2048))
+	binary.Write(buf, le, a.RowId)
+	binary.Write(buf, le, int32(len(a.Hash.Hash)))
+	buf.Write(a.Hash.Hash)
+	binary.Write(buf, le, a.DelegateId)
+	binary.Write(buf, le, a.CreatorId)
+	binary.Write(buf, le, int32(len(a.Pubkey)))
+	buf.Write(a.Pubkey)
+	binary.Write(buf, le, a.Type)
+	binary.Write(buf, le, a.FirstIn)
+	binary.Write(buf, le, a.FirstOut)
+	binary.Write(buf, le, a.LastIn)
+	binary.Write(buf, le, a.LastOut)
+	binary.Write(buf, le, a.FirstSeen)
+	binary.Write(buf, le, a.LastSeen)
+	binary.Write(buf, le, a.DelegatedSince)
+	binary.Write(buf, le, a.DelegateSince)
+	binary.Write(buf, le, a.DelegateUntil)
+	binary.Write(buf, le, a.TotalReceived)
+	binary.Write(buf, le, a.TotalSent)
+	binary.Write(buf, le, a.TotalBurned)
+	binary.Write(buf, le, a.TotalFeesPaid)
+	binary.Write(buf, le, a.TotalRewardsEarned)
+	binary.Write(buf, le, a.TotalFeesEarned)
+	binary.Write(buf, le, a.TotalLost)
+	binary.Write(buf, le, a.FrozenDeposits)
+	binary.Write(buf, le, a.FrozenRewards)
+	binary.Write(buf, le, a.FrozenFees)
+	binary.Write(buf, le, a.UnclaimedBalance)
+	binary.Write(buf, le, a.SpendableBalance)
+	binary.Write(buf, le, a.DelegatedBalance)
+	binary.Write(buf, le, a.TotalDelegations)
+	binary.Write(buf, le, a.ActiveDelegations)
+	binary.Write(buf, le, a.IsFunded)
+	binary.Write(buf, le, a.IsActivated)
+	binary.Write(buf, le, a.IsSpendable)
+	binary.Write(buf, le, a.IsDelegatable)
+	binary.Write(buf, le, a.IsDelegated)
+	binary.Write(buf, le, a.IsRevealed)
+	binary.Write(buf, le, a.IsDelegate)
+	binary.Write(buf, le, a.IsActiveDelegate)
+	binary.Write(buf, le, a.IsContract)
+	binary.Write(buf, le, int32(a.BlocksBaked))
+	binary.Write(buf, le, int32(a.BlocksMissed))
+	binary.Write(buf, le, int32(a.BlocksStolen))
+	binary.Write(buf, le, int32(a.BlocksEndorsed))
+	binary.Write(buf, le, int32(a.SlotsEndorsed))
+	binary.Write(buf, le, int32(a.SlotsMissed))
+	binary.Write(buf, le, int32(a.NOps))
+	binary.Write(buf, le, int32(a.NOpsFailed))
+	binary.Write(buf, le, int32(a.NTx))
+	binary.Write(buf, le, int32(a.NDelegation))
+	binary.Write(buf, le, int32(a.NOrigination))
+	binary.Write(buf, le, int32(a.NProposal))
+	binary.Write(buf, le, int32(a.NBallot))
+	binary.Write(buf, le, a.TokenGenMin)
+	binary.Write(buf, le, a.TokenGenMax)
+	binary.Write(buf, le, a.GracePeriod)
+	binary.Write(buf, le, a.BakerVersion)
+	return buf.Bytes(), nil
+}
+
+func (a *Account) UnmarshalBinary(data []byte) error {
+	le := binary.LittleEndian
+	buf := bytes.NewBuffer(data)
+	binary.Read(buf, le, &a.RowId)
+	var l int32
+	binary.Read(buf, le, &l)
+	if l > 0 {
+		if cap(a.Hash.Hash) < int(l) {
+			a.Hash.Hash = make([]byte, int(l))
+		}
+		a.Hash.Hash = a.Hash.Hash[:int(l)]
+		buf.Read(a.Hash.Hash)
+	}
+	binary.Read(buf, le, &a.DelegateId)
+	binary.Read(buf, le, &a.CreatorId)
+	binary.Read(buf, le, &l)
+	if l > 0 {
+		a.Pubkey = make([]byte, int(l))
+		buf.Read(a.Pubkey)
+	}
+	binary.Read(buf, le, &a.Type)
+	a.Hash.Type = a.Type
+	binary.Read(buf, le, &a.FirstIn)
+	binary.Read(buf, le, &a.FirstOut)
+	binary.Read(buf, le, &a.LastIn)
+	binary.Read(buf, le, &a.LastOut)
+	binary.Read(buf, le, &a.FirstSeen)
+	binary.Read(buf, le, &a.LastSeen)
+	binary.Read(buf, le, &a.DelegatedSince)
+	binary.Read(buf, le, &a.DelegateSince)
+	binary.Read(buf, le, &a.DelegateUntil)
+	binary.Read(buf, le, &a.TotalReceived)
+	binary.Read(buf, le, &a.TotalSent)
+	binary.Read(buf, le, &a.TotalBurned)
+	binary.Read(buf, le, &a.TotalFeesPaid)
+	binary.Read(buf, le, &a.TotalRewardsEarned)
+	binary.Read(buf, le, &a.TotalFeesEarned)
+	binary.Read(buf, le, &a.TotalLost)
+	binary.Read(buf, le, &a.FrozenDeposits)
+	binary.Read(buf, le, &a.FrozenRewards)
+	binary.Read(buf, le, &a.FrozenFees)
+	binary.Read(buf, le, &a.UnclaimedBalance)
+	binary.Read(buf, le, &a.SpendableBalance)
+	binary.Read(buf, le, &a.DelegatedBalance)
+	binary.Read(buf, le, &a.TotalDelegations)
+	binary.Read(buf, le, &a.ActiveDelegations)
+	binary.Read(buf, le, &a.IsFunded)
+	binary.Read(buf, le, &a.IsActivated)
+	binary.Read(buf, le, &a.IsSpendable)
+	binary.Read(buf, le, &a.IsDelegatable)
+	binary.Read(buf, le, &a.IsDelegated)
+	binary.Read(buf, le, &a.IsRevealed)
+	binary.Read(buf, le, &a.IsDelegate)
+	binary.Read(buf, le, &a.IsActiveDelegate)
+	binary.Read(buf, le, &a.IsContract)
+	var n int32
+	binary.Read(buf, le, &n)
+	a.BlocksBaked = int(n)
+	binary.Read(buf, le, &n)
+	a.BlocksMissed = int(n)
+	binary.Read(buf, le, &n)
+	a.BlocksStolen = int(n)
+	binary.Read(buf, le, &n)
+	a.BlocksEndorsed = int(n)
+	binary.Read(buf, le, &n)
+	a.SlotsEndorsed = int(n)
+	binary.Read(buf, le, &n)
+	a.SlotsMissed = int(n)
+	binary.Read(buf, le, &n)
+	a.NOps = int(n)
+	binary.Read(buf, le, &n)
+	a.NOpsFailed = int(n)
+	binary.Read(buf, le, &n)
+	a.NTx = int(n)
+	binary.Read(buf, le, &n)
+	a.NDelegation = int(n)
+	binary.Read(buf, le, &n)
+	a.NOrigination = int(n)
+	binary.Read(buf, le, &n)
+	a.NProposal = int(n)
+	binary.Read(buf, le, &n)
+	a.NBallot = int(n)
+	binary.Read(buf, le, &a.TokenGenMin)
+	binary.Read(buf, le, &a.TokenGenMax)
+	binary.Read(buf, le, &a.GracePeriod)
+	binary.Read(buf, le, &a.BakerVersion)
+	return nil
 }

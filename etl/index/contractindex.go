@@ -10,15 +10,15 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
+	"blockwatch.cc/tzgo/rpc"
+	"blockwatch.cc/tzgo/tezos"
 
-	"blockwatch.cc/tzindex/chain"
 	. "blockwatch.cc/tzindex/etl/model"
-	"blockwatch.cc/tzindex/rpc"
 )
 
 const (
-	ContractPackSizeLog2         = 10 // 8k packs
-	ContractJournalSizeLog2      = 10 // 8k
+	ContractPackSizeLog2         = 15 // 32k packs
+	ContractJournalSizeLog2      = 16 // 64k
 	ContractCacheSize            = 2  // minimum
 	ContractFillLevel            = 100
 	ContractIndexPackSizeLog2    = 15 // 16k packs (32k split size) ~256k
@@ -143,68 +143,119 @@ func (idx *ContractIndex) Close() error {
 }
 
 func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
-	ct := make([]pack.Item, 0, block.NewContracts)
+	ins := make([]pack.Item, 0, block.NewContracts)
+	upd := make([]pack.Item, 0)
 	for _, op := range block.Ops {
-		if op.Type != chain.OpTypeOrigination {
+		// don't process failed or unrelated ops
+		if !op.IsSuccess || !op.IsContract {
 			continue
 		}
-		if !op.IsSuccess {
+
+		// filter relevant op types
+		switch op.Type {
+		case tezos.OpTypeOrigination, tezos.OpTypeMigration, tezos.OpTypeTransaction:
+		default:
 			continue
 		}
-		if !op.IsContract {
-			continue
-		}
-		// load rpc origination op
-		o, ok := block.GetRpcOp(op.OpL, op.OpP, op.OpC)
-		if !ok {
-			return fmt.Errorf("contract: missing %s op [%d:%d]", o.OpKind(), op.OpL, op.OpP)
-		}
-		// load corresponding account
-		acc, ok := builder.AccountById(op.ReceiverId)
-		if !ok {
-			return fmt.Errorf("contract: missing account %d in %s op", op.ReceiverId, op.Type)
-		}
-		// skip when contract is not new (unlikely because every origination creates a
-		// new account, but need to check invariant here)
-		if !acc.IsNew {
-			continue
-		}
-		if op.IsInternal {
-			// on internal originations, find corresponding internal op
-			top, ok := o.(*rpc.TransactionOp)
+
+		switch op.Type {
+		case tezos.OpTypeTransaction:
+			// when contract is updated, load from builder cache
+			contract, ok := builder.ContractById(op.ReceiverId)
 			if !ok {
-				return fmt.Errorf("contract: internal %s op [%d:%d]: unexpected type %T ",
-					o.OpKind(), op.OpL, op.OpP, o)
+				return fmt.Errorf("contract: missing contract %d in %s op [%d:%d]",
+					op.ReceiverId, op.Type, op.OpL, op.OpP)
 			}
-			iop := top.Metadata.InternalResults[op.OpI]
-			ct = append(ct, NewInternalContract(acc, iop, op.OpL, op.OpP, op.OpI))
-		} else {
-			oop, ok := o.(*rpc.OriginationOp)
+			// skip contracts that have been originated in this block, they will
+			// be inserted below
+			if contract.RowId == 0 {
+				continue
+			}
+
+			// add contracts only once, use IsDirty flag
+			if contract.IsDirty {
+				upd = append(upd, contract)
+				contract.IsDirty = false
+			}
+
+		case tezos.OpTypeOrigination:
+			// load corresponding account
+			acc, ok := builder.AccountById(op.ReceiverId)
 			if !ok {
-				return fmt.Errorf("contract: %s op [%d:%d]: unexpected type %T ",
-					o.OpKind(), op.OpL, op.OpP, o)
+				return fmt.Errorf("contract: missing account %d in %s op", op.ReceiverId, op.Type)
 			}
-			ct = append(ct, NewContract(acc, oop, op.OpL, op.OpP))
+			// when contract is new, create model from rpc origination op
+			o, ok := block.GetRpcOp(op.OpL, op.OpP, op.OpC)
+			if !ok {
+				return fmt.Errorf("contract: missing %s op [%d:%d]", o.OpKind(), op.OpL, op.OpP)
+			}
+			if op.IsInternal {
+				// on internal originations, find corresponding internal op
+				top, ok := o.(*rpc.TransactionOp)
+				if !ok {
+					return fmt.Errorf("contract: internal %s op [%d:%d]: unexpected type %T",
+						o.OpKind(), op.OpL, op.OpP, o)
+				}
+				iop := top.Metadata.InternalResults[op.OpI]
+				ins = append(ins, NewInternalContract(acc, iop, op))
+			} else {
+				oop, ok := o.(*rpc.OriginationOp)
+				if !ok {
+					return fmt.Errorf("contract: %s op [%d:%d]: unexpected type %T",
+						o.OpKind(), op.OpL, op.OpP, o)
+				}
+				ins = append(ins, NewContract(acc, oop, op))
+			}
+
+		case tezos.OpTypeMigration:
+			// when contract is migrated, load from builder cache
+			contract, ok := builder.ContractById(op.ReceiverId)
+			if !ok {
+				return fmt.Errorf("contract: missing contract %d in %s op [%d:%d]",
+					op.ReceiverId, op.Type, op.OpL, op.OpP)
+			}
+			if contract.IsNew {
+				// insert new delegator contracts
+				ins = append(ins, contract)
+			} else {
+				// update patched smart contracts (only once is guaranteed)
+				upd = append(upd, contract)
+			}
 		}
 	}
+
 	// insert, will generate unique row ids
-	return idx.table.Insert(ctx, ct)
+	if err := idx.table.Insert(ctx, ins); err != nil {
+		return fmt.Errorf("contract: insert: %v", err)
+	}
+
+	if err := idx.table.Update(ctx, upd); err != nil {
+		return fmt.Errorf("contract: update: %v", err)
+	}
+	return nil
 }
 
-func (idx *ContractIndex) DisconnectBlock(ctx context.Context, block *Block, _ BlockBuilder) error {
+func (idx *ContractIndex) DisconnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
+	upd := make([]pack.Item, 0)
+	// update all dirty contracts
+	for _, v := range builder.Contracts() {
+		if !v.IsDirty {
+			continue
+		}
+		upd = append(upd, v)
+	}
+	if err := idx.table.Update(ctx, upd); err != nil {
+		return fmt.Errorf("contract: update: %v", err)
+	}
+
+	// last, delete originated contracts
 	return idx.DeleteBlock(ctx, block.Height)
 }
 
 func (idx *ContractIndex) DeleteBlock(ctx context.Context, height int64) error {
-	log.Debugf("Rollback deleting contracts at height %d", height)
-	q := pack.Query{
-		Name: "etl.contract.delete",
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: idx.table.Fields().Find("h"), // block height (!)
-			Mode:  pack.FilterModeEqual,
-			Value: height,
-		}},
-	}
-	_, err := idx.table.Delete(ctx, q)
+	// log.Debugf("Rollback deleting contracts at height %d", height)
+	_, err := pack.NewQuery("etl.contract.delete", idx.table).
+		AndEqual("first_seen", height).
+		Delete(ctx)
 	return err
 }

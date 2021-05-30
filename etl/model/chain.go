@@ -62,6 +62,11 @@ func (c *Chain) SetID(id uint64) {
 	c.RowId = id
 }
 
+// be compatible with time series interface
+func (c Chain) Time() time.Time {
+	return c.Timestamp
+}
+
 func (c *Chain) Update(b *Block, delegates map[AccountID]*Account) {
 	c.RowId = 0 // force allocating new id
 	c.Height = b.Height
@@ -136,9 +141,29 @@ func (c *Chain) Update(b *Block, delegates map[AccountID]*Account) {
 		bal := acc.StakingBalance()
 		if bal == 0 {
 			c.ZeroDelegates++
-		} else if bal >= b.Params.TokensPerRoll {
-			c.Rolls += bal / b.Params.TokensPerRoll
-			c.RollOwners++
+		} else {
+			// if we're at the last block of a cycle we need to adjust down the
+			// balance by unfrozen rewards since Tezos snapshots rolls before unfreeze
+			if b.Params.IsCycleEnd(b.Height) {
+				// find the reward unfreeze flow for this baker
+				for _, flow := range b.Flows {
+					if flow.AccountId != acc.RowId {
+						continue
+					}
+					if flow.Category != FlowCategoryRewards {
+						continue
+					}
+					if flow.Operation != FlowTypeInternal {
+						continue
+					}
+					bal -= flow.AmountOut
+					break
+				}
+			}
+			if bal >= b.Params.TokensPerRoll {
+				c.Rolls += bal / b.Params.TokensPerRoll
+				c.RollOwners++
+			}
 		}
 	}
 

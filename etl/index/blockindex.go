@@ -15,13 +15,13 @@ import (
 )
 
 const (
-	BlockPackSizeLog2         = 15
-	BlockJournalSizeLog2      = 15
-	BlockCacheSize            = 8 // ~30M
+	BlockPackSizeLog2         = 15 // 32k packs ~3.6M
+	BlockJournalSizeLog2      = 16 // 64k - search only on rollback and lookup
+	BlockCacheSize            = 8  // ~30M
 	BlockFillLevel            = 100
 	BlockIndexPackSizeLog2    = 15 // 16k packs (32k split size) ~ 256k
-	BlockIndexJournalSizeLog2 = 15
-	BlockIndexCacheSize       = 64
+	BlockIndexJournalSizeLog2 = 16 // 64k
+	BlockIndexCacheSize       = 32 // 8M
 	BlockIndexFillLevel       = 90
 	BlockIndexKey             = "block"
 	BlockTableKey             = "block"
@@ -159,19 +159,15 @@ func (idx *BlockIndex) ConnectBlock(ctx context.Context, block *Block, b BlockBu
 	// fetch and update snapshot block
 	if snap := block.TZ.Snapshot; snap != nil {
 		snapHeight := block.Params.SnapshotBlock(snap.Cycle, snap.RollSnapshot)
-		log.Debugf("Marking block %d [%d] index %d as roll snapshot for cycle %d",
-			snapHeight, block.Params.CycleFromHeight(snapHeight), snap.RollSnapshot, snap.Cycle)
+		// log.Debugf("Marking block %d [%d] index %d as roll snapshot for cycle %d",
+		// 	snapHeight, block.Params.CycleFromHeight(snapHeight), snap.RollSnapshot, snap.Cycle)
 		snapBlock := &Block{}
-		err := idx.table.Stream(ctx, pack.Query{
-			Name:    "block_height.search",
-			NoCache: true,
-			Conditions: pack.ConditionList{pack.Condition{
-				Field: idx.table.Fields().Find("h"), // search for block height
-				Mode:  pack.FilterModeEqual,
-				Value: snapHeight,
-			}},
-			Limit: 1,
-		}, func(r pack.Row) error { return r.Decode(snapBlock) })
+		err := pack.NewQuery("block_height.search", idx.table).
+			WithoutCache().
+			WithLimit(1).
+			AndEqual("height", snapHeight).
+			AndEqual("is_orphan", false).
+			Execute(ctx, snapBlock)
 		if err != nil {
 			return fmt.Errorf("snapshot index block %d for cycle %d: %v", snapHeight, snap.Cycle, err)
 		}
@@ -195,16 +191,9 @@ func (idx *BlockIndex) DisconnectBlock(ctx context.Context, block *Block, _ Bloc
 }
 
 func (idx *BlockIndex) DeleteBlock(ctx context.Context, height int64) error {
-	log.Debugf("Rollback deleting block at height %d", height)
-	q := pack.Query{
-		Name: "etl.block.delete",
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: idx.table.Fields().Find("h"), // block height (!)
-			Mode:  pack.FilterModeEqual,
-			Value: height,
-		}},
-	}
-
-	_, err := idx.table.Delete(ctx, q)
+	// log.Debugf("Rollback deleting block at height %d", height)
+	_, err := pack.NewQuery("etl.block.delete", idx.table).
+		AndEqual("height", height).
+		Delete(ctx)
 	return err
 }

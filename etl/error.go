@@ -4,6 +4,7 @@
 package etl
 
 import (
+	"context"
 	"errors"
 )
 
@@ -26,4 +27,20 @@ var (
 	// ErrNoData is an error that indicates a requested map or cache does
 	// not exist.
 	ErrNoData = errors.New("no data")
+
+	// errInterruptRequested indicates that an operation was cancelled due
+	// to a user-requested interrupt.
+	errInterruptRequested = errors.New("interrupt requested")
 )
+
+// interruptRequested returns true when the provided channel has been closed.
+// This simplifies early shutdown slightly since the caller can just use an if
+// statement instead of a select.
+func interruptRequested(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	default:
+	}
+	return false
+}

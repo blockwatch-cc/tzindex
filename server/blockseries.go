@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -6,17 +6,14 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 )
@@ -24,6 +21,7 @@ import (
 var (
 	blockSeriesNames = util.StringList([]string{
 		"time",
+		"count",
 		"n_endorsed_slots",
 		"n_ops",
 		"n_ops_failed",
@@ -65,6 +63,7 @@ var (
 // configurable marshalling helper
 type BlockSeries struct {
 	Timestamp           time.Time `json:"time"`
+	Count               int       `json:"count"`
 	NSlotsEndorsed      int64     `json:"n_endorsed_slots"`
 	NOps                int64     `json:"n_ops"`
 	NOpsFailed          int64     `json:"n_ops_failed"`
@@ -100,12 +99,26 @@ type BlockSeries struct {
 	TDD                 float64   `json:"days_destroyed"`
 	NOpsImplicit        int64     `json:"n_ops_implicit"`
 
-	columns util.StringList `csv:"-" pack:"-"` // cond. cols & order when brief
-	params  *chain.Params   `csv:"-" pack:"-"`
-	verbose bool            `csv:"-" pack:"-"`
+	columns util.StringList // cond. cols & order when brief
+	params  *tezos.Params
+	verbose bool
+	null    bool
 }
 
-func (s *BlockSeries) Add(b *model.Block) {
+var _ SeriesBucket = (*BlockSeries)(nil)
+
+func (s *BlockSeries) Init(params *tezos.Params, columns []string, verbose bool) {
+	s.params = params
+	s.columns = columns
+	s.verbose = verbose
+}
+
+func (s *BlockSeries) IsEmpty() bool {
+	return s.Count == 0
+}
+
+func (s *BlockSeries) Add(m SeriesModel) {
+	b := m.(*model.Block)
 	s.NSlotsEndorsed += int64(b.NSlotsEndorsed)
 	s.NOps += int64(b.NOps)
 	s.NOpsFailed += int64(b.NOpsFailed)
@@ -140,6 +153,7 @@ func (s *BlockSeries) Add(b *model.Block) {
 	s.StorageSize += int64(b.StorageSize)
 	s.TDD += b.TDD
 	s.NOpsImplicit += int64(b.NOpsImplicit)
+	s.Count++
 }
 
 func (s *BlockSeries) Reset() {
@@ -178,6 +192,130 @@ func (s *BlockSeries) Reset() {
 	s.StorageSize = 0
 	s.TDD = 0
 	s.NOpsImplicit = 0
+	s.Count = 0
+	s.null = false
+}
+
+func (s *BlockSeries) Null(ts time.Time) SeriesBucket {
+	s.Reset()
+	s.Timestamp = ts
+	s.null = true
+	return s
+}
+
+func (s *BlockSeries) Zero(ts time.Time) SeriesBucket {
+	s.Reset()
+	s.Timestamp = ts
+	return s
+}
+
+func (s *BlockSeries) SetTime(ts time.Time) SeriesBucket {
+	s.Timestamp = ts
+	return s
+}
+
+func (s *BlockSeries) Time() time.Time {
+	return s.Timestamp
+}
+
+func (s *BlockSeries) Clone() SeriesBucket {
+	return &BlockSeries{
+		Timestamp:           s.Timestamp,
+		NSlotsEndorsed:      s.NSlotsEndorsed,
+		NOps:                s.NOps,
+		NOpsFailed:          s.NOpsFailed,
+		NOpsContract:        s.NOpsContract,
+		NTx:                 s.NTx,
+		NActivation:         s.NActivation,
+		NSeedNonce:          s.NSeedNonce,
+		N2Baking:            s.N2Baking,
+		N2Endorsement:       s.N2Endorsement,
+		NEndorsement:        s.NEndorsement,
+		NDelegation:         s.NDelegation,
+		NReveal:             s.NReveal,
+		NOrigination:        s.NOrigination,
+		NProposal:           s.NProposal,
+		NBallot:             s.NBallot,
+		Volume:              s.Volume,
+		Fee:                 s.Fee,
+		Reward:              s.Reward,
+		Deposit:             s.Deposit,
+		UnfrozenFees:        s.UnfrozenFees,
+		UnfrozenRewards:     s.UnfrozenRewards,
+		UnfrozenDeposits:    s.UnfrozenDeposits,
+		ActivatedSupply:     s.ActivatedSupply,
+		BurnedSupply:        s.BurnedSupply,
+		NewAccounts:         s.NewAccounts,
+		NewImplicitAccounts: s.NewImplicitAccounts,
+		NewManagedAccounts:  s.NewManagedAccounts,
+		NewContracts:        s.NewContracts,
+		ClearedAccounts:     s.ClearedAccounts,
+		FundedAccounts:      s.FundedAccounts,
+		GasUsed:             s.GasUsed,
+		StorageSize:         s.StorageSize,
+		TDD:                 s.TDD,
+		NOpsImplicit:        s.NOpsImplicit,
+		Count:               s.Count,
+		columns:             s.columns,
+		params:              s.params,
+		verbose:             s.verbose,
+		null:                s.null,
+	}
+}
+
+func (s *BlockSeries) Interpolate(m SeriesBucket, ts time.Time) SeriesBucket {
+	b := m.(*BlockSeries)
+	weight := float64(ts.Sub(s.Timestamp)) / float64(b.Timestamp.Sub(s.Timestamp))
+	if math.IsInf(weight, 1) {
+		weight = 1
+	}
+	switch weight {
+	case 0:
+		return s
+	default:
+		return &BlockSeries{
+			Timestamp:           ts,
+			NSlotsEndorsed:      s.NSlotsEndorsed + int64(weight*float64(int64(b.NSlotsEndorsed)-s.NSlotsEndorsed)),
+			NOps:                s.NOps + int64(weight*float64(int64(b.NOps)-s.NOps)),
+			NOpsFailed:          s.NOpsFailed + int64(weight*float64(int64(b.NOpsFailed)-s.NOpsFailed)),
+			NOpsContract:        s.NOpsContract + int64(weight*float64(int64(b.NOpsContract)-s.NOpsContract)),
+			NTx:                 s.NTx + int64(weight*float64(int64(b.NTx)-s.NTx)),
+			NActivation:         s.NActivation + int64(weight*float64(int64(b.NActivation)-s.NActivation)),
+			NSeedNonce:          s.NSeedNonce + int64(weight*float64(int64(b.NSeedNonce)-s.NSeedNonce)),
+			N2Baking:            s.N2Baking + int64(weight*float64(int64(b.N2Baking)-s.N2Baking)),
+			N2Endorsement:       s.N2Endorsement + int64(weight*float64(int64(b.N2Endorsement)-s.N2Endorsement)),
+			NEndorsement:        s.NEndorsement + int64(weight*float64(int64(b.NEndorsement)-s.NEndorsement)),
+			NDelegation:         s.NDelegation + int64(weight*float64(int64(b.NDelegation)-s.NDelegation)),
+			NReveal:             s.NReveal + int64(weight*float64(int64(b.NReveal)-s.NReveal)),
+			NOrigination:        s.NOrigination + int64(weight*float64(int64(b.NOrigination)-s.NOrigination)),
+			NProposal:           s.NProposal + int64(weight*float64(int64(b.NProposal)-s.NProposal)),
+			NBallot:             s.NBallot + int64(weight*float64(int64(b.NBallot)-s.NBallot)),
+			Volume:              s.Volume + int64(weight*float64(int64(b.Volume)-s.Volume)),
+			Fee:                 s.Fee + int64(weight*float64(int64(b.Fee)-s.Fee)),
+			Reward:              s.Reward + int64(weight*float64(int64(b.Reward)-s.Reward)),
+			Deposit:             s.Deposit + int64(weight*float64(int64(b.Deposit)-s.Deposit)),
+			UnfrozenFees:        s.UnfrozenFees + int64(weight*float64(int64(b.UnfrozenFees)-s.UnfrozenFees)),
+			UnfrozenRewards:     s.UnfrozenRewards + int64(weight*float64(int64(b.UnfrozenRewards)-s.UnfrozenRewards)),
+			UnfrozenDeposits:    s.UnfrozenDeposits + int64(weight*float64(int64(b.UnfrozenDeposits)-s.UnfrozenDeposits)),
+			ActivatedSupply:     s.ActivatedSupply + int64(weight*float64(int64(b.ActivatedSupply)-s.ActivatedSupply)),
+			BurnedSupply:        s.BurnedSupply + int64(weight*float64(int64(b.BurnedSupply)-s.BurnedSupply)),
+			NewAccounts:         s.NewAccounts + int64(weight*float64(int64(b.NewAccounts)-s.NewAccounts)),
+			NewImplicitAccounts: s.NewImplicitAccounts + int64(weight*float64(int64(b.NewImplicitAccounts)-s.NewImplicitAccounts)),
+			NewManagedAccounts:  s.NewManagedAccounts + int64(weight*float64(int64(b.NewManagedAccounts)-s.NewManagedAccounts)),
+			NewContracts:        s.NewContracts + int64(weight*float64(int64(b.NewContracts)-s.NewContracts)),
+			ClearedAccounts:     s.ClearedAccounts + int64(weight*float64(int64(b.ClearedAccounts)-s.ClearedAccounts)),
+			FundedAccounts:      s.FundedAccounts + int64(weight*float64(int64(b.FundedAccounts)-s.FundedAccounts)),
+			GasUsed:             s.GasUsed + int64(weight*float64(int64(b.GasUsed)-s.GasUsed)),
+			StorageSize:         s.StorageSize + int64(weight*float64(int64(b.StorageSize)-s.StorageSize)),
+			TDD:                 s.TDD + weight*b.TDD - s.TDD,
+			NOpsImplicit:        s.NOpsImplicit + int64(weight*float64(int64(b.NOpsImplicit)-s.NOpsImplicit)),
+			Count:               0,
+			columns:             s.columns,
+			params:              s.params,
+			verbose:             s.verbose,
+			null:                false,
+		}
+	}
 }
 
 func (s *BlockSeries) MarshalJSON() ([]byte, error) {
@@ -191,6 +329,7 @@ func (s *BlockSeries) MarshalJSON() ([]byte, error) {
 func (b *BlockSeries) MarshalJSONVerbose() ([]byte, error) {
 	block := struct {
 		Timestamp           time.Time `json:"time"`
+		Count               int       `json:"count"`
 		NSlotsEndorsed      int64     `json:"n_endorsed_slots"`
 		NOps                int64     `json:"n_ops"`
 		NOpsFailed          int64     `json:"n_ops_failed"`
@@ -227,6 +366,7 @@ func (b *BlockSeries) MarshalJSONVerbose() ([]byte, error) {
 		NOpsImplicit        int64     `json:"n_ops_implicit"`
 	}{
 		Timestamp:           b.Timestamp,
+		Count:               b.Count,
 		NSlotsEndorsed:      b.NSlotsEndorsed,
 		NOps:                b.NOps,
 		NOpsFailed:          b.NOpsFailed,
@@ -270,79 +410,90 @@ func (b *BlockSeries) MarshalJSONBrief() ([]byte, error) {
 	buf := make([]byte, 0, 2048)
 	buf = append(buf, '[')
 	for i, v := range b.columns {
-		switch v {
-		case "time":
-			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(b.Timestamp), 10)
-		case "n_endorsed_slots":
-			buf = strconv.AppendInt(buf, int64(b.NSlotsEndorsed), 10)
-		case "n_ops":
-			buf = strconv.AppendInt(buf, int64(b.NOps), 10)
-		case "n_ops_failed":
-			buf = strconv.AppendInt(buf, int64(b.NOpsFailed), 10)
-		case "n_ops_contract":
-			buf = strconv.AppendInt(buf, int64(b.NOpsContract), 10)
-		case "n_tx":
-			buf = strconv.AppendInt(buf, int64(b.NTx), 10)
-		case "n_activation":
-			buf = strconv.AppendInt(buf, int64(b.NActivation), 10)
-		case "n_seed_nonce_revelation":
-			buf = strconv.AppendInt(buf, int64(b.NSeedNonce), 10)
-		case "n_double_baking_evidence":
-			buf = strconv.AppendInt(buf, int64(b.N2Baking), 10)
-		case "n_double_endorsement_evidence":
-			buf = strconv.AppendInt(buf, int64(b.N2Endorsement), 10)
-		case "n_endorsement":
-			buf = strconv.AppendInt(buf, int64(b.NEndorsement), 10)
-		case "n_delegation":
-			buf = strconv.AppendInt(buf, int64(b.NDelegation), 10)
-		case "n_reveal":
-			buf = strconv.AppendInt(buf, int64(b.NReveal), 10)
-		case "n_origination":
-			buf = strconv.AppendInt(buf, int64(b.NOrigination), 10)
-		case "n_proposal":
-			buf = strconv.AppendInt(buf, int64(b.NProposal), 10)
-		case "n_ballot":
-			buf = strconv.AppendInt(buf, int64(b.NBallot), 10)
-		case "volume":
-			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Volume), 'f', dec, 64)
-		case "fee":
-			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Fee), 'f', dec, 64)
-		case "reward":
-			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Reward), 'f', dec, 64)
-		case "deposit":
-			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Deposit), 'f', dec, 64)
-		case "unfrozen_fees":
-			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.UnfrozenFees), 'f', dec, 64)
-		case "unfrozen_rewards":
-			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.UnfrozenRewards), 'f', dec, 64)
-		case "unfrozen_deposits":
-			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.UnfrozenDeposits), 'f', dec, 64)
-		case "activated_supply":
-			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.ActivatedSupply), 'f', dec, 64)
-		case "burned_supply":
-			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.BurnedSupply), 'f', dec, 64)
-		case "n_new_accounts":
-			buf = strconv.AppendInt(buf, int64(b.NewAccounts), 10)
-		case "n_new_implicit":
-			buf = strconv.AppendInt(buf, int64(b.NewImplicitAccounts), 10)
-		case "n_new_managed":
-			buf = strconv.AppendInt(buf, int64(b.NewManagedAccounts), 10)
-		case "n_new_contracts":
-			buf = strconv.AppendInt(buf, int64(b.NewContracts), 10)
-		case "n_cleared_accounts":
-			buf = strconv.AppendInt(buf, int64(b.ClearedAccounts), 10)
-		case "n_funded_accounts":
-			buf = strconv.AppendInt(buf, int64(b.FundedAccounts), 10)
-		case "gas_used":
-			buf = strconv.AppendInt(buf, b.GasUsed, 10)
-		case "storage_size":
-			buf = strconv.AppendInt(buf, b.StorageSize, 10)
-		case "days_destroyed":
-			buf = strconv.AppendFloat(buf, b.TDD, 'f', -1, 64)
-		case "n_ops_implicit":
-			buf = strconv.AppendInt(buf, int64(b.NOpsImplicit), 10)
-		default:
-			continue
+		if b.null {
+			switch v {
+			case "time":
+				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(b.Timestamp), 10)
+			default:
+				buf = append(buf, null...)
+			}
+		} else {
+			switch v {
+			case "time":
+				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(b.Timestamp), 10)
+			case "count":
+				buf = strconv.AppendInt(buf, int64(b.Count), 10)
+			case "n_endorsed_slots":
+				buf = strconv.AppendInt(buf, int64(b.NSlotsEndorsed), 10)
+			case "n_ops":
+				buf = strconv.AppendInt(buf, int64(b.NOps), 10)
+			case "n_ops_failed":
+				buf = strconv.AppendInt(buf, int64(b.NOpsFailed), 10)
+			case "n_ops_contract":
+				buf = strconv.AppendInt(buf, int64(b.NOpsContract), 10)
+			case "n_tx":
+				buf = strconv.AppendInt(buf, int64(b.NTx), 10)
+			case "n_activation":
+				buf = strconv.AppendInt(buf, int64(b.NActivation), 10)
+			case "n_seed_nonce_revelation":
+				buf = strconv.AppendInt(buf, int64(b.NSeedNonce), 10)
+			case "n_double_baking_evidence":
+				buf = strconv.AppendInt(buf, int64(b.N2Baking), 10)
+			case "n_double_endorsement_evidence":
+				buf = strconv.AppendInt(buf, int64(b.N2Endorsement), 10)
+			case "n_endorsement":
+				buf = strconv.AppendInt(buf, int64(b.NEndorsement), 10)
+			case "n_delegation":
+				buf = strconv.AppendInt(buf, int64(b.NDelegation), 10)
+			case "n_reveal":
+				buf = strconv.AppendInt(buf, int64(b.NReveal), 10)
+			case "n_origination":
+				buf = strconv.AppendInt(buf, int64(b.NOrigination), 10)
+			case "n_proposal":
+				buf = strconv.AppendInt(buf, int64(b.NProposal), 10)
+			case "n_ballot":
+				buf = strconv.AppendInt(buf, int64(b.NBallot), 10)
+			case "volume":
+				buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Volume), 'f', dec, 64)
+			case "fee":
+				buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Fee), 'f', dec, 64)
+			case "reward":
+				buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Reward), 'f', dec, 64)
+			case "deposit":
+				buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Deposit), 'f', dec, 64)
+			case "unfrozen_fees":
+				buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.UnfrozenFees), 'f', dec, 64)
+			case "unfrozen_rewards":
+				buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.UnfrozenRewards), 'f', dec, 64)
+			case "unfrozen_deposits":
+				buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.UnfrozenDeposits), 'f', dec, 64)
+			case "activated_supply":
+				buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.ActivatedSupply), 'f', dec, 64)
+			case "burned_supply":
+				buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.BurnedSupply), 'f', dec, 64)
+			case "n_new_accounts":
+				buf = strconv.AppendInt(buf, int64(b.NewAccounts), 10)
+			case "n_new_implicit":
+				buf = strconv.AppendInt(buf, int64(b.NewImplicitAccounts), 10)
+			case "n_new_managed":
+				buf = strconv.AppendInt(buf, int64(b.NewManagedAccounts), 10)
+			case "n_new_contracts":
+				buf = strconv.AppendInt(buf, int64(b.NewContracts), 10)
+			case "n_cleared_accounts":
+				buf = strconv.AppendInt(buf, int64(b.ClearedAccounts), 10)
+			case "n_funded_accounts":
+				buf = strconv.AppendInt(buf, int64(b.FundedAccounts), 10)
+			case "gas_used":
+				buf = strconv.AppendInt(buf, b.GasUsed, 10)
+			case "storage_size":
+				buf = strconv.AppendInt(buf, b.StorageSize, 10)
+			case "days_destroyed":
+				buf = strconv.AppendFloat(buf, b.TDD, 'f', -1, 64)
+			case "n_ops_implicit":
+				buf = strconv.AppendInt(buf, int64(b.NOpsImplicit), 10)
+			default:
+				continue
+			}
 		}
 		if i < len(b.columns)-1 {
 			buf = append(buf, ',')
@@ -356,9 +507,19 @@ func (b *BlockSeries) MarshalCSV() ([]string, error) {
 	dec := b.params.Decimals
 	res := make([]string, len(b.columns))
 	for i, v := range b.columns {
+		if b.null {
+			switch v {
+			case "time":
+				res[i] = strconv.Quote(b.Timestamp.Format(time.RFC3339))
+			default:
+				continue
+			}
+		}
 		switch v {
 		case "time":
-			res[i] = strconv.FormatInt(util.UnixMilliNonZero(b.Timestamp), 10)
+			res[i] = strconv.Quote(b.Timestamp.Format(time.RFC3339))
+		case "count":
+			res[i] = strconv.FormatInt(int64(b.Count), 10)
 		case "n_endorsed_slots":
 			res[i] = strconv.FormatInt(int64(b.NSlotsEndorsed), 10)
 		case "n_ops":
@@ -434,7 +595,7 @@ func (b *BlockSeries) MarshalCSV() ([]string, error) {
 	return res, nil
 }
 
-func StreamBlockSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
+func (s *BlockSeries) BuildQuery(ctx *ApiContext, args *SeriesRequest) pack.Query {
 	// use chain params at current height
 	params := ctx.Params
 
@@ -454,6 +615,10 @@ func StreamBlockSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) 
 	// resolve short column names
 	srcNames = make([]string, 0, len(args.Columns))
 	for _, v := range args.Columns {
+		// ignore count column
+		if v == "count" {
+			continue
+		}
 		// ignore non-series columns
 		if !blockSeriesNames.Contains(v) {
 			panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid time-series column '%s'", v), nil))
@@ -468,20 +633,11 @@ func StreamBlockSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) 
 	}
 
 	// build table query
-	q := pack.Query{
-		Name:   ctx.RequestID,
-		Fields: table.Fields().Select(srcNames...),
-		Order:  args.Order,
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: table.Fields().Find("T"), // time
-				Mode:  pack.FilterModeRange,
-				From:  args.From.Time(),
-				To:    args.To.Time(),
-				Raw:   args.From.String() + " - " + args.To.String(), // debugging aid
-			},
-		},
-	}
+	q := pack.NewQuery(ctx.RequestID, table).
+		WithFields(srcNames...).
+		WithOrder(args.Order).
+		AndRange("time", args.From.Time(), args.To.Time()).
+		AndEqual("is_orphan", false)
 
 	// build dynamic filter conditions from query (will panic on error)
 	for key, val := range ctx.Request.URL.Query() {
@@ -495,7 +651,7 @@ func StreamBlockSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) 
 			}
 		}
 		switch prefix {
-		case "columns", "collapse", "start_date", "end_date", "limit", "order", "verbose":
+		case "columns", "collapse", "start_date", "end_date", "limit", "order", "verbose", "filename", "fill":
 			// skip these fields
 			continue
 
@@ -509,15 +665,15 @@ func StreamBlockSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) 
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty address matches id 0 (== missing baker)
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find("B"), // baker id
 						Mode:  mode,
-						Value: uint64(0),
+						Value: 0,
 						Raw:   val[0], // debugging aid
 					})
 				} else {
 					// single-address lookup and compile condition
-					addr, err := chain.ParseAddress(val[0])
+					addr, err := tezos.ParseAddress(val[0])
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
@@ -527,7 +683,7 @@ func StreamBlockSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) 
 					}
 					// Note: when not found we insert an always false condition
 					if acc == nil || acc.RowId == 0 {
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find("B"), // baker id
 							Mode:  mode,
 							Value: uint64(math.MaxUint64),
@@ -535,10 +691,10 @@ func StreamBlockSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) 
 						})
 					} else {
 						// add addr id as extra fund_flow condition
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find("B"), // baker id
 							Mode:  mode,
-							Value: acc.RowId.Value(),
+							Value: acc.RowId,
 							Raw:   val[0], // debugging aid
 						})
 					}
@@ -547,7 +703,7 @@ func StreamBlockSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) 
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(v)
+					addr, err := tezos.ParseAddress(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
@@ -564,7 +720,7 @@ func StreamBlockSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) 
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("B"), // baker id
 					Mode:  mode,
 					Value: ids,
@@ -576,14 +732,14 @@ func StreamBlockSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) 
 
 		case "voting_period_kind":
 			// parse only the first value
-			period := chain.ParseVotingPeriod(val[0])
+			period := tezos.ParseVotingPeriod(val[0])
 			if !period.IsValid() {
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid voting period '%s'", val[0]), nil))
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
+			q.Conditions.AddAndCondition(&pack.Condition{
 				Field: table.Fields().Find("p"),
 				Mode:  mode,
-				Value: int64(period),
+				Value: period,
 				Raw:   val[0], // debugging aid
 			})
 		default:
@@ -611,155 +767,11 @@ func StreamBlockSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) 
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions = append(q.Conditions, cond)
+					q.Conditions.AddAndCondition(&cond)
 				}
 			}
 		}
 	}
 
-	var count int
-	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Series)
-	defer func() {
-		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	}()
-
-	// prepare for source and return type marshalling
-	bs := &BlockSeries{params: params, verbose: args.Verbose, columns: args.Columns}
-	bm := &model.Block{}
-	window := args.Collapse.Duration()
-	nextBucketTime := args.From.Add(window).Time()
-	mul := 1
-	if args.Order == pack.OrderDesc {
-		mul = 0
-	}
-
-	// prepare response stream
-	ctx.StreamResponseHeaders(http.StatusOK, mimetypes[args.Format])
-
-	switch args.Format {
-	case "json":
-		enc := json.NewEncoder(ctx.ResponseWriter)
-		enc.SetIndent("", "")
-		enc.SetEscapeHTML(false)
-
-		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
-		// close JSON array on panic
-		defer func() {
-			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
-				panic(e)
-			}
-		}()
-
-		// run query and stream results
-		var needComma bool
-
-		// stream from database, result is assumed to be in timestamp order
-		err = table.Stream(ctx, q, func(r pack.Row) error {
-			if err := r.Decode(bm); err != nil {
-				return err
-			}
-
-			// output BlockSeries when valid and time has crossed next boundary
-			if !bs.Timestamp.IsZero() && (bm.Timestamp.Before(nextBucketTime) != (mul == 1)) {
-				// output accumulated data
-				if needComma {
-					io.WriteString(ctx.ResponseWriter, ",")
-				} else {
-					needComma = true
-				}
-				if err := enc.Encode(bs); err != nil {
-					return err
-				}
-				count++
-				if args.Limit > 0 && count == int(args.Limit) {
-					return io.EOF
-				}
-				bs.Reset()
-			}
-
-			// init next time window from data
-			if bs.Timestamp.IsZero() {
-				bs.Timestamp = bm.Timestamp.Truncate(window)
-				nextBucketTime = bs.Timestamp.Add(window * time.Duration(mul))
-			}
-
-			// accumulate data in BlockSeries
-			bs.Add(bm)
-			return nil
-		})
-		// don't handle error here, will be picked up by trailer
-		if err == nil {
-			// output last series element
-			if !bs.Timestamp.IsZero() {
-				if needComma {
-					io.WriteString(ctx.ResponseWriter, ",")
-				}
-				err = enc.Encode(bs)
-				if err == nil {
-					count++
-				}
-			}
-		}
-
-		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
-		ctx.Log.Tracef("JSON encoded %d rows", count)
-
-	case "csv":
-		enc := csv.NewEncoder(ctx.ResponseWriter)
-		// use custom header columns and order
-		if len(args.Columns) > 0 {
-			err = enc.EncodeHeader(args.Columns, nil)
-		}
-		if err == nil {
-			// stream from database, result order is assumed to be in timestamp order
-			err = table.Stream(ctx, q, func(r pack.Row) error {
-				if err := r.Decode(bm); err != nil {
-					return err
-				}
-
-				// output BlockSeries when valid and time has crossed next boundary
-				if !bs.Timestamp.IsZero() && (bm.Timestamp.Before(nextBucketTime) != (mul == 1)) {
-					// output accumulated data
-					if err := enc.EncodeRecord(bs); err != nil {
-						return err
-					}
-					count++
-					if args.Limit > 0 && count == int(args.Limit) {
-						return io.EOF
-					}
-					bs.Reset()
-				}
-
-				// init next time window from data
-				if bs.Timestamp.IsZero() {
-					bs.Timestamp = bm.Timestamp.Truncate(window)
-					nextBucketTime = bs.Timestamp.Add(window * time.Duration(mul))
-				}
-
-				// accumulate data in BlockSeries
-				bs.Add(bm)
-				return nil
-			})
-			if err == nil {
-				// output last series element
-				if !bs.Timestamp.IsZero() {
-					err = enc.EncodeRecord(bs)
-					if err == nil {
-						count++
-					}
-				}
-			}
-		}
-		ctx.Log.Tracef("CSV Encoded %d rows", count)
-	}
-
-	// write error (except EOF), cursor and count as http trailer
-	ctx.StreamTrailer("", count, err)
-
-	// streaming return
-	return nil, -1
+	return q
 }

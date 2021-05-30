@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	"blockwatch.cc/packdb/store"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	. "blockwatch.cc/tzindex/etl/model"
 )
 
@@ -55,7 +55,7 @@ func dbStoreChainTip(dbTx store.Tx, tip *ChainTip) error {
 }
 
 type IndexTip struct {
-	Hash   *chain.BlockHash `json:"hash,omitempty"`
+	Hash   *tezos.BlockHash `json:"hash,omitempty"`
 	Height int64            `json:"height"`
 }
 
@@ -86,15 +86,15 @@ func dbLoadIndexTip(dbTx store.Tx, key string) (*IndexTip, error) {
 	return tip, nil
 }
 
-func dbLoadDeployments(dbTx store.Tx, tip *ChainTip) ([]*chain.Params, error) {
-	plist := make([]*chain.Params, 0, len(tip.Deployments))
+func dbLoadDeployments(dbTx store.Tx, tip *ChainTip) ([]*tezos.Params, error) {
+	plist := make([]*tezos.Params, 0, len(tip.Deployments))
 	bucket := dbTx.Bucket([]byte(deploymentsBucketName))
 	for _, v := range tip.Deployments {
 		buf := bucket.Get(v.Protocol.Hash.Hash)
 		if len(buf) == 0 {
 			return nil, fmt.Errorf("missing deployment data for protocol %s", v.Protocol)
 		}
-		p := &chain.Params{}
+		p := tezos.NewParams()
 		if err := json.Unmarshal(buf, p); err != nil {
 			return nil, err
 		}
@@ -103,7 +103,7 @@ func dbLoadDeployments(dbTx store.Tx, tip *ChainTip) ([]*chain.Params, error) {
 	return plist, nil
 }
 
-func dbStoreDeployment(dbTx store.Tx, p *chain.Params) error {
+func dbStoreDeployment(dbTx store.Tx, p *tezos.Params) error {
 	buf, err := json.Marshal(p)
 	if err != nil {
 		return err

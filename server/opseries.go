@@ -6,17 +6,14 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 )
@@ -33,28 +30,45 @@ var (
 		"deposit",
 		"burned",
 		"days_destroyed",
+		"count",
 	})
 )
 
 // Only use fields that can be summed over time
 // configurable marshalling helper
 type OpSeries struct {
-	Timestamp   time.Time       `json:"time"`
-	GasUsed     int64           `json:"gas_used"`
-	StorageSize int64           `json:"storage_size"`
-	StoragePaid int64           `json:"storage_paid"`
-	Volume      int64           `json:"volume"`
-	Fee         int64           `json:"fee"`
-	Reward      int64           `json:"reward"`
-	Deposit     int64           `json:"deposit"`
-	Burned      int64           `json:"burned"`
-	TDD         float64         `json:"days_destroyed"`
-	columns     util.StringList `csv:"-" pack:"-"` // cond. cols & order when brief
-	params      *chain.Params   `csv:"-" pack:"-"`
-	verbose     bool            `csv:"-" pack:"-"`
+	Timestamp   time.Time `json:"time"`
+	Count       int       `json:"count"`
+	GasUsed     int64     `json:"gas_used"`
+	StorageSize int64     `json:"storage_size"`
+	StoragePaid int64     `json:"storage_paid"`
+	Volume      int64     `json:"volume"`
+	Fee         int64     `json:"fee"`
+	Reward      int64     `json:"reward"`
+	Deposit     int64     `json:"deposit"`
+	Burned      int64     `json:"burned"`
+	TDD         float64   `json:"days_destroyed"`
+
+	columns util.StringList // cond. cols & order when brief
+	params  *tezos.Params
+	verbose bool
+	null    bool
 }
 
-func (s *OpSeries) Add(o *model.Op) {
+var _ SeriesBucket = (*OpSeries)(nil)
+
+func (s *OpSeries) Init(params *tezos.Params, columns []string, verbose bool) {
+	s.params = params
+	s.columns = columns
+	s.verbose = verbose
+}
+
+func (s *OpSeries) IsEmpty() bool {
+	return s.Count == 0
+}
+
+func (s *OpSeries) Add(m SeriesModel) {
+	o := m.(*model.Op)
 	s.GasUsed += o.GasUsed
 	s.StorageSize += o.StorageSize
 	s.StoragePaid += o.StoragePaid
@@ -64,6 +78,7 @@ func (s *OpSeries) Add(o *model.Op) {
 	s.Deposit += o.Deposit
 	s.Burned += o.Burned
 	s.TDD += o.TDD
+	s.Count++
 }
 
 func (s *OpSeries) Reset() {
@@ -77,6 +92,85 @@ func (s *OpSeries) Reset() {
 	s.Deposit = 0
 	s.Burned = 0
 	s.TDD = 0
+	s.Count = 0
+	s.null = false
+}
+
+func (s *OpSeries) Null(ts time.Time) SeriesBucket {
+	s.Reset()
+	s.Timestamp = ts
+	s.null = true
+	return s
+}
+
+func (s *OpSeries) Zero(ts time.Time) SeriesBucket {
+	s.Reset()
+	s.Timestamp = ts
+	return s
+}
+
+func (s *OpSeries) SetTime(ts time.Time) SeriesBucket {
+	s.Timestamp = ts
+	return s
+}
+
+func (s *OpSeries) Time() time.Time {
+	return s.Timestamp
+}
+
+func (s *OpSeries) Clone() SeriesBucket {
+	return &OpSeries{
+		Timestamp:   s.Timestamp,
+		GasUsed:     s.GasUsed,
+		StorageSize: s.StorageSize,
+		StoragePaid: s.StoragePaid,
+		Volume:      s.Volume,
+		Fee:         s.Fee,
+		Reward:      s.Reward,
+		Deposit:     s.Deposit,
+		Burned:      s.Burned,
+		TDD:         s.TDD,
+		Count:       s.Count,
+		columns:     s.columns,
+		params:      s.params,
+		verbose:     s.verbose,
+		null:        s.null,
+	}
+}
+
+func (s *OpSeries) Interpolate(m SeriesBucket, ts time.Time) SeriesBucket {
+	o := m.(*OpSeries)
+	weight := float64(ts.Sub(s.Timestamp)) / float64(o.Timestamp.Sub(s.Timestamp))
+	if math.IsInf(weight, 1) {
+		weight = 1
+	}
+	// log.Infof("INTERPOLATE %s -> %s %f = %d .. %s / %s", o.Timestamp, ts, weight,
+	// 	s.Volume+int64(weight*float64(o.Volume-s.Volume)),
+	// 	ts.Sub(s.Timestamp),
+	// 	o.Timestamp, //.Truncate(window).Sub(s.Timestamp),
+	// )
+	switch weight {
+	case 0:
+		return s
+	default:
+		return &OpSeries{
+			Timestamp:   ts,
+			GasUsed:     s.GasUsed + int64(weight*float64(o.GasUsed-s.GasUsed)),
+			StorageSize: s.StorageSize + int64(weight*float64(o.StorageSize-s.StorageSize)),
+			StoragePaid: s.StoragePaid + int64(weight*float64(o.StoragePaid-s.StoragePaid)),
+			Volume:      s.Volume + int64(weight*float64(o.Volume-s.Volume)),
+			Fee:         s.Fee + int64(weight*float64(o.Fee-s.Fee)),
+			Reward:      s.Reward + int64(weight*float64(o.Reward-s.Reward)),
+			Deposit:     s.Deposit + int64(weight*float64(o.Deposit-s.Deposit)),
+			Burned:      s.Burned + int64(weight*float64(o.Burned-s.Burned)),
+			TDD:         s.TDD + weight*o.TDD - s.TDD,
+			Count:       0,
+			columns:     s.columns,
+			params:      s.params,
+			verbose:     s.verbose,
+			null:        false,
+		}
+	}
 }
 
 func (s *OpSeries) MarshalJSON() ([]byte, error) {
@@ -90,6 +184,7 @@ func (s *OpSeries) MarshalJSON() ([]byte, error) {
 func (o *OpSeries) MarshalJSONVerbose() ([]byte, error) {
 	op := struct {
 		Timestamp   time.Time `json:"time"`
+		Count       int       `json:"count"`
 		GasUsed     int64     `json:"gas_used"`
 		StorageSize int64     `json:"storage_size"`
 		StoragePaid int64     `json:"storage_paid"`
@@ -101,6 +196,7 @@ func (o *OpSeries) MarshalJSONVerbose() ([]byte, error) {
 		TDD         float64   `json:"days_destroyed"`
 	}{
 		Timestamp:   o.Timestamp,
+		Count:       o.Count,
 		GasUsed:     o.GasUsed,
 		StorageSize: o.StorageSize,
 		StoragePaid: o.StoragePaid,
@@ -119,29 +215,40 @@ func (o *OpSeries) MarshalJSONBrief() ([]byte, error) {
 	buf := make([]byte, 0, 2048)
 	buf = append(buf, '[')
 	for i, v := range o.columns {
-		switch v {
-		case "time":
-			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(o.Timestamp), 10)
-		case "gas_used":
-			buf = strconv.AppendInt(buf, o.GasUsed, 10)
-		case "storage_size":
-			buf = strconv.AppendInt(buf, o.StorageSize, 10)
-		case "storage_paid":
-			buf = strconv.AppendInt(buf, o.StoragePaid, 10)
-		case "volume":
-			buf = strconv.AppendFloat(buf, o.params.ConvertValue(o.Volume), 'f', dec, 64)
-		case "fee":
-			buf = strconv.AppendFloat(buf, o.params.ConvertValue(o.Fee), 'f', dec, 64)
-		case "reward":
-			buf = strconv.AppendFloat(buf, o.params.ConvertValue(o.Reward), 'f', dec, 64)
-		case "deposit":
-			buf = strconv.AppendFloat(buf, o.params.ConvertValue(o.Deposit), 'f', dec, 64)
-		case "burned":
-			buf = strconv.AppendFloat(buf, o.params.ConvertValue(o.Burned), 'f', dec, 64)
-		case "days_destroyed":
-			buf = strconv.AppendFloat(buf, o.TDD, 'f', -1, 64)
-		default:
-			continue
+		if o.null {
+			switch v {
+			case "time":
+				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(o.Timestamp), 10)
+			default:
+				buf = append(buf, null...)
+			}
+		} else {
+			switch v {
+			case "time":
+				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(o.Timestamp), 10)
+			case "count":
+				buf = strconv.AppendInt(buf, int64(o.Count), 10)
+			case "gas_used":
+				buf = strconv.AppendInt(buf, o.GasUsed, 10)
+			case "storage_size":
+				buf = strconv.AppendInt(buf, o.StorageSize, 10)
+			case "storage_paid":
+				buf = strconv.AppendInt(buf, o.StoragePaid, 10)
+			case "volume":
+				buf = strconv.AppendFloat(buf, o.params.ConvertValue(o.Volume), 'f', dec, 64)
+			case "fee":
+				buf = strconv.AppendFloat(buf, o.params.ConvertValue(o.Fee), 'f', dec, 64)
+			case "reward":
+				buf = strconv.AppendFloat(buf, o.params.ConvertValue(o.Reward), 'f', dec, 64)
+			case "deposit":
+				buf = strconv.AppendFloat(buf, o.params.ConvertValue(o.Deposit), 'f', dec, 64)
+			case "burned":
+				buf = strconv.AppendFloat(buf, o.params.ConvertValue(o.Burned), 'f', dec, 64)
+			case "days_destroyed":
+				buf = strconv.AppendFloat(buf, o.TDD, 'f', -1, 64)
+			default:
+				continue
+			}
 		}
 		if i < len(o.columns)-1 {
 			buf = append(buf, ',')
@@ -155,9 +262,19 @@ func (o *OpSeries) MarshalCSV() ([]string, error) {
 	dec := o.params.Decimals
 	res := make([]string, len(o.columns))
 	for i, v := range o.columns {
+		if o.null {
+			switch v {
+			case "time":
+				res[i] = strconv.Quote(o.Timestamp.Format(time.RFC3339))
+			default:
+				continue
+			}
+		}
 		switch v {
 		case "time":
-			res[i] = strconv.FormatInt(util.UnixMilliNonZero(o.Timestamp), 10)
+			res[i] = strconv.Quote(o.Timestamp.Format(time.RFC3339))
+		case "count":
+			res[i] = strconv.FormatInt(int64(o.Count), 10)
 		case "gas_used":
 			res[i] = strconv.FormatInt(o.GasUsed, 10)
 		case "storage_size":
@@ -183,7 +300,7 @@ func (o *OpSeries) MarshalCSV() ([]string, error) {
 	return res, nil
 }
 
-func StreamOpSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
+func (s *OpSeries) BuildQuery(ctx *ApiContext, args *SeriesRequest) pack.Query {
 	// use chain params at current height
 	params := ctx.Params
 
@@ -203,6 +320,10 @@ func StreamOpSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 	// resolve short column names
 	srcNames = make([]string, 0, len(args.Columns))
 	for _, v := range args.Columns {
+		// ignore count column
+		if v == "count" {
+			continue
+		}
 		// ignore non-series columns
 		if !opSeriesNames.Contains(v) {
 			panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid time-series column '%s'", v), nil))
@@ -217,25 +338,10 @@ func StreamOpSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 	}
 
 	// build table query
-	q := pack.Query{
-		Name:   ctx.RequestID,
-		Fields: table.Fields().Select(srcNames...),
-		Order:  args.Order,
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: table.Fields().Find("O"), // is_orphan
-				Mode:  pack.FilterModeEqual,
-				Value: false,
-			},
-			pack.Condition{
-				Field: table.Fields().Find("T"), // time
-				Mode:  pack.FilterModeRange,
-				From:  args.From.Time(),
-				To:    args.To.Time(),
-				Raw:   args.From.String() + " - " + args.To.String(), // debugging aid
-			},
-		},
-	}
+	q := pack.NewQuery(ctx.RequestID, table).
+		WithFields(srcNames...).
+		WithOrder(args.Order).
+		AndRange("time", args.From.Time(), args.To.Time())
 
 	// build dynamic filter conditions from query (will panic on error)
 	for key, val := range ctx.Request.URL.Query() {
@@ -249,7 +355,7 @@ func StreamOpSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 			}
 		}
 		switch prefix {
-		case "columns", "collapse", "start_date", "end_date", "limit", "order", "verbose":
+		case "columns", "collapse", "start_date", "end_date", "limit", "order", "verbose", "filename", "fill":
 			// skip these fields
 			continue
 
@@ -257,26 +363,26 @@ func StreamOpSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 			// parse only the first value
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
-				typ := chain.ParseOpType(val[0])
+				typ := tezos.ParseOpType(val[0])
 				if !typ.IsValid() {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid operation type '%s'", val[0]), nil))
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("t"),
 					Mode:  mode,
-					Value: int64(typ),
+					Value: typ,
 					Raw:   val[0], // debugging aid
 				})
 			case pack.FilterModeIn, pack.FilterModeNotIn:
-				typs := make([]int64, 0)
+				typs := make([]uint8, 0)
 				for _, t := range strings.Split(val[0], ",") {
-					typ := chain.ParseOpType(t)
+					typ := tezos.ParseOpType(t)
 					if !typ.IsValid() {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid operation type '%s'", t), nil))
 					}
-					typs = append(typs, int64(typ))
+					typs = append(typs, uint8(typ))
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("t"),
 					Mode:  mode,
 					Value: typs,
@@ -300,15 +406,15 @@ func StreamOpSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty address matches id 0 (== missing baker)
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find(field), // account id
 						Mode:  pack.FilterModeEqual,
-						Value: uint64(0),
+						Value: 0,
 						Raw:   val[0], // debugging aid
 					})
 				} else {
 					// single-address lookup and compile condition
-					addr, err := chain.ParseAddress(val[0])
+					addr, err := tezos.ParseAddress(val[0])
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
@@ -318,7 +424,7 @@ func StreamOpSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 					}
 					// Note: when not found we insert an always false condition
 					if acc == nil || acc.RowId == 0 {
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find(field), // account id
 							Mode:  mode,
 							Value: uint64(math.MaxUint64),
@@ -326,10 +432,10 @@ func StreamOpSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 						})
 					} else {
 						// add id as extra condition
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find(field), // account id
 							Mode:  mode,
-							Value: acc.RowId.Value(),
+							Value: acc.RowId,
 							Raw:   val[0], // debugging aid
 						})
 					}
@@ -338,7 +444,7 @@ func StreamOpSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(v)
+					addr, err := tezos.ParseAddress(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
@@ -355,7 +461,7 @@ func StreamOpSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find(field), // account id
 					Mode:  mode,
 					Value: ids,
@@ -387,155 +493,11 @@ func StreamOpSeries(ctx *ApiContext, args *SeriesRequest) (interface{}, int) {
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions = append(q.Conditions, cond)
+					q.Conditions.AddAndCondition(&cond)
 				}
 			}
 		}
 	}
 
-	var count int
-	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Series)
-	defer func() {
-		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	}()
-
-	// prepare for source and return type marshalling
-	os := &OpSeries{params: params, verbose: args.Verbose, columns: args.Columns}
-	om := &model.Op{}
-	window := args.Collapse.Duration()
-	nextBucketTime := args.From.Add(window).Time()
-	mul := 1
-	if args.Order == pack.OrderDesc {
-		mul = 0
-	}
-
-	// prepare response stream
-	ctx.StreamResponseHeaders(http.StatusOK, mimetypes[args.Format])
-
-	switch args.Format {
-	case "json":
-		enc := json.NewEncoder(ctx.ResponseWriter)
-		enc.SetIndent("", "")
-		enc.SetEscapeHTML(false)
-
-		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
-		// close JSON array on panic
-		defer func() {
-			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
-				panic(e)
-			}
-		}()
-
-		// run query and stream results
-		var needComma bool
-
-		// stream from database, result order is assumed to be in timestamp order
-		err = table.Stream(ctx, q, func(r pack.Row) error {
-			if err := r.Decode(om); err != nil {
-				return err
-			}
-
-			// output OpSeries when valid and time has crossed next boundary
-			if !os.Timestamp.IsZero() && (om.Timestamp.Before(nextBucketTime) != (mul == 1)) {
-				// output accumulated data
-				if needComma {
-					io.WriteString(ctx.ResponseWriter, ",")
-				} else {
-					needComma = true
-				}
-				if err := enc.Encode(os); err != nil {
-					return err
-				}
-				count++
-				if args.Limit > 0 && count == int(args.Limit) {
-					return io.EOF
-				}
-				os.Reset()
-			}
-
-			// init next time window from data
-			if os.Timestamp.IsZero() {
-				os.Timestamp = om.Timestamp.Truncate(window)
-				nextBucketTime = os.Timestamp.Add(window * time.Duration(mul))
-			}
-
-			// accumulate data in OpSeries
-			os.Add(om)
-			return nil
-		})
-		// don't handle error here, will be picked up by trailer
-		if err == nil {
-			// output last series element
-			if !os.Timestamp.IsZero() {
-				if needComma {
-					io.WriteString(ctx.ResponseWriter, ",")
-				}
-				err = enc.Encode(os)
-				if err == nil {
-					count++
-				}
-			}
-		}
-
-		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
-		ctx.Log.Tracef("JSON encoded %d rows", count)
-
-	case "csv":
-		enc := csv.NewEncoder(ctx.ResponseWriter)
-		// use custom header columns and order
-		if len(args.Columns) > 0 {
-			err = enc.EncodeHeader(args.Columns, nil)
-		}
-		if err == nil {
-			// stream from database, result order is assumed to be in timestamp order
-			err = table.Stream(ctx, q, func(r pack.Row) error {
-				if err := r.Decode(om); err != nil {
-					return err
-				}
-
-				// output OpSeries when valid and time has crossed next boundary
-				if !os.Timestamp.IsZero() && (om.Timestamp.Before(nextBucketTime) != (mul == 1)) {
-					// output accumulated data
-					if err := enc.EncodeRecord(os); err != nil {
-						return err
-					}
-					count++
-					if args.Limit > 0 && count == int(args.Limit) {
-						return io.EOF
-					}
-					os.Reset()
-				}
-
-				// init next time window from data
-				if os.Timestamp.IsZero() {
-					os.Timestamp = om.Timestamp.Truncate(window)
-					nextBucketTime = os.Timestamp.Add(window * time.Duration(mul))
-				}
-
-				// accumulate data in OpSeries
-				os.Add(om)
-				return nil
-			})
-			if err == nil {
-				// output last series element
-				if !os.Timestamp.IsZero() {
-					err = enc.EncodeRecord(os)
-					if err == nil {
-						count++
-					}
-				}
-			}
-		}
-		ctx.Log.Tracef("CSV Encoded %d rows", count)
-	}
-
-	// write error (except EOF), cursor and count as http trailer
-	ctx.StreamTrailer("", count, err)
-
-	// streaming return
-	return nil, -1
+	return q
 }

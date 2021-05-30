@@ -4,17 +4,17 @@
 package index
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 
+	"blockwatch.cc/packdb/cache"
+	"blockwatch.cc/packdb/cache/lru"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-
-	"blockwatch.cc/tzindex/chain"
-	"blockwatch.cc/tzindex/micheline"
-	"blockwatch.cc/tzindex/rpc"
+	"blockwatch.cc/tzgo/micheline"
+	"blockwatch.cc/tzgo/rpc"
+	"blockwatch.cc/tzgo/tezos"
 
 	. "blockwatch.cc/tzindex/etl/model"
 )
@@ -24,7 +24,7 @@ const (
 	BigMapJournalSizeLog2      = 16 // 64k
 	BigMapCacheSize            = 128
 	BigMapFillLevel            = 100
-	BigMapIndexPackSizeLog2    = 15 // 16k packs (32k split size) ~256k
+	BigMapIndexPackSizeLog2    = 14 // 16k packs (32k split size) ~256kB
 	BigMapIndexJournalSizeLog2 = 16 // 64k
 	BigMapIndexCacheSize       = 1024
 	BigMapIndexFillLevel       = 90
@@ -33,20 +33,24 @@ const (
 )
 
 var (
-	ErrNoBigMapEntry = errors.New("bigmap not indexed")
+	ErrNoBigmapEntry = errors.New("bigmap not indexed")
 )
 
 type BigMapIndex struct {
-	db    *pack.DB
-	opts  pack.Options
-	iopts pack.Options
-	table *pack.Table
+	db         *pack.DB
+	opts       pack.Options
+	iopts      pack.Options
+	table      *pack.Table
+	allocCache cache.Cache // cache bigmap alloc operations (for fast type access)
+	lastCache  cache.Cache // cache most recent bigmap item (for fast counter access)
 }
 
 var _ BlockIndexer = (*BigMapIndex)(nil)
 
 func NewBigMapIndex(opts, iopts pack.Options) *BigMapIndex {
-	return &BigMapIndex{opts: opts, iopts: iopts}
+	ac, _ := lru.New(1024)
+	lc, _ := lru.New(1024)
+	return &BigMapIndex{opts: opts, iopts: iopts, allocCache: ac, lastCache: lc}
 }
 
 func (idx *BigMapIndex) DB() *pack.DB {
@@ -66,7 +70,7 @@ func (idx *BigMapIndex) Name() string {
 }
 
 func (idx *BigMapIndex) Create(path, label string, opts interface{}) error {
-	fields, err := pack.Fields(BigMapItem{})
+	fields, err := pack.Fields(BigmapItem{})
 	if err != nil {
 		return err
 	}
@@ -90,9 +94,9 @@ func (idx *BigMapIndex) Create(path, label string, opts interface{}) error {
 	}
 
 	_, err = table.CreateIndexIfNotExists(
-		"hash",
-		fields.Find("H"),   // op hash field (32 byte hashes)
-		pack.IndexTypeHash, // hash table, index stores hash(field) -> pk value
+		"key",                 // name
+		fields.Find("K"),      // HashId (uint64 xxhash(bigmap_id + expr-hash)
+		pack.IndexTypeInteger, // sorted int, index stores uint64 -> pk value
 		pack.Options{
 			PackSizeLog2:    util.NonZero(idx.iopts.PackSizeLog2, BigMapIndexPackSizeLog2),
 			JournalSizeLog2: util.NonZero(idx.iopts.JournalSizeLog2, BigMapIndexJournalSizeLog2),
@@ -130,6 +134,8 @@ func (idx *BigMapIndex) Init(path, label string, opts interface{}) error {
 }
 
 func (idx *BigMapIndex) Close() error {
+	idx.lastCache.Purge()
+	idx.allocCache.Purge()
 	if idx.table != nil {
 		if err := idx.table.Close(); err != nil {
 			log.Errorf("Closing %s: %v", idx.Name(), err)
@@ -145,20 +151,19 @@ func (idx *BigMapIndex) Close() error {
 	return nil
 }
 
-// asumes op ids are already set (must run after OpIndex)
+// assumes op ids are already set (must run after OpIndex)
 // Note: zero is a valid bigmap id in all protocols
 func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
 	contracts, err := builder.Table(ContractIndexKey)
 	if err != nil {
 		return err
 	}
-
-	// contracts can pass temporary bigmaps between internal calls
-	var temporaryBigmaps map[int64][]*BigMapItem
+	// contracts can pass temporary bigmaps to internal calls
+	var temporaryBigmaps map[int64][]*BigmapItem
 
 	contract := &Contract{}
 	for _, op := range block.Ops {
-		if len(op.BigMapDiff) == 0 || !op.IsSuccess {
+		if len(op.BigmapDiff) == 0 || !op.IsSuccess {
 			continue
 		}
 		// load rpc op
@@ -169,13 +174,14 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 
 		// reset temp bigmap after a batch of internal ops has been processed
 		if !op.IsInternal {
+			// log.Infof("%s %d/%d/%d/%d Clearing %d temp bigmaps", op.Hash, op.OpL, op.OpP, op.OpC, op.OpI, len(temporaryBigmaps))
 			temporaryBigmaps = nil
 		}
 
 		// extract deserialized bigmap diff
-		var bmd micheline.BigMapDiff
+		var bmd micheline.BigmapDiff
 		switch op.Type {
-		case chain.OpTypeTransaction:
+		case tezos.OpTypeTransaction:
 			if op.IsInternal {
 				// on internal tx, find corresponding internal op
 				top, ok := o.(*rpc.TransactionOp)
@@ -183,16 +189,16 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 					return fmt.Errorf("internal bigmap transaction op [%d:%d]: unexpected type %T ",
 						op.OpL, op.OpP, o)
 				}
-				bmd = top.Metadata.InternalResults[op.OpI].Result.BigMapDiff
+				bmd = top.Metadata.InternalResults[op.OpI].Result.BigmapDiff
 			} else {
 				top, ok := o.(*rpc.TransactionOp)
 				if !ok {
 					return fmt.Errorf("contract bigmap transaction op [%d:%d]: unexpected type %T ",
 						op.OpL, op.OpP, o)
 				}
-				bmd = top.Metadata.Result.BigMapDiff
+				bmd = top.Metadata.Result.BigmapDiff
 			}
-		case chain.OpTypeOrigination:
+		case tezos.OpTypeOrigination:
 			if op.IsInternal {
 				// on internal tx, find corresponding internal op
 				top, ok := o.(*rpc.TransactionOp)
@@ -200,14 +206,14 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 					return fmt.Errorf("internal bigmap origination op [%d:%d]: unexpected type %T ",
 						op.OpL, op.OpP, o)
 				}
-				bmd = top.Metadata.InternalResults[op.OpI].Result.BigMapDiff
+				bmd = top.Metadata.InternalResults[op.OpI].Result.BigmapDiff
 			} else {
 				oop, ok := o.(*rpc.OriginationOp)
 				if !ok {
 					return fmt.Errorf("contract bigmap origination op [%d:%d]: unexpected type %T ",
 						op.OpL, op.OpP, o)
 				}
-				bmd = oop.Metadata.Result.BigMapDiff
+				bmd = oop.Metadata.Result.BigmapDiff
 			}
 		}
 
@@ -215,33 +221,29 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 		if contract.AccountId != op.ReceiverId {
 			contract, ok = builder.ContractById(op.ReceiverId)
 			if !ok {
+				// when a contract was just originated, it is not yet known
+				// by the builder, we fallback to loading the contract here
 				contract = &Contract{}
-				err := contracts.Stream(ctx, pack.Query{
-					Name: "etl.bigmap.lookup",
-					Conditions: pack.ConditionList{
-						pack.Condition{
-							Field: contracts.Fields().Find("A"), // account id
-							Mode:  pack.FilterModeEqual,
-							Value: op.ReceiverId.Value(),
-						},
-					},
-				}, func(r pack.Row) error {
-					return r.Decode(contract)
-				})
+				err := pack.NewQuery("etl.bigmap.lookup", contracts).
+					WithDesc().
+					WithLimit(1). // there should only be one match anyways
+					AndEqual("account_id", op.ReceiverId).
+					Execute(ctx, contract)
 				if err != nil {
-					return fmt.Errorf("bigmap update op [%d:%d] type=%s internal=%t: missing contract for account %d: %v",
+					return fmt.Errorf("bigmap update op [%d:%d] type=%s internal=%t: missing contract account %d: %v",
 						op.OpL, op.OpP, op.Type, op.IsInternal, op.ReceiverId, err)
 				}
 			}
 		}
 
 		// process bigmapdiffs
-		alloc := &BigMapItem{}
-		last := &BigMapItem{}
+		alloc := &BigmapItem{}
+		last := &BigmapItem{}
 		for _, v := range bmd {
 			// find and update previous key if any
 			switch v.Action {
 			case micheline.DiffActionUpdate, micheline.DiffActionRemove:
+				// Temporary Bigmaps
 				if v.Id < 0 {
 					// log.Infof("%s %d/%d/%d/%d Bigmap %s on temp id %d", op.Hash, op.OpL, op.OpP, op.OpC, op.OpI, v.Action, v.Id)
 					// on temporary bigmaps find the alloc from map
@@ -255,7 +257,7 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 							break
 						}
 					}
-					if alloc.BigMapId != v.Id {
+					if alloc.BigmapId != v.Id {
 						// fail if alloc is missing
 						return fmt.Errorf("etl.bigmap.find_alloc: missing alloc in temporary bigmap %d", v.Id)
 					}
@@ -268,7 +270,7 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 						delete(temporaryBigmaps, v.Id)
 					} else {
 						// update/remove a single key
-						var item *BigMapItem
+						var item *BigmapItem
 						for _, vv := range items {
 							if vv.Action == micheline.DiffActionAlloc {
 								continue
@@ -276,7 +278,7 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 							if vv.IsReplaced || vv.IsDeleted {
 								continue
 							}
-							if bytes.Compare(vv.KeyHash, v.KeyHash.Hash.Hash) != 0 {
+							if !vv.GetKeyHash().Equal(v.KeyHash) {
 								continue
 							}
 							// update the temporary item
@@ -301,100 +303,71 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 						if item != nil {
 							prevId = item.RowId
 						}
-						last = NewBigMapItem(op, contract, v, alloc.KeyType, prevId, last.Counter+1, nkeys)
+						last = NewBigmapItem(op, contract, v, prevId, last.Counter+1, nkeys)
 						// extend list (may create new list)
 						items = append(items, last)
 						// re-add potentially new list to map
 						temporaryBigmaps[v.Id] = items
 						// for _, vv := range items {
-						// 	log.Infof("  %s %d %x", vv.Action, vv.BigMapId, vv.Key)
+						// 	log.Infof("  %s %d %x", vv.Action, vv.BigmapId, vv.Key)
 						// }
 					}
 				} else {
-					// on regular (non-temporary) bigmaps
+					// Regular bigmaps (non-temporary)
 					// find bigmap allocation (required for key type)
-					if alloc.RowId == 0 || alloc.BigMapId != v.Id {
-						err := idx.table.Stream(ctx, pack.Query{
-							Name:  "etl.bigmap.find_alloc",
-							Limit: 1, // there should only be one match anyways
-							Order: pack.OrderDesc,
-							Conditions: pack.ConditionList{
-								pack.Condition{
-									Field: idx.table.Fields().Find("B"), // bigmap id
-									Mode:  pack.FilterModeEqual,
-									Value: v.Id,
-								},
-								pack.Condition{
-									Field: idx.table.Fields().Find("a"), // alloc
-									Mode:  pack.FilterModeEqual,
-									Value: uint64(micheline.DiffActionAlloc),
-								},
-							},
-						}, func(r pack.Row) error {
-							alloc = &BigMapItem{}
-							return r.Decode(alloc)
-						})
-						if err != nil {
-							return fmt.Errorf("etl.bigmap.alloc decode: %v", err)
+					if alloc.RowId == 0 || alloc.BigmapId != v.Id {
+						cachedAlloc, ok := idx.allocCache.Get(v.Id)
+						if ok {
+							alloc = cachedAlloc.(*BigmapItem)
+						} else {
+							alloc = &BigmapItem{}
+							err := pack.NewQuery("etl.bigmap.find_alloc", idx.table).
+								WithDesc().
+								WithLimit(1). // there should only be one match anyways
+								AndEqual("bigmap_id", v.Id).
+								AndEqual("action", micheline.DiffActionAlloc).
+								Execute(ctx, alloc)
+							if err != nil {
+								return fmt.Errorf("etl.bigmap.alloc decode: %v", err)
+							}
+							idx.allocCache.Add(alloc.BigmapId, alloc)
 						}
 					}
-					if last.RowId == 0 || last.BigMapId != alloc.BigMapId {
-						err := idx.table.Stream(ctx, pack.Query{
-							Name:  "etl.bigmap.find_last",
-							Limit: 1, // there should only be one match anyways
-							Order: pack.OrderDesc,
-							Conditions: pack.ConditionList{
-								pack.Condition{
-									Field: idx.table.Fields().Find("B"), // bigmap id
-									Mode:  pack.FilterModeEqual,
-									Value: v.Id,
-								},
-							},
-						}, func(r pack.Row) error {
-							last = &BigMapItem{}
-							return r.Decode(last)
-						})
-						if err != nil {
-							return fmt.Errorf("etl.bigmap.last decode: %v", err)
+					// find last bigmap entry for counters
+					if last.RowId == 0 || last.BigmapId != alloc.BigmapId {
+						cachedLast, ok := idx.lastCache.Get(v.Id)
+						if ok {
+							last = cachedLast.(*BigmapItem)
+						} else {
+							last = &BigmapItem{}
+							err := pack.NewQuery("etl.bigmap.find_last", idx.table).
+								WithDesc().
+								WithLimit(1). // there should only be one match anyways
+								AndEqual("bigmap_id", v.Id).
+								Execute(ctx, last)
+							if err != nil {
+								return fmt.Errorf("etl.bigmap.last decode: %v", err)
+							}
+							idx.lastCache.Add(last.BigmapId, last)
 						}
 					}
 
-					prev := &BigMapItem{}
+					// find previous bigmap item at key
 					if v.Key.OpCode == micheline.I_EMPTY_BIG_MAP {
 						// log.Debugf("BigMap emptying %d (%d entries) in block %d",
 						// 	v.Id, last.NKeys, block.Height)
 						// remove all keys from the bigmap including the bigmap itself
 						for last.NKeys > 0 {
 							// find the next entry to remove
-							err := idx.table.Stream(ctx, pack.Query{
-								Name:  "etl.bigmap.empty",
-								Limit: 1, // limit to one match
-								Order: pack.OrderDesc,
-								Conditions: pack.ConditionList{
-									pack.Condition{
-										Field: idx.table.Fields().Find("B"), // bigmap id
-										Mode:  pack.FilterModeEqual,
-										Value: v.Id,
-									},
-									pack.Condition{
-										Field: idx.table.Fields().Find("a"), // action
-										Mode:  pack.FilterModeEqual,
-										Value: uint64(micheline.DiffActionUpdate),
-									},
-									pack.Condition{
-										Field: idx.table.Fields().Find("r"), // is_replaced
-										Mode:  pack.FilterModeEqual,
-										Value: false,
-									},
-									pack.Condition{
-										Field: idx.table.Fields().Find("d"), // is_deleted
-										Mode:  pack.FilterModeEqual,
-										Value: false,
-									},
-								},
-							}, func(r pack.Row) error {
-								return r.Decode(prev)
-							})
+							prev := &BigmapItem{}
+							err := pack.NewQuery("etl.bigmap.empty", idx.table).
+								WithDesc().
+								WithLimit(1). // limit to one match
+								AndEqual("bigmap_id", v.Id).
+								AndEqual("action", micheline.DiffActionUpdate).
+								AndEqual("is_replaced", false).
+								AndEqual("is_deleted", false).
+								Execute(ctx, prev)
 							if err != nil {
 								return fmt.Errorf("etl.bigmap.update decode: %v", err)
 							}
@@ -409,9 +382,9 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 								}
 
 								// insert deletion entry immediately to allow sequence of updates
-								prevdiff := prev.BigMapDiff()
+								prevdiff := prev.BigmapDiff()
 								prevdiff.Action = micheline.DiffActionRemove
-								item := NewBigMapItem(op, contract, prevdiff, alloc.KeyType, prev.RowId, last.Counter+1, last.NKeys-1)
+								item := NewBigmapItem(op, contract, prevdiff, prev.RowId, last.Counter+1, last.NKeys-1)
 								if err := idx.table.Insert(ctx, item); err != nil {
 									return fmt.Errorf("etl.bigmap.insert: %v", err)
 								}
@@ -425,37 +398,24 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 						if err := idx.table.Update(ctx, alloc); err != nil {
 							return fmt.Errorf("etl.bigmap.update: %v", err)
 						}
+						idx.lastCache.Remove(last.BigmapId)
 
 					} else {
 						// update/remove a single key
 
 						// find the previous entry at this key if exists
-						err := idx.table.Stream(ctx, pack.Query{
-							Name:    "etl.bigmap.update",
-							Limit:   1,    // there should only be one match anyways
-							NoIndex: true, // index may contain many duplicates, skip
-							Order:   pack.OrderDesc,
-							Conditions: pack.ConditionList{
-								pack.Condition{
-									Field: idx.table.Fields().Find("B"), // bigmap id
-									Mode:  pack.FilterModeEqual,
-									Value: v.Id,
-								},
-								pack.Condition{
-									Field: idx.table.Fields().Find("r"), // is_replaced
-									Mode:  pack.FilterModeEqual,
-									Value: false,
-								},
-								pack.Condition{
-									Field: idx.table.Fields().Find("H"), // key hash
-									Mode:  pack.FilterModeEqual,
-									Value: v.KeyHash.Hash.Hash, // as []byte slice
-								},
-								// don't filter by deleted flag so we find any deletion entry
-							},
-						}, func(r pack.Row) error {
-							return r.Decode(prev)
-						})
+						// don't filter by deleted flag so we find any deletion entry
+						prev := &BigmapItem{}
+						err := pack.NewQuery("etl.bigmap.update", idx.table).
+							WithDesc().
+							WithLimit(1).   // there should only be one match anyways
+							WithoutIndex(). // index may contain many duplicates, skip
+							AndEqual("bigmap_id", v.Id).
+							AndEqual("action", micheline.DiffActionUpdate).
+							AndEqual("is_replaced", false).
+							AndEqual("key_id", GetKeyId(v.Id, v.KeyHash)).
+							Execute(ctx, prev)
+
 						if err != nil {
 							return fmt.Errorf("etl.bigmap.update decode: %v", err)
 						}
@@ -486,11 +446,12 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 						// log.Debugf("BigMap %s %d key %s in block %d", v.Action, v.Id, v.KeyHash, block.Height)
 
 						// insert immediately to allow sequence of updates
-						item := NewBigMapItem(op, contract, v, alloc.KeyType, prev.RowId, last.Counter+1, nkeys)
+						item := NewBigmapItem(op, contract, v, prev.RowId, last.Counter+1, nkeys)
 						if err := idx.table.Insert(ctx, item); err != nil {
 							return fmt.Errorf("etl.bigmap.insert: %v", err)
 						}
 						last = item
+						idx.lastCache.Add(last.BigmapId, last)
 					}
 				}
 
@@ -499,93 +460,94 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 				// log.Debugf("BigMap %s %d in block %d", v.Action, v.Id, block.Height)
 				if v.Id < 0 {
 					// alloc temp bigmap
-					item := NewBigMapItem(op, contract, v, alloc.KeyType, 0, 0, 0)
+					item := NewBigmapItem(op, contract, v, 0, 0, 0)
 					if temporaryBigmaps == nil {
-						temporaryBigmaps = make(map[int64][]*BigMapItem)
+						temporaryBigmaps = make(map[int64][]*BigmapItem)
 					}
-					temporaryBigmaps[v.Id] = []*BigMapItem{item}
+					temporaryBigmaps[v.Id] = []*BigmapItem{item}
 				} else {
-					item := NewBigMapItem(op, contract, v, alloc.KeyType, 0, 0, 0)
+					// alloc real bigmap
+					item := NewBigmapItem(op, contract, v, 0, 0, 0)
 					if err := idx.table.Insert(ctx, item); err != nil {
 						return fmt.Errorf("etl.bigmap.insert: %v", err)
 					}
 					last = item
+					idx.lastCache.Add(last.BigmapId, last)
 				}
 
 			case micheline.DiffActionCopy:
 				// copy the alloc and all current keys to new entries, set is_copied
-				items := make([]*BigMapItem, 0)
+				items := make([]*BigmapItem, 0)
 
 				if v.SourceId < 0 {
 					// use temporary bigmap as source
 					var ok bool
 					items, ok = temporaryBigmaps[v.SourceId]
 
+					// log.Infof("%s %d/%d/%d/%d Bigmap copy from temp id %d to %d (%d items)",
+					// 	op.Hash, op.OpL, op.OpP, op.OpC, op.OpI, v.SourceId, v.DestId, len(items))
+
 					if !ok || len(items) == 0 {
 						return fmt.Errorf("etl.bigmap.copy: missing temporary bigmap %d", v.SourceId)
 					}
 					// update destination bigmap identity and ownership
 					for _, vv := range items {
-						vv.BigMapId = v.DestId
+						vv.BigmapId = v.DestId
 						vv.AccountId = contract.AccountId
 						vv.ContractId = contract.RowId
 						vv.OpId = op.RowId
 					}
 
+					// for _, vv := range items {
+					// 	log.Infof("  %s %d %x", vv.Action, vv.BigmapId, vv.Key)
+					// }
+
 				} else {
 					// find the source alloc and all current bigmap entries
 					// order matters, because alloc is always first
 					var counter int64
-					err := idx.table.Stream(ctx, pack.Query{
-						Name: "etl.bigmap.copy",
-						Conditions: pack.ConditionList{
-							pack.Condition{
-								Field: idx.table.Fields().Find("B"), // bigmap id
-								Mode:  pack.FilterModeEqual,
-								Value: v.SourceId, // copy from source map
-							},
-							pack.Condition{
-								Field: idx.table.Fields().Find("r"), // is_replaced
-								Mode:  pack.FilterModeEqual,
-								Value: false,
-							},
-							pack.Condition{
-								Field: idx.table.Fields().Find("d"), // is_deleted
-								Mode:  pack.FilterModeEqual,
-								Value: false,
-							},
-						},
-					}, func(r pack.Row) error {
-						source := &BigMapItem{}
-						if err := r.Decode(source); err != nil {
-							return err
-						}
-						// copy the item
-						if source.Action == micheline.DiffActionAlloc {
-							// log.Debugf("BigMap %d %s alloc in block %d", v.DestId, v.Action, block.Height)
-							item := CopyBigMapAlloc(source, op, contract, v.DestId, counter+1, 0)
-							items = append(items, item)
-							last = item
-						} else {
-							// log.Debugf("BigMap %d %s item key %s in block %d", v.DestId, v.Action, v.KeyHash, block.Height)
-							item := CopyBigMapValue(source, op, contract, v.DestId, counter+1, counter)
-							items = append(items, item)
-							last = item
-						}
-						counter++
-						return nil
-					})
+					err := pack.NewQuery("etl.bigmap.copy", idx.table).
+						AndEqual("bigmap_id", v.SourceId). // copy from source map
+						AndEqual("is_replaced", false).
+						AndEqual("is_deleted", false).
+						Stream(ctx, func(r pack.Row) error {
+							source := &BigmapItem{}
+							if err := r.Decode(source); err != nil {
+								return err
+							}
+							// copy the item
+							if source.Action == micheline.DiffActionAlloc {
+								// log.Debugf("BigMap %d %s alloc in block %d", v.DestId, v.Action, block.Height)
+								item := CopyBigMapAlloc(source, op, contract, v.DestId, counter+1, 0)
+								items = append(items, item)
+								last = item
+							} else {
+								// log.Debugf("BigMap %d %s item key %x in block %d", v.DestId, v.Action, source.KeyHash, block.Height)
+								item := CopyBigMapValue(source, op, contract, v.DestId, counter+1, counter)
+								items = append(items, item)
+								last = item
+							}
+							counter++
+							return nil
+						})
 					if err != nil {
 						return fmt.Errorf("etl.bigmap.copy: %v", err)
 					}
+					idx.lastCache.Add(last.BigmapId, last)
 				}
 
 				if v.DestId < 0 {
-					// keep temp bigmaps around, lazy create map
+					// keep temp bigmaps around
+					// log.Infof("%s %d/%d/%d/%d Bigmap copy from %d to temp id %d (%d items)",
+					// 	op.Hash, op.OpL, op.OpP, op.OpC, op.OpI, v.SourceId, v.DestId, len(items))
+					// lazy create map
 					if temporaryBigmaps == nil {
-						temporaryBigmaps = make(map[int64][]*BigMapItem)
+						temporaryBigmaps = make(map[int64][]*BigmapItem)
 					}
 					temporaryBigmaps[v.DestId] = items
+					// for _, vv := range items {
+					// 	log.Infof("  %s %d %x", vv.Action, vv.BigmapId, vv.Key)
+					// }
 				} else {
 					// target for regular copies are stored, need type conversion
 					ins := make([]pack.Item, len(items))
@@ -604,11 +566,13 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 }
 
 func (idx *BigMapIndex) DisconnectBlock(ctx context.Context, block *Block, _ BlockBuilder) error {
+	idx.allocCache.Purge()
+	idx.lastCache.Purge()
 	return idx.DeleteBlock(ctx, block.Height)
 }
 
 func (idx *BigMapIndex) DeleteBlock(ctx context.Context, height int64) error {
-	log.Debugf("Rollback deleting bigmap updates at height %d", height)
+	// log.Debugf("Rollback deleting bigmap updates at height %d", height)
 
 	// need to unset IsReplaced flags in prior rows for every entry we find here
 	upd := make([]pack.Item, 0)
@@ -622,31 +586,27 @@ func (idx *BigMapIndex) DeleteBlock(ctx context.Context, height int64) error {
 	item := &XItem{}
 
 	// find all items to delete and all items to update
-	err := idx.table.Stream(ctx, pack.Query{
-		Name:   "etl.bigmap.delete_scan",
-		Fields: idx.table.Fields().Select("I"),
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: idx.table.Fields().Find("h"), // block height (!)
-			Mode:  pack.FilterModeEqual,
-			Value: height,
-		}},
-	}, func(r pack.Row) error {
-		if err := r.Decode(item); err != nil {
-			return err
-		}
-		if !item.IsCopied {
-			ids = append(ids, item.PrevId)
-		}
-		del = append(ids, item.RowId)
-		return nil
-	})
+	err := idx.table.Stream(ctx,
+		pack.NewQuery("etl.bigmap.delete_scan", idx.table).
+			WithFields("I").
+			AndEqual("height", height),
+		func(r pack.Row) error {
+			if err := r.Decode(item); err != nil {
+				return err
+			}
+			if !item.IsCopied {
+				ids = append(ids, item.PrevId)
+			}
+			del = append(ids, item.RowId)
+			return nil
+		})
 	if err != nil {
 		return err
 	}
 
 	// load update items
 	err = idx.table.StreamLookup(ctx, ids, func(r pack.Row) error {
-		item := AllocBigMapItem()
+		item := AllocBigmapItem()
 		if err := r.Decode(item); err != nil {
 			return err
 		}

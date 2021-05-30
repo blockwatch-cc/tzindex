@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/tzindex/chain"
-	"blockwatch.cc/tzindex/rpc"
+	"blockwatch.cc/tzgo/rpc"
+	"blockwatch.cc/tzgo/tezos"
 )
 
 var opPool = &sync.Pool{
@@ -23,50 +23,52 @@ func (id OpID) Value() uint64 {
 }
 
 type Op struct {
-	RowId        OpID                `pack:"I,pk,snappy"   json:"row_id"`                         // internal: unique row id
-	Timestamp    time.Time           `pack:"T,snappy"      json:"time"`                           // bc: op block time
-	Height       int64               `pack:"h,snappy"      json:"height"`                         // bc: block height op was mined at
-	Cycle        int64               `pack:"c,snappy"      json:"cycle"`                          // bc: block cycle (tezos specific)
-	Hash         chain.OperationHash `pack:"H"             json:"hash"`                           // bc: unique op_id (op hash)
-	Counter      int64               `pack:"j,snappy"      json:"counter"`                        // bc: counter
-	OpN          int                 `pack:"n,snappy"      json:"op_n"`                           // bc: gobal position in block (block.Operations.([][]*OperationHeader) list position)
-	OpC          int                 `pack:"o,snappy"      json:"op_c"`                           // bc: position in OperationHeader.Contents.([]Operation) list
-	OpI          int                 `pack:"i,snappy"      json:"op_i"`                           // bc: position in internal operation result list
-	OpL          int                 `pack:"L,snappy"      json:"op_l"`                           // bc: operation list (i.e. 0 for endorsements, etc corresponding to validation pass)
-	OpP          int                 `pack:"P,snappy"      json:"op_p"`                           // bc: operation list position (use in combination with op_l to lookup op on RPC)
-	Type         chain.OpType        `pack:"t,snappy"      json:"type"`                           // stats: operation type as defined byprotocol
-	Status       chain.OpStatus      `pack:"?,snappy"      json:"status"`                         // stats: operation status
-	IsSuccess    bool                `pack:"!,snappy"      json:"is_success"`                     // bc: operation succesful flag
-	IsContract   bool                `pack:"C,snappy"      json:"is_contract"`                    // bc: operation succesful flag
-	GasLimit     int64               `pack:"l,snappy"      json:"gas_limit"`                      // stats: gas limit
-	GasUsed      int64               `pack:"G,snappy"      json:"gas_used"`                       // stats: gas used
-	GasPrice     float64             `pack:"g,convert,precision=5,snappy"      json:"gas_price"`  // stats: gas price in tezos per unit gas, relative to tx fee
-	StorageLimit int64               `pack:"Z,snappy"      json:"storage_limit"`                  // stats: storage size limit
-	StorageSize  int64               `pack:"z,snappy"      json:"storage_size"`                   // stats: storage size used/allocated by this op
-	StoragePaid  int64               `pack:"$,snappy"      json:"storage_paid"`                   // stats: extra storage size paid by this op
-	Volume       int64               `pack:"v,snappy"      json:"volume"`                         // stats: sum of transacted tezos volume
-	Fee          int64               `pack:"f,snappy"      json:"fee"`                            // stats: transaction fees
-	Reward       int64               `pack:"r,snappy"      json:"reward"`                         // stats: baking and endorsement rewards
-	Deposit      int64               `pack:"d,snappy"      json:"deposit"`                        // stats: bonded deposits for baking and endorsement
-	Burned       int64               `pack:"b,snappy"      json:"burned"`                         // stats: burned tezos
-	SenderId     AccountID           `pack:"S,snappy"      json:"sender_id"`                      // internal: op sender
-	ReceiverId   AccountID           `pack:"R,snappy"      json:"receiver_id"`                    // internal: op receiver
-	ManagerId    AccountID           `pack:"M,snappy"      json:"manager_id"`                     // internal: op manager for originations
-	DelegateId   AccountID           `pack:"D,snappy"      json:"delegate_id"`                    // internal: op delegate for originations and delegations
-	IsInternal   bool                `pack:"N,snappy"      json:"is_internal"`                    // bc: internal from contract call
-	HasData      bool                `pack:"w,snappy"      json:"has_data"`                       // internal: flag to signal if data is available
-	Data         string              `pack:"a,snappy"      json:"data"`                           // bc: extra op data
-	Parameters   []byte              `pack:"p,snappy"      json:"parameters"`                     // bc: input params
-	Storage      []byte              `pack:"s,snappy"      json:"storage"`                        // bc: result storage
-	BigMapDiff   []byte              `pack:"B,snappy"      json:"big_map_diff"`                   // bc: result big map diff
-	Errors       string              `pack:"e,snappy"      json:"errors"`                         // bc: result errors
-	TDD          float64             `pack:"x,convert,precision=6,snappy"  json:"days_destroyed"` // stats: token days destroyed
-	BranchId     uint64              `pack:"X,snappy"      json:"branch_id"`                      // bc: branch block the op is based on
-	BranchHeight int64               `pack:"#,snappy"      json:"branch_height"`                  // bc: height of the branch block
-	BranchDepth  int64               `pack:"<,snappy"      json:"branch_depth"`                   // stats: diff between branch block and current block
-	IsImplicit   bool                `pack:"m,snappy"      json:"is_implicit"`                    // bc: implicit operation not published on chain
-	Entrypoint   int                 `pack:"E,snappy"      json:"entrypoint_id"`                  // entrypoint sequence id
-	IsOrphan     bool                `pack:"O,snappy"      json:"is_orphan"`
+	RowId        OpID           `pack:"I,pk,snappy"   json:"row_id"`                         // internal: unique row id
+	Timestamp    time.Time      `pack:"T,snappy"      json:"time"`                           // bc: op block time
+	Height       int64          `pack:"h,snappy"      json:"height"`                         // bc: block height op was mined at
+	Cycle        int64          `pack:"c,snappy"      json:"cycle"`                          // bc: block cycle (tezos specific)
+	Hash         tezos.OpHash   `pack:"H"             json:"hash"`                           // bc: unique op_id (op hash)
+	Counter      int64          `pack:"j,snappy"      json:"counter"`                        // bc: counter
+	OpN          int            `pack:"n,snappy"      json:"op_n"`                           // bc: gobal position in block (block.Operations.([][]*OperationHeader) list position), collapsing batch/internal at the same op_n
+	OpC          int            `pack:"o,snappy"      json:"op_c"`                           // bc: position in OperationHeader.Contents.([]Operation) list
+	OpI          int            `pack:"i,snappy"      json:"op_i"`                           // bc: position in internal operation result list
+	OpL          int            `pack:"L,snappy"      json:"op_l"`                           // bc: operation list (i.e. 0 for endorsements, etc corresponding to validation pass)
+	OpP          int            `pack:"P,snappy"      json:"op_p"`                           // bc: operation list position (use in combination with op_l to lookup op on RPC)
+	Type         tezos.OpType   `pack:"t,snappy"      json:"type"`                           // stats: operation type as defined byprotocol
+	Status       tezos.OpStatus `pack:"?,snappy"      json:"status"`                         // stats: operation status
+	IsSuccess    bool           `pack:"!,snappy"      json:"is_success"`                     // bc: operation succesful flag
+	IsContract   bool           `pack:"C,snappy"      json:"is_contract"`                    // bc: operation succesful flag
+	GasLimit     int64          `pack:"l,snappy"      json:"gas_limit"`                      // stats: gas limit
+	GasUsed      int64          `pack:"G,snappy"      json:"gas_used"`                       // stats: gas used
+	GasPrice     float64        `pack:"g,convert,precision=5,snappy"  json:"gas_price"`      // stats: gas price in tezos per unit gas, relative to tx fee
+	StorageLimit int64          `pack:"Z,snappy"      json:"storage_limit"`                  // stats: storage size limit
+	StorageSize  int64          `pack:"z,snappy"      json:"storage_size"`                   // stats: storage size used/allocated by this op
+	StoragePaid  int64          `pack:"$,snappy"      json:"storage_paid"`                   // stats: extra storage size paid by this op
+	Volume       int64          `pack:"v,snappy"      json:"volume"`                         // stats: sum of transacted tezos volume
+	Fee          int64          `pack:"f,snappy"      json:"fee"`                            // stats: transaction fees
+	Reward       int64          `pack:"r,snappy"      json:"reward"`                         // stats: baking and endorsement rewards
+	Deposit      int64          `pack:"d,snappy"      json:"deposit"`                        // stats: bonded deposits for baking and endorsement
+	Burned       int64          `pack:"b,snappy"      json:"burned"`                         // stats: burned tezos
+	SenderId     AccountID      `pack:"S,snappy"      json:"sender_id"`                      // internal: op sender
+	ReceiverId   AccountID      `pack:"R,snappy"      json:"receiver_id"`                    // internal: op receiver
+	CreatorId    AccountID      `pack:"M,snappy"      json:"creator_id"`                     // internal: op creator for originations
+	DelegateId   AccountID      `pack:"D,snappy"      json:"delegate_id"`                    // internal: op delegate for originations and delegations
+	IsInternal   bool           `pack:"N,snappy"      json:"is_internal"`                    // bc: internal from contract call
+	HasData      bool           `pack:"w,snappy"      json:"has_data"`                       // internal: flag to signal if data is available
+	Data         string         `pack:"a,snappy"      json:"data"`                           // bc: extra op data
+	Parameters   []byte         `pack:"p,snappy"      json:"parameters"`                     // bc: input params
+	Storage      []byte         `pack:"s,snappy"      json:"storage"`                        // bc: result storage
+	BigmapDiff   []byte         `pack:"B,snappy"      json:"big_map_diff"`                   // bc: result big map diff
+	Errors       string         `pack:"e,snappy"      json:"errors"`                         // bc: result errors
+	TDD          float64        `pack:"x,convert,precision=6,snappy"  json:"days_destroyed"` // stats: token days destroyed
+	BranchId     uint64         `pack:"X,snappy"      json:"branch_id"`                      // bc: branch block the op is based on
+	BranchHeight int64          `pack:"#,snappy"      json:"branch_height"`                  // bc: height of the branch block
+	BranchDepth  int64          `pack:"<,snappy"      json:"branch_depth"`                   // stats: diff between branch block and current block
+	IsImplicit   bool           `pack:"m,snappy"      json:"is_implicit"`                    // bc: implicit operation not published on chain
+	Entrypoint   int            `pack:"E,snappy"      json:"entrypoint_id"`                  // entrypoint sequence id
+	IsOrphan     bool           `pack:"O,snappy"      json:"is_orphan"`
+	IsBatch      bool           `pack:"y,snappy"      json:"is_batch"`
+	IsSapling    bool           `pack:"Y,snappy"      json:"is_sapling"`
 }
 
 // Ensure Op implements the pack.Item interface.
@@ -98,7 +100,7 @@ func NewOp(block, branch *Block, head *rpc.OperationHeader, op_n, op_l, op_p, op
 	return o
 }
 
-func NewImplicitOp(block *Block, recv AccountID, typ chain.OpType, op_n, op_l, op_p int) *Op {
+func NewImplicitOp(block *Block, recv AccountID, typ tezos.OpType, op_n, op_l, op_p int) *Op {
 	o := AllocOp()
 	o.RowId = 0
 	o.ReceiverId = recv
@@ -110,9 +112,14 @@ func NewImplicitOp(block *Block, recv AccountID, typ chain.OpType, op_n, op_l, o
 	o.OpP = op_p
 	o.Type = typ
 	o.IsSuccess = true
-	o.Status = chain.OpStatusApplied
+	o.Status = tezos.OpStatusApplied
 	o.IsImplicit = true
 	return o
+}
+
+// be compatible with time series interface
+func (o Op) Time() time.Time {
+	return o.Timestamp
 }
 
 func (o Op) ID() uint64 {
@@ -133,7 +140,7 @@ func (o *Op) Reset() {
 	o.Timestamp = time.Time{}
 	o.Height = 0
 	o.Cycle = 0
-	o.Hash = chain.OperationHash{chain.InvalidHash}
+	o.Hash = tezos.OpHash{tezos.InvalidHash}
 	o.OpN = 0
 	o.OpC = 0
 	o.OpI = 0
@@ -157,14 +164,14 @@ func (o *Op) Reset() {
 	o.Burned = 0
 	o.SenderId = 0
 	o.ReceiverId = 0
-	o.ManagerId = 0
+	o.CreatorId = 0
 	o.DelegateId = 0
 	o.IsInternal = false
 	o.HasData = false
 	o.Data = ""
 	o.Parameters = nil
 	o.Storage = nil
-	o.BigMapDiff = nil
+	o.BigmapDiff = nil
 	o.Errors = ""
 	o.TDD = 0
 	o.BranchId = 0
@@ -173,4 +180,6 @@ func (o *Op) Reset() {
 	o.IsImplicit = false
 	o.Entrypoint = 0
 	o.IsOrphan = false
+	o.IsBatch = false
+	o.IsSapling = false
 }

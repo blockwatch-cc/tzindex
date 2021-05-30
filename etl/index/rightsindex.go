@@ -11,10 +11,10 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
+	"blockwatch.cc/tzgo/rpc"
+	"blockwatch.cc/tzgo/tezos"
 
-	"blockwatch.cc/tzindex/chain"
 	. "blockwatch.cc/tzindex/etl/model"
-	"blockwatch.cc/tzindex/rpc"
 )
 
 var (
@@ -121,7 +121,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 	// load and update rights when seed nonces are published
 	if block.NSeedNonce > 0 {
 		for _, v := range block.Ops {
-			if v.Type != chain.OpTypeSeedNonceRevelation {
+			if v.Type != tezos.OpTypeSeedNonceRevelation {
 				continue
 			}
 			// find and type-cast the seed nonce op
@@ -137,27 +137,11 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 			// seed nonces are injected by the current block's baker, but may originate
 			// from another baker who was required to publish them as message into the
 			// network
-			err := idx.table.Stream(ctx,
-				pack.Query{
-					Name:   "rights.search_seed",
-					Fields: idx.table.Fields(),
-					Conditions: pack.ConditionList{
-						pack.Condition{
-							Field: idx.table.Fields().Find("h"), // from block height
-							Mode:  pack.FilterModeEqual,
-							Value: sop.Level,
-						}, pack.Condition{
-							Field: idx.table.Fields().Find("t"), // type == baking
-							Mode:  pack.FilterModeEqual,
-							Value: int64(chain.RightTypeBaking),
-						},
-						pack.Condition{
-							Field: idx.table.Fields().Find("R"), // seed required
-							Mode:  pack.FilterModeEqual,
-							Value: true,
-						},
-					}},
-				func(r pack.Row) error {
+			err := pack.NewQuery("rights.search_seed", idx.table).
+				AndEqual("height", sop.Level).
+				AndEqual("type", tezos.RightTypeBaking).
+				AndEqual("is_seed_required", true).
+				Stream(ctx, func(r pack.Row) error {
 					right := &Right{}
 					if err := r.Decode(right); err != nil {
 						return err
@@ -174,15 +158,21 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 
 	// update baking and endorsing rights
 	// careful: rights is slice of structs, not pointers
-	rights := builder.Rights(chain.RightTypeBaking)
+	rights := builder.Rights(tezos.RightTypeBaking)
 	for i := range rights {
 		pd := rights[i].Priority - block.Priority
 		if pd > 0 {
 			continue
 		}
-		rights[i].IsLost = pd < 0
-		if pd == 0 {
+		if pd < 0 {
+			rights[i].IsLost = true
+			// find out if baker was underfunded
+			if dlg, ok := builder.AccountById(rights[i].AccountId); ok {
+				rights[i].IsBondMiss = dlg.SpendableBalance < block.Params.BlockSecurityDeposit
+			}
+		} else if pd == 0 {
 			rights[i].IsStolen = block.Priority > 0
+			rights[i].IsUsed = true
 			rights[i].IsSeedRequired = block.Height%block.Params.BlocksPerCommitment == 0
 		}
 		upd = append(upd, &(rights[i]))
@@ -190,20 +180,45 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 
 	// endorsing rights are for parent block
 	if block.Parent != nil {
-		if missed := ^block.Parent.SlotsEndorsed; missed > 0 {
-			// careful: rights is slice of structs, not pointers
-			rights := builder.Rights(chain.RightTypeEndorsing)
-			for i := range rights {
-				if missed&(0x1<<uint(rights[i].Priority)) == 0 {
-					continue
-				}
+		missed := ^block.Parent.SlotsEndorsed
+		// careful: rights is slice of structs, not pointers
+		rights := builder.Rights(tezos.RightTypeEndorsing)
+		for i := range rights {
+			if missed&(0x1<<uint(rights[i].Priority)) == 0 {
+				rights[i].IsUsed = true
+			} else {
 				rights[i].IsMissed = true
-				upd = append(upd, &(rights[i]))
+				// find out if baker was underfunded
+				if dlg, ok := builder.AccountById(rights[i].AccountId); ok {
+					rights[i].IsBondMiss = dlg.SpendableBalance < block.Params.EndorsementSecurityDeposit
+				}
 			}
+			upd = append(upd, &(rights[i]))
 		}
 	}
 	if err := idx.table.Update(ctx, upd); err != nil {
 		return err
+	}
+
+	// at the first reorg-safe block of a new cycle, remove all unused rights from previous cycles
+	isReorgSafe := block.Height == block.Params.CycleStartHeight(block.Cycle)+tezos.MaxBranchDepth
+	if block.Cycle > 0 && isReorgSafe {
+		n, err := pack.NewQuery("rights.clear", idx.table).
+			AndEqual("cycle", block.Cycle-1).
+			AndEqual("is_used", false).
+			AndEqual("is_lost", false).
+			AndEqual("is_stolen", false).
+			AndEqual("is_missed", false).
+			Delete(ctx)
+		if err != nil {
+			return err
+		}
+		log.Debugf("Rights: deleted %d unused rights from cycle %d at block %d [%d]",
+			n, block.Cycle-1, block.Height, block.Cycle)
+		// compact
+		if err := idx.table.Compact(ctx); err != nil {
+			return err
+		}
 	}
 
 	// nothing more to do when no new rights are available
@@ -219,7 +234,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 			return fmt.Errorf("rights: missing baker account %s", v.Address())
 		}
 		ins = append(ins, &Right{
-			Type:      chain.RightTypeBaking,
+			Type:      tezos.RightTypeBaking,
 			Height:    v.Level,
 			Cycle:     block.Params.CycleFromHeight(v.Level),
 			Priority:  v.Priority,
@@ -245,7 +260,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 		}
 		for _, slot := range sort.IntSlice(v.Slots) {
 			erights = append(erights, &Right{
-				Type:      chain.RightTypeEndorsing,
+				Type:      tezos.RightTypeEndorsing,
 				Height:    v.Level,
 				Cycle:     block.Params.CycleFromHeight(v.Level),
 				Priority:  slot,
@@ -261,13 +276,14 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 	return idx.table.Insert(ctx, ins)
 }
 
+// Does not work on rollback of the first cycle block!
 func (idx *RightsIndex) DisconnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
 	// reverse right updates
 	upd := make([]pack.Item, 0, 32+block.Priority+block.NSeedNonce)
 	// load and update rights when seed nonces are published
 	if block.NSeedNonce > 0 {
 		for _, v := range block.Ops {
-			if v.Type != chain.OpTypeSeedNonceRevelation {
+			if v.Type != tezos.OpTypeSeedNonceRevelation {
 				continue
 			}
 			// find and type-cast the seed nonce op
@@ -282,27 +298,11 @@ func (idx *RightsIndex) DisconnectBlock(ctx context.Context, block *Block, build
 			}
 			// seed nonces are injected by the current block's baker!
 			// we assume each baker has only one priority level per block
-			err := idx.table.Stream(ctx,
-				pack.Query{
-					Name:   "rights.search_seed",
-					Fields: idx.table.Fields(),
-					Conditions: pack.ConditionList{
-						pack.Condition{
-							Field: idx.table.Fields().Find("h"), // from block height
-							Mode:  pack.FilterModeEqual,
-							Value: sop.Level,
-						}, pack.Condition{
-							Field: idx.table.Fields().Find("t"), // type == baking
-							Mode:  pack.FilterModeEqual,
-							Value: int64(chain.RightTypeBaking),
-						},
-						pack.Condition{
-							Field: idx.table.Fields().Find("A"), // delegate account
-							Mode:  pack.FilterModeEqual,
-							Value: block.Baker.RowId.Value(),
-						},
-					}},
-				func(r pack.Row) error {
+			err := pack.NewQuery("rights.search_seed", idx.table).
+				AndEqual("height", sop.Level).
+				AndEqual("type", tezos.RightTypeBaking).
+				AndEqual("account_id", block.Baker.RowId).
+				Stream(ctx, func(r pack.Row) error {
 					right := &Right{}
 					if err := r.Decode(right); err != nil {
 						return err
@@ -320,8 +320,9 @@ func (idx *RightsIndex) DisconnectBlock(ctx context.Context, block *Block, build
 	// update baking and endorsing rights
 	if block.Priority > 0 {
 		// careful: rights is slice of structs, not pointers
-		rights := builder.Rights(chain.RightTypeBaking)
+		rights := builder.Rights(tezos.RightTypeBaking)
 		for i := range rights {
+			rights[i].IsUsed = false
 			rights[i].IsLost = false
 			rights[i].IsStolen = false
 			upd = append(upd, &(rights[i]))
@@ -329,8 +330,9 @@ func (idx *RightsIndex) DisconnectBlock(ctx context.Context, block *Block, build
 	}
 	// endorsing rights are for parent block
 	// careful: rights is slice of structs, not pointers
-	rights := builder.Rights(chain.RightTypeEndorsing)
+	rights := builder.Rights(tezos.RightTypeEndorsing)
 	for i := range rights {
+		rights[i].IsUsed = false
 		rights[i].IsMissed = false
 		upd = append(upd, &(rights[i]))
 	}
@@ -340,7 +342,7 @@ func (idx *RightsIndex) DisconnectBlock(ctx context.Context, block *Block, build
 
 	// new rights are fetched in cycles
 	if block.Params.IsCycleStart(block.Height) {
-		return idx.DeleteCycle(ctx, block.Height)
+		return idx.DeleteCycle(ctx, block.Cycle+block.Params.PreservedCycles)
 	}
 	return nil
 }
@@ -350,15 +352,9 @@ func (idx *RightsIndex) DeleteBlock(ctx context.Context, height int64) error {
 }
 
 func (idx *RightsIndex) DeleteCycle(ctx context.Context, cycle int64) error {
-	log.Debugf("Rollback deleting rights for cycle %d", cycle)
-	q := pack.Query{
-		Name: "etl.rights.delete",
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: idx.table.Fields().Find("c"), // cycle (!)
-			Mode:  pack.FilterModeEqual,
-			Value: cycle,
-		}},
-	}
-	_, err := idx.table.Delete(ctx, q)
+	// log.Debugf("Rollback deleting rights for cycle %d", cycle)
+	_, err := pack.NewQuery("etl.rights.delete", idx.table).
+		AndEqual("cycle", cycle).
+		Delete(ctx)
 	return err
 }

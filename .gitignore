@@ -23,3 +23,7 @@ db/
 # OSX specific files
 .DS_Store
 
+tzindex
+!tzindex/
+tzalias
+!tzalias/

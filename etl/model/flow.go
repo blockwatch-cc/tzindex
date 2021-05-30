@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 )
 
 var flowPool = &sync.Pool{
@@ -45,13 +45,13 @@ type Flow struct {
 	Cycle          int64             `pack:"c,snappy"      json:"cycle"`           // bc: block cycle (tezos specific)
 	Timestamp      time.Time         `pack:"T,snappy"      json:"time"`            // bc: block creation time
 	OpId           OpID              `pack:"D,snappy"      json:"op_id"`           // unique row id from op table
-	OpN            int               `pack:"0,snappy"      json:"op_n"`            // bc: position in block (block.Operations.([][]*OperationHeader) list position)
+	OpN            int               `pack:"0,snappy"      json:"op_n"`            // bc: position in block (block.Operations.([][]*OperationHeader) list position), collapsing batch/internal at the same op_n
 	OpL            int               `pack:"L,snappy"      json:"op_l"`            // bc: operation list (i.e. 0 for endorsements, etc corresponding to validation pass)
 	OpP            int               `pack:"P,snappy"      json:"op_p"`            // bc: operation list position (use in combination with op_l to lookup op on RPC)
 	OpC            int               `pack:"1,snappy"      json:"op_c"`            // bc: position in OperationHeader.Contents.([]Operation) list
 	OpI            int               `pack:"2,snappy"      json:"op_i"`            // bc: position in internal operation result list
 	AccountId      AccountID         `pack:"A,snappy"      json:"account_id"`      // unique account id
-	AddressType    chain.AddressType `pack:"t,snappy"      json:"address_type"`    // address type, usable as filter
+	AddressType    tezos.AddressType `pack:"t,snappy"      json:"address_type"`    // address type, usable as filter
 	CounterPartyId AccountID         `pack:"R,snappy"      json:"counterparty_id"` // counter account that initiated the flow
 	Category       FlowCategory      `pack:"C,snappy"      json:"category"`        // sub-account that received the update
 	Operation      FlowType          `pack:"O,snappy"      json:"operation"`       // op type that caused this update
@@ -61,6 +61,8 @@ type Flow struct {
 	IsBurned       bool              `pack:"b,snappy"      json:"is_burned"`       // flag to indicate this out-flow was burned
 	IsFrozen       bool              `pack:"f,snappy"      json:"is_frozen"`       // flag to indicate this in-flow is frozen
 	IsUnfrozen     bool              `pack:"u,snappy"      json:"is_unfrozen"`     // flag to indicate this flow (rewards -> balance) was unfrozen
+	IsShielded     bool              `pack:"y,snappy"      json:"is_shielded"`     // flag to indicate this flow has been sent into a shielded Sapling pool
+	IsUnshielded   bool              `pack:"Y,snappy"      json:"is_unshielded"`   // flag to indicate this flow has been sent out of a shielded Sapling pool
 	TokenGenMin    int64             `pack:"g,snappy"      json:"token_gen_min"`   // hops
 	TokenGenMax    int64             `pack:"G,snappy"      json:"token_gen_max"`   // hops
 	TokenAge       int64             `pack:"a,snappy"      json:"token_age"`       // time since last move in seconds
@@ -75,6 +77,11 @@ func (f *Flow) ID() uint64 {
 
 func (f *Flow) SetID(id uint64) {
 	f.RowId = id
+}
+
+// be compatible with time series interface
+func (f Flow) Time() time.Time {
+	return f.Timestamp
 }
 
 func NewFlow(b *Block, acc *Account, cntr *Account, n, l, p, c, i int) *Flow {
@@ -125,4 +132,6 @@ func (f *Flow) Reset() {
 	f.TokenGenMin = 0
 	f.TokenGenMax = 0
 	f.TokenAge = 0
+	f.IsShielded = false
+	f.IsUnshielded = false
 }

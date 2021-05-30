@@ -25,18 +25,22 @@ func (w Worker) Start() {
 			// register the current worker into the worker queue.
 			w.WorkerPool <- w.JobChannel
 
-			// wait for next job or shutdown
 			select {
 			case req := <-w.JobChannel:
-				select {
 				// check if the context is expired
+				select {
 				case <-req.Context.Done():
 					err := req.Context.Err()
 					req.handleError(err)
 					req.sendResponse()
+					// req.Logf("%s request skipped (%v)", req.RequestID, err)
+
 				default:
+					// req.Logf("%s serving...", req.RequestID)
 					req.serve()
 					req.sendResponse()
+					// req.Logf("%s request served", req.RequestID)
+					// req.Logf("%s worker done.", req.RequestID)
 				}
 				req.done <- nil
 
@@ -90,6 +94,7 @@ func (d *Dispatcher) dispatch() {
 			if workerChannel != nil {
 				workerChannel <- api
 			}
+			// api.Logf("%s dispatched\n", api.RequestID)
 		}
 	}
 }

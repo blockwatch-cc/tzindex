@@ -1,6 +1,14 @@
 // Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
+// Note on voting_period_kind field in block headers:
+//
+// This may be counter intuitive but the value returned by "voting_period_kind"
+// is "what kind of voting operation are accepted at that level". At the last block
+// of a period, if you inject a operation, it will be part of the first block of the
+// next period and therefore must be an operation of the "to come" period and that's
+// what "voting_period_kind" returns.
+
 package index
 
 import (
@@ -12,10 +20,10 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
+	"blockwatch.cc/tzgo/rpc"
+	"blockwatch.cc/tzgo/tezos"
 
-	"blockwatch.cc/tzindex/chain"
 	. "blockwatch.cc/tzindex/etl/model"
-	"blockwatch.cc/tzindex/rpc"
 )
 
 const (
@@ -23,8 +31,8 @@ const (
 )
 
 var (
-	GovPackSizeLog2    = 14 // 16k
-	GovJournalSizeLog2 = 15 // 32k
+	GovPackSizeLog2    = 15 // 32k
+	GovJournalSizeLog2 = 16 // 64k
 	GovCacheSize       = 2
 	GovFillLevel       = 100
 	GovIndexKey        = "gov"
@@ -224,7 +232,7 @@ func (idx *GovIndex) ConnectBlock(ctx context.Context, block *Block, builder Blo
 
 	// open a new election or vote on first block
 	if isPeriodStart {
-		if block.VotingPeriodKind == chain.VotingPeriodProposal {
+		if block.VotingPeriodKind == tezos.VotingPeriodProposal {
 			if err := idx.openElection(ctx, block, builder); err != nil {
 				log.Errorf("Open election at block %d %s: %v", block.Height, block.VotingPeriodKind, err)
 				return err
@@ -239,15 +247,15 @@ func (idx *GovIndex) ConnectBlock(ctx context.Context, block *Block, builder Blo
 	// process proposals (1) or ballots (2, 4)
 	var err error
 	switch block.VotingPeriodKind {
-	case chain.VotingPeriodProposal:
+	case tezos.VotingPeriodProposal:
 		err = idx.processProposals(ctx, block, builder)
-	case chain.VotingPeriodExploration:
+	case tezos.VotingPeriodExploration:
 		err = idx.processBallots(ctx, block, builder)
-	case chain.VotingPeriodCooldown:
+	case tezos.VotingPeriodCooldown:
 		// nothing to do here
-	case chain.VotingPeriodPromotion:
+	case tezos.VotingPeriodPromotion:
 		err = idx.processBallots(ctx, block, builder)
-	case chain.VotingPeriodAdoption:
+	case tezos.VotingPeriodAdoption:
 		// nothing to do here
 	}
 	if err != nil {
@@ -264,7 +272,7 @@ func (idx *GovIndex) ConnectBlock(ctx context.Context, block *Block, builder Blo
 		}
 
 		// on failure or on end, close last election
-		if !success || block.VotingPeriodKind == chain.VotingPeriodProposal {
+		if !success || block.VotingPeriodKind == tezos.VotingPeriodProposal {
 			if err := idx.closeElection(ctx, block, builder); err != nil {
 				log.Errorf("Close election at block %d: %v", block.Height, err)
 				return err
@@ -295,7 +303,7 @@ func (idx *GovIndex) DisconnectBlock(ctx context.Context, block *Block, builder 
 			log.Errorf("Rollback: reopen %s vote at block %d: %v", block.VotingPeriodKind, block.Height, err)
 			return err
 		}
-		if !success || block.VotingPeriodKind == chain.VotingPeriodProposal {
+		if !success || block.VotingPeriodKind == tezos.VotingPeriodProposal {
 			if err := idx.reopenElection(ctx, block, builder); err != nil {
 				log.Errorf("Rollback: reopen election at block %d: %v", block.Height, err)
 				return err
@@ -308,54 +316,34 @@ func (idx *GovIndex) DisconnectBlock(ctx context.Context, block *Block, builder 
 
 func (idx *GovIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// delete ballots by height
-	q := pack.Query{
-		Name: "etl.ballots.delete",
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: idx.ballotTable.Fields().Find("h"), // block height (!)
-			Mode:  pack.FilterModeEqual,
-			Value: height,
-		}},
-	}
-	if _, err := idx.ballotTable.Delete(ctx, q); err != nil {
+	_, err := pack.NewQuery("etl.ballots.delete", idx.ballotTable).
+		AndEqual("height", height).
+		Delete(ctx)
+	if err != nil {
 		return nil
 	}
 
 	// delete proposals by height
-	q = pack.Query{
-		Name: "etl.proposals.delete",
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: idx.proposalTable.Fields().Find("h"), // block height (!)
-			Mode:  pack.FilterModeEqual,
-			Value: height,
-		}},
-	}
-	if _, err := idx.proposalTable.Delete(ctx, q); err != nil {
+	_, err = pack.NewQuery("etl.proposals.delete", idx.proposalTable).
+		AndEqual("height", height).
+		Delete(ctx)
+	if err != nil {
 		return nil
 	}
 
 	// on vote period start, delete vote by start height
-	q = pack.Query{
-		Name: "etl.vote.delete",
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: idx.voteTable.Fields().Find("H"), // start height (!)
-			Mode:  pack.FilterModeEqual,
-			Value: height,
-		}},
-	}
-	if _, err := idx.voteTable.Delete(ctx, q); err != nil {
+	_, err = pack.NewQuery("etl.vote.delete", idx.voteTable).
+		AndEqual("period_start_height", height).
+		Delete(ctx)
+	if err != nil {
 		return nil
 	}
 
 	// on election start, delete election (maybe not because we use row id as counter)
-	q = pack.Query{
-		Name: "etl.election.delete",
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: idx.electionTable.Fields().Find("H"), // start height (!)
-			Mode:  pack.FilterModeEqual,
-			Value: height,
-		}},
-	}
-	if _, err := idx.electionTable.Delete(ctx, q); err != nil {
+	_, err = pack.NewQuery("etl.election.delete", idx.electionTable).
+		AndEqual("start_height", height).
+		Delete(ctx)
+	if err != nil {
 		return nil
 	}
 	return nil
@@ -459,13 +447,13 @@ func (idx *GovIndex) openVote(ctx context.Context, block *Block, builder BlockBu
 	vote.EligibleRolls = cd.Rolls
 	vote.EligibleVoters = cd.RollOwners
 	switch vote.VotingPeriodKind {
-	case chain.VotingPeriodProposal:
+	case tezos.VotingPeriodProposal:
 		// fixed min proposal quorum as defined by protocol
 		vote.QuorumPct = p.MinProposalQuorum
-	case chain.VotingPeriodCooldown, chain.VotingPeriodAdoption:
+	case tezos.VotingPeriodCooldown, tezos.VotingPeriodAdoption:
 		// no quorum
 		vote.QuorumPct = 0
-	case chain.VotingPeriodExploration, chain.VotingPeriodPromotion:
+	case tezos.VotingPeriodExploration, tezos.VotingPeriodPromotion:
 		// from most recent (testing_vote or promotion_vote) period
 		quorumPct, turnoutEma, err := idx.quorumByHeight(ctx, block.Height, p)
 		if err != nil {
@@ -500,7 +488,7 @@ func (idx *GovIndex) closeVote(ctx context.Context, block *Block, builder BlockB
 
 	// determine result
 	switch vote.VotingPeriodKind {
-	case chain.VotingPeriodProposal:
+	case tezos.VotingPeriodProposal:
 		// select the winning proposal if any and update election
 		var isDraw bool
 		if vote.TurnoutRolls > 0 {
@@ -546,12 +534,12 @@ func (idx *GovIndex) closeVote(ctx context.Context, block *Block, builder BlockB
 		vote.IsDraw = isDraw
 		vote.IsFailed = vote.NoProposal || vote.NoQuorum || vote.IsDraw
 
-	case chain.VotingPeriodExploration, chain.VotingPeriodPromotion:
+	case tezos.VotingPeriodExploration, tezos.VotingPeriodPromotion:
 		vote.NoQuorum = vote.TurnoutRolls < vote.QuorumRolls
 		vote.NoMajority = vote.YayRolls < (vote.YayRolls+vote.NayRolls)*8/10
 		vote.IsFailed = vote.NoQuorum || vote.NoMajority
 
-	case chain.VotingPeriodCooldown, chain.VotingPeriodAdoption:
+	case tezos.VotingPeriodCooldown, tezos.VotingPeriodAdoption:
 		// empty, cannot fail
 	}
 
@@ -610,7 +598,7 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *Block, builder
 	// find unknown proposals
 	insProposals := make([]pack.Item, 0)
 	for _, op := range block.Ops {
-		if op.Type != chain.OpTypeProposals {
+		if op.Type != tezos.OpTypeProposals {
 			continue
 		}
 		cop, ok := block.GetRpcOp(op.OpL, op.OpP, op.OpC)
@@ -670,7 +658,7 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *Block, builder
 	// create and store ballots for each proposal
 	insBallots := make([]pack.Item, 0)
 	for _, op := range block.Ops {
-		if op.Type != chain.OpTypeProposals {
+		if op.Type != tezos.OpTypeProposals {
 			continue
 		}
 		cop, ok := block.GetRpcOp(op.OpL, op.OpP, op.OpC)
@@ -707,32 +695,11 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *Block, builder
 			}
 
 			// skip when the same account voted for the same proposal already
-			q := pack.Query{
-				Name:   "etl.count_account_ballots",
-				Fields: idx.ballotTable.Fields(),
-				Conditions: pack.ConditionList{
-					pack.Condition{
-						Field: idx.ballotTable.Fields().Find("S"), // search for source account id
-						Mode:  pack.FilterModeEqual,
-						Value: acc.RowId.Value(),
-					},
-					pack.Condition{
-						Field: idx.ballotTable.Fields().Find("p"), // voting period
-						Mode:  pack.FilterModeEqual,
-						Value: vote.VotingPeriod,
-					},
-					pack.Condition{
-						Field: idx.ballotTable.Fields().Find("P"), // proposal id
-						Mode:  pack.FilterModeEqual,
-						Value: prop.RowId.Value(),
-					},
-				},
-			}
-			var cnt int
-			err := idx.ballotTable.Stream(ctx, q, func(r pack.Row) error {
-				cnt++
-				return nil
-			})
+			cnt, err := pack.NewQuery("etl.count_account_ballots", idx.ballotTable).
+				AndEqual("source_id", acc.RowId).
+				AndEqual("voting_period", vote.VotingPeriod).
+				AndEqual("proposal_id", prop.RowId).
+				Count(ctx)
 			if err != nil {
 				return err
 			} else if cnt > 0 {
@@ -750,7 +717,7 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *Block, builder
 				SourceId:         acc.RowId,
 				OpId:             op.RowId,
 				Rolls:            rolls,
-				Ballot:           chain.BallotVoteYay,
+				Ballot:           tezos.BallotVoteYay,
 			}
 			insBallots = append(insBallots, b)
 
@@ -762,27 +729,10 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *Block, builder
 		}
 
 		// update vote, skip when the same account voted already
-		q := pack.Query{
-			Name:   "etl.count_account_ballots",
-			Fields: idx.ballotTable.Fields(),
-			Conditions: pack.ConditionList{
-				pack.Condition{
-					Field: idx.ballotTable.Fields().Find("S"), // search for source account id
-					Mode:  pack.FilterModeEqual,
-					Value: acc.RowId.Value(),
-				},
-				pack.Condition{
-					Field: idx.ballotTable.Fields().Find("p"), // voting period
-					Mode:  pack.FilterModeEqual,
-					Value: vote.VotingPeriod,
-				},
-			},
-		}
-		var cnt int
-		err = idx.ballotTable.Stream(ctx, q, func(r pack.Row) error {
-			cnt++
-			return nil
-		})
+		cnt, err := pack.NewQuery("etl.count_account_ballots", idx.ballotTable).
+			AndEqual("source_id", acc.RowId).
+			AndEqual("voting_period", vote.VotingPeriod).
+			Count(ctx)
 		if err != nil {
 			return err
 		} else if cnt == 0 {
@@ -833,7 +783,7 @@ func (idx *GovIndex) processBallots(ctx context.Context, block *Block, builder B
 
 	insBallots := make([]pack.Item, 0)
 	for _, op := range block.Ops {
-		if op.Type != chain.OpTypeBallot {
+		if op.Type != tezos.OpTypeBallot {
 			continue
 		}
 		cop, ok := block.GetRpcOp(op.OpL, op.OpP, op.OpC)
@@ -864,13 +814,13 @@ func (idx *GovIndex) processBallots(ctx context.Context, block *Block, builder B
 		vote.TurnoutRolls += rolls
 		vote.TurnoutVoters++
 		switch bop.Ballot {
-		case chain.BallotVoteYay:
+		case tezos.BallotVoteYay:
 			vote.YayRolls += rolls
 			vote.YayVoters++
-		case chain.BallotVoteNay:
+		case tezos.BallotVoteNay:
 			vote.NayRolls += rolls
 			vote.NayVoters++
-		case chain.BallotVotePass:
+		case tezos.BallotVotePass:
 			vote.PassRolls += rolls
 			vote.PassVoters++
 		}
@@ -905,25 +855,14 @@ func (idx *GovIndex) processBallots(ctx context.Context, block *Block, builder B
 	return idx.ballotTable.Insert(ctx, insBallots)
 }
 
-func (idx *GovIndex) electionByHeight(ctx context.Context, height int64, params *chain.Params) (*Election, error) {
-	q := pack.Query{
-		Name:    "find_election",
-		NoCache: true,
-		Limit:   1,
-		Order:   pack.OrderDesc,
-		Fields:  idx.electionTable.Fields(),
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: idx.electionTable.Fields().Find("H"), // start height
-				Mode:  pack.FilterModeLte,                   // first cycle starts at 2!
-				Value: height,
-			},
-		},
-	}
+func (idx *GovIndex) electionByHeight(ctx context.Context, height int64, params *tezos.Params) (*Election, error) {
 	election := &Election{}
-	err := idx.electionTable.Stream(ctx, q, func(r pack.Row) error {
-		return r.Decode(election)
-	})
+	err := pack.NewQuery("find_election", idx.electionTable).
+		WithoutCache().
+		WithLimit(1).
+		WithDesc().
+		AndLte("start_height", height). // start height; first cycle starts at 2!
+		Execute(ctx, election)
 	if err != nil {
 		return nil, err
 	}
@@ -933,25 +872,14 @@ func (idx *GovIndex) electionByHeight(ctx context.Context, height int64, params 
 	return election, nil
 }
 
-func (idx *GovIndex) voteByHeight(ctx context.Context, height int64, params *chain.Params) (*Vote, error) {
-	q := pack.Query{
-		Name:    "find_vote",
-		NoCache: true,
-		Limit:   1,
-		Order:   pack.OrderDesc,
-		Fields:  idx.voteTable.Fields(),
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: idx.voteTable.Fields().Find("H"), // start height
-				Mode:  pack.FilterModeLte,               // first cycle starts at 2!
-				Value: height,
-			},
-		},
-	}
+func (idx *GovIndex) voteByHeight(ctx context.Context, height int64, params *tezos.Params) (*Vote, error) {
 	vote := &Vote{}
-	err := idx.voteTable.Stream(ctx, q, func(r pack.Row) error {
-		return r.Decode(vote)
-	})
+	err := pack.NewQuery("find_vote", idx.voteTable).
+		WithoutCache().
+		WithLimit(1).
+		WithDesc().
+		AndLte("period_start_height", height). // start height; first cycle starts at 2!
+		Execute(ctx, vote)
 	if err != nil {
 		return nil, err
 	}
@@ -961,28 +889,12 @@ func (idx *GovIndex) voteByHeight(ctx context.Context, height int64, params *cha
 	return vote, nil
 }
 
-func (idx *GovIndex) proposalsByElection(ctx context.Context, eid ElectionID) ([]*Proposal, error) {
-	q := pack.Query{
-		Name:    "list_proposals",
-		NoCache: true,
-		Fields:  idx.proposalTable.Fields(),
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: idx.proposalTable.Fields().Find("E"), // election id
-				Mode:  pack.FilterModeEqual,
-				Value: eid.Value(),
-			},
-		},
-	}
-	proposals := make([]*Proposal, 0, 20)
-	err := idx.proposalTable.Stream(ctx, q, func(r pack.Row) error {
-		p := &Proposal{}
-		if err := r.Decode(p); err != nil {
-			return err
-		}
-		proposals = append(proposals, p)
-		return nil
-	})
+func (idx *GovIndex) proposalsByElection(ctx context.Context, id ElectionID) ([]*Proposal, error) {
+	proposals := make([]*Proposal, 0)
+	err := pack.NewQuery("list_proposals", idx.proposalTable).
+		WithoutCache().
+		AndEqual("election_id", id).
+		Execute(ctx, &proposals)
 	if err != nil {
 		return nil, err
 	}
@@ -990,54 +902,21 @@ func (idx *GovIndex) proposalsByElection(ctx context.Context, eid ElectionID) ([
 }
 
 func (idx *GovIndex) ballotsByVote(ctx context.Context, period int64) ([]*Ballot, error) {
-	q := pack.Query{
-		Name:    "list_ballots",
-		NoCache: true,
-		Fields:  idx.ballotTable.Fields(),
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: idx.ballotTable.Fields().Find("p"), // voting period
-				Mode:  pack.FilterModeEqual,
-				Value: period,
-			},
-		},
-	}
 	ballots := make([]*Ballot, 0)
-	err := idx.ballotTable.Stream(ctx, q, func(r pack.Row) error {
-		b := &Ballot{}
-		if err := r.Decode(b); err != nil {
-			return err
-		}
-		ballots = append(ballots, b)
-		return nil
-	})
+	err := pack.NewQuery("list_ballots", idx.ballotTable).
+		WithoutCache().
+		AndEqual("voting_period", period).
+		Execute(ctx, &ballots)
 	if err != nil {
 		return nil, err
 	}
 	return ballots, nil
 }
 
-func (idx *GovIndex) rollsByHeight(ctx context.Context, aid AccountID, height int64, builder BlockBuilder, params *chain.Params) (int64, error) {
+func (idx *GovIndex) rollsByHeight(ctx context.Context, aid AccountID, height int64, builder BlockBuilder, params *tezos.Params) (int64, error) {
 	table, err := builder.Table(SnapshotTableKey)
 	if err != nil {
 		return 0, err
-	}
-	q := pack.Query{
-		Name:    "find_rolls",
-		NoCache: true,
-		Fields:  table.Fields().Select("B", "D"),
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: table.Fields().Find("h"), // height
-				Mode:  pack.FilterModeEqual,
-				Value: height,
-			},
-			pack.Condition{
-				Field: table.Fields().Find("a"), // account id
-				Mode:  pack.FilterModeEqual,
-				Value: aid.Value(),
-			},
-		},
 	}
 	type XSnapshot struct {
 		Balance   int64 `pack:"B"`
@@ -1045,10 +924,15 @@ func (idx *GovIndex) rollsByHeight(ctx context.Context, aid AccountID, height in
 	}
 	var count int
 	xs := &XSnapshot{}
-	err = table.Stream(ctx, q, func(r pack.Row) error {
-		count++
-		return r.Decode(xs)
-	})
+	err = pack.NewQuery("gov_find_rolls", table).
+		WithoutCache().
+		WithFields("B", "D").
+		AndEqual("height", height).
+		AndEqual("account_id", aid).
+		Stream(ctx, func(r pack.Row) error {
+			count++
+			return r.Decode(xs)
+		})
 	if err != nil {
 		return 0, err
 	}
@@ -1062,41 +946,21 @@ func (idx *GovIndex) rollsByHeight(ctx context.Context, aid AccountID, height in
 	if err != nil {
 		return 0, err
 	}
-	q = pack.Query{
-		Name:    "gov_find_unfreeze",
-		NoCache: true,
-		Fields:  table.Fields().Select("o"),
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: table.Fields().Find("h"), // height
-				Mode:  pack.FilterModeEqual,
-				Value: height,
-			},
-			pack.Condition{
-				Field: table.Fields().Find("A"), // account id
-				Mode:  pack.FilterModeEqual,
-				Value: aid.Value(),
-			},
-			pack.Condition{
-				Field: table.Fields().Find("C"), // category
-				Mode:  pack.FilterModeEqual,
-				Value: FlowCategoryRewards,
-			},
-			pack.Condition{
-				Field: table.Fields().Find("O"), // operation
-				Mode:  pack.FilterModeEqual,
-				Value: FlowTypeInternal,
-			},
-		},
-	}
 	type XFlow struct {
 		AmountOut int64 `pack:"o"`
 	}
 	xf := &XFlow{}
-	err = table.Stream(ctx, q, func(r pack.Row) error {
-		count++
-		return r.Decode(xf)
-	})
+	err = pack.NewQuery("gov_find_unfreeze", table).
+		WithoutCache().
+		WithFields("o").
+		AndEqual("height", height).
+		AndEqual("account_id", aid).
+		AndEqual("category", FlowCategoryRewards).
+		AndEqual("operation", FlowTypeInternal).
+		Stream(ctx, func(r pack.Row) error {
+			count++
+			return r.Decode(xf)
+		})
 	if count != 2 {
 		log.Debugf("govindex: no unfreeze flow for account %d at height %d (expected for new bakers)", aid, height)
 	}
@@ -1114,36 +978,27 @@ func (idx *GovIndex) rollsByHeight(ctx context.Context, aid AccountID, height in
 
 // quorums adjust at the end of each exploration & promotion voting period
 // starting in v005 the algorithm changes to track participation as EMA (80/20)
-func (idx *GovIndex) quorumByHeight(ctx context.Context, height int64, params *chain.Params) (int64, int64, error) {
+func (idx *GovIndex) quorumByHeight(ctx context.Context, height int64, params *tezos.Params) (int64, int64, error) {
 	// find most recent exploration or promotion period
-	q := pack.Query{
-		Name:    "find_quorum_vote",
-		NoCache: true,
-		Order:   pack.OrderDesc,
-		Fields:  idx.voteTable.Fields(),
-		Conditions: pack.ConditionList{
-			pack.Condition{
-				Field: idx.voteTable.Fields().Find("H"), // start height
-				Mode:  pack.FilterModeLt,
-				Value: height,
-			},
-		},
-	}
 	var lastQuorum, lastTurnout, lastTurnoutEma, nextQuorum, nextEma int64
 	vote := &Vote{}
-	err := idx.voteTable.Stream(ctx, q, func(r pack.Row) error {
-		if err := r.Decode(vote); err != nil {
-			return err
-		}
-		switch vote.VotingPeriodKind {
-		case chain.VotingPeriodExploration, chain.VotingPeriodPromotion:
-			lastQuorum = vote.QuorumPct
-			lastTurnout = vote.TurnoutPct
-			lastTurnoutEma = vote.TurnoutEma
-			return io.EOF
-		}
-		return nil
-	})
+	err := pack.NewQuery("find_quorum_vote", idx.voteTable).
+		WithoutCache().
+		WithDesc().
+		AndLt("period_start_height", height).
+		Stream(ctx, func(r pack.Row) error {
+			if err := r.Decode(vote); err != nil {
+				return err
+			}
+			switch vote.VotingPeriodKind {
+			case tezos.VotingPeriodExploration, tezos.VotingPeriodPromotion:
+				lastQuorum = vote.QuorumPct
+				lastTurnout = vote.TurnoutPct
+				lastTurnoutEma = vote.TurnoutEma
+				return io.EOF
+			}
+			return nil
+		})
 	if err != io.EOF {
 		if err != nil {
 			return 0, 0, err

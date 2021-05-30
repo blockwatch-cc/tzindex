@@ -16,7 +16,7 @@ import (
 	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 )
@@ -47,9 +47,9 @@ func init() {
 // configurable marshalling helper
 type Election struct {
 	model.Election
-	verbose bool            `csv:"-" pack:"-"` // cond. marshal
-	columns util.StringList `csv:"-" pack:"-"` // cond. cols & order when brief
-	ctx     *ApiContext     `csv:"-" pack:"-"`
+	verbose bool            // cond. marshal
+	columns util.StringList // cond. cols & order when brief
+	ctx     *ApiContext
 }
 
 func (e *Election) MarshalJSON() ([]byte, error) {
@@ -67,7 +67,7 @@ func (e *Election) MarshalJSONVerbose() ([]byte, error) {
 		Proposal         string `json:"proposal"`
 		NumPeriods       int    `json:"num_periods"`
 		NumProposals     int    `json:"num_proposals"`
-		VotingPeriod     int64  `json:"voting_perid"`
+		VotingPeriod     int64  `json:"voting_period"`
 		StartTime        int64  `json:"start_time"`
 		EndTime          int64  `json:"end_time"`
 		StartHeight      int64  `json:"start_height"`
@@ -96,7 +96,7 @@ func (e *Election) MarshalJSONVerbose() ([]byte, error) {
 		NoQuorum:         e.NoQuorum,
 		NoMajority:       e.NoMajority,
 		NoProposal:       e.NumProposals == 0,
-		VotingPeriodKind: chain.ToVotingPeriod(e.NumPeriods).String(),
+		VotingPeriodKind: tezos.ToVotingPeriod(e.NumPeriods).String(),
 	}
 	if e.IsOpen {
 		p := e.ctx.Params
@@ -125,7 +125,7 @@ func (e *Election) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, int64(e.NumPeriods), 10)
 		case "num_proposals":
 			buf = strconv.AppendInt(buf, int64(e.NumProposals), 10)
-		case "voting_perid":
+		case "voting_period":
 			buf = strconv.AppendInt(buf, e.VotingPeriod, 10)
 		case "start_time":
 			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(e.StartTime), 10)
@@ -183,7 +183,7 @@ func (e *Election) MarshalJSONBrief() ([]byte, error) {
 				buf = append(buf, '0')
 			}
 		case "last_voting_period":
-			buf = strconv.AppendQuote(buf, chain.ToVotingPeriod(e.NumPeriods).String())
+			buf = strconv.AppendQuote(buf, tezos.ToVotingPeriod(e.NumPeriods).String())
 		default:
 			continue
 		}
@@ -211,7 +211,7 @@ func (e *Election) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(int64(e.NumPeriods), 10)
 		case "num_proposals":
 			res[i] = strconv.FormatInt(int64(e.NumProposals), 10)
-		case "voting_perid":
+		case "voting_period":
 			res[i] = strconv.FormatInt(e.VotingPeriod, 10)
 		case "start_time":
 			res[i] = strconv.Quote(e.StartTime.Format(time.RFC3339))
@@ -245,7 +245,7 @@ func (e *Election) MarshalCSV() ([]string, error) {
 		case "no_proposal":
 			res[i] = strconv.FormatBool(e.NumProposals == 0)
 		case "last_voting_period":
-			res[i] = strconv.Quote(chain.ToVotingPeriod(e.NumPeriods).String())
+			res[i] = strconv.Quote(tezos.ToVotingPeriod(e.NumPeriods).String())
 		default:
 			continue
 		}
@@ -270,6 +270,10 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			if !ok {
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("unknown column '%s'", v), nil))
 			}
+			switch v {
+			case "end_height", "end_time": // need start_height when open
+				srcNames = append(srcNames, "H") // start height
+			}
 			if n != "-" {
 				srcNames = append(srcNames, n)
 			}
@@ -282,11 +286,10 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 
 	// build table query
 	q := pack.Query{
-		Name:       ctx.RequestID,
-		Fields:     table.Fields().Select(srcNames...),
-		Limit:      int(args.Limit),
-		Conditions: make(pack.ConditionList, 0),
-		Order:      args.Order,
+		Name:   ctx.RequestID,
+		Fields: table.Fields().Select(srcNames...),
+		Limit:  int(args.Limit),
+		Order:  args.Order,
 	}
 
 	// build dynamic filter conditions from query (will panic on error)
@@ -301,7 +304,7 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			}
 		}
 		switch prefix {
-		case "columns", "limit", "order", "verbose":
+		case "columns", "limit", "order", "verbose", "filename":
 			// skip these fields
 		case "cursor":
 			// add row id condition: id > cursor (new cursor == last row id)
@@ -313,7 +316,7 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
+			q.Conditions.AddAndCondition(&pack.Condition{
 				Field: table.Fields().Pk(),
 				Mode:  cursorMode,
 				Value: id,
@@ -328,15 +331,15 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty hash matches id 0 (== missing proposal)
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find("P"), // proposal id
 						Mode:  mode,
-						Value: uint64(0),
+						Value: 0,
 						Raw:   val[0], // debugging aid
 					})
 				} else {
 					// single-proposal lookup and compile condition
-					h, err := chain.ParseProtocolHash(val[0])
+					h, err := tezos.ParseProtocolHash(val[0])
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", val[0]), err))
 					}
@@ -346,7 +349,7 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 					}
 					// Note: when not found we insert an always false condition
 					if prop == nil || prop.RowId == 0 {
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find("P"), // proposal id
 							Mode:  mode,
 							Value: uint64(math.MaxUint64),
@@ -354,10 +357,10 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 						})
 					} else {
 						// add proto id as extra condition
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find("P"), // proposal id
 							Mode:  mode,
-							Value: prop.RowId.Value(),
+							Value: prop.RowId,
 							Raw:   val[0], // debugging aid
 						})
 					}
@@ -366,7 +369,7 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				// multi-proposal lookup and compile condition
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					h, err := chain.ParseProtocolHash(v)
+					h, err := tezos.ParseProtocolHash(v)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", v), err))
 					}
@@ -383,7 +386,7 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				}
 				// Note: when list is empty (no proposal was found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("P"), // proposal id
 					Mode:  mode,
 					Value: ids,
@@ -394,14 +397,14 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			}
 		case "last_voting_period":
 			// parse only the first value
-			period := chain.ParseVotingPeriod(val[0])
+			period := tezos.ParseVotingPeriod(val[0])
 			if !period.IsValid() {
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid voting period '%s'", val[0]), nil))
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
+			q.Conditions.AddAndCondition(&pack.Condition{
 				Field: table.Fields().Find("n"), // num periods
 				Mode:  mode,
-				Value: int64(period.Num()),
+				Value: period.Num(),
 				Raw:   val[0], // debugging aid
 			})
 		default:
@@ -418,7 +421,7 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions = append(q.Conditions, cond)
+					q.Conditions.AddAndCondition(&cond)
 				}
 			}
 		}
@@ -429,11 +432,11 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 		lastId uint64
 	)
 
-	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
-	defer func() {
-		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	}()
+	// start := time.Now()
+	// ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
+	// defer func() {
+	// 	ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
+	// }()
 
 	// prepare return type marshalling
 	election := &Election{
@@ -486,7 +489,7 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 
 		// close JSON bracket
 		io.WriteString(ctx.ResponseWriter, "]")
-		ctx.Log.Tracef("JSON encoded %d rows", count)
+		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":
 		enc := csv.NewEncoder(ctx.ResponseWriter)
@@ -511,7 +514,7 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				return nil
 			})
 		}
-		ctx.Log.Tracef("CSV Encoded %d rows", count)
+		// ctx.Log.Tracef("CSV Encoded %d rows", count)
 	}
 
 	// without new records, cursor remains the same as input (may be empty)

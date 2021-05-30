@@ -7,41 +7,42 @@ import (
 	"time"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 )
 
+// Note: removed circulating supply in v9.1 in favour of liquid since
+// TF vesting time is over
 type Supply struct {
-	RowId               uint64    `pack:"I,pk,snappy" json:"row_id"`             // unique id
-	Height              int64     `pack:"h,snappy"    json:"height"`             // bc: block height (also for orphans)
-	Cycle               int64     `pack:"c,snappy"    json:"cycle"`              // bc: block cycle (tezos specific)
-	Timestamp           time.Time `pack:"T,snappy"    json:"time"`               // bc: block creation time
-	Total               int64     `pack:"t,snappy"    json:"total"`              // total available supply (including unclaimed)
-	Activated           int64     `pack:"A,snappy"    json:"activated"`          // activated fundraiser supply
-	Unclaimed           int64     `pack:"U,snappy"    json:"unclaimed"`          // all non-activated fundraiser supply
-	Vested              int64     `pack:"V,snappy"    json:"vested"`             // foundation vested supply
-	Unvested            int64     `pack:"N,snappy"    json:"unvested"`           // remaining unvested supply
-	Circulating         int64     `pack:"C,snappy"    json:"circulating"`        // able to move next block floating (total - unvested)
-	Delegated           int64     `pack:"E,snappy"    json:"delegated"`          // all delegated balances
-	Staking             int64     `pack:"D,snappy"    json:"staking"`            // all delegated + delegate's own balances
-	ActiveDelegated     int64     `pack:"G,snappy"    json:"active_delegated"`   // delegated  balances to active delegates
-	ActiveStaking       int64     `pack:"J,snappy"    json:"active_staking"`     // delegated + delegate's own balances for active delegates
-	InactiveDelegated   int64     `pack:"g,snappy"    json:"inactive_delegated"` // delegated  balances to inactive delegates
-	InactiveStaking     int64     `pack:"j,snappy"    json:"inactive_staking"`   // delegated + delegate's own balances for inactive delegates
-	Minted              int64     `pack:"M,snappy"    json:"minted"`
-	MintedBaking        int64     `pack:"b,snappy"    json:"minted_baking"`
-	MintedEndorsing     int64     `pack:"e,snappy"    json:"minted_endorsing"`
-	MintedSeeding       int64     `pack:"s,snappy"    json:"minted_seeding"`
-	MintedAirdrop       int64     `pack:"a,snappy"    json:"minted_airdrop"`
-	Burned              int64     `pack:"B,snappy"    json:"burned"`
-	BurnedDoubleBaking  int64     `pack:"1,snappy"    json:"burned_double_baking"`
-	BurnedDoubleEndorse int64     `pack:"2,snappy"    json:"burned_double_endorse"`
-	BurnedOrigination   int64     `pack:"3,snappy"    json:"burned_origination"`
-	BurnedImplicit      int64     `pack:"4,snappy"    json:"burned_implicit"`
-	BurnedSeedMiss      int64     `pack:"5,snappy"    json:"burned_seed_miss"`
-	Frozen              int64     `pack:"F,snappy"    json:"frozen"`
-	FrozenDeposits      int64     `pack:"d,snappy"    json:"frozen_deposits"`
-	FrozenRewards       int64     `pack:"r,snappy"    json:"frozen_rewards"`
-	FrozenFees          int64     `pack:"f,snappy"    json:"frozen_fees"`
+	RowId               uint64    `pack:"I,pk,snappy"  json:"row_id"`             // unique id
+	Height              int64     `pack:"h,snappy"     json:"height"`             // bc: block height (also for orphans)
+	Cycle               int64     `pack:"c,snappy"     json:"cycle"`              // bc: block cycle (tezos specific)
+	Timestamp           time.Time `pack:"T,snappy"     json:"time"`               // bc: block creation time
+	Total               int64     `pack:"t,snappy"     json:"total"`              // total available supply (including unclaimed)
+	Activated           int64     `pack:"A,snappy"     json:"activated"`          // activated fundraiser supply
+	Unclaimed           int64     `pack:"U,snappy"     json:"unclaimed"`          // all non-activated fundraiser supply
+	Liquid              int64     `pack:"L,snappy"     json:"liquid"`             // able to move next block floating (total - frozen - unclaimed)
+	Delegated           int64     `pack:"E,snappy"     json:"delegated"`          // all delegated balances
+	Staking             int64     `pack:"D,snappy"     json:"staking"`            // all delegated + delegate's own balances
+	Shielded            int64     `pack:"S,snappy"     json:"shielded"`           // Sapling shielded supply
+	ActiveDelegated     int64     `pack:"G,snappy"     json:"active_delegated"`   // delegated  balances to active delegates
+	ActiveStaking       int64     `pack:"J,snappy"     json:"active_staking"`     // delegated + delegate's own balances for active delegates
+	InactiveDelegated   int64     `pack:"g,snappy"     json:"inactive_delegated"` // delegated  balances to inactive delegates
+	InactiveStaking     int64     `pack:"j,snappy"     json:"inactive_staking"`   // delegated + delegate's own balances for inactive delegates
+	Minted              int64     `pack:"M,snappy"     json:"minted"`
+	MintedBaking        int64     `pack:"b,snappy"     json:"minted_baking"`
+	MintedEndorsing     int64     `pack:"e,snappy"     json:"minted_endorsing"`
+	MintedSeeding       int64     `pack:"s,snappy"     json:"minted_seeding"`
+	MintedAirdrop       int64     `pack:"a,snappy"     json:"minted_airdrop"`
+	Burned              int64     `pack:"B,snappy"     json:"burned"`
+	BurnedDoubleBaking  int64     `pack:"1,snappy"     json:"burned_double_baking"`
+	BurnedDoubleEndorse int64     `pack:"2,snappy"     json:"burned_double_endorse"`
+	BurnedOrigination   int64     `pack:"3,snappy"     json:"burned_origination"`
+	BurnedImplicit      int64     `pack:"4,snappy"     json:"burned_implicit"`
+	BurnedSeedMiss      int64     `pack:"5,snappy"     json:"burned_seed_miss"`
+	Frozen              int64     `pack:"F,snappy"     json:"frozen"`
+	FrozenDeposits      int64     `pack:"d,snappy"     json:"frozen_deposits"`
+	FrozenRewards       int64     `pack:"r,snappy"     json:"frozen_rewards"`
+	FrozenFees          int64     `pack:"f,snappy"     json:"frozen_fees"`
 }
 
 // Ensure Supply implements the pack.Item interface.
@@ -53,6 +54,11 @@ func (s *Supply) ID() uint64 {
 
 func (s *Supply) SetID(id uint64) {
 	s.RowId = id
+}
+
+// be compatible with time series interface
+func (s Supply) Time() time.Time {
+	return s.Timestamp
 }
 
 func (s *Supply) Update(b *Block, delegates map[AccountID]*Account) {
@@ -71,15 +77,12 @@ func (s *Supply) Update(b *Block, delegates map[AccountID]*Account) {
 	// overall burn this block
 	s.Burned += b.BurnedSupply
 
-	// activated/unclaimed, vested/unvested, invoice/airdrop from flows
+	// activated/unclaimed, invoice/airdrop from flows
 	for _, f := range b.Flows {
 		switch f.Operation {
 		case FlowTypeActivation:
 			s.Activated += f.AmountIn
 			s.Unclaimed -= f.AmountIn
-		case FlowTypeVest:
-			s.Vested += f.AmountIn
-			s.Unvested -= f.AmountIn
 		case FlowTypeNonceRevelation:
 			// adjust frozen bucket types to reflect seed burn; note that
 			// block.BurnedSupply already contains the sum of all seed burns, so don't
@@ -110,35 +113,43 @@ func (s *Supply) Update(b *Block, delegates map[AccountID]*Account) {
 			case FlowCategoryFees:
 				s.FrozenFees -= f.AmountOut // offender lost fees
 			}
+		case FlowTypeTransaction:
+			// count total Sapling shielded supply across all pools
+			if f.IsShielded {
+				s.Shielded += f.AmountIn
+			}
+			if f.IsUnshielded {
+				s.Shielded -= f.AmountOut
+			}
 		}
 	}
 
 	// use ops to update non-baking deposits/rewards and individual burn details
 	for _, op := range b.Ops {
 		switch op.Type {
-		case chain.OpTypeSeedNonceRevelation:
+		case tezos.OpTypeSeedNonceRevelation:
 			s.MintedSeeding += op.Reward
 			s.Total += op.Reward
 			s.Minted += op.Reward
 			s.FrozenRewards += op.Reward
 
-		case chain.OpTypeEndorsement:
+		case tezos.OpTypeEndorsement:
 			s.MintedEndorsing += op.Reward
 			s.Total += op.Reward
 			s.Minted += op.Reward
 			s.FrozenDeposits += op.Deposit
 			s.FrozenRewards += op.Reward
 
-		case chain.OpTypeDoubleBakingEvidence:
+		case tezos.OpTypeDoubleBakingEvidence:
 			s.BurnedDoubleBaking += op.Burned
 
-		case chain.OpTypeDoubleEndorsementEvidence:
+		case tezos.OpTypeDoubleEndorsementEvidence:
 			s.BurnedDoubleEndorse += op.Burned
 
-		case chain.OpTypeOrigination:
+		case tezos.OpTypeOrigination:
 			s.BurnedOrigination += op.Burned
 
-		case chain.OpTypeTransaction:
+		case tezos.OpTypeTransaction:
 			s.BurnedImplicit += op.Burned
 			// TODO: storage burn
 		}
@@ -170,9 +181,11 @@ func (s *Supply) Update(b *Block, delegates map[AccountID]*Account) {
 	// we can calculate total baking rewards as difference to total rewards
 	s.MintedBaking = s.Minted - s.MintedSeeding - s.MintedEndorsing - s.MintedAirdrop
 
-	// unanimous consent that unclaimed can move at next block and frozen is
-	// generally considered as part of circulating
-	s.Circulating = s.Total - s.Unvested
+	// unanimous consent is that unclaimed can move next block and frozen is
+	// generally considered as part of circulating supply; however to have a
+	// metric on how much is economically available for sale, we only report
+	// liquid and no longer circulating
+	s.Liquid = s.Total - s.Frozen - s.Unclaimed
 }
 
 func (s *Supply) Rollback(b *Block) {

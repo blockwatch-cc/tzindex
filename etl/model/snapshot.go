@@ -16,21 +16,21 @@ var snapshotPool = &sync.Pool{
 
 // Snapshot is an account balance snapshot made at a snapshot block.
 type Snapshot struct {
-	RowId        uint64    `pack:"I,pk,snappy" json:"row_id"`
-	Height       int64     `pack:"h,snappy"    json:"height"`
-	Cycle        int64     `pack:"c,snappy"    json:"cycle"`
-	IsSelected   bool      `pack:"s,snappy"    json:"is_selected"`
-	Timestamp    time.Time `pack:"T,snappy"    json:"time"`
-	Index        int64     `pack:"i,snappy"    json:"index"`
-	Rolls        int64     `pack:"r,snappy"    json:"rolls"`
-	AccountId    AccountID `pack:"a,snappy"    json:"account_id"`
-	DelegateId   AccountID `pack:"d,snappy"    json:"delegate_id"`
-	IsDelegate   bool      `pack:"?,snappy"    json:"is_delegate"`
-	IsActive     bool      `pack:"v,snappy"    json:"is_active"`
-	Balance      int64     `pack:"B,snappy"    json:"balance"`
-	Delegated    int64     `pack:"D,snappy"    json:"delegated"`
-	NDelegations int64     `pack:"n,snappy"    json:"n_delegations"`
-	Since        int64     `pack:"S,snappy"    json:"since"`
+	RowId        uint64    `pack:"I,pk,snappy"     json:"row_id"`
+	Height       int64     `pack:"h,snappy"        json:"height"`
+	Cycle        int64     `pack:"c,snappy"        json:"cycle"`
+	IsSelected   bool      `pack:"s,snappy"        json:"is_selected"`
+	Timestamp    time.Time `pack:"T,snappy"        json:"time"`
+	Index        int64     `pack:"i,snappy"        json:"index"`
+	Rolls        int64     `pack:"r,snappy"        json:"rolls"`
+	AccountId    AccountID `pack:"a,snappy"        json:"account_id"`
+	DelegateId   AccountID `pack:"d,snappy"        json:"delegate_id"`
+	IsDelegate   bool      `pack:"?,snappy"        json:"is_delegate"`
+	IsActive     bool      `pack:"v,snappy"        json:"is_active"`
+	Balance      int64     `pack:"B,snappy"        json:"balance"`
+	Delegated    int64     `pack:"D,snappy"        json:"delegated"`
+	NDelegations int64     `pack:"n,snappy"        json:"n_delegations"`
+	Since        int64     `pack:"S,snappy"        json:"since"`
 }
 
 // Ensure Snapshot implements the pack.Item interface.

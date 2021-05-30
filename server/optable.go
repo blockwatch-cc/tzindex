@@ -17,8 +17,7 @@ import (
 	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/packdb/vec"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 )
@@ -40,24 +39,25 @@ func init() {
 	opSourceNames = fields.NameMapReverse()
 	opAllAliases = fields.Aliases()
 
-	// add extra transalations for accounts
+	// add extra translations for related accounts
 	opSourceNames["sender"] = "S"
 	opSourceNames["receiver"] = "R"
-	opSourceNames["manager"] = "M"
+	opSourceNames["creator"] = "M"
 	opSourceNames["delegate"] = "D"
+	opSourceNames["branch_id"] = "-"
 	opAllAliases = append(opAllAliases, "sender")
 	opAllAliases = append(opAllAliases, "receiver")
-	opAllAliases = append(opAllAliases, "manager")
+	opAllAliases = append(opAllAliases, "creator")
 	opAllAliases = append(opAllAliases, "delegate")
 }
 
 // configurable marshalling helper
 type Op struct {
 	model.Op
-	verbose bool                              `csv:"-" pack:"-"` // cond. marshal
-	columns util.StringList                   `csv:"-" pack:"-"` // cond. cols & order when brief
-	params  *chain.Params                     `csv:"-" pack:"-"` // blockchain amount conversion
-	addrs   map[model.AccountID]chain.Address `csv:"-" pack:"-"` // address map
+	verbose bool            // cond. marshal
+	columns util.StringList // cond. cols & order when brief
+	params  *tezos.Params   // blockchain amount conversion
+	ctx     *ApiContext
 }
 
 func (o *Op) MarshalJSON() ([]byte, error) {
@@ -98,8 +98,8 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		Sender       string          `json:"sender"`
 		ReceiverId   uint64          `json:"receiver_id"`
 		Receiver     string          `json:"receiver"`
-		ManagerId    uint64          `json:"manager_id"`
-		Manager      string          `json:"manager"`
+		CreatorId    uint64          `json:"creator_id"`
+		Creator      string          `json:"creator"`
 		DelegateId   uint64          `json:"delegate_id"`
 		Delegate     string          `json:"delegate"`
 		IsSuccess    bool            `json:"is_success"`
@@ -109,15 +109,17 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		Data         string          `json:"data,omitempty"`
 		Parameters   string          `json:"parameters,omitempty"`
 		Storage      string          `json:"storage,omitempty"`
-		BigMapDiff   string          `json:"big_map_diff,omitempty"`
+		BigmapDiff   string          `json:"big_map_diff,omitempty"`
 		Errors       json.RawMessage `json:"errors,omitempty"`
 		TDD          float64         `json:"days_destroyed"`
-		BranchId     uint64          `json:"branch_id"`
+		BranchHash   string          `json:"branch_hash"`
 		BranchHeight int64           `json:"branch_height"`
 		BranchDepth  int64           `json:"branch_depth"`
 		IsImplicit   bool            `json:"is_implicit"`
 		Entrypoint   int             `json:"entrypoint_id"`
 		IsOrphan     bool            `json:"is_orphan"`
+		IsBatch      bool            `json:"is_batch"`
+		IsSapling    bool            `json:"is_sapling"`
 	}{
 		RowId:        o.RowId.Value(),
 		Timestamp:    util.UnixMilliNonZero(o.Timestamp),
@@ -143,13 +145,13 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		Deposit:      o.params.ConvertValue(o.Deposit),
 		Burned:       o.params.ConvertValue(o.Burned),
 		SenderId:     o.SenderId.Value(),
-		Sender:       o.addrs[o.SenderId].String(),
+		Sender:       o.ctx.Indexer.LookupAddress(o.ctx, o.SenderId).String(),
 		ReceiverId:   o.ReceiverId.Value(),
-		Receiver:     o.addrs[o.ReceiverId].String(),
-		ManagerId:    o.ManagerId.Value(),
-		Manager:      o.addrs[o.ManagerId].String(),
+		Receiver:     o.ctx.Indexer.LookupAddress(o.ctx, o.ReceiverId).String(),
+		CreatorId:    o.CreatorId.Value(),
+		Creator:      o.ctx.Indexer.LookupAddress(o.ctx, o.CreatorId).String(),
 		DelegateId:   o.DelegateId.Value(),
-		Delegate:     o.addrs[o.DelegateId].String(),
+		Delegate:     o.ctx.Indexer.LookupAddress(o.ctx, o.DelegateId).String(),
 		IsSuccess:    o.IsSuccess,
 		IsContract:   o.IsContract,
 		IsInternal:   o.IsInternal,
@@ -157,18 +159,24 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		Data:         o.Data,
 		Parameters:   "",
 		Storage:      "",
-		BigMapDiff:   "",
+		BigmapDiff:   "",
 		Errors:       nil,
 		TDD:          o.TDD,
-		BranchId:     o.BranchId,
 		BranchHeight: o.BranchHeight,
 		BranchDepth:  o.BranchDepth,
 		IsImplicit:   o.IsImplicit,
 		Entrypoint:   o.Entrypoint,
 		IsOrphan:     o.IsOrphan,
+		IsBatch:      o.IsBatch,
+		IsSapling:    o.IsSapling,
 	}
 
-	if !o.Hash.IsEqual(chain.ZeroOpHash) {
+	if o.BranchId != 0 {
+		if h, err := o.ctx.Indexer.BlockHashById(o.ctx.Context, o.BranchId); err == nil {
+			op.BranchHash = h.String()
+		}
+	}
+	if !o.Hash.Equal(tezos.ZeroOpHash) {
 		op.Hash = o.Hash.String()
 	}
 	if len(o.Parameters) > 0 {
@@ -177,8 +185,8 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 	if len(o.Storage) > 0 {
 		op.Storage = hex.EncodeToString(o.Storage)
 	}
-	if len(o.BigMapDiff) > 0 {
-		op.BigMapDiff = hex.EncodeToString(o.BigMapDiff)
+	if len(o.BigmapDiff) > 0 {
+		op.BigmapDiff = hex.EncodeToString(o.BigmapDiff)
 	}
 	if o.Errors != "" {
 		op.Errors = json.RawMessage(o.Errors)
@@ -202,7 +210,7 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 		case "cycle":
 			buf = strconv.AppendInt(buf, o.Cycle, 10)
 		case "hash":
-			if !o.Hash.IsEqual(chain.ZeroOpHash) {
+			if !o.Hash.Equal(tezos.ZeroOpHash) {
 				buf = strconv.AppendQuote(buf, o.Hash.String())
 			} else {
 				buf = append(buf, []byte(`""`)...)
@@ -248,20 +256,20 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 		case "sender_id":
 			buf = strconv.AppendUint(buf, o.SenderId.Value(), 10)
 		case "sender":
-			buf = strconv.AppendQuote(buf, o.addrs[o.SenderId].String())
+			buf = strconv.AppendQuote(buf, o.ctx.Indexer.LookupAddress(o.ctx, o.SenderId).String())
 		case "receiver_id":
 			buf = strconv.AppendUint(buf, o.ReceiverId.Value(), 10)
 		case "receiver":
 			if o.ReceiverId > 0 {
-				buf = strconv.AppendQuote(buf, o.addrs[o.ReceiverId].String())
+				buf = strconv.AppendQuote(buf, o.ctx.Indexer.LookupAddress(o.ctx, o.ReceiverId).String())
 			} else {
 				buf = append(buf, "null"...)
 			}
-		case "manager_id":
-			buf = strconv.AppendUint(buf, o.ManagerId.Value(), 10)
-		case "manager":
-			if o.ManagerId > 0 {
-				buf = strconv.AppendQuote(buf, o.addrs[o.ManagerId].String())
+		case "creator_id":
+			buf = strconv.AppendUint(buf, o.CreatorId.Value(), 10)
+		case "creator":
+			if o.CreatorId > 0 {
+				buf = strconv.AppendQuote(buf, o.ctx.Indexer.LookupAddress(o.ctx, o.CreatorId).String())
 			} else {
 				buf = append(buf, "null"...)
 			}
@@ -269,7 +277,7 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendUint(buf, o.DelegateId.Value(), 10)
 		case "delegate":
 			if o.DelegateId > 0 {
-				buf = strconv.AppendQuote(buf, o.addrs[o.DelegateId].String())
+				buf = strconv.AppendQuote(buf, o.ctx.Indexer.LookupAddress(o.ctx, o.DelegateId).String())
 			} else {
 				buf = append(buf, "null"...)
 			}
@@ -319,8 +327,8 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 			}
 		case "big_map_diff":
 			// big_map_diff is binary
-			if len(o.BigMapDiff) > 0 {
-				buf = strconv.AppendQuote(buf, hex.EncodeToString(o.BigMapDiff))
+			if len(o.BigmapDiff) > 0 {
+				buf = strconv.AppendQuote(buf, hex.EncodeToString(o.BigmapDiff))
 			} else {
 				buf = append(buf, "null"...)
 			}
@@ -333,12 +341,21 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 			}
 		case "days_destroyed":
 			buf = strconv.AppendFloat(buf, o.TDD, 'f', -1, 64)
-		case "branch_id":
-			buf = strconv.AppendUint(buf, o.BranchId, 10)
 		case "branch_height":
 			buf = strconv.AppendInt(buf, o.BranchHeight, 10)
 		case "branch_depth":
 			buf = strconv.AppendInt(buf, o.BranchDepth, 10)
+		case "branch_hash":
+			ok := false
+			if o.BranchId != 0 {
+				if h, err := o.ctx.Indexer.BlockHashById(o.ctx.Context, o.BranchId); err == nil {
+					buf = strconv.AppendQuote(buf, h.String())
+					ok = true
+				}
+			}
+			if !ok {
+				buf = append(buf, []byte(`""`)...)
+			}
 		case "is_implicit":
 			if o.IsImplicit {
 				buf = append(buf, '1')
@@ -349,6 +366,18 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, int64(o.Entrypoint), 10)
 		case "is_orphan":
 			if o.IsOrphan {
+				buf = append(buf, '1')
+			} else {
+				buf = append(buf, '0')
+			}
+		case "is_batch":
+			if o.IsBatch {
+				buf = append(buf, '1')
+			} else {
+				buf = append(buf, '0')
+			}
+		case "is_sapling":
+			if o.IsSapling {
 				buf = append(buf, '1')
 			} else {
 				buf = append(buf, '0')
@@ -378,7 +407,7 @@ func (o *Op) MarshalCSV() ([]string, error) {
 		case "cycle":
 			res[i] = strconv.FormatInt(o.Cycle, 10)
 		case "hash":
-			if !o.Hash.IsEqual(chain.ZeroOpHash) {
+			if !o.Hash.Equal(tezos.ZeroOpHash) {
 				res[i] = strconv.Quote(o.Hash.String())
 			} else {
 				res[i] = `""`
@@ -424,19 +453,19 @@ func (o *Op) MarshalCSV() ([]string, error) {
 		case "sender_id":
 			res[i] = strconv.FormatUint(o.SenderId.Value(), 10)
 		case "sender":
-			res[i] = strconv.Quote(o.addrs[o.SenderId].String())
+			res[i] = strconv.Quote(o.ctx.Indexer.LookupAddress(o.ctx, o.SenderId).String())
 		case "receiver_id":
 			res[i] = strconv.FormatUint(o.ReceiverId.Value(), 10)
 		case "receiver":
-			res[i] = strconv.Quote(o.addrs[o.ReceiverId].String())
-		case "manager_id":
-			res[i] = strconv.FormatUint(o.ManagerId.Value(), 10)
-		case "manager":
-			res[i] = strconv.Quote(o.addrs[o.ManagerId].String())
+			res[i] = strconv.Quote(o.ctx.Indexer.LookupAddress(o.ctx, o.ReceiverId).String())
+		case "creator_id":
+			res[i] = strconv.FormatUint(o.CreatorId.Value(), 10)
+		case "creator":
+			res[i] = strconv.Quote(o.ctx.Indexer.LookupAddress(o.ctx, o.CreatorId).String())
 		case "delegate_id":
 			res[i] = strconv.FormatUint(o.DelegateId.Value(), 10)
 		case "delegate":
-			res[i] = strconv.Quote(o.addrs[o.DelegateId].String())
+			res[i] = strconv.Quote(o.ctx.Indexer.LookupAddress(o.ctx, o.DelegateId).String())
 		case "is_success":
 			res[i] = strconv.FormatBool(o.IsSuccess)
 		case "is_contract":
@@ -452,23 +481,36 @@ func (o *Op) MarshalCSV() ([]string, error) {
 		case "storage":
 			res[i] = strconv.Quote(hex.EncodeToString(o.Storage))
 		case "big_map_diff":
-			res[i] = strconv.Quote(hex.EncodeToString(o.BigMapDiff))
+			res[i] = strconv.Quote(hex.EncodeToString(o.BigmapDiff))
 		case "errors":
 			res[i] = strconv.Quote(o.Errors)
 		case "days_destroyed":
 			res[i] = strconv.FormatFloat(o.TDD, 'f', -1, 64)
-		case "branch_id":
-			res[i] = strconv.FormatUint(o.BranchId, 10)
 		case "branch_height":
 			res[i] = strconv.FormatInt(o.BranchHeight, 10)
 		case "branch_depth":
 			res[i] = strconv.FormatInt(o.BranchDepth, 10)
+		case "branch_hash":
+			ok := false
+			if o.BranchId != 0 {
+				if h, err := o.ctx.Indexer.BlockHashById(o.ctx.Context, o.BranchId); err == nil {
+					res[i] = strconv.Quote(h.String())
+					ok = true
+				}
+			}
+			if !ok {
+				res[i] = `""`
+			}
 		case "is_implicit":
 			res[i] = strconv.FormatBool(o.IsImplicit)
 		case "entrypoint_id":
 			res[i] = strconv.FormatInt(int64(o.Entrypoint), 10)
 		case "is_orphan":
 			res[i] = strconv.FormatBool(o.IsOrphan)
+		case "is_batch":
+			res[i] = strconv.FormatBool(o.IsBatch)
+		case "is_sapling":
+			res[i] = strconv.FormatBool(o.IsSapling)
 		default:
 			continue
 		}
@@ -485,13 +527,9 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	if err != nil {
 		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", args.Table), err))
 	}
-	accountT, err := ctx.Indexer.Table(index.AccountTableKey)
-	if err != nil {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", index.AccountTableKey), err))
-	}
 
 	// translate long column names to short names used in pack tables
-	var needAccountT bool
+	// var needAccountT bool
 	var srcNames []string
 	if len(args.Columns) > 0 {
 		// resolve short column names
@@ -505,29 +543,22 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				srcNames = append(srcNames, n)
 			}
 			switch v {
-			case "sender", "receiver", "manager", "delegate":
-				needAccountT = true
 			case "data":
 				srcNames = append(srcNames, "has_data")
-			}
-			if args.Verbose {
-				needAccountT = true
 			}
 		}
 	} else {
 		// use all table columns in order and reverse lookup their long names
 		srcNames = table.Fields().Names()
 		args.Columns = opAllAliases
-		needAccountT = true
 	}
 
 	// build table query
 	q := pack.Query{
-		Name:       ctx.RequestID,
-		Fields:     table.Fields().Select(srcNames...),
-		Limit:      int(args.Limit),
-		Conditions: make(pack.ConditionList, 0),
-		Order:      args.Order,
+		Name:   ctx.RequestID,
+		Fields: table.Fields().Select(srcNames...),
+		Limit:  int(args.Limit),
+		Order:  args.Order,
 	}
 
 	// build dynamic filter conditions from query (will panic on error)
@@ -542,7 +573,7 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			}
 		}
 		switch prefix {
-		case "columns", "limit", "order", "verbose":
+		case "columns", "limit", "order", "verbose", "filename":
 			// skip these fields
 		case "cursor":
 			// add row id condition: id > cursor (new cursor == last row id)
@@ -554,7 +585,7 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
+			q.Conditions.AddAndCondition(&pack.Condition{
 				Field: table.Fields().Pk(),
 				Mode:  cursorMode,
 				Value: id,
@@ -564,13 +595,13 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			// special hash type to []byte conversion
 			hashes := make([][]byte, len(val))
 			for i, v := range val {
-				h, err := chain.ParseOperationHash(v)
+				h, err := tezos.ParseOpHash(v)
 				if err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid operation hash '%s'", val), err))
 				}
 				hashes[i] = h.Hash.Hash
 			}
-			q.Conditions = append(q.Conditions, pack.Condition{
+			q.Conditions.AddAndCondition(&pack.Condition{
 				Field: table.Fields().Find("H"),
 				Mode:  pack.FilterModeIn,
 				Value: hashes,
@@ -580,26 +611,26 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			// parse only the first value
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
-				typ := chain.ParseOpType(val[0])
+				typ := tezos.ParseOpType(val[0])
 				if !typ.IsValid() {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid operation type '%s'", val[0]), nil))
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("t"),
 					Mode:  mode,
-					Value: int64(typ),
+					Value: typ,
 					Raw:   val[0], // debugging aid
 				})
 			case pack.FilterModeIn, pack.FilterModeNotIn:
-				typs := make([]int64, 0)
+				typs := make([]uint8, 0)
 				for _, t := range strings.Split(val[0], ",") {
-					typ := chain.ParseOpType(t)
+					typ := tezos.ParseOpType(t)
 					if !typ.IsValid() {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid operation type '%s'", t), nil))
 					}
-					typs = append(typs, int64(typ))
+					typs = append(typs, uint8(typ))
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("t"),
 					Mode:  mode,
 					Value: typs,
@@ -613,26 +644,26 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			// parse only the first value
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
-				stat := chain.ParseOpStatus(val[0])
+				stat := tezos.ParseOpStatus(val[0])
 				if !stat.IsValid() {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid operation status '%s'", val[0]), nil))
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("?"),
 					Mode:  mode,
-					Value: int64(stat),
+					Value: stat,
 					Raw:   val[0], // debugging aid
 				})
 			case pack.FilterModeIn, pack.FilterModeNotIn:
-				stats := make([]int64, 0)
+				stats := make([]uint8, 0)
 				for _, t := range strings.Split(val[0], ",") {
-					stat := chain.ParseOpStatus(t)
+					stat := tezos.ParseOpStatus(t)
 					if !stat.IsValid() {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid operation status '%s'", t), nil))
 					}
-					stats = append(stats, int64(stat))
+					stats = append(stats, uint8(stat))
 				}
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find("?"),
 					Mode:  mode,
 					Value: stats,
@@ -642,27 +673,26 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			default:
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
-		case "sender", "receiver", "manager", "delegate":
+		case "sender", "receiver", "creator", "delegate":
 			// parse address and lookup id
 			// valid filter modes: eq, in
 			// 1 resolve account_id from account table
 			// 2 add eq/in cond: account_id
 			// 3 cache result in map (for output)
-			needAccountT = true
 			field := opSourceNames[prefix]
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty address matches id 0 (== missing baker)
-					q.Conditions = append(q.Conditions, pack.Condition{
+					q.Conditions.AddAndCondition(&pack.Condition{
 						Field: table.Fields().Find(field), // account id
 						Mode:  pack.FilterModeEqual,
-						Value: uint64(0),
+						Value: 0,
 						Raw:   val[0], // debugging aid
 					})
 				} else {
 					// single-address lookup and compile condition
-					addr, err := chain.ParseAddress(val[0])
+					addr, err := tezos.ParseAddress(val[0])
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
@@ -672,7 +702,7 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 					}
 					// Note: when not found we insert an always false condition
 					if acc == nil || acc.RowId == 0 {
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find(field), // account id
 							Mode:  mode,
 							Value: uint64(math.MaxUint64),
@@ -680,10 +710,10 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 						})
 					} else {
 						// add id as extra condition
-						q.Conditions = append(q.Conditions, pack.Condition{
+						q.Conditions.AddAndCondition(&pack.Condition{
 							Field: table.Fields().Find(field), // account id
 							Mode:  mode,
-							Value: acc.RowId.Value(),
+							Value: acc.RowId,
 							Raw:   val[0], // debugging aid
 						})
 					}
@@ -692,7 +722,7 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
 				for _, a := range strings.Split(val[0], ",") {
-					addr, err := chain.ParseAddress(a)
+					addr, err := tezos.ParseAddress(a)
 					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
@@ -709,7 +739,7 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions = append(q.Conditions, pack.Condition{
+				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find(field), // account id
 					Mode:  mode,
 					Value: ids,
@@ -750,7 +780,7 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions = append(q.Conditions, cond)
+					q.Conditions.AddAndCondition(&cond)
 				}
 			}
 		}
@@ -761,66 +791,26 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		lastId uint64
 	)
 
-	start := time.Now()
-	ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
-	defer func() {
-		ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	}()
+	// start := time.Now()
+	// ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
+	// defer func() {
+	// 	ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
+	// }()
 
 	// Step 1: query database
 	res, err := table.Query(ctx, q)
 	if err != nil {
 		panic(EInternal(EC_DATABASE, "query failed", err))
 	}
-	ctx.Log.Tracef("Processing result with %d rows %d cols", res.Rows(), res.Cols())
+	// ctx.Log.Tracef("Processing result with %d rows %d cols", res.Rows(), res.Cols())
 	defer res.Close()
-
-	// Step 2: resolve accounts using lookup (when requested)
-	accMap := make(map[model.AccountID]chain.Address)
-	if needAccountT && res.Rows() > 0 {
-		var find []uint64
-		for _, v := range []string{"S", "R", "M", "D"} {
-			// get a unique copy of sender and receiver id columns (clip on request limit)
-			col, _ := res.Uint64Column(v)
-			find = vec.UniqueUint64Slice(append(find, col[:util.Min(len(col), int(args.Limit))]...))
-		}
-
-		// lookup accounts from id
-		q := pack.Query{
-			Name:   ctx.RequestID + ".op_account_lookup",
-			Fields: accountT.Fields().Select("I", "H", "t"),
-			Conditions: pack.ConditionList{pack.Condition{
-				Field: accountT.Fields().Find("I"),
-				Mode:  pack.FilterModeIn,
-				Value: find,
-			}},
-		}
-		ctx.Log.Tracef("Looking up %d accounts", len(find))
-		type XAcc struct {
-			Id   model.AccountID   `pack:"I,pk"`
-			Hash []byte            `pack:"H"`
-			Type chain.AddressType `pack:"t"`
-		}
-		acc := &XAcc{}
-		err := accountT.Stream(ctx, q, func(r pack.Row) error {
-			if err := r.Decode(acc); err != nil {
-				return err
-			}
-			accMap[acc.Id] = chain.NewAddress(acc.Type, acc.Hash)
-			return nil
-		})
-		if err != nil {
-			// non-fatal error
-			ctx.Log.Errorf("Account lookup failed: %v", err)
-		}
-	}
 
 	// prepare return type marshalling
 	op := &Op{
 		verbose: args.Verbose,
 		columns: util.StringList(args.Columns),
 		params:  params,
-		addrs:   accMap,
+		ctx:     ctx,
 	}
 
 	// prepare response stream
@@ -865,7 +855,7 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		})
 		// close JSON bracket
 		io.WriteString(ctx.ResponseWriter, "]")
-		ctx.Log.Tracef("JSON encoded %d rows", count)
+		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":
 		enc := csv.NewEncoder(ctx.ResponseWriter)
@@ -890,7 +880,7 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				return nil
 			})
 		}
-		ctx.Log.Tracef("CSV Encoded %d rows", count)
+		// ctx.Log.Tracef("CSV Encoded %d rows", count)
 	}
 
 	// without new records, cursor remains the same as input (may be empty)

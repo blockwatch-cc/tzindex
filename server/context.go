@@ -24,10 +24,10 @@ import (
 
 	logpkg "github.com/echa/log"
 
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/rpc"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/model"
-	"blockwatch.cc/tzindex/rpc"
 )
 
 const (
@@ -55,7 +55,7 @@ type ApiContext struct {
 	Indexer        *etl.Indexer
 	Client         *rpc.Client
 	Tip            *model.ChainTip
-	Params         *chain.Params
+	Params         *tezos.Params
 
 	// QoS and Debugging
 	RequestID string
@@ -85,8 +85,6 @@ func NewContext(ctx context.Context, r *http.Request, w http.ResponseWriter, f A
 
 	// extract name from func to use in fail method
 	name := getCallName(f)
-
-	// log.Infof("New API call %s %s (%s)", r.Method, r.URL.Path, name)
 
 	// get real IP behind Docker Interface X-Real-IP or X-Forwarded-For
 	host := r.Header.Get("X-Real-Ip")
@@ -132,10 +130,12 @@ func (api *ApiContext) ParseRequestArgs(args interface{}) {
 		}
 	} else {
 		// POST, PUT, PATCH, DELETE
-
 		// decode URL arguments
-		if err := schemaDecoder.Decode(args, r.URL.Query()); err != nil {
-			panic(EBadRequest(EC_BAD_URL_QUERY, err.Error(), nil))
+		v := reflect.ValueOf(args)
+		if v.Kind() == reflect.Ptr && v.Elem().Kind() == reflect.Struct {
+			if err := schemaDecoder.Decode(args, r.URL.Query()); err != nil {
+				panic(EBadRequest(EC_BAD_URL_QUERY, err.Error(), nil))
+			}
 		}
 		// JSON overwrites URL arguments
 		jsonDecoder := json.NewDecoder(r.Body)
@@ -210,6 +210,7 @@ func (api *ApiContext) handleError(e error) {
 				// ignore
 				return
 			default:
+				api.Log.Errorf("Unhandled error %T: %v", err, err)
 				re = EInternal(EC_SERVER, "uncaught exception", err).(*Error)
 				if b, _ := api.jsonStack(); len(b) > 0 {
 					api.Log.Error(string(b))
@@ -228,7 +229,7 @@ func (api *ApiContext) handleError(e error) {
 
 func (api *ApiContext) jsonStack() ([]byte, error) {
 	trace := debug.Stack()
-	api.Log.Debugf("%s", string(trace))
+	// api.Log.Debugf("%s", string(trace))
 	lines := make([]string, 0, bytes.Count(trace, []byte("\n"))+1)
 	for _, v := range bytes.Split(trace, []byte("\n")) {
 		if len(v) == 0 {
@@ -262,11 +263,7 @@ func (api *ApiContext) sendResponse() {
 		// marshal JSON response into HTTP body
 		api.writeResponseBody()
 	} else {
-		path := strings.Join([]string{
-			api.Request.Method,
-			api.Request.RequestURI,
-			api.Request.Proto,
-		}, " ")
+		path := api.RequestString()
 
 		err := api.err
 		switch api.status {
@@ -294,6 +291,14 @@ func (api *ApiContext) sendResponse() {
 			api.ResponseWriter.Write(err.MarshalIndent())
 		}
 	}
+}
+
+func (api *ApiContext) RequestString() string {
+	return strings.Join([]string{
+		api.Request.Method,
+		api.Request.RequestURI,
+		api.Request.Proto,
+	}, " ")
 }
 
 func (api *ApiContext) StreamResponseHeaders(status int, contentType string) {
@@ -326,6 +331,7 @@ func (api *ApiContext) StreamTrailer(cursor string, count int, err error) {
 		case 400, 404:
 			api.Log.Debugf("streaming %d (%d) %s - %s failed (%s): %v", api.status, api.err.Code, path, api.err.Scope, api.err.Detail, api.err.Cause)
 		default:
+			// api.err may be nil on premature stream close
 			if api.err == nil {
 				return
 			}
@@ -339,8 +345,8 @@ func (api *ApiContext) StreamTrailer(cursor string, count int, err error) {
 func (api *ApiContext) writeResponseHeaders(contentType, trailers string) {
 	// Note: rate limiting headers are inserted during call init
 	w := api.ResponseWriter
-	// r := api.Request
 	h := w.Header()
+	hc := api.Cfg.Http
 
 	// add request id header
 	h.Set("Server", UserAgent)
@@ -348,10 +354,9 @@ func (api *ApiContext) writeResponseHeaders(contentType, trailers string) {
 	h.Set("X-Request-Id", api.RequestID)
 
 	// add blockchain info
-	tip := api.Tip
-	h.Set("X-Network-Id", tip.ChainId.String())
-	if l := len(tip.Deployments); l > 0 {
-		h.Set("X-Protocol-Hash", tip.Deployments[l-1].Protocol.String())
+	h.Set("X-Network-Id", api.Tip.ChainId.String())
+	if l := len(api.Tip.Deployments); l > 0 {
+		h.Set("X-Protocol-Hash", api.Tip.Deployments[l-1].Protocol.String())
 	}
 
 	// set content type if not already set by request handler function
@@ -366,26 +371,26 @@ func (api *ApiContext) writeResponseHeaders(contentType, trailers string) {
 		h.Set("Trailer", trailers)
 	}
 
-	// response creation time
+	// response creation time is start of request
 	now := api.Now
 
 	// set CORS header if enabled
-	if api.Cfg.Http.CorsEnable {
-		if api.Cfg.Http.CorsOrigin == "*" {
+	if hc.CorsEnable {
+		if hc.CorsOrigin == "*" {
 			h.Set("Access-Control-Allow-Origin", api.Request.Header.Get("Origin"))
 		} else {
-			h.Set("Access-Control-Allow-Origin", api.Cfg.Http.CorsOrigin)
+			h.Set("Access-Control-Allow-Origin", hc.CorsOrigin)
 		}
-		h.Set("Access-Control-Allow-Headers", api.Cfg.Http.CorsAllowHeaders)
-		h.Set("Access-Control-Expose-Headers", api.Cfg.Http.CorsExposeHeaders)
-		h.Set("Access-Control-Allow-Methods", api.Cfg.Http.CorsMethods)
-		h.Set("Access-Control-Allow-Credentials", api.Cfg.Http.CorsCredentials)
-		h.Set("Access-Control-Max-Age", api.Cfg.Http.CorsMaxAge)
+		h.Set("Access-Control-Allow-Headers", hc.CorsAllowHeaders)
+		h.Set("Access-Control-Expose-Headers", hc.CorsExposeHeaders)
+		h.Set("Access-Control-Allow-Methods", hc.CorsMethods)
+		h.Set("Access-Control-Allow-Credentials", hc.CorsCredentials)
+		h.Set("Access-Control-Max-Age", hc.CorsMaxAge)
 	}
 
 	// Set cache headers ONLY if ALL of the following applies
 	// - caching is enabled in config
-	// - request method is GET or OPTIONS (not needed, read-only API)
+	// - request method is GET, HEAD or OPTIONS
 	// - return status is 2xx
 	//
 	cacheStatus := api.status >= 200 && api.status <= 299
@@ -413,7 +418,7 @@ func (api *ApiContext) writeResponseHeaders(contentType, trailers string) {
 		// UTC format: time.RFC1123 (would set timezone string to UTC instead of GMT)
 		w.Header().Set("Date", now.Format(http.TimeFormat))
 		w.Header().Set("Expires", now.Add(expires).Format(http.TimeFormat))
-		w.Header().Set("Cache-Control", api.Cfg.Http.CacheControl+", max-age="+strconv.FormatInt(int64(expires/time.Second), 10))
+		w.Header().Set("Cache-Control", hc.CacheControl+", max-age="+strconv.FormatInt(int64(expires/time.Second), 10))
 	} else {
 		h.Set("Cache-Control", "max-age=0, no-cache, no-store, must-revalidate")
 		h.Set("Pragma", "no-cache")
@@ -438,7 +443,7 @@ func (api *ApiContext) writeResponseBody() {
 			api.ResponseWriter.Write(t)
 		default:
 			// marshal and write the result to the HTTP body
-			if b, err := json.MarshalIndent(api.result, "", "  "); err != nil {
+			if b, err := json.Marshal(api.result); err != nil {
 				path := strings.Join([]string{
 					api.Request.Method,
 					api.Request.RequestURI,
@@ -450,7 +455,7 @@ func (api *ApiContext) writeResponseBody() {
 				if api.isStreamed {
 					api.ResponseWriter.Header().Set(trailerError, e.String())
 				} else {
-					api.ResponseWriter.Write(e.MarshalIndent())
+					api.ResponseWriter.Write(e.Marshal())
 				}
 			} else {
 				api.ResponseWriter.Write(append(b, '\n'))

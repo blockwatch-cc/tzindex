@@ -7,7 +7,7 @@ import (
 	"context"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/tezos"
 )
 
 // BlockCrawler provides an interface to access information about the current
@@ -17,10 +17,10 @@ type BlockCrawler interface {
 	Table(string) (*pack.Table, error)
 
 	// returns the blockchain params at specified block height
-	ParamsByHeight(height int64) *chain.Params
+	ParamsByHeight(height int64) *tezos.Params
 
 	// returns the blockchain params for the specified protocol
-	ParamsByProtocol(proto chain.ProtocolHash) *chain.Params
+	ParamsByProtocol(proto tezos.ProtocolHash) *tezos.Params
 
 	// returns the current crawler chain tip
 	Tip() *ChainTip
@@ -42,7 +42,7 @@ type BlockCrawler interface {
 // processed block.
 type BlockBuilder interface {
 	// resolves account from address, returns nil and false when not found
-	AccountByAddress(chain.Address) (*Account, bool)
+	AccountByAddress(tezos.Address) (*Account, bool)
 
 	// resolves account from id, returns nil and false when not found
 	AccountById(AccountID) (*Account, bool)
@@ -60,13 +60,16 @@ type BlockBuilder interface {
 	Contracts() map[AccountID]*Contract
 
 	// returns block rights
-	Rights(chain.RightType) []Right
+	Rights(tezos.RightType) []Right
 
 	// return params at specific height
-	Params(int64) *chain.Params
+	Params(int64) *tezos.Params
 
 	// returns the requested database table if exists or error otherwise
 	Table(string) (*pack.Table, error)
+
+	// returns true if indexer is run in light mode
+	IsLightMode() bool
 }
 
 // BlockIndexer provides a generic interface for an indexer that is managed by an

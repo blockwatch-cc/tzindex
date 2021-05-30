@@ -13,11 +13,11 @@ import (
 	"time"
 
 	"blockwatch.cc/packdb/util"
-
-	"blockwatch.cc/tzindex/chain"
+	"blockwatch.cc/tzgo/micheline"
+	"blockwatch.cc/tzgo/rpc"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
 	. "blockwatch.cc/tzindex/etl/model"
-	"blockwatch.cc/tzindex/rpc"
 )
 
 // implicit operation list ids
@@ -56,7 +56,7 @@ func (b *Builder) AppendImplicitOps(ctx context.Context) error {
 			// only append additional invoice op when none is defined in params
 			if len(b.block.Params.Invoices) == 0 {
 				if ops[f.OpN] == nil {
-					ops[f.OpN] = NewImplicitOp(b.block, f.AccountId, chain.OpTypeInvoice, f.OpN, f.OpL, f.OpP)
+					ops[f.OpN] = NewImplicitOp(b.block, f.AccountId, tezos.OpTypeInvoice, f.OpN, f.OpL, f.OpP)
 					ops[f.OpN].SenderId = f.AccountId
 					ops[f.OpN].Volume = f.AmountIn
 				}
@@ -64,7 +64,7 @@ func (b *Builder) AppendImplicitOps(ctx context.Context) error {
 		case f.Operation == FlowTypeBaking:
 			// OpTypeBake
 			if ops[f.OpN] == nil {
-				ops[f.OpN] = NewImplicitOp(b.block, f.AccountId, chain.OpTypeBake, f.OpN, f.OpL, f.OpP)
+				ops[f.OpN] = NewImplicitOp(b.block, f.AccountId, tezos.OpTypeBake, f.OpN, f.OpL, f.OpP)
 				ops[f.OpN].SenderId = f.AccountId
 			}
 			// assuming only one flow per category per baker
@@ -82,7 +82,7 @@ func (b *Builder) AppendImplicitOps(ctx context.Context) error {
 		case f.IsUnfrozen && f.Category != FlowCategoryBalance:
 			// OpTypeUnfreeze
 			if ops[f.OpN] == nil {
-				ops[f.OpN] = NewImplicitOp(b.block, f.AccountId, chain.OpTypeUnfreeze, f.OpN, f.OpL, f.OpP)
+				ops[f.OpN] = NewImplicitOp(b.block, f.AccountId, tezos.OpTypeUnfreeze, f.OpN, f.OpL, f.OpP)
 				ops[f.OpN].SenderId = f.AccountId
 			}
 			// assuming only one flow per category per baker
@@ -97,7 +97,7 @@ func (b *Builder) AppendImplicitOps(ctx context.Context) error {
 		case f.IsBurned && f.Operation == FlowTypeNonceRevelation:
 			// OpTypeSeedSlash
 			if ops[f.OpN] == nil {
-				ops[f.OpN] = NewImplicitOp(b.block, f.AccountId, chain.OpTypeSeedSlash, f.OpN, f.OpL, f.OpC)
+				ops[f.OpN] = NewImplicitOp(b.block, f.AccountId, tezos.OpTypeSeedSlash, f.OpN, f.OpL, f.OpC)
 			}
 			switch f.Category {
 			case FlowCategoryRewards:
@@ -122,9 +122,9 @@ func (b *Builder) AppendImplicitOps(ctx context.Context) error {
 }
 
 func (b *Builder) AppendInvoiceOp(ctx context.Context, acc *Account, amount int64, p int) error {
-	n := len(b.block.Ops)
+	n := b.block.NextN()
 	b.block.Flows = append(b.block.Flows, b.NewInvoiceFlow(acc, amount, n, p))
-	op := NewImplicitOp(b.block, acc.RowId, chain.OpTypeInvoice, n, OPL_PROTOCOL_UPGRADE, p)
+	op := NewImplicitOp(b.block, acc.RowId, tezos.OpTypeInvoice, n, OPL_PROTOCOL_UPGRADE, p)
 	op.SenderId = acc.RowId
 	op.Volume = amount
 	b.block.Ops = append(b.block.Ops, op)
@@ -132,41 +132,34 @@ func (b *Builder) AppendInvoiceOp(ctx context.Context, acc *Account, amount int6
 }
 
 func (b *Builder) AppendAirdropOp(ctx context.Context, acc *Account, amount int64, p int) error {
-	n := len(b.block.Ops)
+	n := b.block.NextN()
 	b.block.Flows = append(b.block.Flows, b.NewAirdropFlow(acc, amount, n, p))
-	op := NewImplicitOp(b.block, acc.RowId, chain.OpTypeAirdrop, n, OPL_PROTOCOL_UPGRADE, p)
+	op := NewImplicitOp(b.block, acc.RowId, tezos.OpTypeAirdrop, n, OPL_PROTOCOL_UPGRADE, p)
 	op.Volume = amount
 	b.block.Ops = append(b.block.Ops, op)
 	return nil
 }
 
 func (b *Builder) AppendMagicBakerRegistrationOp(ctx context.Context, acc *Account, p int) error {
-	n := len(b.block.Ops)
-	op := NewImplicitOp(b.block, 0, chain.OpTypeDelegation, n, OPL_PROTOCOL_UPGRADE, p)
+	n := b.block.NextN()
+	op := NewImplicitOp(b.block, 0, tezos.OpTypeDelegation, n, OPL_PROTOCOL_UPGRADE, p)
 	op.SenderId = acc.RowId
 	op.DelegateId = acc.RowId
 	b.block.Ops = append(b.block.Ops, op)
 	return nil
 }
 
-// func (b *Builder) AppendContractMigrationOp(ctx context.Context, acc *Account, c *Contract, p int) error {
-// 	n := len(b.block.Ops)
-// 	op := NewImplicitOp(b.block, acc.RowId, chain.OpTypeMigration, n, OPL_PROTOCOL_UPGRADE, p)
-// 	op.IsContract = true
-// 	if c.Type == chain.ContractTypeDelegator {
-// 		var err error
-// 		op.Storage, err = c.InitialStorage()
-// 		if err != nil {
-// 			return err
-// 		}
-// 	}
-// 	b.block.Ops = append(b.block.Ops, op)
-// 	return nil
-// }
+func (b *Builder) AppendContractMigrationOp(ctx context.Context, acc *Account, c *Contract, p int) error {
+	n := b.block.NextN()
+	op := NewImplicitOp(b.block, acc.RowId, tezos.OpTypeMigration, n, OPL_PROTOCOL_UPGRADE, p)
+	op.IsContract = true
+	op.Storage = c.Storage
+	b.block.Ops = append(b.block.Ops, op)
+	return nil
+}
 
 func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.OperationHeader, op_l, op_p, op_c int, rollback bool) error {
 	o := oh.Contents[op_c]
-
 	Errorf := func(format string, args ...interface{}) error {
 		return fmt.Errorf(
 			"%s op [%d:%d]: "+format,
@@ -184,7 +177,7 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.OperationHeade
 	}
 
 	// need to lookup using blinded key
-	bkey, err := chain.BlindAddress(aop.Pkh, aop.Secret)
+	bkey, err := tezos.BlindAddress(aop.Pkh, aop.Secret)
 	if err != nil {
 		return Errorf("blinded address creation failed: %v", err)
 	}
@@ -194,7 +187,7 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.OperationHeade
 		return Errorf("missing account %s", aop.Pkh)
 	}
 
-	// cross-check if account exists under it's implicity address
+	// cross-check if account exists under it's implicit address
 	origacc, ok := b.AccountByAddress(aop.Pkh)
 	if !ok {
 		origacc, _ = b.idx.LookupAccount(ctx, aop.Pkh)
@@ -204,10 +197,10 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.OperationHeade
 	activated := aop.Metadata.BalanceUpdates[0].(*rpc.ContractBalanceUpdate).Change
 
 	// build op
-	op_n := len(b.block.Ops)
+	op_n := b.block.NextN()
 	op := NewOp(b.block, branch, oh, op_n, op_l, op_p, op_c, 0)
 	op.IsSuccess = true
-	op.Status = chain.OpStatusApplied
+	op.Status = tezos.OpStatusApplied
 	op.Volume = activated
 	op.SenderId = acc.RowId
 	op.ReceiverId = acc.RowId
@@ -218,7 +211,7 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.OperationHeade
 	// update account
 	if !rollback {
 		// remove blinded hash from builder
-		key := accountHashKey(acc)
+		key := b.accCache.AccountHashKey(acc)
 		delete(b.accHashMap, key)
 
 		// merge with original account, empty blinded account
@@ -237,23 +230,23 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.OperationHeade
 			acc.IsDirty = true
 
 			// register original account with builder
-			b.accHashMap[accountHashKey(origacc)] = origacc
+			b.accHashMap[b.accCache.AccountHashKey(origacc)] = origacc
 			b.accMap[origacc.RowId] = origacc
 
 			// use original account from now
 			acc = origacc
 		} else {
 			// update blinded account with new hash
-			acc.Hash = aop.Pkh.Hash
+			acc.Hash = aop.Pkh
 			acc.Type = aop.Pkh.Type
 			acc.FirstSeen = b.block.Height
 			acc.LastSeen = b.block.Height
 			acc.IsActivated = true
 			acc.IsSpendable = true
-			acc.IsDelegatable = true
+			acc.IsDelegatable = true // after Babylon, so virtually always
 			acc.IsFunded = true
 			acc.IsDirty = true
-			b.accHashMap[accountHashKey(acc)] = acc
+			b.accHashMap[b.accCache.AccountHashKey(acc)] = acc
 		}
 	} else {
 		// check if deactivated blinded account exists
@@ -263,7 +256,7 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.OperationHeade
 			blindedacc.SpendableBalance = activated
 
 			// register blinded account with builder
-			b.accHashMap[accountHashKey(blindedacc)] = blindedacc
+			b.accHashMap[b.accCache.AccountHashKey(blindedacc)] = blindedacc
 			b.accMap[blindedacc.RowId] = blindedacc
 
 			// rollback current account (adjust spendable balance here!)
@@ -276,15 +269,15 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.OperationHeade
 			acc = blindedacc
 		} else {
 			// replace implicit hash with blinded hash
-			delete(b.accHashMap, accountHashKey(acc))
+			delete(b.accHashMap, b.accCache.AccountHashKey(acc))
 			acc.NOps--
-			acc.Hash = bkey.Hash
+			acc.Hash = bkey
 			acc.Type = bkey.Type
 			acc.IsActivated = false
 			acc.IsDirty = true
 			acc.FirstSeen = 1 // reset to genesis
 			acc.LastSeen = 1  // reset to genesis
-			b.accHashMap[accountHashKey(acc)] = acc
+			b.accHashMap[b.accCache.AccountHashKey(acc)] = acc
 		}
 	}
 
@@ -325,7 +318,7 @@ func (b *Builder) AppendEndorsementOp(
 	}
 
 	// build flows
-	op_n := len(b.block.Ops)
+	op_n := b.block.NextN()
 	flows, err := b.NewEndorserFlows(acc, eop.Metadata.BalanceUpdates, op_n, op_l, op_p)
 	if err != nil {
 		return Errorf("building flows: %v", err)
@@ -333,7 +326,7 @@ func (b *Builder) AppendEndorsementOp(
 
 	// build op
 	op := NewOp(b.block, branch, oh, op_n, op_l, op_p, op_c, 0)
-	op.Status = chain.OpStatusApplied
+	op.Status = tezos.OpStatusApplied
 	op.IsSuccess = true
 	op.SenderId = acc.RowId
 
@@ -371,6 +364,7 @@ func (b *Builder) AppendEndorsementOp(
 		acc.BlocksEndorsed++
 		acc.SlotsEndorsed += len(eop.Metadata.Slots)
 		acc.IsActiveDelegate = true // reset inactivity unconditionally
+		acc.DelegateUntil = 0
 		acc.IsDirty = true
 	} else {
 		acc.NOps--
@@ -407,9 +401,9 @@ func (b *Builder) AppendBallotOp(ctx context.Context, oh *rpc.OperationHeader, o
 	}
 
 	// build op, ballots have no fees, volume, gas, etc
-	op_n := len(b.block.Ops)
+	op_n := b.block.NextN()
 	op := NewOp(b.block, branch, oh, op_n, op_l, op_p, op_c, 0)
-	op.Status = chain.OpStatusApplied
+	op.Status = tezos.OpStatusApplied
 	op.IsSuccess = true
 	op.SenderId = acc.RowId
 
@@ -459,15 +453,15 @@ func (b *Builder) AppendProposalsOp(ctx context.Context, oh *rpc.OperationHeader
 	}
 
 	// build op, proposals have no fees, volume, gas, etc
-	op_n := len(b.block.Ops)
+	op_n := b.block.NextN()
 	op := NewOp(b.block, branch, oh, op_n, op_l, op_p, op_c, 0)
-	op.Status = chain.OpStatusApplied
+	op.Status = tezos.OpStatusApplied
 	op.IsSuccess = true
 	op.SenderId = acc.RowId
 
 	// store proposals as comma separated base58 strings (same format as in JSON RPC)
 	op.HasData = true
-	buf := bytes.NewBuffer(make([]byte, 0, len(pop.Proposals)*chain.HashTypeProtocol.Base58Len()-1))
+	buf := bytes.NewBuffer(make([]byte, 0, len(pop.Proposals)*tezos.HashTypeProtocol.Base58Len()-1))
 	for i, v := range pop.Proposals {
 		buf.WriteString(v.String())
 		if i < len(pop.Proposals)-1 {
@@ -518,12 +512,19 @@ func (b *Builder) AppendRevealOp(ctx context.Context, oh *rpc.OperationHeader, o
 	var dlg *Account
 	if src.DelegateId != 0 {
 		if dlg, ok = b.AccountById(src.DelegateId); !ok {
-			return Errorf("missing delegate %d for source account %d", src.DelegateId, src.RowId)
+			acc, err := b.idx.LookupAccountId(ctx, src.DelegateId)
+			if err != nil {
+				return Errorf("missing baker account %d for source account %d %s: %v", src.DelegateId, src.RowId, src, err)
+			}
+			return Errorf("unregistered baker %d %s for source account %d %s", src.DelegateId, acc, src.RowId, src)
 		}
 	}
 
 	// build op
-	op_n := len(b.block.Ops)
+	op_n := b.block.NextN()
+	if op_c > 0 {
+		op_n--
+	}
 	op := NewOp(b.block, branch, oh, op_n, op_l, op_p, op_c, 0)
 	op.SenderId = src.RowId
 	op.Counter = rop.Counter
@@ -555,6 +556,7 @@ func (b *Builder) AppendRevealOp(ctx context.Context, oh *rpc.OperationHeader, o
 			src.NOpsFailed++
 			src.LastSeen = b.block.Height
 			src.IsDirty = true
+
 			if len(res.Errors) > 0 {
 				if buf, err := json.Marshal(res.Errors); err == nil {
 					op.Errors = string(buf)
@@ -567,9 +569,7 @@ func (b *Builder) AppendRevealOp(ctx context.Context, oh *rpc.OperationHeader, o
 			// update account, key may be ed25519 (edpk), secp256k1 (sppk) or p256 (p2pk)
 			src.NOps++
 			src.IsRevealed = true
-			// src.Pubkey = rop.PublicKey.Bytes()
-			src.PubkeyHash = rop.PublicKey.Hash
-			src.PubkeyType = rop.PublicKey.Type
+			src.Pubkey = rop.PublicKey.Bytes()
 			src.LastSeen = b.block.Height
 			src.IsDirty = true
 		}
@@ -581,8 +581,7 @@ func (b *Builder) AppendRevealOp(ctx context.Context, oh *rpc.OperationHeader, o
 		} else {
 			src.NOps--
 			src.IsRevealed = false
-			src.PubkeyHash = nil
-			src.PubkeyType = chain.HashTypeInvalid
+			src.Pubkey = nil
 			src.IsDirty = true
 		}
 	}
@@ -609,15 +608,15 @@ func (b *Builder) AppendSeedNonceOp(ctx context.Context, oh *rpc.OperationHeader
 		return Errorf("missing branch %s", oh.Branch)
 	}
 
-	op_n := len(b.block.Ops)
+	op_n := b.block.NextN()
 	flows, err := b.NewSeedNonceFlows(sop.Metadata.BalanceUpdates, op_n, op_l, op_p)
 	if err != nil {
-		return Errorf("building flows: %v", err)
+		return err
 	}
 
 	// build op
 	op := NewOp(b.block, branch, oh, op_n, op_l, op_p, op_c, 0)
-	op.Status = chain.OpStatusApplied
+	op.Status = tezos.OpStatusApplied
 	op.IsSuccess = true
 	op.SenderId = b.block.Baker.RowId
 	op.HasData = true
@@ -680,7 +679,7 @@ func (b *Builder) AppendDoubleBakingOp(ctx context.Context, oh *rpc.OperationHea
 	}
 
 	// build flows first to determine burn
-	op_n := len(b.block.Ops)
+	op_n := b.block.NextN()
 	flows, err := b.NewDoubleBakingFlows(accuser, offender, upd, op_n, op_l, op_p)
 	if err != nil {
 		return Errorf("building flows: %v", err)
@@ -689,7 +688,7 @@ func (b *Builder) AppendDoubleBakingOp(ctx context.Context, oh *rpc.OperationHea
 	// build op
 	op := NewOp(b.block, branch, oh, op_n, op_l, op_p, op_c, 0)
 	op.IsSuccess = true
-	op.Status = chain.OpStatusApplied
+	op.Status = tezos.OpStatusApplied
 	op.SenderId = accuser.RowId
 	op.ReceiverId = offender.RowId
 	op.HasData = true
@@ -770,7 +769,7 @@ func (b *Builder) AppendDoubleEndorsingOp(ctx context.Context, oh *rpc.Operation
 	}
 
 	// build flows first to determine burn
-	op_n := len(b.block.Ops)
+	op_n := b.block.NextN()
 	flows, err := b.NewDoubleEndorsingFlows(accuser, offender, upd, op_n, op_l, op_p)
 	if err != nil {
 		return Errorf("building flows: %v", err)
@@ -779,7 +778,7 @@ func (b *Builder) AppendDoubleEndorsingOp(ctx context.Context, oh *rpc.Operation
 	// build op
 	op := NewOp(b.block, branch, oh, op_n, op_l, op_p, op_c, 0)
 	op.IsSuccess = true
-	op.Status = chain.OpStatusApplied
+	op.Status = tezos.OpStatusApplied
 	op.SenderId = accuser.RowId
 	op.ReceiverId = offender.RowId
 	op.HasData = true
@@ -857,7 +856,12 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 	if !ok {
 		return Errorf("missing target account %s", top.Destination)
 	}
-	var srcdlg, dstdlg *Account
+
+	var (
+		srcdlg, dstdlg *Account
+		err            error
+		srccon, dstcon *Contract
+	)
 	if src.DelegateId != 0 {
 		if srcdlg, ok = b.AccountById(src.DelegateId); !ok {
 			return Errorf("missing delegate %d for source account %d", src.DelegateId, src.RowId)
@@ -868,9 +872,24 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 			return Errorf("missing delegate %d for dest account %d", dst.DelegateId, dst.RowId)
 		}
 	}
+	if src.IsContract {
+		srccon, err = b.LoadContractByAccountId(ctx, src.RowId)
+		if err != nil {
+			return Errorf("loading contract: %v", err)
+		}
+	}
+	if dst.IsContract {
+		dstcon, err = b.LoadContractByAccountId(ctx, dst.RowId)
+		if err != nil {
+			return Errorf("loading contract: %v", err)
+		}
+	}
 
 	// build op
-	op_n := len(b.block.Ops)
+	op_n := b.block.NextN()
+	if op_c > 0 {
+		op_n--
+	}
 	op := NewOp(b.block, branch, oh, op_n, op_l, op_p, op_c, 0)
 	op.SenderId = src.RowId
 	op.ReceiverId = dst.RowId
@@ -889,9 +908,15 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 	if op.GasUsed > 0 && op.Fee > 0 {
 		op.GasPrice = float64(op.Fee) / float64(op.GasUsed)
 	}
-	op.HasData = res.Storage != nil || top.Parameters != nil || len(res.BigMapDiff) > 0
+	op.HasData = res.Storage != nil || top.Parameters != nil || len(res.BigmapDiff) > 0
 
-	var err error
+	if srccon != nil {
+		op.IsSapling = srccon.Features.Contains(micheline.FeatureSapling)
+	}
+	if dstcon != nil {
+		op.IsSapling = op.IsSapling || dstcon.Features.Contains(micheline.FeatureSapling)
+	}
+
 	if top.Parameters != nil {
 		op.Parameters, err = top.Parameters.MarshalBinary()
 		// log.Debugf("Call [%d:%d:%d] %s entrypoint %s bin=%x",
@@ -900,21 +925,18 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 			return Errorf("marshal params: %v", err)
 		}
 
-		// load contract to identify which real entrypoint was called
-		con, err := b.LoadContractByAccountId(ctx, dst.RowId)
-		if err != nil {
-			return Errorf("loading contract: %v", err)
+		if dstcon != nil {
+			script, err := dstcon.LoadScript()
+			if err != nil {
+				return Errorf("loading script: %v", err)
+			}
+			ep, _, err := top.Parameters.MapEntrypoint(script)
+			if op.IsSuccess && err != nil {
+				return Errorf("searching entrypoint: %v", err)
+			}
+			op.Entrypoint = ep.Id
+			op.Data = ep.Call
 		}
-		tip := &ChainTip{ChainId: b.block.TZ.Block.ChainId}
-		script, err := con.LoadScript(tip, b.block.Height, nil)
-		if err != nil {
-			return Errorf("loading script: %v", err)
-		}
-		ep, _, err := top.Parameters.MapEntrypoint(script)
-		if op.IsSuccess && err != nil {
-			return Errorf("searching entrypoint: %v", err)
-		}
-		op.Entrypoint = ep.Id
 	}
 	if res.Storage != nil {
 		op.Storage, err = res.Storage.MarshalBinary()
@@ -922,12 +944,12 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 			return Errorf("marshal storage: %v", err)
 		}
 	}
-	if len(res.BigMapDiff) > 0 {
-		top.Metadata.Result.BigMapDiff, err = b.PatchBigMapDiff(ctx, res.BigMapDiff, dst.Address(), nil)
+	if len(res.BigmapDiff) > 0 {
+		top.Metadata.Result.BigmapDiff, err = b.PatchBigmapDiff(ctx, res.BigmapDiff, dst.Address(), nil)
 		if err != nil {
 			return Errorf("patch bigmap: %v", err)
 		}
-		op.BigMapDiff, err = top.Metadata.Result.BigMapDiff.MarshalBinary()
+		op.BigmapDiff, err = top.Metadata.Result.BigmapDiff.MarshalBinary()
 		if err != nil {
 			return Errorf("marshal bigmap: %v", err)
 		}
@@ -937,6 +959,7 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 
 	if op.IsSuccess {
 		flows, err = b.NewTransactionFlows(src, dst, srcdlg, dstdlg,
+			srccon, dstcon,
 			top.Metadata.BalanceUpdates, // fees
 			res.BalanceUpdates,          // move
 			b.block,
@@ -974,6 +997,7 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 
 		// fees only
 		flows, err = b.NewTransactionFlows(src, nil, srcdlg, nil,
+			nil, nil,
 			top.Metadata.BalanceUpdates,
 			nil, // no result balance updates
 			b.block,
@@ -1006,6 +1030,8 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 			dst.NTx++
 			dst.LastSeen = b.block.Height
 			dst.IsDirty = true
+			// new tz1/2/3 accounts may be allocated when receiving funds for the
+			// first time
 			if res.Allocated {
 				// init dest account when allocated
 				dst.IsSpendable = true
@@ -1016,6 +1042,7 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 				// - it seems from reverse engineering delegate activation rules
 				//   that received transactions will reactivate an inactive delegate
 				//   and extend grace period for active delegates
+				// - don't do this for magic delegates (missing self-registration)
 				// - support for this feature ends with proto_004
 				if !dst.IsActiveDelegate && dst.DelegateId == dst.RowId {
 					dst.IsActiveDelegate = true
@@ -1024,10 +1051,10 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 					dst.UpdateGracePeriod(b.block.Cycle, b.block.Params)
 				}
 			}
-			// update last seen for contracts (flow might be missing)
-			// update entrypoint call stats
-			if op.IsContract {
-				dst.IncCallStats(byte(op.Entrypoint), b.block.Height, b.block.Params)
+
+			// update contract from op
+			if dstcon != nil {
+				dstcon.Update(op)
 			}
 		}
 	} else {
@@ -1048,8 +1075,11 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 			dst.NTx--
 			dst.IsDirty = true
 
-			if op.IsContract {
-				dst.DecCallStats(byte(op.Entrypoint), b.block.Height, b.block.Params)
+			// rollback contract from previous op
+			if dstcon != nil {
+				// if nil, will rollback to previous state
+				prev, _ := b.idx.FindLastCall(ctx, dst.RowId, dst.FirstSeen, op.Height)
+				dstcon.Rollback(op, prev)
 			}
 		}
 	}
@@ -1060,15 +1090,15 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 	// apply internal operation result (may generate new op and flows)
 	for i, v := range top.Metadata.InternalResults {
 		switch v.OpKind() {
-		case chain.OpTypeTransaction:
+		case tezos.OpTypeTransaction:
 			if err := b.AppendInternalTransactionOp(ctx, src, srcdlg, oh, v, op_l, op_p, op_c, i, rollback); err != nil {
 				return err
 			}
-		case chain.OpTypeDelegation:
+		case tezos.OpTypeDelegation:
 			if err := b.AppendInternalDelegationOp(ctx, src, srcdlg, oh, v, op_l, op_p, op_c, i, rollback); err != nil {
 				return err
 			}
-		case chain.OpTypeOrigination:
+		case tezos.OpTypeOrigination:
 			if err := b.AppendInternalOriginationOp(ctx, src, srcdlg, oh, v, op_l, op_p, op_c, i, rollback); err != nil {
 				return err
 			}
@@ -1106,7 +1136,11 @@ func (b *Builder) AppendInternalTransactionOp(
 	if !ok {
 		return Errorf("missing branch %s", oh.Branch)
 	}
-	var srcdlg, dstdlg *Account
+	var (
+		srcdlg, dstdlg *Account
+		err            error
+		srccon, dstcon *Contract
+	)
 	if src.DelegateId != 0 {
 		if srcdlg, ok = b.AccountById(src.DelegateId); !ok {
 			return Errorf("missing delegate %d for source account %d", src.DelegateId, src.RowId)
@@ -1117,20 +1151,32 @@ func (b *Builder) AppendInternalTransactionOp(
 			return Errorf("missing delegate %d for dest account %d", dst.DelegateId, dst.RowId)
 		}
 	}
+	if src.IsContract {
+		srccon, err = b.LoadContractByAccountId(ctx, src.RowId)
+		if err != nil {
+			return Errorf("loading contract: %v", err)
+		}
+	}
+	if dst.IsContract {
+		dstcon, err = b.LoadContractByAccountId(ctx, dst.RowId)
+		if err != nil {
+			return Errorf("loading contract: %v", err)
+		}
+	}
 
 	// build op (internal and outer tx share the same hash and block location)
-	op_n := len(b.block.Ops)
+	op_n := b.block.NextN() - 1
 	op := NewOp(b.block, branch, oh, op_n, op_l, op_p, op_c, op_i)
-	op.Type = chain.OpTypeTransaction
+	op.Type = tezos.OpTypeTransaction
 	op.IsInternal = true
+	op.IsContract = dst.IsContract
 	op.SenderId = src.RowId
 	op.ReceiverId = dst.RowId
-	op.ManagerId = origsrc.RowId
+	op.CreatorId = origsrc.RowId
 	op.Counter = iop.Nonce
 	op.Fee = 0          // n.a. for internal ops
 	op.GasLimit = 0     // n.a. for internal ops
 	op.StorageLimit = 0 // n.a. for internal ops
-	op.IsContract = dst.IsContract
 	op.Volume = iop.Amount
 	res := iop.Result
 	op.Status = res.Status
@@ -1138,29 +1184,32 @@ func (b *Builder) AppendInternalTransactionOp(
 	op.GasUsed = res.ConsumedGas
 	op.StorageSize = res.StorageSize
 	op.StoragePaid = res.PaidStorageSizeDiff
-	op.HasData = iop.Parameters != nil || res.Storage != nil || len(res.BigMapDiff) > 0
+	op.HasData = iop.Parameters != nil || res.Storage != nil || len(res.BigmapDiff) > 0
 
-	var err error
+	if srccon != nil {
+		op.IsSapling = srccon.Features.Contains(micheline.FeatureSapling)
+	}
+	if dstcon != nil {
+		op.IsSapling = op.IsSapling || dstcon.Features.Contains(micheline.FeatureSapling)
+	}
+
 	if iop.Parameters != nil {
 		op.Parameters, err = iop.Parameters.MarshalBinary()
 		if err != nil {
 			return Errorf("marshal params: %v", err)
 		}
-		// load contract to identify which real entrypoint was called
-		con, err := b.LoadContractByAccountId(ctx, dst.RowId)
-		if err != nil {
-			return Errorf("loading contract: %v", err)
+		if dstcon != nil {
+			script, err := dstcon.LoadScript()
+			if err != nil {
+				return Errorf("loading script for %s: %v", dst, err)
+			}
+			ep, _, err := iop.Parameters.MapEntrypoint(script)
+			if op.IsSuccess && err != nil {
+				return Errorf("searching entrypoint in %s: %v", dst, err)
+			}
+			op.Entrypoint = ep.Id
+			op.Data = ep.Call
 		}
-		tip := &ChainTip{ChainId: b.block.TZ.Block.ChainId}
-		script, err := con.LoadScript(tip, b.block.Height, nil)
-		if err != nil {
-			return Errorf("loading script: %v", err)
-		}
-		ep, _, err := iop.Parameters.MapEntrypoint(script)
-		if op.IsSuccess && err != nil {
-			return Errorf("searching entrypoint: %v", err)
-		}
-		op.Entrypoint = ep.Id
 	}
 	if res.Storage != nil {
 		op.Storage, err = res.Storage.MarshalBinary()
@@ -1168,12 +1217,12 @@ func (b *Builder) AppendInternalTransactionOp(
 			return Errorf("marshal storage: %v", err)
 		}
 	}
-	if len(res.BigMapDiff) > 0 {
-		iop.Result.BigMapDiff, err = b.PatchBigMapDiff(ctx, res.BigMapDiff, dst.Address(), nil)
+	if len(res.BigmapDiff) > 0 {
+		iop.Result.BigmapDiff, err = b.PatchBigmapDiff(ctx, res.BigmapDiff, dst.Address(), nil)
 		if err != nil {
 			return Errorf("patch bigmap: %v", err)
 		}
-		op.BigMapDiff, err = iop.Result.BigMapDiff.MarshalBinary()
+		op.BigmapDiff, err = iop.Result.BigmapDiff.MarshalBinary()
 		if err != nil {
 			return Errorf("marshal bigmap: %v", err)
 		}
@@ -1183,11 +1232,14 @@ func (b *Builder) AppendInternalTransactionOp(
 
 	// on success, create flows and update accounts
 	if op.IsSuccess {
+
 		// Note: need to use storage from the outer operation result
+		// FIXME: refactor contract-related flows
 		flows, err = b.NewInternalTransactionFlows(
 			origsrc, src, dst, // outer and inner source, inner dest
 			origdlg, srcdlg, dstdlg, // delegates
-			res.BalanceUpdates, // moved and bruned amounts
+			srccon, dstcon, // contracts (optional)
+			res.BalanceUpdates, // moved and burned amounts
 			oh.Contents[op_c].(*rpc.TransactionOp).Metadata.Result.Storage, // updated contract storage
 			b.block,
 			op_n, op_l, op_p, op_c, op_i,
@@ -1220,7 +1272,7 @@ func (b *Builder) AppendInternalTransactionOp(
 				log.Error(Errorf("marshal op errors: %v", err))
 			}
 		}
-		// a negative outcome leaves no trace because fees are payed by outer tx
+		// a negative outcome leaves no trace because fees are paid by outer tx
 	}
 
 	// update accounts
@@ -1246,10 +1298,9 @@ func (b *Builder) AppendInternalTransactionOp(
 			dst.LastSeen = b.block.Height
 			dst.IsDirty = true
 
-			// update last seen for contracts (flow might be missing)
-			// update entrypoint call stats
-			if op.IsContract {
-				dst.IncCallStats(byte(op.Entrypoint), b.block.Height, b.block.Params)
+			// update contract from op
+			if dstcon != nil {
+				dstcon.Update(op)
 			}
 		}
 	} else {
@@ -1269,8 +1320,11 @@ func (b *Builder) AppendInternalTransactionOp(
 			dst.NOps--
 			dst.NTx--
 			dst.IsDirty = true
-			if op.IsContract {
-				dst.DecCallStats(byte(op.Entrypoint), b.block.Height, b.block.Params)
+			// rollback contract from previous op
+			if dstcon != nil {
+				// if nil, will rollback to origination state
+				prev, _ := b.idx.FindLastCall(ctx, dst.RowId, dst.FirstSeen, op.Height)
+				dstcon.Rollback(op, prev)
 			}
 		}
 	}
@@ -1331,7 +1385,10 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.OperationHead
 	}
 
 	// build op
-	op_n := len(b.block.Ops)
+	op_n := b.block.NextN()
+	if op_c > 0 {
+		op_n--
+	}
 	op := NewOp(b.block, branch, oh, op_n, op_l, op_p, op_c, 0)
 	op.SenderId = src.RowId
 	op.Counter = oop.Counter
@@ -1339,11 +1396,11 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.OperationHead
 	op.GasLimit = oop.GasLimit
 	op.StorageLimit = oop.StorageLimit
 	op.IsContract = oop.Script != nil
-	op.Volume = oop.Balance
 	res := oop.Metadata.Result
 	op.Status = res.Status
 	op.IsSuccess = op.Status.IsSuccess()
 	op.GasUsed = res.ConsumedGas
+	op.Volume = oop.Balance
 	op.StorageSize = res.StorageSize
 	op.StoragePaid = res.PaidStorageSizeDiff
 	if op.GasUsed > 0 && op.Fee > 0 {
@@ -1352,7 +1409,7 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.OperationHead
 
 	// store manager and delegate
 	if mgr != nil {
-		op.ManagerId = mgr.RowId
+		op.CreatorId = mgr.RowId
 	}
 	if newdlg != nil {
 		op.DelegateId = newdlg.RowId
@@ -1399,12 +1456,12 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.OperationHead
 		}
 
 		// create or extend bigmap diff to inject alloc for proto < v005
-		oop.Metadata.Result.BigMapDiff, err = b.PatchBigMapDiff(ctx, res.BigMapDiff, dst.Address(), oop.Script)
+		oop.Metadata.Result.BigmapDiff, err = b.PatchBigmapDiff(ctx, res.BigmapDiff, dst.Address(), oop.Script)
 		if err != nil {
 			return Errorf("patch bigmap: %v", err)
 		}
-		if len(oop.Metadata.Result.BigMapDiff) > 0 {
-			op.BigMapDiff, err = oop.Metadata.Result.BigMapDiff.MarshalBinary()
+		if len(oop.Metadata.Result.BigmapDiff) > 0 {
+			op.BigmapDiff, err = oop.Metadata.Result.BigmapDiff.MarshalBinary()
 			if err != nil {
 				return Errorf("marshal bigmap: %v", err)
 			}
@@ -1447,24 +1504,25 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.OperationHead
 			src.IsDirty = true
 
 			// initialize originated account
-			// in babylon, keep the sender as manager regardless
+			// pre-Babylon delegator KT1s had no code, post-babylon keep sender
+			// as creator, until Athens it was called manager
+			dst.IsContract = oop.Script != nil
 			if mgr != nil {
-				dst.ManagerId = mgr.RowId
+				dst.CreatorId = mgr.RowId
 				mgr.LastSeen = b.block.Height
 				mgr.IsDirty = true
 			} else {
-				dst.ManagerId = src.RowId
+				dst.CreatorId = src.RowId
 			}
-			dst.IsContract = oop.Script != nil
-
-			// from Babylon, these flags always exist
+			// in Babylon, these flags always exist, required for upgrades
 			if oop.Spendable != nil {
 				dst.IsSpendable = *oop.Spendable
 			}
 			if oop.Delegatable != nil {
 				dst.IsDelegatable = *oop.Delegatable
 			}
-			// pre-babylon, they were true when missing
+			// pre-babylon, they were true when missing,
+			// post-delphi they are deprecated
 			if b.block.Params.SilentSpendable {
 				dst.IsSpendable = dst.IsSpendable || oop.Spendable == nil || *oop.Spendable
 				dst.IsDelegatable = dst.IsDelegatable || oop.Delegatable == nil || *oop.Delegatable
@@ -1497,8 +1555,7 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.OperationHead
 			// on Carthagenet block 346116); the actual contract table entry
 			// is later created & inserted separately in contract index and
 			// this temporary object is discarded
-			// b.conMap[dst.RowId] = NewContract(dst, oop, op)
-			b.conMap[dst.RowId] = NewContract(dst, oop, op_l, op_p)
+			b.conMap[dst.RowId] = NewContract(dst, oop, op)
 		}
 	} else {
 		if !op.IsSuccess {
@@ -1574,22 +1631,22 @@ func (b *Builder) AppendInternalOriginationOp(
 	}
 
 	// build op (internal and outer op share the same hash and block location)
-	op_n := len(b.block.Ops)
+	op_n := b.block.NextN() - 1
 	op := NewOp(b.block, branch, oh, op_n, op_l, op_p, op_c, op_i)
 	op.IsInternal = true
-	op.Type = chain.OpTypeOrigination
+	op.Type = tezos.OpTypeOrigination
 	op.SenderId = src.RowId
-	op.ManagerId = origsrc.RowId
+	op.CreatorId = origsrc.RowId
 	op.Counter = iop.Nonce
 	op.Fee = 0          // n.a. for internal ops
 	op.GasLimit = 0     // n.a. for internal ops
 	op.StorageLimit = 0 // n.a. for internal ops
-	op.IsContract = iop.Script != nil
-	op.Volume = iop.Balance
+	op.IsContract = true
 	res := iop.Result // same as transaction result
 	op.Status = res.Status
 	op.GasUsed = res.ConsumedGas
 	op.IsSuccess = op.Status.IsSuccess()
+	op.Volume = iop.Balance
 	op.StorageSize = res.StorageSize
 	op.StoragePaid = res.PaidStorageSizeDiff
 
@@ -1644,12 +1701,12 @@ func (b *Builder) AppendInternalOriginationOp(
 		}
 
 		// create or extend bigmap diff to inject alloc for proto < v005
-		iop.Result.BigMapDiff, err = b.PatchBigMapDiff(ctx, res.BigMapDiff, dst.Address(), iop.Script)
+		iop.Result.BigmapDiff, err = b.PatchBigmapDiff(ctx, res.BigmapDiff, dst.Address(), iop.Script)
 		if err != nil {
 			return Errorf("patch bigmap: %v", err)
 		}
-		if len(iop.Result.BigMapDiff) > 0 {
-			op.BigMapDiff, err = iop.Result.BigMapDiff.MarshalBinary()
+		if len(iop.Result.BigmapDiff) > 0 {
+			op.BigmapDiff, err = iop.Result.BigmapDiff.MarshalBinary()
 			if err != nil {
 				return Errorf("marshal bigmap: %v", err)
 			}
@@ -1690,10 +1747,12 @@ func (b *Builder) AppendInternalOriginationOp(
 			dst.LastSeen = b.block.Height
 			dst.IsContract = iop.Script != nil
 			dst.IsDirty = true
+			dst.IsSpendable = true
+			dst.IsDelegatable = true
 
 			// internal originations have no manager, delegate and flags (in protocol v5)
 			// but we still keep the original caller as manager to track contract ownership
-			dst.ManagerId = origsrc.RowId
+			dst.CreatorId = origsrc.RowId
 
 			// handle delegation
 			if newdlg != nil {
@@ -1715,8 +1774,7 @@ func (b *Builder) AppendInternalOriginationOp(
 			// on Carthagenet block 346116); the actual contract table entry
 			// is later created & inserted separately in contract index and
 			// this temporary object is discarded
-			// b.conMap[dst.RowId] = NewInternalContract(dst, iop, op)
-			b.conMap[dst.RowId] = NewInternalContract(dst, iop, op_l, op_p, op_i)
+			b.conMap[dst.RowId] = NewInternalContract(dst, iop, op)
 		}
 	} else {
 		if !op.IsSuccess {
@@ -1793,7 +1851,10 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.OperationHeade
 	}
 
 	// build op
-	op_n := len(b.block.Ops)
+	op_n := b.block.NextN()
+	if op_c > 0 {
+		op_n--
+	}
 	op := NewOp(b.block, branch, oh, op_n, op_l, op_p, op_c, 0)
 	op.SenderId = src.RowId
 	if ndlg != nil {
@@ -1877,7 +1938,7 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.OperationHeade
 
 			// handle delegate registration
 			if ndlg != nil {
-				// this is idempotent, always sets grace to cycle + 11
+				// this is idempotent, always sets grace to cycle + N + 2
 				if src.RowId == ndlg.RowId {
 					b.RegisterDelegate(src, true)
 				}
@@ -1894,6 +1955,9 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.OperationHeade
 			if ndlg != nil && src.RowId != ndlg.RowId {
 				// delegate must be registered
 				if !ndlg.IsDelegate {
+					// b.RegisterDelegate(ndlg, true)
+					// log.Warnf("target delegate %s %d not registered",
+					// 	op_l, op_p, ndlg.String(), ndlg.RowId)
 					return Errorf("target delegate %s %d not registered", ndlg.String(), ndlg.RowId)
 				}
 				// only update when this delegation changes baker
@@ -1927,19 +1991,21 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.OperationHeade
 			src.NOpsFailed--
 			src.NDelegation--
 			src.IsDirty = true
+			// TODO: cannot set src.LastSeen without op table scan
 		} else {
 			src.NOps--
 			src.NDelegation--
 			src.IsDirty = true
 
-			// handle delegate un-registration
+			// handle delegate registration rollback
 			if ndlg != nil && src.RowId == ndlg.RowId {
 				src.DelegateId = 0
 				src.IsDelegate = false
 				src.DelegateSince = 0
 				src.IsActiveDelegate = false
+				src.DelegateUntil = 0
 				src.IsDirty = true
-				hashkey := accountHashKey(src)
+				hashkey := b.accCache.AccountHashKey(src)
 				b.accMap[src.RowId] = src
 				b.accHashMap[hashkey] = src
 				delete(b.dlgMap, src.RowId)
@@ -1950,11 +2016,11 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.OperationHeade
 			var lastsince int64
 			if prevop, err := b.idx.FindLatestDelegation(ctx, src.RowId); err != nil {
 				if err != index.ErrNoOpEntry {
-					return Errorf("rollback: missing previous delegation op for account %d: %v", src.RowId, err)
+					return Errorf("rollback: failed loading previous delegation op for account %d: %v", src.RowId, err)
 				}
 				odlg = nil
 			} else if prevop.DelegateId > 0 {
-				lastsince = op.Height
+				lastsince = prevop.Height
 				odlg, ok = b.AccountById(prevop.DelegateId)
 				if !ok {
 					return Errorf("rollback: missing previous delegate id %d", prevop.DelegateId)
@@ -2037,12 +2103,12 @@ func (b *Builder) AppendInternalDelegationOp(
 	}
 
 	// build op (internal and outer op share the same hash and block location)
-	op_n := len(b.block.Ops)
+	op_n := b.block.NextN() - 1
 	op := NewOp(b.block, branch, oh, op_n, op_l, op_p, op_c, op_i)
 	op.IsInternal = true
-	op.Type = chain.OpTypeDelegation
+	op.Type = tezos.OpTypeDelegation
 	op.SenderId = src.RowId
-	op.ManagerId = origsrc.RowId
+	op.CreatorId = origsrc.RowId
 	if ndlg != nil {
 		op.DelegateId = ndlg.RowId
 	}
@@ -2196,9 +2262,7 @@ func (b *Builder) AppendInternalDelegationOp(
 				src.IsDelegated = true
 				src.DelegateId = odlg.RowId
 				src.DelegatedSince = lastsince
-				if ndlg != nil && src.RowId != ndlg.RowId {
-					odlg.ActiveDelegations++
-				}
+				odlg.ActiveDelegations++
 				odlg.IsDirty = true
 			} else {
 				src.IsDelegated = false

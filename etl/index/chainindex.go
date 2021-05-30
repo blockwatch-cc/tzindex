@@ -15,9 +15,9 @@ import (
 )
 
 var (
-	ChainPackSizeLog2    = 15 // 32k packs
-	ChainJournalSizeLog2 = 16 // 65k - can be big, no search required
-	ChainCacheSize       = 2
+	ChainPackSizeLog2    = 15 // 32k packs ~3.6M
+	ChainJournalSizeLog2 = 16 // 64k - can be big, no search required
+	ChainCacheSize       = 8  // ~30M
 	ChainFillLevel       = 100
 	ChainIndexKey        = "chain"
 	ChainTableKey        = "chain"
@@ -122,15 +122,9 @@ func (idx *ChainIndex) DisconnectBlock(ctx context.Context, block *Block, _ Bloc
 }
 
 func (idx *ChainIndex) DeleteBlock(ctx context.Context, height int64) error {
-	log.Debugf("Rollback deleting chain state at height %d", height)
-	q := pack.Query{
-		Name: "etl.chain.delete",
-		Conditions: pack.ConditionList{pack.Condition{
-			Field: idx.table.Fields().Find("h"), // block height (!)
-			Mode:  pack.FilterModeEqual,
-			Value: height,
-		}},
-	}
-	_, err := idx.table.Delete(ctx, q)
+	// log.Debugf("Rollback deleting chain state at height %d", height)
+	_, err := pack.NewQuery("etl.chain.delete", idx.table).
+		AndEqual("height", height).
+		Delete(ctx)
 	return err
 }

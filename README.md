@@ -10,7 +10,7 @@ For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](h
 
 - indexes and cross-checks full on-chain state
 - feature-rich [REST API](https://tzstats.com/docs/api/index.html) with objects, bulk tables and time-series
-- supports protocols up to Edo (v008)
+- supports protocols up to Florence (v009)
 - auto-detects and locks Tezos network (never mixes data from different networks)
 - indexes all accounts and smart-contracts (including genesis data)
 - follows chain reorgs as they are resolved
@@ -22,6 +22,8 @@ For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](h
 - automatic database backups/snapshots
 - configurable HTTP request rate-limiter
 - light mode for dapps with low storage requirements
+- pruning of unused historic rights and snapshots
+- flexible metadata support
 
 **Supported indexes and data tables**
 
@@ -37,6 +39,7 @@ For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](h
 - **snapshots**: balances of active delegates & delegators at all snapshot blocks
 - baker **income**: per-cycle statistics on baker income, efficiency, etc
 - **bigmap**: bigmap smart contract storage index
+- **metadata**: standardized and custom account/token metadata
 
 **Operation modes**
 
