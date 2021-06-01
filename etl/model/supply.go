@@ -20,7 +20,7 @@ type Supply struct {
 	Total               int64     `pack:"t,snappy"     json:"total"`              // total available supply (including unclaimed)
 	Activated           int64     `pack:"A,snappy"     json:"activated"`          // activated fundraiser supply
 	Unclaimed           int64     `pack:"U,snappy"     json:"unclaimed"`          // all non-activated fundraiser supply
-	Liquid              int64     `pack:"L,snappy"     json:"liquid"`             // able to move next block floating (total - frozen - unclaimed)
+	Circulating         int64     `pack:"L,snappy"     json:"circulating"`        // able to move next block floating (total - frozen - unclaimed)
 	Delegated           int64     `pack:"E,snappy"     json:"delegated"`          // all delegated balances
 	Staking             int64     `pack:"D,snappy"     json:"staking"`            // all delegated + delegate's own balances
 	Shielded            int64     `pack:"S,snappy"     json:"shielded"`           // Sapling shielded supply
@@ -181,11 +181,10 @@ func (s *Supply) Update(b *Block, delegates map[AccountID]*Account) {
 	// we can calculate total baking rewards as difference to total rewards
 	s.MintedBaking = s.Minted - s.MintedSeeding - s.MintedEndorsing - s.MintedAirdrop
 
-	// unanimous consent is that unclaimed can move next block and frozen is
-	// generally considered as part of circulating supply; however to have a
-	// metric on how much is economically available for sale, we only report
-	// liquid and no longer circulating
-	s.Liquid = s.Total - s.Frozen - s.Unclaimed
+	// although unclaimed can move next block and frozen is
+	// generally considered a part of circulating supply we need a
+	// metric to show how much is economically available for sale
+	s.Circulating = s.Total - s.Frozen - s.Unclaimed
 }
 
 func (s *Supply) Rollback(b *Block) {

@@ -257,7 +257,7 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*Block, error) {
 	b.block.Supply.Staking = b.block.Supply.ActiveStaking
 	b.block.Supply.Delegated = b.block.Supply.ActiveDelegated
 	b.block.Supply.Total = b.block.Supply.Activated + b.block.Supply.Unclaimed
-	b.block.Supply.Liquid = b.block.Supply.Activated
+	b.block.Supply.Circulating = b.block.Supply.Activated
 
 	if genesisSupply := gen.Supply(); b.block.Supply.Total != genesisSupply {
 		return nil, fmt.Errorf("Genesis supply mismatch exp=%d got=%d (active=%d unclaimed=%d)",

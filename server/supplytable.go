@@ -62,7 +62,7 @@ func (s *Supply) MarshalJSONVerbose() ([]byte, error) {
 		Total               float64   `json:"total"`
 		Activated           float64   `json:"activated"`
 		Unclaimed           float64   `json:"unclaimed"`
-		Liquid              float64   `json:"liquid"`
+		Circulating         float64   `json:"circulating"`
 		Delegated           float64   `json:"delegated"`
 		Staking             float64   `json:"staking"`
 		Shielded            float64   `json:"shielded"`
@@ -93,7 +93,7 @@ func (s *Supply) MarshalJSONVerbose() ([]byte, error) {
 		Total:               s.params.ConvertValue(s.Total),
 		Activated:           s.params.ConvertValue(s.Activated),
 		Unclaimed:           s.params.ConvertValue(s.Unclaimed),
-		Liquid:              s.params.ConvertValue(s.Liquid),
+		Circulating:         s.params.ConvertValue(s.Circulating),
 		Delegated:           s.params.ConvertValue(s.Delegated),
 		Staking:             s.params.ConvertValue(s.Staking),
 		Shielded:            s.params.ConvertValue(s.Shielded),
@@ -140,8 +140,8 @@ func (s *Supply) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Activated), 'f', dec, 64)
 		case "unclaimed":
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Unclaimed), 'f', dec, 64)
-		case "liquid":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Liquid), 'f', dec, 64)
+		case "circulating":
+			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Circulating), 'f', dec, 64)
 		case "delegated":
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Delegated), 'f', dec, 64)
 		case "staking":
@@ -216,8 +216,8 @@ func (s *Supply) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Activated), 'f', dec, 64)
 		case "unclaimed":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Unclaimed), 'f', dec, 64)
-		case "liquid":
-			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Liquid), 'f', dec, 64)
+		case "circulating":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Circulating), 'f', dec, 64)
 		case "delegated":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Delegated), 'f', dec, 64)
 		case "staking":
