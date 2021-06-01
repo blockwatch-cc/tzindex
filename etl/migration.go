@@ -1389,7 +1389,7 @@ func (b *Builder) RunBabylonUpgrade(ctx context.Context, params *tezos.Params, n
 	err = pack.NewQuery("etl.account.babylon_upgrade", table).
 		WithoutCache().
 		AndEqual("address_type", tezos.AddressTypeContract).
-		AndEqual("is_contract", true).
+		AndEqual("is_contract", false).
 		Stream(ctx, func(r pack.Row) error {
 			acc := &Account{}
 			if err := r.Decode(acc); err != nil {
