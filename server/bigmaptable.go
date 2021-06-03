@@ -49,6 +49,7 @@ func init() {
 	bigmapSourceNames["key_hash"] = "-"
 	bigmapAllAliases = append(bigmapAllAliases, "address")
 	bigmapAllAliases = append(bigmapAllAliases, "op")
+	bigmapAllAliases = append(bigmapAllAliases, "key_hash")
 }
 
 // configurable marshalling helper
