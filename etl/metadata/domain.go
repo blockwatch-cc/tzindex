@@ -45,7 +45,7 @@ const (
 type TezosDomains struct {
 	Address tezos.Address     `json:"address"`
 	Name    string            `json:"name"`
-	Owner   tezos.Address     `json:"address"`
+	Owner   tezos.Address     `json:"owner"`
 	Expiry  time.Time         `json:"expiry"`
 	Data    map[string]string `json:"data,omitempty"`
 }
