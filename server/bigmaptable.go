@@ -46,6 +46,7 @@ func init() {
 	bigmapSourceNames["address"] = "A"
 	bigmapSourceNames["op"] = "O"
 	bigmapSourceNames["key_id"] = "-"
+	bigmapSourceNames["key_hash"] = "-"
 	bigmapAllAliases = append(bigmapAllAliases, "address")
 	bigmapAllAliases = append(bigmapAllAliases, "op")
 }
@@ -71,6 +72,7 @@ func (b *BigMapItem) MarshalJSON() ([]byte, error) {
 func (b *BigMapItem) MarshalJSONVerbose() ([]byte, error) {
 	bigmap := struct {
 		RowId      uint64 `json:"row_id"`
+		KeyId      uint64 `json:"key_id"`
 		PrevId     uint64 `json:"prev_id"`
 		Address    string `json:"address"`
 		AccountId  uint64 `json:"account_id"`
@@ -92,6 +94,7 @@ func (b *BigMapItem) MarshalJSONVerbose() ([]byte, error) {
 		Updated    int64  `json:"updated"`
 	}{
 		RowId:      b.RowId,
+		KeyId:      b.KeyId,
 		PrevId:     b.PrevId,
 		Address:    b.ctx.Indexer.LookupAddress(b.ctx, b.AccountId).String(),
 		AccountId:  b.AccountId.Value(),
@@ -122,6 +125,8 @@ func (b *BigMapItem) MarshalJSONBrief() ([]byte, error) {
 		switch v {
 		case "row_id":
 			buf = strconv.AppendUint(buf, b.RowId, 10)
+		case "key_id":
+			buf = strconv.AppendUint(buf, b.KeyId, 10)
 		case "prev_id":
 			buf = strconv.AppendUint(buf, b.PrevId, 10)
 		case "address":
@@ -183,6 +188,8 @@ func (b *BigMapItem) MarshalCSV() ([]string, error) {
 		switch v {
 		case "row_id":
 			res[i] = strconv.FormatUint(b.RowId, 10)
+		case "key_id":
+			res[i] = strconv.FormatUint(b.KeyId, 10)
 		case "prev_id":
 			res[i] = strconv.FormatUint(b.PrevId, 10)
 		case "address":
