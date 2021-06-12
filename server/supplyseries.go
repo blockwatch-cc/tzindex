@@ -118,6 +118,7 @@ func (s *SupplySeries) MarshalJSONVerbose() ([]byte, error) {
 		Activated           float64   `json:"activated"`
 		Unclaimed           float64   `json:"unclaimed"`
 		Circulating         float64   `json:"circulating"`
+		Liquid              float64   `json:"liquid"`
 		Delegated           float64   `json:"delegated"`
 		Staking             float64   `json:"staking"`
 		Shielded            float64   `json:"shielded"`
@@ -149,6 +150,7 @@ func (s *SupplySeries) MarshalJSONVerbose() ([]byte, error) {
 		Activated:           s.params.ConvertValue(s.Activated),
 		Unclaimed:           s.params.ConvertValue(s.Unclaimed),
 		Circulating:         s.params.ConvertValue(s.Circulating),
+		Liquid:              s.params.ConvertValue(s.Liquid),
 		Delegated:           s.params.ConvertValue(s.Delegated),
 		Staking:             s.params.ConvertValue(s.Staking),
 		Shielded:            s.params.ConvertValue(s.Shielded),
@@ -205,6 +207,8 @@ func (s *SupplySeries) MarshalJSONBrief() ([]byte, error) {
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Unclaimed), 'f', dec, 64)
 			case "circulating":
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Circulating), 'f', dec, 64)
+			case "liquid":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Liquid), 'f', dec, 64)
 			case "delegated":
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Delegated), 'f', dec, 64)
 			case "staking":
@@ -290,6 +294,8 @@ func (s *SupplySeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Unclaimed), 'f', dec, 64)
 		case "circulating":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Circulating), 'f', dec, 64)
+		case "liquid":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Liquid), 'f', dec, 64)
 		case "delegated":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Delegated), 'f', dec, 64)
 		case "staking":
