@@ -11,9 +11,7 @@ WORKDIR       /go/src/${BUILD_TARGET}
 ENV           GOPATH=/go
 RUN           apk --no-cache add git binutils
 RUN           git checkout ${BUILD_TAG}
-RUN           go install -v -ldflags "-X main.version=${BUILD_VERSION} -X main.commit=${BUILD_COMMIT}" ./cmd/tzproxy
-RUN           go install -v -ldflags "-X main.version=${BUILD_VERSION} -X main.commit=${BUILD_COMMIT}" ./cmd/tzindex
-RUN           go install -v -ldflags "-X main.version=${BUILD_VERSION} -X main.commit=${BUILD_COMMIT}" ./cmd/tzalias
+RUN           go install -v -ldflags "-X main.version=${BUILD_VERSION} -X main.commit=${BUILD_COMMIT}" ./cmd/...
 RUN           go install github.com/echa/gttp
 
 # final stage
