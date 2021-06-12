@@ -389,6 +389,10 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 									return fmt.Errorf("etl.bigmap.insert: %v", err)
 								}
 								last = item
+							} else {
+								// safety hatch
+								log.Errorf("etl.bigmap.empty: %d keys left in deleted bigmap %d", last.NKeys, v.Id)
+								last.NKeys = 0
 							}
 						}
 
@@ -574,54 +578,32 @@ func (idx *BigMapIndex) DisconnectBlock(ctx context.Context, block *Block, _ Blo
 func (idx *BigMapIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting bigmap updates at height %d", height)
 
-	// need to unset IsReplaced flags in prior rows for every entry we find here
+	// unset IsReplaced and IsDeleted flags in rows updated by this block
 	upd := make([]pack.Item, 0)
-	del := make([]uint64, 0)
-	ids := make([]uint64, 0)
-	type XItem struct {
-		RowId    uint64 `pack:"I"`
-		PrevId   uint64 `pack:"P"`
-		IsCopied bool   `pack:"c"`
-	}
-	item := &XItem{}
-
-	// find all items to delete and all items to update
+	// reverse flags on all updated items
 	err := idx.table.Stream(ctx,
 		pack.NewQuery("etl.bigmap.delete_scan", idx.table).
-			WithFields("I").
-			AndEqual("height", height),
+			AndEqual("u", height), // updated by this block
 		func(r pack.Row) error {
+			item := AllocBigmapItem()
 			if err := r.Decode(item); err != nil {
 				return err
 			}
-			if !item.IsCopied {
-				ids = append(ids, item.PrevId)
-			}
-			del = append(ids, item.RowId)
+			item.IsReplaced = false
+			item.IsDeleted = false
+			upd = append(upd, item)
 			return nil
 		})
 	if err != nil {
 		return err
 	}
 
-	// load update items
-	err = idx.table.StreamLookup(ctx, ids, func(r pack.Row) error {
-		item := AllocBigmapItem()
-		if err := r.Decode(item); err != nil {
-			return err
-		}
-		item.IsReplaced = false
-		upd = append(upd, item)
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	// and run update
+	// run update
 	if err := idx.table.Update(ctx, upd); err != nil {
 		return err
 	}
 
-	// now delete the original items
-	return idx.table.DeleteIds(ctx, del)
+	// delete everything created at this block
+	_, err = idx.table.Delete(ctx, pack.NewQuery("etl.bigmap.delete", idx.table).AndEqual("h", height))
+	return err
 }

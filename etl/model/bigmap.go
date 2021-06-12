@@ -210,12 +210,15 @@ func (m *BigmapItem) Free() {
 
 func (m *BigmapItem) Reset() {
 	m.RowId = 0
+	m.KeyId = 0
+	m.PrevId = 0
 	m.AccountId = 0
 	m.ContractId = 0
 	m.OpId = 0
 	m.Height = 0
 	m.Timestamp = time.Time{}
 	m.BigmapId = 0
+	m.Action = 0
 	m.Key = nil
 	m.Value = nil
 	m.IsReplaced = false
