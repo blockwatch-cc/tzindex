@@ -287,6 +287,7 @@ func NewExplorerElection(ctx *ApiContext, e *model.Election) *ExplorerElection {
 		election.EndHeight = election.StartHeight + int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - 1
 		election.expires = tm.Add(p.TimeBetweenBlocks[0])
 	} else {
+		election.MaxPeriods = election.NumPeriods
 		height := ctx.Tip.BestHeight
 		if election.EndHeight >= height {
 			election.expires = tm.Add(p.TimeBetweenBlocks[0])

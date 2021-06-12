@@ -1313,7 +1313,6 @@ func (m *Indexer) VotesByElection(ctx context.Context, id model.ElectionID) ([]*
 	votes := make([]*model.Vote, 0)
 	err = pack.NewQuery("list_votes", table).
 		WithoutCache().
-		WithLimit(1).
 		AndEqual("election_id", id).
 		Execute(ctx, &votes)
 	if err != nil {
