@@ -25,7 +25,14 @@ Breaking changes at a glance
 - API: block endorser list has been replaced by more detailed rights list (use `rights=1` to include)
 - API: refactored contract data model
 
+Fixes
+- API: fixed election queries not returning all voting periods
+- API: fixed collapse operation listings
+- API: fixed invalid flags after bigmap rollback
+- PROXY: fixed flushing block cache after reorg
+
 For details please consult the API changelog for versions [2021-04-16](https://tzstats.com/docs/api#2021-04-16) and [2021-02-10](https://tzstats.com/docs/api#2021-02-10) (the new v9.1 branch of TzIndex PRO contains all changes from both API upgrades).
+
 
 ## 9.0.1
 

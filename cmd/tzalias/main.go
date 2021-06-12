@@ -175,9 +175,15 @@ func exportAliases(ctx context.Context, c *tzstats.Client) error {
 	}
 	defer f.Close()
 
+	// change format to map
+	mapped := make(map[string]tzstats.Metadata)
+	for _, v := range SortedAliases(aliases) {
+		mapped[v.ID()] = v
+	}
+
 	enc := json.NewEncoder(f)
 	if sorted {
-		if err := enc.Encode(SortedAliases(aliases)); err != nil {
+		if err := enc.Encode(mapped); err != nil {
 			return fmt.Errorf("%s: %v", fname, err)
 		}
 	} else {
@@ -222,6 +228,16 @@ func importAliases(ctx context.Context, c *tzstats.Client) error {
 		return fmt.Errorf("%s: %v", fname, err)
 	}
 
+	aliases, err := c.ListMetadata(ctx)
+	if err != nil {
+		return err
+	}
+
+	mapped := make(map[string]tzstats.Metadata)
+	for _, v := range aliases {
+		mapped[v.ID()] = v
+	}
+
 	log.Infof("Importing %d aliases", len(content))
 	count := 0
 	ins := make([]tzstats.Metadata, 0)
@@ -229,6 +245,10 @@ func importAliases(ctx context.Context, c *tzstats.Client) error {
 		v.Address, v.AssetId, err = parseAddressAndAssetId(n)
 		if err != nil {
 			return err
+		}
+		// merge existing models (imported models have priority)
+		if md, ok := mapped[v.ID()]; ok {
+			v = md.Merge(v)
 		}
 		ins = append(ins, v)
 		count++
@@ -282,11 +302,21 @@ func addAlias(ctx context.Context, c *tzstats.Client) error {
 	if err != nil {
 		return err
 	}
-	alias := tzstats.Metadata{}
+
 	addr, id, err := parseAddressAndAssetId(flags.Arg(1))
 	if err != nil {
 		return err
 	}
+
+	// load existing alias, ignore errors
+	var alias tzstats.Metadata
+	if id == nil {
+		alias, _ = c.GetAccountMetadata(ctx, addr)
+	} else {
+		alias, _ = c.GetAssetMetadata(ctx, addr, *id)
+	}
+
+	// always set identifier
 	alias.Address = addr
 	alias.AssetId = id
 	if err := fillStruct(kvp, &alias); err != nil {
