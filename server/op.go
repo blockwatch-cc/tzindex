@@ -253,7 +253,7 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 		TDD:           op.TDD,
 		IsImplicit:    op.IsImplicit,
 		IsOrphan:      op.IsOrphan,
-		IsBatch:       op.IsBatch,
+		IsBatch:       op.IsBatch && !args.WithCollapse(),
 		IsSapling:     op.IsSapling,
 		Confirmations: ctx.Tip.BestHeight - op.Height,
 	}

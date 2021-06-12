@@ -888,13 +888,7 @@ func (m *Indexer) ListBlockOpsCollapsed(ctx context.Context, r ListRequest) ([]*
 		} else {
 			q = q.AndGt("I", r.Cursor)
 		}
-	} else {
-		if r.Offset > 0 {
-			q.AndGte("op_n", r.Offset)
-		}
-		if r.Limit > 0 {
-			q.AndLte("op_n", r.Offset+r.Limit)
-		}
+		r.Offset = 0
 	}
 	if len(r.Typs) > 0 && r.Mode.IsValid() {
 		if r.Mode.IsScalar() {
@@ -916,8 +910,21 @@ func (m *Indexer) ListBlockOpsCollapsed(ctx context.Context, r ListRequest) ([]*
 		}
 
 		// detect next op group (works in both directions)
+		isFirst := lastN < 0
 		isNext := op.OpN != lastN
 		lastN = op.OpN
+
+		// skip offset groups
+		if r.Offset > 0 {
+			if isNext && !isFirst {
+				r.Offset--
+			} else {
+				return nil
+			}
+			if r.Offset > 0 {
+				return nil
+			}
+		}
 
 		// stop at first result after group end
 		if isNext && r.Limit > 0 && count == int(r.Limit) {
@@ -1084,6 +1091,7 @@ func (m *Indexer) ListAccountOpsCollapsed(ctx context.Context, r ListRequest) ([
 		} else {
 			q = q.AndGt("I", r.Cursor)
 		}
+		r.Offset = 0
 	}
 	if r.Since > 0 || r.Account.FirstSeen > 0 {
 		q = q.AndGt("height", util.Max64(r.Since, r.Account.FirstSeen-1))
