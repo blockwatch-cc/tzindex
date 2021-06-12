@@ -82,7 +82,7 @@ func (c *AddressCache) Build(ctx context.Context, table *pack.Table) error {
 				return err
 			}
 			// pad with empty bytes when we detect a gap in account ids
-			if pad := a.RowId.Value() - uint64(c.Len()) - 1; pad > 0 {
+			if pad := int64(a.RowId.Value()) - int64(c.Len()) - 1; pad > 0 {
 				c.hashes = append(c.hashes, bytes.Repeat([]byte{0}, int(pad)*addrLen)...)
 			}
 			c.hashes = append(c.hashes, byte(a.Address.Type))
@@ -146,7 +146,7 @@ func (c *AddressCache) Update(accounts map[model.AccountID]*model.Account) error
 	// append new address data
 	for _, v := range ins {
 		// pad with empty bytes when we detect a gap in account ids
-		if pad := v.RowId.Value() - uint64(len(dest)/addrLen) - 1; pad > 0 {
+		if pad := int64(v.RowId.Value()) - int64(len(dest)/addrLen) - 1; pad > 0 {
 			dest = append(dest, bytes.Repeat([]byte{0}, int(pad)*addrLen)...)
 		}
 		dest = append(dest, byte(v.Address.Type))
