@@ -302,7 +302,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				// single-address lookup and compile condition
 				addr, err := tezos.ParseAddress(val[0])
-				if err != nil {
+				if err != nil || !addr.IsValid() {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				if addr.Type != tezos.AddressTypeContract {
@@ -320,7 +320,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				hashes := make([][]byte, 0)
 				for _, v := range strings.Split(val[0], ",") {
 					addr, err := tezos.ParseAddress(v)
-					if err != nil {
+					if err != nil || !addr.IsValid() {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					if addr.Type != tezos.AddressTypeContract {
@@ -348,7 +348,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				// single-account lookup and compile condition
 				addr, err := tezos.ParseAddress(val[0])
-				if err != nil {
+				if err != nil || !addr.IsValid() {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
@@ -377,7 +377,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
 					addr, err := tezos.ParseAddress(v)
-					if err != nil {
+					if err != nil || !addr.IsValid() {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)

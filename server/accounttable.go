@@ -713,7 +713,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				addr, err := tezos.ParseAddress(val[0])
-				if err != nil {
+				if err != nil || !addr.IsValid() {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
@@ -743,7 +743,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 				hashes := make([][]byte, 0)
 				for _, v := range strings.Split(val[0], ",") {
 					addr, err := tezos.ParseAddress(v)
-					if err != nil {
+					if err != nil || !addr.IsValid() {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					hashes = append(hashes, addr.Bytes22())
@@ -825,7 +825,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 				} else {
 					// single-account lookup and compile condition
 					addr, err := tezos.ParseAddress(val[0])
-					if err != nil {
+					if err != nil || !addr.IsValid() {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
@@ -855,7 +855,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
 					addr, err := tezos.ParseAddress(v)
-					if err != nil {
+					if err != nil || !addr.IsValid() {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)

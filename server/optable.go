@@ -693,7 +693,7 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				} else {
 					// single-address lookup and compile condition
 					addr, err := tezos.ParseAddress(val[0])
-					if err != nil {
+					if err != nil || !addr.IsValid() {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
@@ -723,7 +723,7 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				ids := make([]uint64, 0)
 				for _, a := range strings.Split(val[0], ",") {
 					addr, err := tezos.ParseAddress(a)
-					if err != nil {
+					if err != nil || !addr.IsValid() {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
