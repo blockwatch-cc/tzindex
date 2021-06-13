@@ -237,9 +237,9 @@ func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *Block, builde
 
 func (idx *ContractIndex) DisconnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
 	upd := make([]pack.Item, 0)
-	// update all dirty contracts
+	// update all dirty contracts, skip originated contracts (will be removed)
 	for _, v := range builder.Contracts() {
-		if !v.IsDirty {
+		if !v.IsDirty || v.RowId == 0 {
 			continue
 		}
 		upd = append(upd, v)
