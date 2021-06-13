@@ -49,11 +49,6 @@ func init() {
 	config.SetDefault("server.cors_credentials", "true")
 	config.SetDefault("server.cache_control", "public")
 
-	// health check
-	config.SetDefault("health_check.enable", false)
-	config.SetDefault("health_check.addr", "127.0.0.1")
-	config.SetDefault("health_check.port", 8001)
-
 	// logging
 	config.SetDefault("logging.progress", 10*time.Second)
 	config.SetDefault("logging.backend", "stdout")

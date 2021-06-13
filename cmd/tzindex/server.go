@@ -63,10 +63,6 @@ var serverCmd = &cobra.Command{
 }
 
 func runServer(args []string) error {
-	if err := parseRPCFlags(); err != nil {
-		return err
-	}
-
 	// set user agent in library client
 	server.UserAgent = UserAgent()
 	server.ApiVersion = apiVersion

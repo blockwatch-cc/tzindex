@@ -223,13 +223,13 @@ func newRPCClient() (*rpc.Client, error) {
 
 func parseRPCFlags() error {
 	// overwrite config from flags only if set
-	if notls {
+	if serverCmd.Flags().Changed("notls") {
 		config.Set("rpc.disable_tls", notls)
 	}
-	if insecure {
+	if serverCmd.Flags().Changed("insecure") {
 		config.Set("rpc.insecure_tls", insecure)
 	}
-	if rpcurl != "" {
+	if serverCmd.Flags().Changed("rpcurl") && rpcurl != "" {
 		ux := rpcurl
 		if !strings.HasPrefix(ux, "http") {
 			if config.GetBool("rpc.disable_tls") {
@@ -262,10 +262,10 @@ func parseRPCFlags() error {
 		}
 		config.Set("rpc.path", path)
 	}
-	if rpcuser != "" {
+	if serverCmd.Flags().Changed("rpcuser") {
 		config.Set("rpc.user", rpcuser)
 	}
-	if rpcpass != "" {
+	if serverCmd.Flags().Changed("rpcpass") {
 		config.Set("rpc.pass", rpcpass)
 	}
 	return nil

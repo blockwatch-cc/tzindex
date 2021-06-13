@@ -118,6 +118,10 @@ func initConfig() {
 		setLogLevels(logpkg.LevelInfo)
 	}
 
+	if err := parseRPCFlags(); err != nil {
+		log.Error(err)
+	}
+
 	// TODO: testconf
 	if testconf {
 		// Check()
