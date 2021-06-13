@@ -11,7 +11,6 @@ WORKDIR       /go/src/${BUILD_TARGET}
 RUN           apk --no-cache add git binutils
 RUN           git checkout ${BUILD_TAG}
 RUN           go install -v -ldflags "-X main.version=${BUILD_VERSION} -X main.commit=${BUILD_COMMIT}" ./cmd/...
-RUN           strip /go/bin/tz*
 
 # final stage
 FROM          alpine:latest
