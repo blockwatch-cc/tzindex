@@ -266,6 +266,9 @@ func (c *Contract) NamedBigmaps(ids []int64) map[string]int64 {
 		if n == "" {
 			n = strconv.Itoa(i)
 		}
+		if _, ok := named[n]; ok {
+			n += "_" + strconv.Itoa(i)
+		}
 		named[n] = ids[i]
 	}
 	return named
