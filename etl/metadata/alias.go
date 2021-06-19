@@ -41,6 +41,7 @@ const (
 				"nft",
 				"game",
 				"event",
+				"dao",
 				"other"
 	      	],
 	      	"description": "A structured type used for filtering."
