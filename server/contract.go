@@ -41,7 +41,7 @@ type ExplorerContract struct {
 	LastSeenTime  time.Time                    `json:"last_seen_time"`
 	NOps          int                          `json:"n_ops"`
 	NOpsFailed    int                          `json:"n_ops_failed"`
-	BigMaps       map[string]int64             `json:"bigmaps,omitempty"`
+	Bigmaps       map[string]int64             `json:"bigmaps,omitempty"`
 	InterfaceHash string                       `json:"iface_hash"`
 	CodeHash      string                       `json:"code_hash"`
 	CallStats     map[string]int               `json:"call_stats"`
@@ -76,7 +76,7 @@ func NewExplorerContract(ctx *ApiContext, c *model.Contract, a *model.Account, a
 
 	// map bigmap ids to storage annotation names
 	if ids, err := ctx.Indexer.ListContractBigMapIds(ctx.Context, a.RowId); err == nil {
-		cc.BigMaps = c.NamedBigmaps(ids)
+		cc.Bigmaps = c.NamedBigmaps(ids)
 	} else {
 		log.Errorf("explorer contract: cannot load bigmap ids: %v", err)
 	}
@@ -404,6 +404,7 @@ type ExplorerScript struct {
 	Script      *micheline.Script     `json:"script,omitempty"`
 	Type        micheline.Typedef     `json:"storage_type"`
 	Entrypoints micheline.Entrypoints `json:"entrypoints"`
+	Bigmaps     map[string]int64      `json:"bigmaps,omitempty"`
 	modified    time.Time             `json:"-"`
 }
 
@@ -436,11 +437,13 @@ func ReadContractScript(ctx *ApiContext) (interface{}, int) {
 	if err != nil {
 		panic(EInternal(EC_SERVER, "script entrypoint parsing failed", err))
 	}
+	ids, _ := ctx.Indexer.ListContractBigMapIds(ctx.Context, cc.AccountId)
 
 	resp := &ExplorerScript{
 		Script:      script,
 		Type:        script.StorageType().Typedef("storage"),
 		Entrypoints: ep,
+		Bigmaps:     cc.NamedBigmaps(ids),
 		modified:    ctx.Indexer.LookupBlockTime(ctx.Context, cc.FirstSeen),
 	}
 	if !args.WithPrim() {
@@ -464,6 +467,7 @@ func ReadContractStorage(ctx *ApiContext) (interface{}, int) {
 	if err != nil {
 		panic(EInternal(EC_SERVER, "script unmarshal failed", err))
 	}
+	ids, _ := ctx.Indexer.ListContractBigMapIds(ctx.Context, cc.AccountId)
 
 	// type is always the most recently upgraded type stored in contract table
 	var (
@@ -512,40 +516,29 @@ func ReadContractStorage(ctx *ApiContext) (interface{}, int) {
 		}
 	}
 
-	// always output post-babylon storage
-	// upgrade pre-babylon storage value to post-babylon spec
-	// if cc.NeedsBabylonUpgrade(ctx.Params) && ctx.Params.IsPreBabylonHeight(height) {
-	// 	if acc, err := ctx.Indexer.LookupAccountId(ctx, cc.CreatorId); err == nil {
-	// 		prim = prim.MigrateToBabylonStorage(acc.Address().Bytes())
-	// 	}
-	// }
-
 	// patch bigmap pointers when storage is loaded from origination
-	if patchBigmaps {
-		if ids, err := ctx.Indexer.ListContractBigMapIds(ctx.Context, cc.AccountId); err == nil && len(ids) > 0 {
-			// Note: This is a heuristic only, and should work in the majority of cases.
-			// Reason is that in value trees we cannot distinguish between bigmaps
-			// and any other container type using PrimSequence as encoding (list, map, set).
-			//
-			// FIXME: If it turns out this generates issues, we could use
-			// paths from the type tree and match the same paths in the value
-			// tree, but due to ambiguities in pair unfolding this method would
-			// in theory not be correct in all possible cases either.
-			prim.Visit(func(p *micheline.Prim) error {
-				if p.LooksLikeContainer() {
-					*p = micheline.NewBigmapRef(ids[0])
-					ids = ids[1:]
-					if len(ids) == 0 {
-						return io.EOF
-					}
+	if patchBigmaps && len(ids) > 0 {
+
+		// Note: This is a heuristic only, and should work in the majority of cases.
+		// Reason is that in value trees we cannot distinguish between bigmaps
+		// and any other container type using PrimSequence as encoding (list, map, set).
+		//
+		var i int
+		prim.Visit(func(p *micheline.Prim) error {
+			if p.LooksLikeContainer() {
+				*p = micheline.NewBigmapRef(ids[i])
+				i++
+				if len(ids) <= i {
+					return io.EOF
 				}
-				return nil
-			})
-		}
+			}
+			return nil
+		})
 	}
 
 	resp := &ExplorerStorageValue{
 		Value:    micheline.NewValue(typ, prim),
+		Bigmaps:  cc.NamedBigmaps(ids),
 		modified: ts,
 		expires:  ctx.Tip.BestTime.Add(ctx.Params.TimeBetweenBlocks[0]),
 	}

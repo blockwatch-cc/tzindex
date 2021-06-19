@@ -184,6 +184,7 @@ type ExplorerStorageValue struct {
 	Meta     *ExplorerStorageMeta `json:"meta,omitempty"`
 	Value    micheline.Value      `json:"value"`
 	Prim     *micheline.Prim      `json:"prim,omitempty"`
+	Bigmaps  map[string]int64     `json:"bigmaps,omitempty"` // for ContractStorage
 	modified time.Time            `json:"-"`
 	expires  time.Time            `json:"-"`
 }
