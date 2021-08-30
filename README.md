@@ -10,7 +10,7 @@ For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](h
 
 - indexes and cross-checks full on-chain state
 - feature-rich [REST API](https://tzstats.com/docs/api/index.html) with objects, bulk tables and time-series
-- supports protocols up to Florence (v009)
+- supports protocols up to Granada (v010)
 - auto-detects and locks Tezos network (never mixes data from different networks)
 - indexes all accounts and smart-contracts (including genesis data)
 - follows chain reorgs as they are resolved
@@ -43,8 +43,8 @@ For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](h
 
 **Operation modes**
 
-- **Full** regular operation mode that builds all indexes (default)
-- **Light** light-weight mode without consensus and governance indexes (CLI: `--light`)
+- **Full** regular operation mode that builds all indexes
+- **Light** (default) light-weight mode without consensus and governance indexes (CLI: `--light`)
 - **Validate** state validation mode for checking accounts and balances each block/cycle (CLI: `--validate`)
 
 **Light mode** is best suited for dapps where access to baking-related data is not necessary. In light mode we don't generate the following list of indexes: rights, elections, votes, proposals, ballots, snapshots and income. Therefore its not possible to switch between full and light mode.
@@ -61,7 +61,7 @@ Light mode saves roughly \~50% storage costs and \~50% indexing time. Keep in mi
 
 ### Requirements
 
-- Storage: 6.7GB (full Mainnet index, Jun 2021), 4G (light mode)
+- Storage: 10GB (full Mainnet index, Aug 2021), 4G (light mode)
 - RAM:  4-24GB (configurable, use more memory for better query latency)
 - CPU:  2+ cores (configurable, use more for better query parallelism)
 - Tezos node in archive mode
@@ -153,12 +153,20 @@ Flags:
   -c, --config string          config file
       --cpus int               max number of logical CPU cores to use (default: all) (default -1)
   -p, --dbpath path            database path
+      --full                   full mode (index all data)
       --gogc int               trigger GC when used mem grows by N percent (default 20)
   -h, --help                   help for tzindex
+      --insecure               disable RPC TLS certificate checks (not recommended)
+      --light                  light mode (use to skip baker and gov data)
+      --norpc                  disable RPC client
+      --notls                  disable RPC TLS support (use http)
       --profile-block string   write blocking events to file
       --profile-cpu string     write cpu profile to file
       --profile-mutex string   write mutex contention samples to file
       --profile-rate int       block/mutex profiling rate in fractions of 100 (e.g. 100 == 1%) (default 100)
+      --rpcpass string         RPC password
+      --rpcurl string          RPC url (default "http://127.0.0.1:8732")
+      --rpcuser string         RPC username
   -t, --test                   test configuration and exit
       --v                      be verbose
       --vv                     debug mode
@@ -172,21 +180,36 @@ Usage:
   tzindex run [flags]
 
 Flags:
-      --enable-cors      enable API CORS support
-  -h, --help             help for run
-      --insecure         disable RPC TLS certificate checks (not recommended)
-      --light            light mode (use to skip baker and gov data)
-      --noapi            disable API server
-      --noindex          disable indexing
-      --nomonitor        disable block monitor
-      --norpc            disable RPC client
-      --notls            disable RPC TLS support (use http)
-      --rpcpass string   RPC password
-      --rpcurl string    RPC url (default "http://127.0.0.1:8732")
-      --rpcuser string   RPC username
-      --stop height      stop indexing after height
-      --unsafe           disable fsync for fast ingest (DANGEROUS! data will be lost on crashes)
-      --validate         validate account balances
+      --enable-cors   enable API CORS support
+  -h, --help          help for run
+      --noapi         disable API server
+      --noindex       disable indexing
+      --nomonitor     disable block monitor
+      --stop height   stop indexing after height
+      --unsafe        disable fsync for fast ingest (DANGEROUS! data will be lost on crashes)
+      --validate      validate account balances
+
+Global Flags:
+  -c, --config string          config file
+      --cpus int               max number of logical CPU cores to use (default: all) (default -1)
+  -p, --dbpath path            database path
+      --full                   full mode (index all data)
+      --gogc int               trigger GC when used mem grows by N percent (default 20)
+      --insecure               disable RPC TLS certificate checks (not recommended)
+      --light                  light mode (use to skip baker and gov data)
+      --norpc                  disable RPC client
+      --notls                  disable RPC TLS support (use http)
+      --profile-block string   write blocking events to file
+      --profile-cpu string     write cpu profile to file
+      --profile-mutex string   write mutex contention samples to file
+      --profile-rate int       block/mutex profiling rate in fractions of 100 (e.g. 100 == 1%) (default 100)
+      --rpcpass string         RPC password
+      --rpcurl string          RPC url (default "http://127.0.0.1:8732")
+      --rpcuser string         RPC username
+  -t, --test                   test configuration and exit
+      --v                      be verbose
+      --vv                     debug mode
+      --vvv                    trace mode
 ```
 
 ### License
