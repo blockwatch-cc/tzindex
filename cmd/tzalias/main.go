@@ -4,14 +4,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,7 +17,7 @@ import (
 
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzstats-go"
-	"github.com/daviddengcn/go-colortext"
+	"github.com/echa/config"
 	"github.com/echa/log"
 )
 
@@ -85,22 +83,37 @@ func main() {
 			fmt.Printf("  asset.version         (string) smart contract version\n")
 			fmt.Printf("  asset.homepage        (string) token issuer homepage\n")
 			fmt.Printf("  asset.tags            ([]string) list of user-defined tags\n")
+			fmt.Printf("  updated.hash          (string) last update block\n")
+			fmt.Printf("  updated.height        (int) last update height\n")
+			fmt.Printf("  updated.time          (string) last update time\n")
 			os.Exit(0)
 		}
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
 
+	config.SetEnvPrefix("TZALIAS")
+	realconf := config.ConfigName()
+	if _, err := os.Stat(realconf); err == nil {
+		if err := config.ReadConfigFile(); err != nil {
+			fmt.Printf("Could not read config %s: %v\n", realconf, err)
+			os.Exit(1)
+		}
+		log.Infof("Using configuration file %s", realconf)
+	} else {
+		log.Warnf("Missing config file, using default values.")
+	}
+
+	tzstats.UseLogger(log.Log)
 	if verbose {
 		log.SetLevel(log.LevelDebug)
-		tzstats.UseLogger(log.Log)
 	}
 
 	if err := run(); err != nil {
 		if e, ok := tzstats.IsApiError(err); ok {
-			fmt.Printf("Error: %s: %s\n", e.Errors[0].Message, e.Errors[0].Detail)
+			log.Errorf("%s: %s", e.Errors[0].Message, e.Errors[0].Detail)
 		} else {
-			fmt.Printf("Error: %v\n", err)
+			log.Error(err)
 		}
 		os.Exit(1)
 	}
@@ -394,367 +407,6 @@ func removeAlias(ctx context.Context, c *tzstats.Client) error {
 		return err
 	}
 	log.Infof("Removed alias %s/%d", addr, id)
-	return nil
-}
-
-type kvpairs map[string]string
-
-func parseArgs(args []string) (kvpairs, error) {
-	kvp := make(kvpairs, 0)
-	for _, arg := range args {
-		ok, k, v := parseKeyValue(arg)
-		if !ok {
-			return nil, fmt.Errorf("bad key/value: %s", arg)
-		}
-		kvp[k] = v
-	}
-	return kvp, nil
-}
-
-func unescape(s string) string {
-	u := make([]rune, 0, len(s))
-	var escape bool
-	for _, c := range s {
-		if escape {
-			u = append(u, c)
-			escape = false
-			continue
-		}
-		if c == '\\' {
-			escape = true
-			continue
-		}
-		u = append(u, c)
-	}
-
-	return string(u)
-}
-
-func parseKeyValue(keyvalue string) (bool, string, string) {
-	k := make([]rune, 0, len(keyvalue))
-	var escape bool
-	for i, c := range keyvalue {
-		if escape {
-			k = append(k, c)
-			escape = false
-			continue
-		}
-		if c == '\\' {
-			escape = true
-			continue
-		}
-		if c == '=' {
-			return true, string(k), unescape(keyvalue[i+1:])
-		}
-		k = append(k, c)
-	}
-
-	return false, "", ""
-}
-
-func print(val interface{}) {
-	body, _ := json.MarshalIndent(val, "", "    ")
-	if nocolor {
-		os.Stdout.Write(body)
-	} else {
-		raw := make(map[string]interface{})
-		dec := json.NewDecoder(bytes.NewBuffer(body))
-		dec.UseNumber()
-		dec.Decode(&raw)
-		printJSON(1, raw, false)
-	}
-}
-
-func printJSON(depth int, val interface{}, isKey bool) {
-	switch v := val.(type) {
-	case nil:
-		ct.ChangeColor(ct.Blue, false, ct.None, false)
-		fmt.Print("null")
-		ct.ResetColor()
-	case bool:
-		ct.ChangeColor(ct.Blue, false, ct.None, false)
-		if v {
-			fmt.Print("true")
-		} else {
-			fmt.Print("false")
-		}
-		ct.ResetColor()
-	case string:
-		if isKey {
-			ct.ChangeColor(ct.Blue, true, ct.None, false)
-		} else {
-			ct.ChangeColor(ct.Yellow, false, ct.None, false)
-		}
-		fmt.Print(strconv.Quote(v))
-		ct.ResetColor()
-	case json.Number:
-		ct.ChangeColor(ct.Blue, false, ct.None, false)
-		fmt.Print(v)
-		ct.ResetColor()
-	case map[string]interface{}:
-
-		if len(v) == 0 {
-			fmt.Print("{}")
-			break
-		}
-
-		var keys []string
-
-		for h := range v {
-			keys = append(keys, h)
-		}
-
-		sort.Strings(keys)
-
-		fmt.Println("{")
-		needNL := false
-		for _, key := range keys {
-			if needNL {
-				fmt.Print(",\n")
-			}
-			needNL = true
-			for i := 0; i < depth; i++ {
-				fmt.Print("    ")
-			}
-
-			printJSON(depth+1, key, true)
-			fmt.Print(": ")
-			printJSON(depth+1, v[key], false)
-		}
-		fmt.Println("")
-
-		for i := 0; i < depth-1; i++ {
-			fmt.Print("    ")
-		}
-		fmt.Print("}")
-
-	case []interface{}:
-
-		if len(v) == 0 {
-			fmt.Print("[]")
-			break
-		}
-
-		fmt.Println("[")
-		needNL := false
-		for _, e := range v {
-			if needNL {
-				fmt.Print(",\n")
-			}
-			needNL = true
-			for i := 0; i < depth; i++ {
-				fmt.Print("    ")
-			}
-
-			printJSON(depth+1, e, false)
-		}
-		fmt.Println("")
-
-		for i := 0; i < depth-1; i++ {
-			fmt.Print("    ")
-		}
-		fmt.Print("]")
-	default:
-		fmt.Println("unknown type:", reflect.TypeOf(v))
-	}
-}
-
-var stringSliceType = reflect.TypeOf([]string(nil))
-
-func setField(dst interface{}, name, value string) error {
-	structValue := reflect.ValueOf(dst).Elem()
-	typ := structValue.Type()
-	index := -1
-	for i := 0; i < typ.NumField(); i++ {
-		tag := strings.Split(typ.Field(i).Tag.Get("json"), ",")[0]
-		if tag == "-" {
-			continue
-		}
-		if tag == name {
-			index = i
-			break
-		}
-	}
-	if index < 0 {
-		return fmt.Errorf("No such field: %s in struct", name)
-	}
-
-	structFieldValue := structValue.FieldByIndex([]int{index})
-	if !structFieldValue.IsValid() {
-		return fmt.Errorf("No such field: %s in struct", name)
-	}
-
-	if !structFieldValue.CanSet() {
-		return fmt.Errorf("Cannot set %s field value", name)
-	}
-
-	switch structFieldValue.Kind() {
-	case reflect.Int, reflect.Int64:
-		i, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			return err
-		}
-		structFieldValue.SetInt(i)
-	case reflect.Int32:
-		i, err := strconv.ParseInt(value, 10, 32)
-		if err != nil {
-			return err
-		}
-		structFieldValue.SetInt(i)
-	case reflect.Int16:
-		i, err := strconv.ParseInt(value, 10, 16)
-		if err != nil {
-			return err
-		}
-		structFieldValue.SetInt(i)
-	case reflect.Int8:
-		i, err := strconv.ParseInt(value, 10, 8)
-		if err != nil {
-			return err
-		}
-		structFieldValue.SetInt(i)
-	case reflect.Uint, reflect.Uint64:
-		i, err := strconv.ParseUint(value, 10, 64)
-		if err != nil {
-			return err
-		}
-		structFieldValue.SetUint(i)
-	case reflect.Uint32:
-		i, err := strconv.ParseUint(value, 10, 32)
-		if err != nil {
-			return err
-		}
-		structFieldValue.SetUint(i)
-	case reflect.Uint16:
-		i, err := strconv.ParseUint(value, 10, 16)
-		if err != nil {
-			return err
-		}
-		structFieldValue.SetUint(i)
-	case reflect.Uint8:
-		i, err := strconv.ParseUint(value, 10, 8)
-		if err != nil {
-			return err
-		}
-		structFieldValue.SetUint(i)
-	case reflect.Float64:
-		i, err := strconv.ParseFloat(value, 64)
-		if err != nil {
-			return err
-		}
-		structFieldValue.SetFloat(i)
-	case reflect.Float32:
-		i, err := strconv.ParseFloat(value, 32)
-		if err != nil {
-			return err
-		}
-		structFieldValue.SetFloat(i)
-	case reflect.Bool:
-		b, err := strconv.ParseBool(value)
-		if err != nil {
-			return err
-		}
-		structFieldValue.SetBool(b)
-	case reflect.String:
-		structFieldValue.SetString(value)
-	case reflect.Slice:
-		if structFieldValue.Type() == stringSliceType {
-			structFieldValue.Set(reflect.ValueOf(strings.Split(value, ",")))
-		} else {
-			return fmt.Errorf("Unsupported slice type %s", structFieldValue.Type())
-		}
-	default:
-		return fmt.Errorf("Unsupported struct type %s", structFieldValue.Type())
-	}
-	return nil
-}
-
-// we assume exactly two nesting levels and add all detected schemas
-// as schema descriptors to Extra
-func fillStruct(m map[string]string, alias *tzstats.Metadata) error {
-	for k, v := range m {
-		keyParts := strings.Split(k, ".")
-		ns := keyParts[0]
-		var err error
-		switch ns {
-		case "alias":
-			if alias.Alias == nil {
-				alias.Alias = &tzstats.AliasMetadata{}
-			}
-			err = setField(alias.Alias, keyParts[1], v)
-		case "baker":
-			if alias.Baker == nil {
-				alias.Baker = &tzstats.BakerMetadata{}
-			}
-			err = setField(alias.Baker, keyParts[1], v)
-		case "payout":
-			if alias.Payout == nil {
-				alias.Payout = &tzstats.PayoutMetadata{}
-			}
-			err = setField(alias.Payout, keyParts[1], v)
-		case "asset":
-			if alias.Asset == nil {
-				alias.Asset = &tzstats.AssetMetadata{}
-			}
-			err = setField(alias.Asset, keyParts[1], v)
-		case "location":
-			if alias.Location == nil {
-				alias.Location = &tzstats.LocationMetadata{}
-			}
-			err = setField(alias.Location, keyParts[1], v)
-		case "domain":
-			if alias.Domain == nil {
-				alias.Domain = &tzstats.DomainMetadata{}
-			}
-			err = setField(alias.Domain, keyParts[1], v)
-		case "media":
-			if alias.Media == nil {
-				alias.Media = &tzstats.MediaMetadata{}
-			}
-			err = setField(alias.Media, keyParts[1], v)
-		case "rights":
-			if alias.Rights == nil {
-				alias.Rights = &tzstats.RightsMetadata{}
-			}
-			err = setField(alias.Rights, keyParts[1], v)
-		case "social":
-			if alias.Social == nil {
-				alias.Social = &tzstats.SocialMetadata{}
-			}
-			err = setField(alias.Social, keyParts[1], v)
-		case "tz16":
-			if alias.Tz16 == nil {
-				alias.Tz16 = &tzstats.Tz16Metadata{}
-			}
-			err = setField(alias.Tz16, keyParts[1], v)
-		case "tz21":
-			if alias.Tz21 == nil {
-				alias.Tz21 = &tzstats.Tz21Metadata{}
-			}
-			err = setField(alias.Tz21, keyParts[1], v)
-		default:
-			if alias.Extra == nil {
-				alias.Extra = make(map[string]interface{})
-			}
-			// use custom metadata schema
-			desc, ok := alias.Extra[ns]
-			if !ok {
-				desc = make(map[string]interface{})
-			}
-			// check value type
-			if descVal, ok := desc.(map[string]interface{}); ok {
-				descVal[keyParts[1]] = v
-			} else {
-				if err := setField(desc, keyParts[1], v); err != nil {
-					return err
-				}
-			}
-			alias.Extra[ns] = desc
-		}
-		if err != nil {
-			return fmt.Errorf("Setting %s=%s: %v", k, v, err)
-		}
-	}
 	return nil
 }
 

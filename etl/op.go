@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"blockwatch.cc/packdb/util"
+	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/rpc"
 	"blockwatch.cc/tzgo/tezos"
@@ -118,6 +119,107 @@ func (b *Builder) AppendImplicitOps(ctx context.Context) error {
 		b.block.Ops = append(b.block.Ops, v)
 	}
 
+	return nil
+}
+
+// generate synthetic ops from block implicit ops (Granada+)
+// Originations (on migration)
+// Transactions / Subsidy
+func (b *Builder) AppendImplicitBlockOps(ctx context.Context) error {
+	for p, op := range b.block.TZ.Block.Metadata.ImplicitOperationsResults {
+		n := b.block.NextN()
+		Errorf := func(format string, args ...interface{}) error {
+			return fmt.Errorf(
+				"implicit block %s op [%d]: "+format,
+				append([]interface{}{op.Kind, n}, args...)...,
+			)
+		}
+
+		switch op.Kind {
+		case tezos.OpTypeOrigination:
+			// for now we expect a single address only
+			dst, ok := b.AccountByAddress(op.OriginatedContracts[0])
+			if !ok {
+				return Errorf("missing originated contract %s", op.OriginatedContracts[0])
+			}
+			// load script from RPC
+			if op.Script == nil {
+				var err error
+				op.Script, err = b.rpc.GetContractScript(ctx, dst.Address)
+				if err != nil {
+					return Errorf("loading contract script %s: %v", dst.Address, err)
+				}
+			}
+			o := NewImplicitOp(b.block, dst.RowId, tezos.OpTypeOrigination, n, OPL_PROTOCOL_UPGRADE, p)
+			o.IsContract = true
+			dst.IsContract = true
+			o.GasUsed = op.ConsumedGas
+			o.StorageSize = op.StorageSize
+			o.StoragePaid = op.PaidStorageSizeDiff
+			if op.Storage != nil {
+				o.Storage, _ = op.Storage.MarshalBinary()
+			}
+
+			// patch in missing bigmap allocs
+			typs := op.Script.BigmapTypesByName()
+			ids := op.Script.BigmapsByName()
+			if len(ids) > 0 {
+				bmd := make(micheline.BigmapDiff, 0)
+				for n, id := range ids {
+					typ, _ := typs[n]
+					diff := micheline.BigmapDiffElem{
+						Action:    micheline.DiffActionAlloc,
+						Id:        id,
+						KeyType:   typ.Prim.Args[0],
+						ValueType: typ.Prim.Args[1],
+					}
+					bmd = append(bmd, diff)
+				}
+				o.BigmapDiff, _ = bmd.MarshalBinary()
+			}
+
+			// add volume if balance update exists
+			for _, v := range op.BalanceUpdates {
+				o.Volume += v.Amount()
+				f := b.NewSubsidyFlow(dst, v.Amount(), n, p)
+				b.block.Flows = append(b.block.Flows, f)
+			}
+
+			b.block.Ops = append(b.block.Ops, o)
+
+			// register new implicit contract
+			b.conMap[dst.RowId] = NewImplicitContract(dst, op, o)
+
+		case tezos.OpTypeTransaction:
+			for _, v := range op.BalanceUpdates {
+				dst, ok := b.AccountByAddress(v.Address())
+				if !ok {
+					return Errorf("missing account %s", v.Address())
+				}
+				dstcon, err := b.LoadContractByAccountId(ctx, dst.RowId)
+				if err != nil {
+					return Errorf("loading contract %d %s: %v", dst.RowId, v.Address(), err)
+				}
+				o := NewImplicitOp(b.block, dst.RowId, tezos.OpTypeTransaction, n, OPL_BLOCK_HEADER, p)
+				o.IsContract = true
+				o.Volume = v.Amount()
+				o.GasUsed = op.ConsumedGas
+				o.StorageSize = op.StorageSize
+				o.StoragePaid = op.PaidStorageSizeDiff
+				o.Data = "mint_subsidy"
+				if op.Storage != nil {
+					o.Storage, _ = op.Storage.MarshalBinary()
+				}
+				dstcon.Update(o)
+				// o.BigmapDiff, _ = op.BigmapDiff.MarshalBinary()
+				b.block.Ops = append(b.block.Ops, o)
+				if o.Volume > 0 {
+					f := b.NewSubsidyFlow(dst, o.Volume, n, p)
+					b.block.Flows = append(b.block.Flows, f)
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -237,7 +339,7 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.OperationHeade
 			acc = origacc
 		} else {
 			// update blinded account with new hash
-			acc.Hash = aop.Pkh
+			acc.Address = aop.Pkh
 			acc.Type = aop.Pkh.Type
 			acc.FirstSeen = b.block.Height
 			acc.LastSeen = b.block.Height
@@ -271,7 +373,7 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.OperationHeade
 			// replace implicit hash with blinded hash
 			delete(b.accHashMap, b.accCache.AccountHashKey(acc))
 			acc.NOps--
-			acc.Hash = bkey
+			acc.Address = bkey
 			acc.Type = bkey.Type
 			acc.IsActivated = false
 			acc.IsDirty = true
@@ -339,11 +441,11 @@ func (b *Builder) AppendEndorsementOp(
 
 	// store endorsed slots as data
 	op.HasData = true
-	var slotmask uint32
-	for _, v := range eop.Metadata.Slots {
-		slotmask |= 1 << uint(v)
+	bits := vec.NewBitSet(b.block.Params.EndorsersPerBlock)
+	for _, idx := range eop.Metadata.Slots {
+		bits.Set(idx)
 	}
-	op.Data = strconv.FormatUint(uint64(slotmask), 10)
+	op.Data = hex.EncodeToString(bits.Bytes())
 
 	// fill op amounts from flows
 	for _, f := range flows {
@@ -930,7 +1032,7 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 			if err != nil {
 				return Errorf("loading script: %v", err)
 			}
-			ep, _, err := top.Parameters.MapEntrypoint(script)
+			ep, _, err := top.Parameters.MapEntrypoint(script.ParamType())
 			if op.IsSuccess && err != nil {
 				return Errorf("searching entrypoint: %v", err)
 			}
@@ -945,7 +1047,7 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 		}
 	}
 	if len(res.BigmapDiff) > 0 {
-		top.Metadata.Result.BigmapDiff, err = b.PatchBigmapDiff(ctx, res.BigmapDiff, dst.Address(), nil)
+		top.Metadata.Result.BigmapDiff, err = b.PatchBigmapDiff(ctx, res.BigmapDiff, dst.Address, nil)
 		if err != nil {
 			return Errorf("patch bigmap: %v", err)
 		}
@@ -1203,7 +1305,7 @@ func (b *Builder) AppendInternalTransactionOp(
 			if err != nil {
 				return Errorf("loading script for %s: %v", dst, err)
 			}
-			ep, _, err := iop.Parameters.MapEntrypoint(script)
+			ep, _, err := iop.Parameters.MapEntrypoint(script.ParamType())
 			if op.IsSuccess && err != nil {
 				return Errorf("searching entrypoint in %s: %v", dst, err)
 			}
@@ -1218,7 +1320,7 @@ func (b *Builder) AppendInternalTransactionOp(
 		}
 	}
 	if len(res.BigmapDiff) > 0 {
-		iop.Result.BigmapDiff, err = b.PatchBigmapDiff(ctx, res.BigmapDiff, dst.Address(), nil)
+		iop.Result.BigmapDiff, err = b.PatchBigmapDiff(ctx, res.BigmapDiff, dst.Address, nil)
 		if err != nil {
 			return Errorf("patch bigmap: %v", err)
 		}
@@ -1449,14 +1551,14 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.OperationHead
 		if op.Volume > 0 {
 			// instead of real time we use block offsets and the target time
 			// between blocks as time diff
-			blocksec := int64(b.block.Params.TimeBetweenBlocks[0] / time.Second)
+			blocksec := int64(b.block.Params.BlockTime() / time.Second)
 			diffsec := (b.block.Height - src.LastIn) * blocksec
 			// convert seconds to days and volume from atomic units to coins
 			op.TDD += float64(diffsec) / 86400 * b.block.Params.ConvertValue(op.Volume)
 		}
 
 		// create or extend bigmap diff to inject alloc for proto < v005
-		oop.Metadata.Result.BigmapDiff, err = b.PatchBigmapDiff(ctx, res.BigmapDiff, dst.Address(), oop.Script)
+		oop.Metadata.Result.BigmapDiff, err = b.PatchBigmapDiff(ctx, res.BigmapDiff, dst.Address, oop.Script)
 		if err != nil {
 			return Errorf("patch bigmap: %v", err)
 		}
@@ -1694,14 +1796,14 @@ func (b *Builder) AppendInternalOriginationOp(
 		if op.Volume > 0 {
 			// instead of real time we use block offsets and the target time
 			// between blocks as time diff
-			blocksec := int64(b.block.Params.TimeBetweenBlocks[0] / time.Second)
+			blocksec := int64(b.block.Params.BlockTime() / time.Second)
 			diffsec := (b.block.Height - src.LastIn) * blocksec
 			// convert seconds to days and volume from atomic units to coins
 			op.TDD += float64(diffsec) / 86400 * b.block.Params.ConvertValue(op.Volume)
 		}
 
 		// create or extend bigmap diff to inject alloc for proto < v005
-		iop.Result.BigmapDiff, err = b.PatchBigmapDiff(ctx, res.BigmapDiff, dst.Address(), iop.Script)
+		iop.Result.BigmapDiff, err = b.PatchBigmapDiff(ctx, res.BigmapDiff, dst.Address, iop.Script)
 		if err != nil {
 			return Errorf("patch bigmap: %v", err)
 		}

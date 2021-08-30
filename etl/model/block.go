@@ -7,12 +7,12 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"math/bits"
 	"sync"
 	"time"
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
+	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/rpc"
 	"blockwatch.cc/tzgo/tezos"
 )
@@ -49,7 +49,7 @@ type Block struct {
 	Nonce               uint64                 `pack:"n,snappy"      json:"nonce"`                          // bc: block nonce
 	VotingPeriodKind    tezos.VotingPeriodKind `pack:"k,snappy"      json:"voting_period_kind"`             // bc: tezos voting period (enum)
 	BakerId             AccountID              `pack:"B,snappy"      json:"baker_id"`                       // bc: block baker (address id)
-	SlotsEndorsed       uint32                 `pack:"s,snappy"      json:"endorsed_slots"`                 // bc: slots that were endorsed by the following block
+	SlotsEndorsed       []byte                 `pack:"s,snappy"      json:"endorsed_slots"`                 // bc: slots that were endorsed by the following block
 	NSlotsEndorsed      int                    `pack:"e,snappy"      json:"n_endorsed_slots"`               // stats: successful endorsed slots
 	NOps                int                    `pack:"1,snappy"      json:"n_ops"`                          // stats: successful operation count
 	NOpsFailed          int                    `pack:"2,snappy"      json:"n_ops_failed"`                   // stats: failed operation coiunt
@@ -87,6 +87,8 @@ type Block struct {
 	StorageSize         int64                  `pack:"Y,snappy"      json:"storage_size"`                   // stats: total new storage size allocated
 	TDD                 float64                `pack:"t,convert,precision=5,snappy"  json:"days_destroyed"` // stats: token days destroyed (from last-in time to spend)
 	NOpsImplicit        int                    `pack:"j,snappy"      json:"n_ops_implicit"`                 // stats: number of implicit operations
+	LbEscapeVote        bool                   `pack:"O,snappy"      json:"lb_esc_vote"`                    // stats: liquidity baking vote
+	LbEscapeEma         int64                  `pack:"M,snappy"      json:"lb_esc_ema"`                     // stats: liquidity baking disable moving average
 
 	// other tz or extracted/translated data for processing
 	TZ     *Bundle       `pack:"-" json:"-"`
@@ -144,6 +146,8 @@ func NewBlock(tz *Bundle, parent *Block) (*Block, error) {
 	b.Version = tz.Block.GetVersion()
 	b.Validation = tz.Block.Header.ValidationPass
 	b.Priority = tz.Block.Header.Priority
+	b.LbEscapeVote = tz.Block.Header.LiquidityBakingEscapeVote
+	b.LbEscapeEma = tz.Block.Metadata.LiquidityBakingEscapeEma
 	if len(tz.Block.Header.ProofOfWorkNonce) >= 8 {
 		b.Nonce = binary.BigEndian.Uint64(tz.Block.Header.ProofOfWorkNonce)
 	}
@@ -250,9 +254,9 @@ func (b *Block) IsProtocolUpgrade() bool {
 }
 
 func (b *Block) GetRpcOp(l, p, c int) (rpc.Operation, bool) {
-	if len(b.TZ.Block.Operations) < l ||
+	if l >= 0 && (len(b.TZ.Block.Operations) < l ||
 		len(b.TZ.Block.Operations[l]) < p ||
-		len(b.TZ.Block.Operations[l][p].Contents) < c {
+		len(b.TZ.Block.Operations[l][p].Contents) < c) {
 		return nil, false
 	}
 	return b.TZ.Block.Operations[l][p].Contents[c], true
@@ -291,7 +295,7 @@ func (b *Block) NextN() int {
 func (b *Block) Age(height int64) int64 {
 	// instead of real time we use block offsets and the target time
 	// between blocks as time diff
-	return (b.Height - height) * int64(b.Params.TimeBetweenBlocks[0]/time.Second)
+	return (b.Height - height) * int64(b.Params.BlockTime()/time.Second)
 }
 
 func (b *Block) BlockReward(p *tezos.Params) int64 {
@@ -358,7 +362,7 @@ func (b *Block) Reset() {
 	b.Nonce = 0
 	b.VotingPeriodKind = 0
 	b.BakerId = 0
-	b.SlotsEndorsed = 0
+	b.SlotsEndorsed = nil
 	b.NSlotsEndorsed = 0
 	b.NOps = 0
 	b.NOpsFailed = 0
@@ -396,6 +400,8 @@ func (b *Block) Reset() {
 	b.StorageSize = 0
 	b.TDD = 0
 	b.NOpsImplicit = 0
+	b.LbEscapeVote = false
+	b.LbEscapeEma = 0
 	b.TZ = nil
 	b.Params = nil
 	b.Chain = nil
@@ -454,15 +460,14 @@ func (b *Block) Update(accounts, delegates map[AccountID]*Account) {
 	b.StorageSize = 0
 	b.TDD = 0
 	b.NOpsImplicit = 0
-
-	var slotsEndorsed uint32
+	slotsEndorsed := vec.NewBitSet(b.Params.EndorsersPerBlock)
 
 	for _, op := range b.Ops {
 		b.BurnedSupply += op.Burned
 		b.TDD += op.TDD
 		b.GasLimit += op.GasLimit
 		b.GasUsed += op.GasUsed
-		b.StorageSize += op.StorageSize
+		b.StorageSize += op.StoragePaid
 
 		if op.IsContract {
 			b.NOpsContract++
@@ -517,7 +522,7 @@ func (b *Block) Update(accounts, delegates map[AccountID]*Account) {
 			b.NEndorsement++
 			eop, _ := b.GetRpcOp(op.OpL, op.OpP, op.OpC)
 			for _, v := range eop.(*rpc.EndorsementOp).Metadata.Slots {
-				slotsEndorsed |= 1 << uint(v)
+				slotsEndorsed.Set(v)
 			}
 		case tezos.OpTypeProposals:
 			b.NOps++
@@ -529,8 +534,8 @@ func (b *Block) Update(accounts, delegates map[AccountID]*Account) {
 	}
 
 	if b.Parent != nil {
-		b.Parent.SlotsEndorsed = slotsEndorsed
-		b.Parent.NSlotsEndorsed = int(bits.OnesCount32(slotsEndorsed))
+		b.Parent.SlotsEndorsed = slotsEndorsed.Bytes()
+		b.Parent.NSlotsEndorsed = int(slotsEndorsed.Count())
 	}
 
 	// mean gas price for this block

@@ -81,9 +81,14 @@ func (c *AddressCache) Build(ctx context.Context, table *pack.Table) error {
 			if err := r.Decode(&a); err != nil {
 				return err
 			}
-			// pad with empty bytes when we detect a gap in account ids
-			if pad := int64(a.RowId.Value()) - int64(c.Len()) - 1; pad > 0 {
-				c.hashes = append(c.hashes, bytes.Repeat([]byte{0}, int(pad)*addrLen)...)
+			diff := int64(a.RowId.Value()) - int64(c.Len())
+			if diff <= 0 {
+				log.Warnf("AddressCache: Skipping %d duplicates/out-of-order ids detected before id %d", -(diff - 1), a.RowId)
+				return nil
+			} else if diff > 1 {
+				log.Warnf("AddressCache: gap size %d decteded before id %d", diff, a.RowId)
+				// pad with empty bytes when we detect a gap in account ids
+				c.hashes = append(c.hashes, bytes.Repeat([]byte{0}, int(diff-1)*addrLen)...)
 			}
 			c.hashes = append(c.hashes, byte(a.Address.Type))
 			c.hashes = append(c.hashes, a.Address.Hash...)
@@ -107,12 +112,12 @@ func (c *AddressCache) Update(accounts map[model.AccountID]*model.Account) error
 	for _, v := range accounts {
 		// insert address when new
 		if v.IsNew {
-			ins = append(ins, XAccount{RowId: v.RowId, Address: v.Hash})
+			ins = append(ins, XAccount{RowId: v.RowId, Address: v.Address})
 			continue
 		}
 		// replace address when account was just activated
 		if v.IsActivated && v.FirstSeen == v.LastSeen {
-			upd = append(upd, XAccount{RowId: v.RowId, Address: v.Hash})
+			upd = append(upd, XAccount{RowId: v.RowId, Address: v.Address})
 		}
 	}
 

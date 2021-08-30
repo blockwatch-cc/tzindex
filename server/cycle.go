@@ -6,7 +6,6 @@ package server
 import (
 	"encoding/json"
 	"github.com/gorilla/mux"
-	"math/bits"
 	"net/http"
 	"strconv"
 	"sync"
@@ -172,9 +171,9 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 		nowtime := ctx.Tip.BestTime
 		ec.StartTime = ctx.Indexer.LookupBlockTime(ctx.Context, start)
 		if ec.StartTime.IsZero() {
-			ec.StartTime = nowtime.Add(time.Duration(start-nowheight) * p.TimeBetweenBlocks[0])
+			ec.StartTime = nowtime.Add(time.Duration(start-nowheight) * p.BlockTime())
 		}
-		ec.EndTime = nowtime.Add(time.Duration(end-nowheight) * p.TimeBetweenBlocks[0])
+		ec.EndTime = nowtime.Add(time.Duration(end-nowheight) * p.BlockTime())
 	}
 
 	var (
@@ -254,11 +253,10 @@ func NewExplorerCycle(ctx *ApiContext, id int64) *ExplorerCycle {
 
 				// don't count endorsements for the current block
 				if b.Height != nowheight {
-					nEndorse := bits.OnesCount32(b.SlotsEndorsed)
-					ec.MissedEndorsements += p.EndorsersPerBlock - nEndorse
-					endorseStats.Add(int64(nEndorse))
-					if nEndorse < worstEndorsements {
-						worstEndorsements = nEndorse
+					ec.MissedEndorsements += p.EndorsersPerBlock - b.NSlotsEndorsed
+					endorseStats.Add(int64(b.NSlotsEndorsed))
+					if b.NSlotsEndorsed < worstEndorsements {
+						worstEndorsements = b.NSlotsEndorsed
 						ec.WorstEndorsedBlock = b.Height
 					}
 				}
@@ -451,7 +449,7 @@ func ReadCycle(ctx *ApiContext) (interface{}, int) {
 	cycle.FollowerCycle = lookupOrBuildCycle(ctx, id+(p.PreservedCycles+2))
 
 	// set cache expiry
-	cycle.expires = tiptime.Add(p.TimeBetweenBlocks[0])
+	cycle.expires = tiptime.Add(p.BlockTime())
 	cycle.lastmod = tiptime
 
 	return cycle, http.StatusOK

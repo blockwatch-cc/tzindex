@@ -55,13 +55,13 @@ func (b *Builder) CheckState(ctx context.Context) error {
 					acc, acc.Type.KeyType().String(), want, have)
 			}
 			key := acc.Key()
-			addr := acc.Address()
+			addr := acc.Address
 			if !addr.Equal(key.Address()) {
 				log.Errorf("key mismatch: acc=%s type=%s bad-key=%s", addr, key.Type, key)
 			}
 		}
 		// check balance against node rpc
-		addr := acc.Address()
+		addr := acc.Address
 		bal, err := b.rpc.GetContractBalanceHeight(ctx, addr, b.block.Height)
 		if err != nil {
 			// skip 404 errors on non-funded accounts (they may not exist,
@@ -96,7 +96,7 @@ func (b *Builder) CheckState(ctx context.Context) error {
 				acc, acc.Type.KeyType(), want, have)
 		}
 		key := acc.Key()
-		addr := acc.Address()
+		addr := acc.Address
 		if !addr.Equal(key.Address()) {
 			log.Errorf("baker key mismatch: acc=%s type=%s bad-key=%s", addr, key.Type, key)
 		}
@@ -162,7 +162,7 @@ func (b *Builder) CheckAccountDatabase(ctx context.Context, nofail bool) error {
 
 			// check duplicates in DB
 			hash := b.accCache.AccountHashKey(acc)
-			addr := acc.Address()
+			addr := acc.Address
 			if n, ok := seen[hash]; ok && addr.Equal(n) {
 				log.Errorf("Duplicate account %s in database at id %d", addr, acc.RowId)
 			}

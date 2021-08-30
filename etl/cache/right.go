@@ -117,9 +117,9 @@ func (c *RightsCache) Build(ctx context.Context, height, startCycle int64, table
 	right := &model.Right{}
 	return pack.NewQuery("init_cache", table).
 		WithoutCache().
-		WithFields("h", "t", "A", "p").
+		WithFields("h", "t", "A").
 		AndGte("cycle", startCycle). // from cycle
-		AndLte("priority", 31).      // priority for bake & endorse
+		AndEqual("priority", 0).     // priority for bake & endorse
 		Stream(ctx, func(r pack.Row) error {
 			if err := r.Decode(right); err != nil {
 				return err
@@ -127,9 +127,7 @@ func (c *RightsCache) Build(ctx context.Context, height, startCycle int64, table
 			switch right.Type {
 			case tezos.RightTypeBaking:
 				// store only prio zero blocks
-				if right.Priority == 0 {
-					c.SetBakeBit(right.AccountId, right.Height)
-				}
+				c.SetBakeBit(right.AccountId, right.Height)
 			case tezos.RightTypeEndorsing:
 				// store all endorsements (cannot skip because we need to store for
 				// different validators)

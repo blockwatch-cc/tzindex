@@ -67,7 +67,7 @@ func NewExplorerContract(ctx *ApiContext, c *model.Contract, a *model.Account, a
 		CallStats:     c.ListCallStats(),
 		Features:      c.ListFeatures(),
 		Interfaces:    c.ListInterfaces(),
-		expires:       ctx.Tip.BestTime.Add(p.TimeBetweenBlocks[0]),
+		expires:       ctx.Tip.BestTime.Add(p.BlockTime()),
 	}
 
 	// resolve block times
@@ -75,7 +75,7 @@ func NewExplorerContract(ctx *ApiContext, c *model.Contract, a *model.Account, a
 	cc.LastSeenTime = ctx.Indexer.LookupBlockTime(ctx.Context, a.LastSeen)
 
 	// map bigmap ids to storage annotation names
-	if ids, err := ctx.Indexer.ListContractBigMapIds(ctx.Context, a.RowId); err == nil {
+	if ids, err := ctx.Indexer.ListContractBigmapIds(ctx.Context, a.RowId); err == nil {
 		cc.Bigmaps = c.NamedBigmaps(ids)
 	} else {
 		log.Errorf("explorer contract: cannot load bigmap ids: %v", err)
@@ -318,7 +318,7 @@ func ReadContractCalls(ctx *ApiContext) (interface{}, int) {
 
 	// parse entrypoint filter
 	// - name (eg. "default")
-	// - branch (eg. "RRL")
+	// - branch (eg. "/R/R/L")
 	// - id (eg. 5)
 	r.Entrypoints = make([]int64, 0)
 	if len(args.EntrypointCond) > 0 {
@@ -371,7 +371,7 @@ func ReadContractCalls(ctx *ApiContext) (interface{}, int) {
 	// we reuse explorer ops here
 	resp := &ExplorerOpList{
 		list:    make([]*ExplorerOp, 0),
-		expires: ctx.Tip.BestTime.Add(ctx.Params.TimeBetweenBlocks[0]),
+		expires: ctx.Tip.BestTime.Add(ctx.Params.BlockTime()),
 	}
 	cache := make(map[int64]interface{})
 	for _, v := range ops {
@@ -437,7 +437,7 @@ func ReadContractScript(ctx *ApiContext) (interface{}, int) {
 	if err != nil {
 		panic(EInternal(EC_SERVER, "script entrypoint parsing failed", err))
 	}
-	ids, _ := ctx.Indexer.ListContractBigMapIds(ctx.Context, cc.AccountId)
+	ids, _ := ctx.Indexer.ListContractBigmapIds(ctx.Context, cc.AccountId)
 
 	resp := &ExplorerScript{
 		Script:      script,
@@ -467,7 +467,7 @@ func ReadContractStorage(ctx *ApiContext) (interface{}, int) {
 	if err != nil {
 		panic(EInternal(EC_SERVER, "script unmarshal failed", err))
 	}
-	ids, _ := ctx.Indexer.ListContractBigMapIds(ctx.Context, cc.AccountId)
+	ids, _ := ctx.Indexer.ListContractBigmapIds(ctx.Context, cc.AccountId)
 
 	// type is always the most recently upgraded type stored in contract table
 	var (
@@ -518,7 +518,6 @@ func ReadContractStorage(ctx *ApiContext) (interface{}, int) {
 
 	// patch bigmap pointers when storage is loaded from origination
 	if patchBigmaps && len(ids) > 0 {
-
 		// Note: This is a heuristic only, and should work in the majority of cases.
 		// Reason is that in value trees we cannot distinguish between bigmaps
 		// and any other container type using PrimSequence as encoding (list, map, set).
@@ -540,11 +539,11 @@ func ReadContractStorage(ctx *ApiContext) (interface{}, int) {
 		Value:    micheline.NewValue(typ, prim),
 		Bigmaps:  cc.NamedBigmaps(ids),
 		modified: ts,
-		expires:  ctx.Tip.BestTime.Add(ctx.Params.TimeBetweenBlocks[0]),
+		expires:  ctx.Tip.BestTime.Add(ctx.Params.BlockTime()),
 	}
 	if args.WithMeta() {
 		resp.Meta = &ExplorerStorageMeta{
-			Contract: cc.String(),
+			Contract: cc.Address,
 			Time:     ts,
 			Height:   height,
 			Block:    ctx.Indexer.LookupBlockHash(ctx.Context, height),

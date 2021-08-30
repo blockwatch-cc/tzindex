@@ -141,6 +141,14 @@ func (b *Builder) NewImplicitFlows() ([]*Flow, error) {
 	return flows, nil
 }
 
+func (b *Builder) NewSubsidyFlow(acc *Account, amount int64, n, p int) *Flow {
+	f := NewFlow(b.block, acc, nil, n, OPL_BLOCK_HEADER, p, 0, 0)
+	f.Category = FlowCategoryBalance
+	f.Operation = FlowTypeSubsidy
+	f.AmountIn = amount
+	return f
+}
+
 func (b *Builder) NewInvoiceFlow(acc *Account, amount int64, n, p int) *Flow {
 	f := NewFlow(b.block, acc, nil, n, OPL_PROTOCOL_UPGRADE, p, 0, 0)
 	f.Category = FlowCategoryBalance
@@ -731,7 +739,7 @@ func (b *Builder) NewInternalOriginationFlows(origsrc, src, dst, origdlg, srcdlg
 		case "contract":
 			u := v.(*rpc.ContractBalanceUpdate)
 			switch true {
-			case u.Contract.Equal(origsrc.Hash):
+			case u.Contract.Equal(origsrc.Address):
 				// burned from original source balance
 				f := NewFlow(b.block, origsrc, nil, n, l, p, c, i)
 				f.Category = FlowCategoryBalance
@@ -740,7 +748,7 @@ func (b *Builder) NewInternalOriginationFlows(origsrc, src, dst, origdlg, srcdlg
 				f.IsBurned = true
 				flows = append(flows, f)
 				burned += -u.Change
-			case u.Contract.Equal(src.Hash):
+			case u.Contract.Equal(src.Address):
 				// transfers from src contract to dst contract
 				f := NewFlow(b.block, src, dst, n, l, p, c, i)
 				f.Category = FlowCategoryBalance
@@ -748,7 +756,7 @@ func (b *Builder) NewInternalOriginationFlows(origsrc, src, dst, origdlg, srcdlg
 				f.AmountOut = -u.Change // note the negation!
 				flows = append(flows, f)
 				moved += -u.Change
-			case u.Contract.Equal(dst.Hash):
+			case u.Contract.Equal(dst.Address):
 				// transfers from src contract to dst contract
 				f := NewFlow(b.block, dst, src, n, l, p, c, i)
 				f.Category = FlowCategoryBalance

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	"blockwatch.cc/packdb/cache"
 	"blockwatch.cc/packdb/cache/lru"
@@ -16,61 +17,84 @@ import (
 	"blockwatch.cc/tzgo/rpc"
 	"blockwatch.cc/tzgo/tezos"
 
-	. "blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/model"
 )
 
 const (
-	BigMapPackSizeLog2         = 15 // 32k packs
-	BigMapJournalSizeLog2      = 16 // 64k
-	BigMapCacheSize            = 128
-	BigMapFillLevel            = 100
-	BigMapIndexPackSizeLog2    = 14 // 16k packs (32k split size) ~256kB
-	BigMapIndexJournalSizeLog2 = 16 // 64k
-	BigMapIndexCacheSize       = 1024
-	BigMapIndexFillLevel       = 90
-	BigMapIndexKey             = "bigmap"
-	BigMapTableKey             = "bigmap"
+	BigmapPackSizeLog2         = 15 // 32k packs
+	BigmapJournalSizeLog2      = 16 // 64k
+	BigmapCacheSize            = 128
+	BigmapFillLevel            = 100
+	BigmapIndexPackSizeLog2    = 14 // 16k packs (32k split size) ~256kB
+	BigmapIndexJournalSizeLog2 = 16 // 64k
+	BigmapIndexCacheSize       = 1024
+	BigmapIndexFillLevel       = 90
+
+	// TODO: separate config options
+	// BigmapAllocPackSizeLog2  = 15 // 32k
+	// BigmapAllocCacheSize     = 16
+	// BigmapLivePackSizeLog2   = 15 // 32k
+	// BigmapLiveCacheSize      = 256
+	// BigmapUpdatePackSizeLog2 = 16 // 64k
+	// BigmapUpdateCacheSize    = 2  // minimum
+
+	BigmapIndexKey       = "bigmap"
+	BigmapAllocTableKey  = "bigmaps"
+	BigmapUpdateTableKey = "bigmap_updates"
+	BigmapValueTableKey  = "bigmap_values"
 )
 
 var (
-	ErrNoBigmapEntry = errors.New("bigmap not indexed")
+	ErrNoBigmapAlloc = errors.New("bigmap not indexed")
 )
 
-type BigMapIndex struct {
-	db         *pack.DB
-	opts       pack.Options
-	iopts      pack.Options
-	table      *pack.Table
-	allocCache cache.Cache // cache bigmap alloc operations (for fast type access)
-	lastCache  cache.Cache // cache most recent bigmap item (for fast counter access)
+type BigmapIndex struct {
+	db          *pack.DB
+	opts        pack.Options
+	iopts       pack.Options
+	allocTable  *pack.Table
+	updateTable *pack.Table
+	valueTable  *pack.Table
+	allocCache  cache.Cache // cache bigmap allocs (for fast type access)
 }
 
-var _ BlockIndexer = (*BigMapIndex)(nil)
+var _ model.BlockIndexer = (*BigmapIndex)(nil)
 
-func NewBigMapIndex(opts, iopts pack.Options) *BigMapIndex {
+func NewBigmapIndex(opts, iopts pack.Options) *BigmapIndex {
 	ac, _ := lru.New(1024)
-	lc, _ := lru.New(1024)
-	return &BigMapIndex{opts: opts, iopts: iopts, allocCache: ac, lastCache: lc}
+	return &BigmapIndex{opts: opts, iopts: iopts, allocCache: ac}
 }
 
-func (idx *BigMapIndex) DB() *pack.DB {
+func (idx *BigmapIndex) DB() *pack.DB {
 	return idx.db
 }
 
-func (idx *BigMapIndex) Tables() []*pack.Table {
-	return []*pack.Table{idx.table}
+func (idx *BigmapIndex) Tables() []*pack.Table {
+	return []*pack.Table{
+		idx.allocTable,
+		idx.updateTable,
+		idx.valueTable,
+	}
 }
 
-func (idx *BigMapIndex) Key() string {
-	return BigMapIndexKey
+func (idx *BigmapIndex) Key() string {
+	return BigmapIndexKey
 }
 
-func (idx *BigMapIndex) Name() string {
-	return BigMapIndexKey + " index"
+func (idx *BigmapIndex) Name() string {
+	return BigmapIndexKey + " index"
 }
 
-func (idx *BigMapIndex) Create(path, label string, opts interface{}) error {
-	fields, err := pack.Fields(BigmapItem{})
+func (idx *BigmapIndex) Create(path, label string, opts interface{}) error {
+	allocFields, err := pack.Fields(model.BigmapAlloc{})
+	if err != nil {
+		return err
+	}
+	updateFields, err := pack.Fields(model.BigmapUpdate{})
+	if err != nil {
+		return err
+	}
+	liveFields, err := pack.Fields(model.BigmapKV{})
 	if err != nil {
 		return err
 	}
@@ -80,28 +104,52 @@ func (idx *BigMapIndex) Create(path, label string, opts interface{}) error {
 	}
 	defer db.Close()
 
-	table, err := db.CreateTableIfNotExists(
-		BigMapTableKey,
-		fields,
+	_, err = db.CreateTableIfNotExists(
+		BigmapAllocTableKey,
+		allocFields,
 		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, BigMapPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, BigMapJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, BigMapCacheSize),
-			FillLevel:       util.NonZero(idx.opts.FillLevel, BigMapFillLevel),
+			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, BigmapPackSizeLog2),
+			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, BigmapJournalSizeLog2),
+			CacheSize:       util.NonZero(idx.opts.CacheSize, BigmapCacheSize),
+			FillLevel:       util.NonZero(idx.opts.FillLevel, BigmapFillLevel),
+		})
+	if err != nil {
+		return err
+	}
+	_, err = db.CreateTableIfNotExists(
+		BigmapUpdateTableKey,
+		updateFields,
+		pack.Options{
+			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, BigmapPackSizeLog2),
+			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, BigmapJournalSizeLog2),
+			CacheSize:       util.NonZero(idx.opts.CacheSize, BigmapCacheSize),
+			FillLevel:       util.NonZero(idx.opts.FillLevel, BigmapFillLevel),
+		})
+	if err != nil {
+		return err
+	}
+	live, err := db.CreateTableIfNotExists(
+		BigmapValueTableKey,
+		liveFields,
+		pack.Options{
+			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, BigmapPackSizeLog2),
+			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, BigmapJournalSizeLog2),
+			CacheSize:       util.NonZero(idx.opts.CacheSize, BigmapCacheSize),
+			FillLevel:       util.NonZero(idx.opts.FillLevel, BigmapFillLevel),
 		})
 	if err != nil {
 		return err
 	}
 
-	_, err = table.CreateIndexIfNotExists(
+	_, err = live.CreateIndexIfNotExists(
 		"key",                 // name
-		fields.Find("K"),      // HashId (uint64 xxhash(bigmap_id + expr-hash)
+		liveFields.Find("K"),  // HashId (uint64 xxhash(bigmap_id + expr-hash)
 		pack.IndexTypeInteger, // sorted int, index stores uint64 -> pk value
 		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.iopts.PackSizeLog2, BigMapIndexPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.iopts.JournalSizeLog2, BigMapIndexJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.iopts.CacheSize, BigMapIndexCacheSize),
-			FillLevel:       util.NonZero(idx.iopts.FillLevel, BigMapIndexFillLevel),
+			PackSizeLog2:    util.NonZero(idx.iopts.PackSizeLog2, BigmapIndexPackSizeLog2),
+			JournalSizeLog2: util.NonZero(idx.iopts.JournalSizeLog2, BigmapIndexJournalSizeLog2),
+			CacheSize:       util.NonZero(idx.iopts.CacheSize, BigmapIndexCacheSize),
+			FillLevel:       util.NonZero(idx.iopts.FillLevel, BigmapIndexFillLevel),
 		})
 	if err != nil {
 		return err
@@ -110,21 +158,41 @@ func (idx *BigMapIndex) Create(path, label string, opts interface{}) error {
 	return nil
 }
 
-func (idx *BigMapIndex) Init(path, label string, opts interface{}) error {
+func (idx *BigmapIndex) Init(path, label string, opts interface{}) error {
 	var err error
 	idx.db, err = pack.OpenDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return err
 	}
-	idx.table, err = idx.db.Table(
-		BigMapTableKey,
+	idx.allocTable, err = idx.db.Table(
+		BigmapAllocTableKey,
 		pack.Options{
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, BigMapJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, BigMapCacheSize),
+			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, BigmapJournalSizeLog2),
+			CacheSize:       util.NonZero(idx.opts.CacheSize, BigmapCacheSize),
+		})
+	if err != nil {
+		idx.Close()
+		return err
+	}
+	idx.updateTable, err = idx.db.Table(
+		BigmapUpdateTableKey,
+		pack.Options{
+			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, BigmapJournalSizeLog2),
+			CacheSize:       util.NonZero(idx.opts.CacheSize, BigmapCacheSize),
+		})
+	if err != nil {
+		idx.Close()
+		return err
+	}
+	idx.valueTable, err = idx.db.Table(
+		BigmapValueTableKey,
+		pack.Options{
+			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, BigmapJournalSizeLog2),
+			CacheSize:       util.NonZero(idx.opts.CacheSize, BigmapCacheSize),
 		},
 		pack.Options{
-			JournalSizeLog2: util.NonZero(idx.iopts.JournalSizeLog2, BigMapIndexJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.iopts.CacheSize, BigMapIndexCacheSize),
+			JournalSizeLog2: util.NonZero(idx.iopts.JournalSizeLog2, BigmapIndexJournalSizeLog2),
+			CacheSize:       util.NonZero(idx.iopts.CacheSize, BigmapIndexCacheSize),
 		})
 	if err != nil {
 		idx.Close()
@@ -133,15 +201,18 @@ func (idx *BigMapIndex) Init(path, label string, opts interface{}) error {
 	return nil
 }
 
-func (idx *BigMapIndex) Close() error {
-	idx.lastCache.Purge()
+func (idx *BigmapIndex) Close() error {
 	idx.allocCache.Purge()
-	if idx.table != nil {
-		if err := idx.table.Close(); err != nil {
-			log.Errorf("Closing %s: %v", idx.Name(), err)
+	for _, v := range idx.Tables() {
+		if v != nil {
+			if err := v.Close(); err != nil {
+				log.Errorf("Closing %s table: %v", v.Name(), err)
+			}
 		}
-		idx.table = nil
 	}
+	idx.allocTable = nil
+	idx.updateTable = nil
+	idx.valueTable = nil
 	if idx.db != nil {
 		if err := idx.db.Close(); err != nil {
 			return err
@@ -151,416 +222,450 @@ func (idx *BigMapIndex) Close() error {
 	return nil
 }
 
-// assumes op ids are already set (must run after OpIndex)
-// Note: zero is a valid bigmap id in all protocols
-func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
-	contracts, err := builder.Table(ContractIndexKey)
-	if err != nil {
-		return err
+func getBigmapDiffs(op *model.Op, block *model.Block) (micheline.BigmapDiff, error) {
+	// implicit ops (from block metadata) can only contain originations
+	if op.IsImplicit {
+		// load and unpack from op
+		var bmd micheline.BigmapDiff
+		if err := bmd.UnmarshalBinary(op.BigmapDiff); err != nil {
+			return nil, fmt.Errorf("decoding implicit bigmap origination op [%d:%d]: %v",
+				op.OpL, op.OpP, err)
+		}
+		return bmd, nil
 	}
-	// contracts can pass temporary bigmaps to internal calls
-	var temporaryBigmaps map[int64][]*BigmapItem
 
-	contract := &Contract{}
+	// load rpc op
+	o, ok := block.GetRpcOp(op.OpL, op.OpP, op.OpC)
+	if !ok {
+		return nil, fmt.Errorf("missing bigmap transaction op [%d:%d]", op.OpL, op.OpP)
+	}
+
+	// extract deserialized bigmap diff
+	switch op.Type {
+	case tezos.OpTypeTransaction:
+		if op.IsInternal {
+			// on internal tx, find corresponding internal op
+			top, ok := o.(*rpc.TransactionOp)
+			if !ok {
+				return nil, fmt.Errorf("internal bigmap transaction op [%d:%d]: unexpected type %T",
+					op.OpL, op.OpP, o)
+			}
+			return top.Metadata.InternalResults[op.OpI].Result.BigmapDiff, nil
+		} else {
+			top, ok := o.(*rpc.TransactionOp)
+			if !ok {
+				return nil, fmt.Errorf("contract bigmap transaction op [%d:%d]: unexpected type %T",
+					op.OpL, op.OpP, o)
+			}
+			return top.Metadata.Result.BigmapDiff, nil
+		}
+	case tezos.OpTypeOrigination:
+		switch true {
+		case op.IsInternal:
+			// on internal tx, find corresponding internal op
+			top, ok := o.(*rpc.TransactionOp)
+			if !ok {
+				return nil, fmt.Errorf("internal bigmap origination op [%d:%d]: unexpected type %T",
+					op.OpL, op.OpP, o)
+			}
+			return top.Metadata.InternalResults[op.OpI].Result.BigmapDiff, nil
+		default:
+			oop, ok := o.(*rpc.OriginationOp)
+			if !ok {
+				return nil, fmt.Errorf("contract bigmap origination op [%d:%d]: unexpected type %T",
+					op.OpL, op.OpP, o)
+			}
+			return oop.Metadata.Result.BigmapDiff, nil
+		}
+	}
+	return nil, nil
+}
+
+type InMemoryBigmap struct {
+	Alloc   *model.BigmapAlloc
+	Updates []*model.BigmapUpdate
+	Live    []*model.BigmapKV
+}
+
+func NewInMemoryBigmap(alloc *model.BigmapAlloc) InMemoryBigmap {
+	return InMemoryBigmap{
+		Alloc:   alloc,
+		Updates: make([]*model.BigmapUpdate, 0),
+		Live:    make([]*model.BigmapKV, 0),
+	}
+}
+
+func (idx *BigmapIndex) loadAlloc(ctx context.Context, id int64) (*model.BigmapAlloc, error) {
+	cachedAlloc, ok := idx.allocCache.Get(id)
+	if ok {
+		return cachedAlloc.(*model.BigmapAlloc), nil
+	}
+	alloc := &model.BigmapAlloc{}
+	err := pack.NewQuery("etl.bigmap.find_alloc", idx.allocTable).
+		WithLimit(1). // there should only be one match anyways
+		AndEqual("bigmap_id", id).
+		Execute(ctx, alloc)
+	if err != nil {
+		return nil, fmt.Errorf("etl.bigmap.alloc decode: %v", err)
+	}
+	idx.allocCache.Add(id, alloc)
+	return alloc, nil
+}
+
+// assumes op ids are already set (must run after OpIndex)
+func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
+	tmp := make(map[int64]InMemoryBigmap)
 	for _, op := range block.Ops {
+		// skip non-bigmap ops
 		if len(op.BigmapDiff) == 0 || !op.IsSuccess {
 			continue
-		}
-		// load rpc op
-		o, ok := block.GetRpcOp(op.OpL, op.OpP, op.OpC)
-		if !ok {
-			return fmt.Errorf("missing bigmap transaction op [%d:%d]", op.OpL, op.OpP)
 		}
 
 		// reset temp bigmap after a batch of internal ops has been processed
 		if !op.IsInternal {
-			// log.Infof("%s %d/%d/%d/%d Clearing %d temp bigmaps", op.Hash, op.OpL, op.OpP, op.OpC, op.OpI, len(temporaryBigmaps))
-			temporaryBigmaps = nil
-		}
-
-		// extract deserialized bigmap diff
-		var bmd micheline.BigmapDiff
-		switch op.Type {
-		case tezos.OpTypeTransaction:
-			if op.IsInternal {
-				// on internal tx, find corresponding internal op
-				top, ok := o.(*rpc.TransactionOp)
-				if !ok {
-					return fmt.Errorf("internal bigmap transaction op [%d:%d]: unexpected type %T ",
-						op.OpL, op.OpP, o)
-				}
-				bmd = top.Metadata.InternalResults[op.OpI].Result.BigmapDiff
-			} else {
-				top, ok := o.(*rpc.TransactionOp)
-				if !ok {
-					return fmt.Errorf("contract bigmap transaction op [%d:%d]: unexpected type %T ",
-						op.OpL, op.OpP, o)
-				}
-				bmd = top.Metadata.Result.BigmapDiff
-			}
-		case tezos.OpTypeOrigination:
-			if op.IsInternal {
-				// on internal tx, find corresponding internal op
-				top, ok := o.(*rpc.TransactionOp)
-				if !ok {
-					return fmt.Errorf("internal bigmap origination op [%d:%d]: unexpected type %T ",
-						op.OpL, op.OpP, o)
-				}
-				bmd = top.Metadata.InternalResults[op.OpI].Result.BigmapDiff
-			} else {
-				oop, ok := o.(*rpc.OriginationOp)
-				if !ok {
-					return fmt.Errorf("contract bigmap origination op [%d:%d]: unexpected type %T ",
-						op.OpL, op.OpP, o)
-				}
-				bmd = oop.Metadata.Result.BigmapDiff
+			for k := range tmp {
+				delete(tmp, k)
 			}
 		}
 
-		// load corresponding contract
-		if contract.AccountId != op.ReceiverId {
-			contract, ok = builder.ContractById(op.ReceiverId)
-			if !ok {
-				// when a contract was just originated, it is not yet known
-				// by the builder, we fallback to loading the contract here
-				contract = &Contract{}
-				err := pack.NewQuery("etl.bigmap.lookup", contracts).
-					WithDesc().
-					WithLimit(1). // there should only be one match anyways
-					AndEqual("account_id", op.ReceiverId).
-					Execute(ctx, contract)
-				if err != nil {
-					return fmt.Errorf("bigmap update op [%d:%d] type=%s internal=%t: missing contract account %d: %v",
-						op.OpL, op.OpP, op.Type, op.IsInternal, op.ReceiverId, err)
-				}
-			}
+		bmd, err := getBigmapDiffs(op, block)
+		if err != nil {
+			log.Error(err)
+			continue
 		}
 
 		// process bigmapdiffs
-		alloc := &BigmapItem{}
-		last := &BigmapItem{}
-		for _, v := range bmd {
-			// find and update previous key if any
-			switch v.Action {
-			case micheline.DiffActionUpdate, micheline.DiffActionRemove:
-				// Temporary Bigmaps
-				if v.Id < 0 {
-					// log.Infof("%s %d/%d/%d/%d Bigmap %s on temp id %d", op.Hash, op.OpL, op.OpP, op.OpC, op.OpI, v.Action, v.Id)
-					// on temporary bigmaps find the alloc from map
-					items, ok := temporaryBigmaps[v.Id]
-					if !ok || len(items) == 0 {
-						return fmt.Errorf("etl.bigmap.find_alloc: missing temporary bigmap %d", v.Id)
-					}
-					for _, vv := range items {
-						if vv.Action == micheline.DiffActionAlloc {
-							alloc = vv
-							break
-						}
-					}
-					if alloc.BigmapId != v.Id {
-						// fail if alloc is missing
-						return fmt.Errorf("etl.bigmap.find_alloc: missing alloc in temporary bigmap %d", v.Id)
-					}
-					// keep last value
-					last = items[len(items)-1]
-
-					if v.Key.OpCode == micheline.I_EMPTY_BIG_MAP {
-						// clear from temp map
-						// log.Infof("%s %d/%d/%d/%d Bigmap clear temp id %d", op.Hash, op.OpL, op.OpP, op.OpC, op.OpI, v.Id)
-						delete(temporaryBigmaps, v.Id)
-					} else {
-						// update/remove a single key
-						var item *BigmapItem
-						for _, vv := range items {
-							if vv.Action == micheline.DiffActionAlloc {
-								continue
-							}
-							if vv.IsReplaced || vv.IsDeleted {
-								continue
-							}
-							if !vv.GetKeyHash().Equal(v.KeyHash) {
-								continue
-							}
-							// update the temporary item
-							vv.IsReplaced = true
-							vv.Updated = block.Height
-							item = vv
-							break
-						}
-
-						nkeys := last.NKeys
-						if v.Action == micheline.DiffActionRemove {
-							// ignore double remove (if that's even possible)
-							nkeys--
-						} else {
-							// count new item if not exist
-							if item == nil {
-								nkeys++
-							}
-						}
-						// always add a new item
-						prevId := uint64(0)
-						if item != nil {
-							prevId = item.RowId
-						}
-						last = NewBigmapItem(op, contract, v, prevId, last.Counter+1, nkeys)
-						// extend list (may create new list)
-						items = append(items, last)
-						// re-add potentially new list to map
-						temporaryBigmaps[v.Id] = items
-						// for _, vv := range items {
-						// 	log.Infof("  %s %d %x", vv.Action, vv.BigmapId, vv.Key)
-						// }
-					}
-				} else {
-					// Regular bigmaps (non-temporary)
-					// find bigmap allocation (required for key type)
-					if alloc.RowId == 0 || alloc.BigmapId != v.Id {
-						cachedAlloc, ok := idx.allocCache.Get(v.Id)
-						if ok {
-							alloc = cachedAlloc.(*BigmapItem)
-						} else {
-							alloc = &BigmapItem{}
-							err := pack.NewQuery("etl.bigmap.find_alloc", idx.table).
-								WithDesc().
-								WithLimit(1). // there should only be one match anyways
-								AndEqual("bigmap_id", v.Id).
-								AndEqual("action", micheline.DiffActionAlloc).
-								Execute(ctx, alloc)
-							if err != nil {
-								return fmt.Errorf("etl.bigmap.alloc decode: %v", err)
-							}
-							idx.allocCache.Add(alloc.BigmapId, alloc)
-						}
-					}
-					// find last bigmap entry for counters
-					if last.RowId == 0 || last.BigmapId != alloc.BigmapId {
-						cachedLast, ok := idx.lastCache.Get(v.Id)
-						if ok {
-							last = cachedLast.(*BigmapItem)
-						} else {
-							last = &BigmapItem{}
-							err := pack.NewQuery("etl.bigmap.find_last", idx.table).
-								WithDesc().
-								WithLimit(1). // there should only be one match anyways
-								AndEqual("bigmap_id", v.Id).
-								Execute(ctx, last)
-							if err != nil {
-								return fmt.Errorf("etl.bigmap.last decode: %v", err)
-							}
-							idx.lastCache.Add(last.BigmapId, last)
-						}
-					}
-
-					// find previous bigmap item at key
-					if v.Key.OpCode == micheline.I_EMPTY_BIG_MAP {
-						// log.Debugf("BigMap emptying %d (%d entries) in block %d",
-						// 	v.Id, last.NKeys, block.Height)
-						// remove all keys from the bigmap including the bigmap itself
-						for last.NKeys > 0 {
-							// find the next entry to remove
-							prev := &BigmapItem{}
-							err := pack.NewQuery("etl.bigmap.empty", idx.table).
-								WithDesc().
-								WithLimit(1). // limit to one match
-								AndEqual("bigmap_id", v.Id).
-								AndEqual("action", micheline.DiffActionUpdate).
-								AndEqual("is_replaced", false).
-								AndEqual("is_deleted", false).
-								Execute(ctx, prev)
-							if err != nil {
-								return fmt.Errorf("etl.bigmap.update decode: %v", err)
-							}
-
-							// flush update immediately to allow sequence of updates
-							if prev.RowId > 0 {
-								// log.Debugf("BigMap %s %d in block %d", v.Action, v.Id, block.Height)
-								prev.IsReplaced = true
-								prev.Updated = block.Height
-								if err := idx.table.Update(ctx, prev); err != nil {
-									return fmt.Errorf("etl.bigmap.update: %v", err)
-								}
-
-								// insert deletion entry immediately to allow sequence of updates
-								prevdiff := prev.BigmapDiff()
-								prevdiff.Action = micheline.DiffActionRemove
-								item := NewBigmapItem(op, contract, prevdiff, prev.RowId, last.Counter+1, last.NKeys-1)
-								if err := idx.table.Insert(ctx, item); err != nil {
-									return fmt.Errorf("etl.bigmap.insert: %v", err)
-								}
-								last = item
-							} else {
-								// safety hatch
-								log.Errorf("etl.bigmap.empty: %d keys left in deleted bigmap %d", last.NKeys, v.Id)
-								last.NKeys = 0
-							}
-						}
-
-						// now mark the allocation as deleted
-						alloc.IsDeleted = true
-						alloc.Updated = block.Height
-						if err := idx.table.Update(ctx, alloc); err != nil {
-							return fmt.Errorf("etl.bigmap.update: %v", err)
-						}
-						idx.lastCache.Remove(last.BigmapId)
-
-					} else {
-						// update/remove a single key
-
-						// find the previous entry at this key if exists
-						// don't filter by deleted flag so we find any deletion entry
-						prev := &BigmapItem{}
-						err := pack.NewQuery("etl.bigmap.update", idx.table).
-							WithDesc().
-							WithLimit(1).   // there should only be one match anyways
-							WithoutIndex(). // index may contain many duplicates, skip
-							AndEqual("bigmap_id", v.Id).
-							AndEqual("action", micheline.DiffActionUpdate).
-							AndEqual("is_replaced", false).
-							AndEqual("key_id", GetKeyId(v.Id, v.KeyHash)).
-							Execute(ctx, prev)
-
-						if err != nil {
-							return fmt.Errorf("etl.bigmap.update decode: %v", err)
-						}
-
-						// flush update immediately to allow sequence of updates
-						if prev.RowId > 0 {
-							prev.IsReplaced = true
-							prev.Updated = block.Height
-							if err := idx.table.Update(ctx, prev); err != nil {
-								return fmt.Errorf("etl.bigmap.update: %v", err)
-							}
-						}
-
-						// update counters for next entry
-						nkeys := last.NKeys
-						if v.Action == micheline.DiffActionRemove {
-							// ignore double remove (if that's even possible)
-							if prev.RowId > 0 && !prev.IsDeleted {
-								nkeys--
-							}
-						} else {
-							// new keys are detected by non-existing prev
-							if prev.RowId == 0 || prev.IsDeleted {
-								nkeys++
-							}
-						}
-
-						// log.Debugf("BigMap %s %d key %s in block %d", v.Action, v.Id, v.KeyHash, block.Height)
-
-						// insert immediately to allow sequence of updates
-						item := NewBigmapItem(op, contract, v, prev.RowId, last.Counter+1, nkeys)
-						if err := idx.table.Insert(ctx, item); err != nil {
-							return fmt.Errorf("etl.bigmap.insert: %v", err)
-						}
-						last = item
-						idx.lastCache.Add(last.BigmapId, last)
-					}
-				}
-
+		for _, diff := range bmd {
+			switch diff.Action {
 			case micheline.DiffActionAlloc:
 				// insert immediately to allow sequence of updates
-				// log.Debugf("BigMap %s %d in block %d", v.Action, v.Id, block.Height)
-				if v.Id < 0 {
+				// log.Debugf("Bigmap %s %d in block %d", v.Action, v.Id, block.Height)
+				if diff.Id < 0 {
 					// alloc temp bigmap
-					item := NewBigmapItem(op, contract, v, 0, 0, 0)
-					if temporaryBigmaps == nil {
-						temporaryBigmaps = make(map[int64][]*BigmapItem)
-					}
-					temporaryBigmaps[v.Id] = []*BigmapItem{item}
+					alloc := model.NewBigmapAlloc(op, diff)
+					tmp[diff.Id] = NewInMemoryBigmap(alloc)
 				} else {
 					// alloc real bigmap
-					item := NewBigmapItem(op, contract, v, 0, 0, 0)
-					if err := idx.table.Insert(ctx, item); err != nil {
-						return fmt.Errorf("etl.bigmap.insert: %v", err)
+					alloc := model.NewBigmapAlloc(op, diff)
+					if err := idx.allocTable.Insert(ctx, alloc); err != nil {
+						return fmt.Errorf("etl.bigmap_alloc.insert: %v", err)
 					}
-					last = item
-					idx.lastCache.Add(last.BigmapId, last)
+					idx.allocCache.Add(alloc.BigmapId, alloc)
+
+					// store as update
+					if err := idx.updateTable.Insert(ctx, alloc.ToUpdate(op)); err != nil {
+						return fmt.Errorf("etl.bigmap_alloc.insert: %v", err)
+					}
 				}
 
 			case micheline.DiffActionCopy:
-				// copy the alloc and all current keys to new entries, set is_copied
-				items := make([]*BigmapItem, 0)
+				// copy the alloc
+				// copy and all live keys
+				// generate updates for inserting all live keys
+				var (
+					alloc   *model.BigmapAlloc
+					updates = make([]*model.BigmapUpdate, 0)
+					live    = make([]*model.BigmapKV, 0)
+				)
 
-				if v.SourceId < 0 {
+				if diff.SourceId < 0 {
 					// use temporary bigmap as source
-					var ok bool
-					items, ok = temporaryBigmaps[v.SourceId]
-
-					// log.Infof("%s %d/%d/%d/%d Bigmap copy from temp id %d to %d (%d items)",
-					// 	op.Hash, op.OpL, op.OpP, op.OpC, op.OpI, v.SourceId, v.DestId, len(items))
-
-					if !ok || len(items) == 0 {
-						return fmt.Errorf("etl.bigmap.copy: missing temporary bigmap %d", v.SourceId)
-					}
-					// update destination bigmap identity and ownership
-					for _, vv := range items {
-						vv.BigmapId = v.DestId
-						vv.AccountId = contract.AccountId
-						vv.ContractId = contract.RowId
-						vv.OpId = op.RowId
+					bm, ok := tmp[diff.SourceId]
+					if !ok {
+						return fmt.Errorf("etl.bigmap.copy: missing temporary bigmap %d", diff.SourceId)
 					}
 
-					// for _, vv := range items {
-					// 	log.Infof("  %s %d %x", vv.Action, vv.BigmapId, vv.Key)
-					// }
+					// create new alloc
+					alloc = model.CopyBigmapAlloc(bm.Alloc, op, diff.DestId)
+
+					// copy live keys and create updates
+					for _, v := range bm.Live {
+						copied := model.CopyBigmapKV(v, diff.DestId)
+						live = append(live, copied)
+						updates = append(updates, copied.ToUpdateCopy(op))
+					}
+					alloc.NKeys = int64(len(live))
+					alloc.NUpdates = int64(len(live))
 
 				} else {
-					// find the source alloc and all current bigmap entries
-					// order matters, because alloc is always first
-					var counter int64
-					err := pack.NewQuery("etl.bigmap.copy", idx.table).
-						AndEqual("bigmap_id", v.SourceId). // copy from source map
-						AndEqual("is_replaced", false).
-						AndEqual("is_deleted", false).
+					// find the source alloc
+					srcAlloc, err := idx.loadAlloc(ctx, diff.SourceId)
+					if err != nil {
+						return fmt.Errorf("etl.bigmap.copy: %v", err)
+					}
+					alloc = model.CopyBigmapAlloc(srcAlloc, op, diff.DestId)
+
+					// add an alloc update
+					updates = append(updates, alloc.ToUpdateCopy(op, diff.SourceId))
+
+					// load all currently live bigmap entries from source
+					err = pack.NewQuery("etl.bigmap.copy", idx.valueTable).
+						AndEqual("bigmap_id", diff.SourceId).
 						Stream(ctx, func(r pack.Row) error {
-							source := &BigmapItem{}
+							source := &model.BigmapKV{}
 							if err := r.Decode(source); err != nil {
 								return err
 							}
-							// copy the item
-							if source.Action == micheline.DiffActionAlloc {
-								// log.Debugf("BigMap %d %s alloc in block %d", v.DestId, v.Action, block.Height)
-								item := CopyBigMapAlloc(source, op, contract, v.DestId, counter+1, 0)
-								items = append(items, item)
-								last = item
-							} else {
-								// log.Debugf("BigMap %d %s item key %x in block %d", v.DestId, v.Action, source.KeyHash, block.Height)
-								item := CopyBigMapValue(source, op, contract, v.DestId, counter+1, counter)
-								items = append(items, item)
-								last = item
-							}
-							counter++
+							copied := model.CopyBigmapKV(source, diff.DestId)
+							live = append(live, copied)
+							updates = append(updates, copied.ToUpdateCopy(op))
 							return nil
 						})
 					if err != nil {
 						return fmt.Errorf("etl.bigmap.copy: %v", err)
 					}
-					idx.lastCache.Add(last.BigmapId, last)
+					alloc.NKeys = int64(len(live))
+					alloc.NUpdates = int64(len(live))
 				}
 
-				if v.DestId < 0 {
+				if diff.DestId < 0 {
 					// keep temp bigmaps around
-					// log.Infof("%s %d/%d/%d/%d Bigmap copy from %d to temp id %d (%d items)",
-					// 	op.Hash, op.OpL, op.OpP, op.OpC, op.OpI, v.SourceId, v.DestId, len(items))
-					// lazy create map
-					if temporaryBigmaps == nil {
-						temporaryBigmaps = make(map[int64][]*BigmapItem)
-					}
-					temporaryBigmaps[v.DestId] = items
-					// for _, vv := range items {
-					// 	log.Infof("  %s %d %x", vv.Action, vv.BigmapId, vv.Key)
-					// }
+					bm := NewInMemoryBigmap(alloc)
+					bm.Updates = updates
+					bm.Live = live
+					tmp[diff.DestId] = bm
 				} else {
-					// target for regular copies are stored, need type conversion
-					ins := make([]pack.Item, len(items))
-					for i, vv := range items {
-						ins[i] = vv
-					}
-					if err := idx.table.Insert(ctx, ins); err != nil {
+					// store copied data
+					if err := idx.allocTable.Insert(ctx, alloc); err != nil {
 						return fmt.Errorf("etl.bigmap.insert: %v", err)
 					}
+					idx.allocCache.Add(alloc.BigmapId, alloc)
+					ins := make([]pack.Item, len(live))
+					for i, v := range live {
+						ins[i] = v
+					}
+					if err := idx.valueTable.Insert(ctx, ins); err != nil {
+						return fmt.Errorf("etl.bigmap.insert: %v", err)
+					}
+					ins = ins[:0]
+					for _, v := range updates {
+						ins = append(ins, v)
+					}
+					if err := idx.updateTable.Insert(ctx, ins); err != nil {
+						return fmt.Errorf("etl.bigmap.insert: %v", err)
+					}
+				}
+
+			case micheline.DiffActionRemove:
+				// full bigmap removal
+				if diff.Key.OpCode == micheline.I_EMPTY_BIG_MAP {
+					if diff.Id < 0 {
+						// clear temp bigmap
+						delete(tmp, diff.Id)
+
+						// done, next bigmap diff
+						continue
+					}
+
+					// for regular bigmaps, update alloc
+					alloc, err := idx.loadAlloc(ctx, diff.Id)
+					if err != nil {
+						return fmt.Errorf("etl.bigmap.empty: %v", err)
+					}
+
+					// list all live keys and schedule for deletion
+					ids := make([]uint64, 0, int(alloc.NKeys))
+					updates := make([]pack.Item, 0, int(alloc.NKeys))
+					err = pack.NewQuery("etl.bigmap.empty", idx.valueTable).
+						AndEqual("bigmap_id", diff.Id).
+						Stream(ctx, func(r pack.Row) error {
+							source := &model.BigmapKV{}
+							if err := r.Decode(source); err != nil {
+								return err
+							}
+							ids = append(ids, source.RowId)
+							updates = append(updates, source.ToUpdateRemove(op))
+							return nil
+						})
+					if err != nil {
+						return fmt.Errorf("etl.bigmap.empty decode: %v", err)
+					}
+					alloc.NKeys = 0
+					alloc.NUpdates += int64(len(updates))
+					alloc.Updated = op.Height
+
+					if err := idx.allocTable.Update(ctx, alloc); err != nil {
+						return fmt.Errorf("etl.bigmap.empty: %v", err)
+					}
+					if err := idx.updateTable.Insert(ctx, updates); err != nil {
+						return fmt.Errorf("etl.bigmap.empty: %v", err)
+					}
+					if err := idx.valueTable.DeleteIds(ctx, ids); err != nil {
+						return fmt.Errorf("etl.bigmap.empty: %v", err)
+					}
+
+					// done, next bigmap diff
+					continue
+				}
+
+				// single key removal from temp bigmap
+				if diff.Id < 0 {
+					// use temporary bigmap as source
+					bm, ok := tmp[diff.Id]
+					if !ok {
+						return fmt.Errorf("etl.bigmap.remove: missing temporary bigmap %d", diff.Id)
+					}
+
+					// find the key to remove and remove from live & update lists
+					var pos int = -1
+					for i, v := range bm.Live {
+						if !v.GetKeyHash().Equal(diff.KeyHash) {
+							continue
+						}
+						pos = i
+						break
+					}
+					if pos > -1 {
+						bm.Alloc.NKeys--
+						bm.Live = append(bm.Live[:pos], bm.Live[pos+1:]...)
+					}
+					pos = -1
+					for i, v := range bm.Updates {
+						if !v.GetKeyHash().Equal(diff.KeyHash) {
+							continue
+						}
+						pos = i
+						break
+					}
+					if pos > -1 {
+						bm.Updates = append(bm.Updates[:pos], bm.Updates[pos+1:]...)
+					}
+
+					// done, next bigmap diff
+					continue
+				}
+
+				// single key removal from regular bigmap
+				alloc, err := idx.loadAlloc(ctx, diff.Id)
+				if err != nil {
+					return fmt.Errorf("etl.bigmap.remove: %v", err)
+				}
+
+				// find the previous entry, key should exist
+				var prev *model.BigmapKV
+				err = pack.NewQuery("etl.bigmap.remove", idx.valueTable).
+					AndEqual("key_id", model.GetKeyId(diff.Id, diff.KeyHash)).
+					AndEqual("bigmap_id", diff.Id).
+					Stream(ctx, func(r pack.Row) error {
+						source := &model.BigmapKV{}
+						if err := r.Decode(source); err != nil {
+							return err
+						}
+						// additional check for hash collision safety
+						if source.GetKeyHash().Equal(diff.KeyHash) {
+							prev = source
+							return io.EOF
+						}
+						return nil
+					})
+				if err != nil && err != io.EOF {
+					return fmt.Errorf("etl.bigmap.remove decode: %v", err)
+				}
+
+				if prev != nil {
+					if err := idx.valueTable.DeleteIds(ctx, []uint64{prev.RowId}); err != nil {
+						return fmt.Errorf("etl.bigmap.remove: %v", err)
+					}
+					alloc.NKeys--
+				} else {
+					// double remove is possible, actually its double update
+					// with empty value (which we translate into remove)
+					log.Debugf("bigmap: remove on non-existing key %d %s in %s", diff.Id, diff.KeyHash, op.Hash)
+				}
+				alloc.Updated = op.Height
+				alloc.NUpdates++
+				if err := idx.updateTable.Insert(ctx, model.NewBigmapUpdate(op, diff)); err != nil {
+					return fmt.Errorf("etl.bigmap.remove: %v", err)
+				}
+				if err := idx.allocTable.Update(ctx, alloc); err != nil {
+					return fmt.Errorf("etl.bigmap.remove: %v", err)
+				}
+
+			case micheline.DiffActionUpdate:
+				// update on temp bigmap
+				if diff.Id < 0 {
+					// use temporary bigmap as source
+					bm, ok := tmp[diff.Id]
+					if !ok {
+						return fmt.Errorf("etl.bigmap.update: missing temporary bigmap %d", diff.Id)
+					}
+
+					// find the key to update in live list
+					// create live item if none exists
+					// always create update item
+					var pos int = -1
+					for i, v := range bm.Live {
+						if !v.GetKeyHash().Equal(diff.KeyHash) {
+							continue
+						}
+						pos = i
+						break
+					}
+					if pos < 0 {
+						// add
+						bm.Alloc.NKeys++
+						bm.Alloc.NUpdates++
+						bm.Live = append(bm.Live, model.NewBigmapKV(diff))
+						bm.Updates = append(bm.Updates, model.NewBigmapUpdate(op, diff))
+					} else {
+						// replace
+						bm.Alloc.NUpdates++
+						bm.Live[pos] = model.NewBigmapKV(diff)
+						bm.Updates = append(bm.Updates, model.NewBigmapUpdate(op, diff))
+					}
+
+					// done, next bigmap diff
+					continue
+				}
+
+				// regular bigmaps
+				alloc, err := idx.loadAlloc(ctx, diff.Id)
+				if err != nil {
+					return fmt.Errorf("etl.bigmap.update: %v", err)
+				}
+
+				// find the previous entry, key should exist
+				var prev *model.BigmapKV
+				err = pack.NewQuery("etl.bigmap.update", idx.valueTable).
+					AndEqual("key_id", model.GetKeyId(diff.Id, diff.KeyHash)).
+					AndEqual("bigmap_id", diff.Id).
+					Stream(ctx, func(r pack.Row) error {
+						source := &model.BigmapKV{}
+						if err := r.Decode(source); err != nil {
+							return err
+						}
+						// additional check for hash collision safety
+						if source.GetKeyHash().Equal(diff.KeyHash) {
+							prev = source
+						}
+						return nil
+					})
+				if err != nil {
+					return fmt.Errorf("etl.bigmap.update decode: %v", err)
+				}
+
+				live := model.NewBigmapKV(diff)
+				if prev != nil {
+					// replace
+					live.RowId = prev.RowId
+					if err := idx.valueTable.Update(ctx, live); err != nil {
+						return fmt.Errorf("etl.bigmap.update: %v", err)
+					}
+				} else {
+					// add
+					if err := idx.valueTable.Insert(ctx, live); err != nil {
+						return fmt.Errorf("etl.bigmap.update: %v", err)
+					}
+					alloc.NKeys++
+				}
+				alloc.Updated = op.Height
+				alloc.NUpdates++
+
+				if err := idx.updateTable.Insert(ctx, model.NewBigmapUpdate(op, diff)); err != nil {
+					return fmt.Errorf("etl.bigmap.update: %v", err)
+				}
+				if err := idx.allocTable.Update(ctx, alloc); err != nil {
+					return fmt.Errorf("etl.bigmap.update: %v", err)
 				}
 			}
 		}
@@ -569,41 +674,194 @@ func (idx *BigMapIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 	return nil
 }
 
-func (idx *BigMapIndex) DisconnectBlock(ctx context.Context, block *Block, _ BlockBuilder) error {
+func (idx *BigmapIndex) DisconnectBlock(ctx context.Context, block *model.Block, _ model.BlockBuilder) error {
 	idx.allocCache.Purge()
-	idx.lastCache.Purge()
 	return idx.DeleteBlock(ctx, block.Height)
 }
 
-func (idx *BigMapIndex) DeleteBlock(ctx context.Context, height int64) error {
-	// log.Debugf("Rollback deleting bigmap updates at height %d", height)
-
-	// unset IsReplaced and IsDeleted flags in rows updated by this block
-	upd := make([]pack.Item, 0)
-	// reverse flags on all updated items
-	err := idx.table.Stream(ctx,
-		pack.NewQuery("etl.bigmap.delete_scan", idx.table).
-			AndEqual("u", height), // updated by this block
-		func(r pack.Row) error {
-			item := AllocBigmapItem()
-			if err := r.Decode(item); err != nil {
-				return err
-			}
-			item.IsReplaced = false
-			item.IsDeleted = false
-			upd = append(upd, item)
-			return nil
-		})
+func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
+	// reconstruct live keys by rolling back updates
+	updates := make([]*model.BigmapUpdate, 0)
+	err := pack.NewQuery("etl.bigmap.delete_scan", idx.updateTable).
+		WithDesc().
+		AndEqual("height", height).
+		Execute(ctx, &updates)
 	if err != nil {
 		return err
 	}
 
-	// run update
-	if err := idx.table.Update(ctx, upd); err != nil {
+	// load allocs for rollback along the way, update all at once at the end
+	allocs := make(map[int64]*model.BigmapAlloc)
+
+	// identify list of updated keys
+	for _, v := range updates {
+		hash := v.GetKeyHash()
+		key := model.GetKeyId(v.BigmapId, hash)
+
+		// load alloc first
+		alloc, ok := allocs[v.BigmapId]
+		if !ok {
+			alloc, err = idx.loadAlloc(ctx, v.BigmapId)
+			if err != nil {
+				return fmt.Errorf("rollback: missing alloc for bigmap %d: %v", v.BigmapId, err)
+			}
+			alloc.Updated = 0
+			allocs[v.BigmapId] = alloc
+		}
+
+		// find the previous live entry, may not exist, may be from same block(!)
+		var (
+			prev *model.BigmapUpdate
+			live *model.BigmapKV
+		)
+		err = pack.NewQuery("etl.bigmap.rollback", idx.updateTable).
+			AndEqual("key_id", key).
+			AndEqual("bigmap_id", v.BigmapId).
+			AndLt("I", v.RowId).            // exclude self
+			AndLte("height", height).       // limit search scope
+			AndGte("height", alloc.Height). // limit search scope
+			Stream(ctx, func(r pack.Row) error {
+				source := &model.BigmapUpdate{}
+				if err := r.Decode(source); err != nil {
+					return err
+				}
+				// additional check for hash collision safety
+				if source.GetKeyHash().Equal(hash) {
+					prev = source
+					return io.EOF
+				}
+				return nil
+			})
+		if err != nil && err != io.EOF {
+			return fmt.Errorf("etl.bigmap.rollback decode: %v", err)
+		}
+
+		// rollback update
+		switch v.Action {
+		case micheline.DiffActionRemove:
+			// sanity checks
+			if prev == nil {
+				log.Warnf("rollback: missing previous update for bigmap %d key %s", v.BigmapId, v.GetKeyHash())
+				continue
+			}
+			if prev.Action != micheline.DiffActionUpdate {
+				// just skip if this was a double remove
+				alloc.NUpdates--
+				log.Debugf("rollback: unexpected prev action %s update for bigmap %d key %s", prev.Action, v.BigmapId, v.GetKeyHash())
+			} else {
+				// this was a remove after update, insert previous live key
+				live = prev.ToKV()
+				alloc.NKeys++
+				alloc.NUpdates--
+				if err := idx.valueTable.Insert(ctx, live); err != nil {
+					return fmt.Errorf("etl.bigmap.rollback insert live key: %v", err)
+				}
+			}
+			// beware of same-block updates when resetting alloc update
+			if prev.Height < height {
+				alloc.Updated = util.Max64(alloc.Updated, prev.Height)
+			}
+
+		case micheline.DiffActionUpdate, micheline.DiffActionCopy:
+			// load current live key, may not exist
+			err = pack.NewQuery("etl.bigmap.rollback", idx.valueTable).
+				AndEqual("key_id", key).
+				AndEqual("bigmap_id", v.BigmapId).
+				Stream(ctx, func(r pack.Row) error {
+					source := &model.BigmapKV{}
+					if err := r.Decode(source); err != nil {
+						return err
+					}
+					// additional check for hash collision safety
+					if source.GetKeyHash().Equal(hash) {
+						live = source
+						return io.EOF
+					}
+					return nil
+				})
+			if err != nil && err != io.EOF {
+				return fmt.Errorf("etl.bigmap.rollback decode: %v", err)
+			}
+			if prev == nil {
+				// sanity check
+				if live == nil {
+					log.Warnf("rollback: missing live key in bigmap %d key %s", v.BigmapId, v.GetKeyHash())
+					continue
+				}
+
+				// this was a first-time insert, delete current live key
+				if err := idx.valueTable.DeleteIds(ctx, []uint64{live.RowId}); err != nil {
+					return fmt.Errorf("etl.bigmap.rollback delete live key: %v", err)
+				}
+				alloc.NKeys--
+				alloc.NUpdates--
+
+				// FIXME: we don't know previous update height here, but its ok
+				// since alloc.Updated field is not relevant for correctness
+
+			} else {
+				if prev.Action == micheline.DiffActionRemove {
+					// this was an insert after remove, remove current live key
+					if err := idx.valueTable.DeleteIds(ctx, []uint64{live.RowId}); err != nil {
+						return fmt.Errorf("etl.bigmap.rollback delete live key: %v", err)
+					}
+					alloc.NKeys--
+					alloc.NUpdates--
+
+				} else {
+					// sanity check
+					if live == nil {
+						return fmt.Errorf("rollback: missing live key in bigmap %d key %s", v.BigmapId, v.GetKeyHash())
+					}
+
+					// this was an update after update, replace current live key
+					lastLive := prev.ToKV()
+					lastLive.RowId = live.RowId
+					if err := idx.valueTable.Update(ctx, lastLive); err != nil {
+						return fmt.Errorf("etl.bigmap.rollback replace live key: %v", err)
+					}
+					alloc.NUpdates--
+				}
+
+				// beware of same-block updates when resetting alloc update
+				if prev.Height < height {
+					alloc.Updated = util.Max64(alloc.Updated, prev.Height)
+				}
+			}
+		}
+	}
+
+	// delete all updates at height
+	_, err = pack.NewQuery("etl.bigmap.delete", idx.updateTable).
+		AndEqual("height", height).
+		Delete(ctx)
+	if err != nil {
 		return err
 	}
 
-	// delete everything created at this block
-	_, err = idx.table.Delete(ctx, pack.NewQuery("etl.bigmap.delete", idx.table).AndEqual("h", height))
-	return err
+	// update rolled back allocs
+	upd := make([]pack.Item, 0)
+	for _, v := range allocs {
+		if v.Height != height {
+			continue
+		}
+		upd = append(upd, v)
+	}
+	if err := idx.allocTable.Update(ctx, upd); err != nil {
+		return err
+	}
+
+	// delete all allocs from this block
+	_, err = pack.NewQuery("etl.bigmap.delete", idx.allocTable).
+		AndEqual("h", height). // alloc height
+		Delete(ctx)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (idx *BigmapIndex) DeleteCycle(ctx context.Context, cycle int64) error {
+	return nil
 }

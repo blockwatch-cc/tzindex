@@ -307,7 +307,7 @@ func (s *OpSeries) BuildQuery(ctx *ApiContext, args *SeriesRequest) pack.Query {
 	// access table
 	table, err := ctx.Indexer.Table(args.Series)
 	if err != nil {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access series source table '%s'", args.Series), err))
+		panic(ENotFound(EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", args.Series), err))
 	}
 
 	// translate long column names to short names used in pack tables

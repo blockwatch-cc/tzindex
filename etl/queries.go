@@ -15,11 +15,46 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/packdb/vec"
-	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 )
+
+type ListRequest struct {
+	Account     *model.Account
+	Mode        pack.FilterMode
+	Typs        []tezos.OpType
+	Since       int64
+	Until       int64
+	Offset      uint
+	Limit       uint
+	Cursor      uint64
+	Order       pack.OrderType
+	SenderId    model.AccountID
+	ReceiverId  model.AccountID
+	Entrypoints []int64
+	Period      int64
+	BigmapId    int64
+	BigmapKey   tezos.ExprHash
+}
+
+func (r ListRequest) WithDelegation() bool {
+	if r.Mode == pack.FilterModeEqual || r.Mode == pack.FilterModeIn {
+		for _, t := range r.Typs {
+			if t == tezos.OpTypeDelegation {
+				return true
+			}
+		}
+		return false
+	} else {
+		for _, t := range r.Typs {
+			if t == tezos.OpTypeDelegation {
+				return false
+			}
+		}
+		return true
+	}
+}
 
 func (m *Indexer) ChainByHeight(ctx context.Context, height int64) (*model.Chain, error) {
 	table, err := m.Table(index.ChainTableKey)
@@ -430,7 +465,7 @@ func (m *Indexer) ListBlockRights(ctx context.Context, height int64, typ tezos.R
 	if typ.IsValid() {
 		q = q.AndEqual("type", typ)
 	}
-	resp := make([]model.Right, 0, 64+32)
+	resp := make([]model.Right, 0)
 	err = q.Stream(ctx, func(r pack.Row) error {
 		right := model.Right{}
 		if err := r.Decode(&right); err != nil {
@@ -804,22 +839,6 @@ func (m *Indexer) LookupOpIds(ctx context.Context, ids []uint64) ([]*model.Op, e
 	return ops, nil
 }
 
-type ListRequest struct {
-	Account     *model.Account
-	Mode        pack.FilterMode
-	Typs        []tezos.OpType
-	Since       int64
-	Until       int64
-	Offset      uint
-	Limit       uint
-	Cursor      uint64
-	Order       pack.OrderType
-	SenderId    model.AccountID
-	ReceiverId  model.AccountID
-	Entrypoints []int64
-	Period      int64
-}
-
 // Note: offset and limit count in atomar operations
 func (m *Indexer) ListBlockOps(ctx context.Context, r ListRequest) ([]*model.Op, error) {
 	table, err := m.Table(index.OpTableKey)
@@ -964,10 +983,14 @@ func (m *Indexer) ListAccountOps(ctx context.Context, r ListRequest) ([]*model.O
 	r.Since = util.Max64(r.Since, r.Account.FirstSeen-1)
 	r.Until = util.NonZeroMin64(r.Until, r.Account.LastSeen)
 
+	// check if we should list delegations, consider different query modes
+	withDelegation := r.WithDelegation()
+	onlyDelegation := withDelegation && len(r.Typs) == 1
+
 	// list all ops where this address is any of
 	// - sender
 	// - receiver
-	// - delegate
+	// - delegate (only for delegation type)
 	q := pack.NewQuery("list_account_ops", table).
 		WithOrder(r.Order).
 		WithLimit(int(r.Limit)).
@@ -984,24 +1007,75 @@ func (m *Indexer) ListAccountOps(ctx context.Context, r ListRequest) ([]*model.O
 		// | + D = 39598
 		// + h > 25768
 		// + h <= 25773
-		q = q.Or(
-			pack.Equal("receiver_id", r.Account.RowId),
-			pack.Equal("delegate_id", r.Account.RowId),
-		)
+		if onlyDelegation {
+			q = q.Or(
+				// regular delegation is del + delegate set
+				// internal delegation are tx + delegate set
+				// regular origination + delegation is orig + delegate set
+				// internal origination + delegation is orig + delegate set
+				pack.And(
+					pack.In("type", []tezos.OpType{tezos.OpTypeDelegation, tezos.OpTypeOrigination}),
+					pack.Equal("delegate_id", r.Account.RowId),
+				),
+				// regular un/re-delegation is del + receiver set
+				// internal un/re-delegation is del + receiver set
+				pack.And(
+					pack.Equal("type", tezos.OpTypeDelegation),
+					pack.Equal("receiver_id", r.Account.RowId),
+				),
+			)
+			r.Typs = nil
+		} else if withDelegation {
+			q = q.Or(
+				pack.Equal("receiver_id", r.Account.RowId),
+				pack.Equal("delegate_id", r.Account.RowId),
+			)
+		} else {
+			q = q.AndEqual("receiver_id", r.Account.RowId)
+		}
 		q = q.AndEqual("sender_id", r.SenderId)
 	case r.ReceiverId > 0:
 		// FIXME: packdb condition bug
-		q = q.Or(
-			pack.Equal("receiver_id", r.ReceiverId),
-			pack.Equal("delegate_id", r.ReceiverId),
-		)
+		if onlyDelegation {
+			q = q.Or(
+				// regular delegation is del + delegate set
+				// internal delegation are tx + delegate set
+				// regular origination + delegation is orig + delegate set
+				// internal origination + delegation is orig + delegate set
+				pack.And(
+					pack.In("type", []tezos.OpType{tezos.OpTypeDelegation, tezos.OpTypeOrigination}),
+					pack.Equal("delegate_id", r.ReceiverId),
+				),
+				// regular un/re-delegation is del + receiver set
+				// internal un/re-delegation is del + receiver set
+				pack.And(
+					pack.Equal("type", tezos.OpTypeDelegation),
+					pack.Equal("receiver_id", r.ReceiverId),
+				),
+			)
+			r.Typs = nil
+		} else if withDelegation {
+			q = q.Or(
+				pack.Equal("receiver_id", r.ReceiverId),
+				pack.Equal("delegate_id", r.ReceiverId),
+			)
+		} else {
+			q = q.AndEqual("receiver_id", r.ReceiverId)
+		}
 		q = q.AndEqual("sender_id", r.Account.RowId)
 	default:
-		q = q.Or(
-			pack.Equal("sender_id", r.Account.RowId),
-			pack.Equal("receiver_id", r.Account.RowId),
-			pack.Equal("delegate_id", r.Account.RowId),
-		)
+		if withDelegation {
+			q = q.Or(
+				pack.Equal("sender_id", r.Account.RowId),
+				pack.Equal("receiver_id", r.Account.RowId),
+				pack.Equal("delegate_id", r.Account.RowId),
+			)
+		} else {
+			q = q.Or(
+				pack.Equal("sender_id", r.Account.RowId),
+				pack.Equal("receiver_id", r.Account.RowId),
+			)
+		}
 	}
 
 	if r.Cursor > 0 {
@@ -1050,6 +1124,10 @@ func (m *Indexer) ListAccountOpsCollapsed(ctx context.Context, r ListRequest) ([
 	r.Since = util.Max64(r.Since, r.Account.FirstSeen-1)
 	r.Until = util.NonZeroMin64(r.Until, r.Account.LastSeen)
 
+	// check if we should list delegations, consider different query modes
+	withDelegation := r.WithDelegation()
+	onlyDelegation := withDelegation && len(r.Typs) == 1
+
 	// list all ops where this address is any of
 	// - sender
 	// - receiver
@@ -1060,25 +1138,77 @@ func (m *Indexer) ListAccountOpsCollapsed(ctx context.Context, r ListRequest) ([
 	switch {
 	case r.SenderId > 0:
 		// FIXME: packdb condition bug
-		q = q.Or(
-			pack.Equal("receiver_id", r.Account.RowId),
-			pack.Equal("delegate_id", r.Account.RowId),
-		)
+		if onlyDelegation {
+			q = q.Or(
+				// regular delegation is del + delegate set
+				// internal delegation are tx + delegate set
+				// regular origination + delegation is orig + delegate set
+				// internal origination + delegation is orig + delegate set
+				pack.And(
+					pack.In("type", []tezos.OpType{tezos.OpTypeDelegation, tezos.OpTypeOrigination}),
+					pack.Equal("delegate_id", r.Account.RowId),
+				),
+				// regular un/re-delegation is del + receiver set
+				// internal un/re-delegation is del + receiver set
+				pack.And(
+					pack.Equal("type", tezos.OpTypeDelegation),
+					pack.Equal("receiver_id", r.Account.RowId),
+				),
+			)
+			r.Typs = nil
+		} else if withDelegation {
+			q = q.Or(
+				pack.Equal("receiver_id", r.Account.RowId),
+				pack.Equal("delegate_id", r.Account.RowId),
+			)
+		} else {
+			q = q.AndEqual("receiver_id", r.Account.RowId)
+		}
 		q = q.AndEqual("sender_id", r.SenderId)
 
 	case r.ReceiverId > 0:
 		// FIXME: packdb condition bug
-		q = q.Or(
-			pack.Equal("receiver_id", r.ReceiverId),
-			pack.Equal("delegate_id", r.ReceiverId),
-		)
+		if onlyDelegation {
+			q = q.Or(
+				// regular delegation is del + delegate set
+				// internal delegation are tx + delegate set
+				// regular origination + delegation is orig + delegate set
+				// internal origination + delegation is orig + delegate set
+				pack.And(
+					pack.In("type", []tezos.OpType{tezos.OpTypeDelegation, tezos.OpTypeOrigination}),
+					pack.Equal("delegate_id", r.ReceiverId),
+				),
+				// regular un/re-delegation is del + receiver set
+				// internal un/re-delegation is del + receiver set
+				pack.And(
+					pack.Equal("type", tezos.OpTypeDelegation),
+					pack.Equal("receiver_id", r.ReceiverId),
+				),
+			)
+			r.Typs = nil
+		} else if withDelegation {
+			q = q.Or(
+				pack.Equal("receiver_id", r.ReceiverId),
+				pack.Equal("delegate_id", r.ReceiverId),
+			)
+		} else {
+			q = q.AndEqual("receiver_id", r.ReceiverId)
+		}
 		q = q.AndEqual("sender_id", r.Account.RowId)
+
 	default:
-		q = q.Or(
-			pack.Equal("sender_id", r.Account.RowId),
-			pack.Equal("receiver_id", r.Account.RowId),
-			pack.Equal("delegate_id", r.Account.RowId),
-		)
+		if withDelegation {
+			q = q.Or(
+				pack.Equal("sender_id", r.Account.RowId),
+				pack.Equal("receiver_id", r.Account.RowId),
+				pack.Equal("delegate_id", r.Account.RowId),
+			)
+		} else {
+			q = q.Or(
+				pack.Equal("sender_id", r.Account.RowId),
+				pack.Equal("receiver_id", r.Account.RowId),
+			)
+		}
 	}
 
 	// FIXME:
@@ -1248,31 +1378,6 @@ func (m *Indexer) FindLastCall(ctx context.Context, acc model.AccountID, from, t
 	return op, nil
 }
 
-func (m *Indexer) ListContractBigMapIds(ctx context.Context, acc model.AccountID) ([]int64, error) {
-	table, err := m.Table(index.BigMapTableKey)
-	if err != nil {
-		return nil, err
-	}
-	q := pack.NewQuery("list_bigmaps", table).
-		AndEqual("account_id", acc).
-		AndEqual("action", micheline.DiffActionAlloc).
-		AndEqual("is_deleted", false)
-	ids := make([]int64, 0)
-	bmi := &model.BigmapItem{}
-	err = q.Stream(ctx, func(r pack.Row) error {
-		if err := r.Decode(bmi); err != nil {
-			return err
-		}
-		ids = append(ids, bmi.BigmapId)
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	vec.Int64Sorter(ids).Sort()
-	return ids, nil
-}
-
 func (m *Indexer) ElectionByHeight(ctx context.Context, height int64) (*model.Election, error) {
 	table, err := m.Table(index.ElectionTableKey)
 	if err != nil {
@@ -1332,37 +1437,23 @@ func (m *Indexer) VotesByElection(ctx context.Context, id model.ElectionID) ([]*
 	return votes, nil
 }
 
+// r.Since is the true vote start block
 func (m *Indexer) ListVoters(ctx context.Context, r ListRequest) ([]*model.Voter, error) {
-	// use params from one cycle before the vote started (necessary during protocol upgrades)
-	params := m.ParamsByHeight(r.Since - 1)
-
 	// cursor and offset are mutually exclusive
 	if r.Cursor > 0 {
 		r.Offset = 0
 	}
 
 	// Step 1
-	// collect eligible voters from previous roll snapshot
-	//
-	// Note this is not entirely correct because we don't collect a gov
-	// snapshot but instead create a virtual gov snapshot from an existing roll
-	// snapshot at the end of the previous cycle. The differences are
-	//
-	// - some bakers may have been deactivated right after the roll snapshot
-	//   and before the gov snapshot (we express this in the snapshot by setting
-	//   is_active = false)
-	// - the roll snapshot does not contain unfrozen rewards, but the
-	//   governance snapshot should include this
-	//
-	snapshotTable, err := m.Table(index.SnapshotTableKey)
+	// collect voters from governance roll snapshot
+	rollsTable, err := m.Table(index.RollsTableKey)
 	if err != nil {
 		return nil, err
 	}
-	q := pack.NewQuery("list_voters", snapshotTable).
+	q := pack.NewQuery("list_voters", rollsTable).
 		WithLimit(int(r.Limit)).
 		WithOffset(int(r.Offset)).
-		AndEqual("height", r.Since-1). // end of previous cycle snapshot
-		AndEqual("is_active", true)
+		AndEqual("height", r.Since-1) // snapshots are made at end of previous vote
 
 	if r.Cursor > 0 {
 		if r.Order == pack.OrderDesc {
@@ -1372,7 +1463,7 @@ func (m *Indexer) ListVoters(ctx context.Context, r ListRequest) ([]*model.Voter
 		}
 	}
 	voters := make(map[model.AccountID]*model.Voter)
-	snap := &model.Snapshot{}
+	snap := &model.RollSnapshot{}
 	err = q.Stream(ctx, func(r pack.Row) error {
 		if err := r.Decode(snap); err != nil {
 			return err
@@ -1380,7 +1471,7 @@ func (m *Indexer) ListVoters(ctx context.Context, r ListRequest) ([]*model.Voter
 		voters[snap.AccountId] = &model.Voter{
 			RowId: snap.AccountId,
 			Rolls: snap.Rolls,
-			Stake: snap.Balance + snap.Delegated,
+			Stake: snap.Stake,
 		}
 		return nil
 	})
@@ -1388,37 +1479,7 @@ func (m *Indexer) ListVoters(ctx context.Context, r ListRequest) ([]*model.Voter
 		return nil, err
 	}
 
-	// Step 2
-	// adjust rolls up by unfrozen rewards which are applied after the roll snapshot
-	// roll snapshot after last block of previous cycle, unfreeze at first block
-	flowTable, err := m.Table(index.FlowTableKey)
-	if err != nil {
-		return nil, err
-	}
-	type XFlow struct {
-		AccountId model.AccountID `pack:"A"`
-		AmountOut int64           `pack:"o"`
-	}
-	xf := &XFlow{}
-	err = pack.NewQuery("list_voters", flowTable).
-		AndEqual("height", r.Since).
-		AndEqual("category", model.FlowCategoryRewards).
-		AndEqual("operation", model.FlowTypeInternal).
-		Stream(ctx, func(r pack.Row) error {
-			if err := r.Decode(xf); err != nil {
-				return err
-			}
-			if voter, ok := voters[xf.AccountId]; ok {
-				voter.Stake += xf.AmountOut
-				voter.Rolls = voter.Stake / params.TokensPerRoll
-			}
-			return nil
-		})
-	if err != nil {
-		return nil, err
-	}
-
-	// Step 3: list ballots
+	// Step 2: list ballots
 	ballotTable, err := m.Table(index.BallotTableKey)
 	if err != nil {
 		return nil, err
@@ -1624,101 +1685,136 @@ func (m *Indexer) LookupSnapshot(ctx context.Context, accId model.AccountID, cyc
 	return snap, nil
 }
 
-func (m *Indexer) LookupBigmap(ctx context.Context, id int64, withLast bool) (*model.BigmapItem, *model.BigmapItem, error) {
-	table, err := m.Table(index.BigMapTableKey)
+func (m *Indexer) ListContractBigmapIds(ctx context.Context, acc model.AccountID) ([]int64, error) {
+	table, err := m.Table(index.BigmapAllocTableKey)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	alloc := &model.BigmapItem{}
-	err = pack.NewQuery("search_bigmap", table).
-		WithLimit(1).
-		AndEqual("bigmap_id", id).
-		AndEqual("action", micheline.DiffActionAlloc).
-		Execute(ctx, alloc)
+	q := pack.NewQuery("list_bigmaps", table).AndEqual("account_id", acc)
+	ids := make([]int64, 0)
+	alloc := &model.BigmapAlloc{}
+	err = q.Stream(ctx, func(r pack.Row) error {
+		if err := r.Decode(alloc); err != nil {
+			return err
+		}
+		ids = append(ids, alloc.BigmapId)
+		return nil
+	})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	if alloc.RowId == 0 {
-		return nil, nil, index.ErrNoBigmapEntry
-	}
-	if !withLast {
-		return alloc, nil, nil
-	}
-	last := &model.BigmapItem{}
-	err = pack.NewQuery("search_bigmap", table).
-		WithDesc().WithLimit(1).
-		AndEqual("bigmap_id", id).
-		Execute(ctx, last)
-	return alloc, last, err
+	vec.Int64Sorter(ids).Sort()
+	return ids, nil
 }
 
-func (m *Indexer) ListBigmapKeys(ctx context.Context, id, height int64, keyhash tezos.ExprHash, offset, limit uint) ([]*model.BigmapItem, error) {
-	table, err := m.Table(index.BigMapTableKey)
+func (m *Indexer) LookupBigmapAlloc(ctx context.Context, id int64) (*model.BigmapAlloc, error) {
+	table, err := m.Table(index.BigmapAllocTableKey)
+	if err != nil {
+		return nil, err
+	}
+	alloc := &model.BigmapAlloc{}
+	err = pack.NewQuery("search_bigmap", table).
+		AndEqual("bigmap_id", id).
+		Execute(ctx, alloc)
+	if err != nil {
+		return nil, err
+	}
+	if alloc.RowId == 0 {
+		return nil, index.ErrNoBigmapAlloc
+	}
+	return alloc, nil
+}
+
+func (m *Indexer) ListHistoricBigmapKeys(ctx context.Context, r ListRequest) ([]*model.BigmapKV, error) {
+	hist, ok := m.bigmaps.Get(r.BigmapId, r.Since)
+	if !ok {
+		start := time.Now()
+		table, err := m.Table(index.BigmapUpdateTableKey)
+		if err != nil {
+			return nil, err
+		}
+		hist, err = m.bigmaps.Build(ctx, table, r.BigmapId, r.Since)
+		if err != nil {
+			return nil, err
+		}
+		log.Debugf("Built history cache for bigmap %d at height %d with %d entries in %s",
+			r.BigmapId, r.Since, hist.Len(), time.Since(start))
+	}
+
+	// cursor and offset are mutually exclusive, we use offset below
+	// Note that cursor starts at 1
+	if r.Cursor > 0 {
+		r.Offset = uint(r.Cursor - 1)
+	}
+	var from, to int
+	if r.Order == pack.OrderAsc {
+		from, to = int(r.Offset), int(r.Offset+r.Limit)
+	} else {
+		l := hist.Len()
+		from = util.Max(0, l-int(r.Offset-r.Limit))
+		to = from + int(r.Limit)
+	}
+
+	// get from cache
+	var items []*model.BigmapKV
+	if r.BigmapKey.IsValid() {
+		if item := hist.Get(r.BigmapKey); item != nil {
+			items = []*model.BigmapKV{item}
+		}
+	} else {
+		items = hist.Range(from, to)
+	}
+
+	// maybe reverse order
+	if r.Order == pack.OrderDesc {
+		for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
+			items[i], items[j] = items[j], items[i]
+		}
+	}
+	return items, nil
+}
+
+func (m *Indexer) ListBigmapKeys(ctx context.Context, r ListRequest) ([]*model.BigmapKV, error) {
+	table, err := m.Table(index.BigmapValueTableKey)
 	if err != nil {
 		return nil, err
 	}
 	q := pack.NewQuery("list_bigmap", table).
-		AndEqual("bigmap_id", id).
-		AndEqual("action", micheline.DiffActionUpdate)
-	if height == 0 {
-		// rely on flags to quickly find latest state
-		q = q.AndEqual("is_replaced", false).AndEqual("is_deleted", false)
-	} else {
-		// time-warp: ignore flags and future updates after height
-		q = q.AndLte("height", height)
-	}
-	if keyhash.IsValid() {
-		// assume hash collisions
-		q = q.WithDesc().AndEqual("key_id", model.GetKeyId(id, keyhash))
-	}
-	items := make([]*model.BigmapItem, 0)
-	err = q.Stream(ctx, func(r pack.Row) error {
-		var b *model.BigmapItem
-		if height > 0 {
-			// time-warp check requires to decode first
-			b = model.AllocBigmapItem()
-			if err := r.Decode(b); err != nil {
-				return err
-			}
-			// skip values that were updated before height
-			// FIXME: when the database supports OR conditions, this can be
-			// done more efficiently with a condtion updated.eq=0 || updated.gt=height
-			if b.Updated > 0 && b.Updated <= height {
-				b.Free()
-				return nil
-			}
-			// skip values that were removed
-			if b.IsDeleted {
-				b.Free()
-				return nil
-			}
-			// skip matches when offset is used
-			if offset > 0 {
-				offset--
-				b.Free()
-				return nil
-			}
+		WithOrder(r.Order).
+		AndEqual("bigmap_id", r.BigmapId)
+	if r.Cursor > 0 {
+		r.Offset = 0
+		if r.Order == pack.OrderDesc {
+			q = q.AndLt("I", r.Cursor)
 		} else {
-			// for non-time-warp it's more efficient to skip before decoding
-			if offset > 0 {
-				offset--
-				return nil
-			}
-			b = model.AllocBigmapItem()
-			if err := r.Decode(b); err != nil {
-				b.Free()
-				return err
-			}
+			q = q.AndGt("I", r.Cursor)
+		}
+	}
+	if r.BigmapKey.IsValid() {
+		// assume hash collisions
+		q = q.WithDesc().AndEqual("key_id", model.GetKeyId(r.BigmapId, r.BigmapKey))
+	}
+	items := make([]*model.BigmapKV, 0)
+	err = q.Stream(ctx, func(row pack.Row) error {
+		// skip before decoding
+		if r.Offset > 0 {
+			r.Offset--
+			return nil
+		}
+		b := &model.BigmapKV{}
+		if err := row.Decode(b); err != nil {
+			return err
 		}
 
 		// skip hash collisions on key_id
-		if keyhash.IsValid() && !keyhash.Equal(b.GetKeyHash()) {
+		if r.BigmapKey.IsValid() && !r.BigmapKey.Equal(b.GetKeyHash()) {
+			// log.Infof("Skip hash collision for item %s %d %d key %x", b.Action, b.BigmapId, b.RowId, b.Key)
 			return nil
 		}
 
-		// log.Infof("Found item %s %d %d key %x", b.Action, b.BigMapId, b.RowId, b.Key)
+		// log.Infof("Found item %s %d %d key %x", b.Action, b.BigmapId, b.RowId, b.Key)
 		items = append(items, b)
-		if len(items) == int(limit) {
+		if len(items) == int(r.Limit) {
 			return io.EOF
 		}
 		return nil
@@ -1729,42 +1825,47 @@ func (m *Indexer) ListBigmapKeys(ctx context.Context, id, height int64, keyhash 
 	return items, nil
 }
 
-func (m *Indexer) ListBigmapUpdates(ctx context.Context, id, minHeight, maxHeight int64, keyhash tezos.ExprHash, offset, limit uint) ([]*model.BigmapItem, error) {
-	table, err := m.Table(index.BigMapTableKey)
+func (m *Indexer) ListBigmapUpdates(ctx context.Context, r ListRequest) ([]*model.BigmapUpdate, error) {
+	table, err := m.Table(index.BigmapUpdateTableKey)
 	if err != nil {
 		return nil, err
 	}
 	q := pack.NewQuery("list_bigmap", table).
-		AndEqual("bigmap_id", id).
-		AndNotIn("action", []uint8{
-			uint8(micheline.DiffActionAlloc),
-			uint8(micheline.DiffActionCopy),
-		})
-	if minHeight > 0 {
-		q = q.AndGte("height", minHeight)
+		WithOrder(r.Order).
+		AndEqual("bigmap_id", r.BigmapId)
+	if r.Cursor > 0 {
+		r.Offset = 0
+		if r.Order == pack.OrderDesc {
+			q = q.AndLt("I", r.Cursor)
+		} else {
+			q = q.AndGt("I", r.Cursor)
+		}
 	}
-	if maxHeight > 0 {
-		q = q.AndLte("height", maxHeight)
+	if r.Since > 0 {
+		q = q.AndGte("height", r.Since)
 	}
-	if keyhash.IsValid() {
-		q = q.AndEqual("key_id", model.GetKeyId(id, keyhash))
+	if r.Until > 0 {
+		q = q.AndLte("height", r.Until)
 	}
-	items := make([]*model.BigmapItem, 0)
-	err = table.Stream(ctx, q, func(r pack.Row) error {
-		if offset > 0 {
-			offset--
+	if r.BigmapKey.IsValid() {
+		q = q.AndEqual("key_id", model.GetKeyId(r.BigmapId, r.BigmapKey))
+	}
+	items := make([]*model.BigmapUpdate, 0)
+	err = table.Stream(ctx, q, func(row pack.Row) error {
+		if r.Offset > 0 {
+			r.Offset--
 			return nil
 		}
-		b := model.AllocBigmapItem()
-		if err := r.Decode(b); err != nil {
+		b := &model.BigmapUpdate{}
+		if err := row.Decode(b); err != nil {
 			return err
 		}
 		// skip hash collisions on key_id
-		if keyhash.IsValid() && !keyhash.Equal(b.GetKeyHash()) {
+		if r.BigmapKey.IsValid() && !r.BigmapKey.Equal(b.GetKeyHash()) {
 			return nil
 		}
 		items = append(items, b)
-		if len(items) == int(limit) {
+		if len(items) == int(r.Limit) {
 			return io.EOF
 		}
 		return nil
@@ -1864,8 +1965,10 @@ func (m *Indexer) PurgeMetadata(ctx context.Context) error {
 		return err
 	}
 	q := pack.NewQuery("api.metadata.purge", table).AndGte("row_id", 0)
-	_, err = table.Delete(ctx, q)
-	return err
+	if _, err := table.Delete(ctx, q); err != nil {
+		return err
+	}
+	return table.Flush(ctx)
 }
 
 func (m *Indexer) UpsertMetadata(ctx context.Context, entries []*model.Metadata) error {

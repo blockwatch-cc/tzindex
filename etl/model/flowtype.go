@@ -67,6 +67,7 @@ const (
 	FlowTypeInternal                        // 9 - used for unfreeze
 	FlowTypeInvoice                         // 10 - invoice feature
 	FlowTypeAirdrop                         // 11 - Babylon Airdrop
+	FlowTypeSubsidy                         // 12 - Granada liquidity baking
 	FlowTypeInvalid
 )
 
@@ -96,6 +97,8 @@ func ParseFlowType(s string) FlowType {
 		return FlowTypeInvoice
 	case "airdrop":
 		return FlowTypeAirdrop
+	case "subsidy":
+		return FlowTypeSubsidy
 	default:
 		return FlowTypeInvalid
 	}
@@ -131,6 +134,8 @@ func (t FlowType) String() string {
 		return "invoice"
 	case FlowTypeAirdrop:
 		return "airdrop"
+	case FlowTypeSubsidy:
+		return "subsidy"
 	default:
 		return "invalid"
 	}

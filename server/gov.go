@@ -89,7 +89,7 @@ func NewExplorerVote(ctx *ApiContext, v *model.Vote) *ExplorerVote {
 	if vote.IsOpen {
 		params := ctx.Params
 		diff := params.BlocksPerVotingPeriod - (ctx.Tip.BestHeight - v.StartHeight) - 1
-		vote.EndTime = ctx.Tip.BestTime.Add(time.Duration(diff) * params.TimeBetweenBlocks[0])
+		vote.EndTime = ctx.Tip.BestTime.Add(time.Duration(diff) * params.BlockTime())
 	}
 	return vote
 }
@@ -283,14 +283,14 @@ func NewExplorerElection(ctx *ApiContext, e *model.Election) *ExplorerElection {
 	tm := ctx.Tip.BestTime
 	if election.IsOpen {
 		diff := int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - (ctx.Tip.BestHeight - e.StartHeight)
-		election.EndTime = tm.Add(time.Duration(diff) * p.TimeBetweenBlocks[0])
+		election.EndTime = tm.Add(time.Duration(diff) * p.BlockTime())
 		election.EndHeight = election.StartHeight + int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - 1
-		election.expires = tm.Add(p.TimeBetweenBlocks[0])
+		election.expires = tm.Add(p.BlockTime())
 	} else {
 		election.MaxPeriods = election.NumPeriods
 		height := ctx.Tip.BestHeight
 		if election.EndHeight >= height {
-			election.expires = tm.Add(p.TimeBetweenBlocks[0])
+			election.expires = tm.Add(p.BlockTime())
 		} else {
 			election.expires = ctx.Now.Add(maxCacheExpires)
 		}
@@ -353,7 +353,7 @@ func loadElection(ctx *ApiContext) *model.Election {
 			if err != nil {
 				switch err {
 				case etl.ErrNoTable:
-					panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, err.Error(), nil))
+					panic(ENotFound(EC_RESOURCE_NOTFOUND, "cannot access proposal table", err))
 				case index.ErrNoProposalEntry:
 					panic(ENotFound(EC_RESOURCE_NOTFOUND, "no proposal", err))
 				default:
@@ -372,7 +372,7 @@ func loadElection(ctx *ApiContext) *model.Election {
 		if err != nil {
 			switch err {
 			case etl.ErrNoTable:
-				panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, err.Error(), nil))
+				panic(ENotFound(EC_RESOURCE_NOTFOUND, "cannot access election table", err))
 			case index.ErrNoElectionEntry:
 				panic(ENotFound(EC_RESOURCE_NOTFOUND, "no election", err))
 			default:
@@ -384,14 +384,14 @@ func loadElection(ctx *ApiContext) *model.Election {
 	return nil
 }
 
-func loadStage(ctx *ApiContext, election *model.Election) int {
+func loadStage(ctx *ApiContext, election *model.Election, maxPeriods int) int {
 	var stage int // 1 .. 4 (5 in Edo) (same as tezos.VotingPeriodKind)
 	if s, ok := mux.Vars(ctx.Request)["stage"]; !ok || s == "" {
 		panic(EBadRequest(EC_RESOURCE_ID_MISSING, "missing voting period identifier", nil))
 	} else {
 		if i, err := strconv.Atoi(s); err != nil {
 			panic(EBadRequest(EC_RESOURCE_ID_MALFORMED, "invalid voting period identifier", err))
-		} else if i < 1 || i > ctx.Params.NumVotingPeriods {
+		} else if i < 1 || i > maxPeriods {
 			panic(EBadRequest(EC_RESOURCE_ID_MALFORMED, "invalid voting period identifier", err))
 		} else if i > election.NumPeriods {
 			panic(ENotFound(EC_RESOURCE_NOTFOUND, "voting period does not exist", nil))
@@ -409,7 +409,7 @@ func ReadElection(ctx *ApiContext) (interface{}, int) {
 	if err != nil {
 		switch err {
 		case etl.ErrNoTable:
-			panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, err.Error(), nil))
+			panic(ENotFound(EC_RESOURCE_NOTFOUND, "cannot access vote table", err))
 		default:
 			panic(EInternal(EC_DATABASE, err.Error(), nil))
 		}
@@ -418,7 +418,7 @@ func ReadElection(ctx *ApiContext) (interface{}, int) {
 	if err != nil {
 		switch err {
 		case etl.ErrNoTable:
-			panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, err.Error(), nil))
+			panic(ENotFound(EC_RESOURCE_NOTFOUND, "cannot access proposal table", err))
 		default:
 			panic(EInternal(EC_DATABASE, err.Error(), nil))
 		}
@@ -515,10 +515,11 @@ func ListVoters(ctx *ApiContext) (interface{}, int) {
 	args := &ListRequest{}
 	ctx.ParseRequestArgs(args)
 	election := loadElection(ctx)
-	stage := loadStage(ctx, election)
+	params := ctx.Indexer.ParamsByHeight(election.StartHeight)
+	stage := loadStage(ctx, election, params.NumVotingPeriods)
 
 	r := etl.ListRequest{
-		Since:  election.StartHeight + int64(stage)*ctx.Params.BlocksPerVotingPeriod,
+		Since:  election.StartHeight + int64(stage)*params.BlocksPerVotingPeriod,
 		Period: election.VotingPeriod + int64(stage),
 		Offset: args.Offset,
 		Limit:  args.Limit, // allow higher limit to fetch all voters at once
@@ -536,7 +537,7 @@ func ListVoters(ctx *ApiContext) (interface{}, int) {
 	}
 
 	if election.IsOpen {
-		resp.expires = ctx.Tip.BestTime.Add(ctx.Params.TimeBetweenBlocks[0])
+		resp.expires = ctx.Tip.BestTime.Add(params.BlockTime())
 	} else {
 		resp.expires = ctx.Now.Add(maxCacheExpires)
 	}
@@ -558,7 +559,8 @@ func ListBallots(ctx *ApiContext) (interface{}, int) {
 	args := &ListRequest{}
 	ctx.ParseRequestArgs(args)
 	election := loadElection(ctx)
-	stage := loadStage(ctx, election)
+	p := ctx.Indexer.ParamsByHeight(election.StartHeight)
+	stage := loadStage(ctx, election, p.NumVotingPeriods)
 
 	r := etl.ListRequest{
 		Period: election.VotingPeriod + int64(stage),
@@ -596,7 +598,7 @@ func ListBallots(ctx *ApiContext) (interface{}, int) {
 	}
 
 	if election.IsOpen {
-		resp.expires = ctx.Tip.BestTime.Add(ctx.Params.TimeBetweenBlocks[0])
+		resp.expires = ctx.Tip.BestTime.Add(p.BlockTime())
 	} else {
 		resp.expires = ctx.Now.Add(maxCacheExpires)
 	}

@@ -102,6 +102,10 @@ type BlockIndexer interface {
 	// block must be rolled back after an error occured.
 	DeleteBlock(ctx context.Context, height int64) error
 
+	// DeleteCycle is invoked when an index must delete all content from
+	// a particular cycle.
+	DeleteCycle(ctx context.Context, cycle int64) error
+
 	// Close closes the indexer and frees all associated resources, if any.
 	Close() error
 

@@ -245,11 +245,11 @@ func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 		if bh > 0 {
 			acc.NextBakeHeight = bh
 			acc.NextBakePriority = 0
-			acc.NextBakeTime = tm.Add(a.params.TimeBetweenBlocks[0] * time.Duration(bh-height))
+			acc.NextBakeTime = tm.Add(a.params.BlockTime() * time.Duration(bh-height))
 		}
 		if eh > 0 {
 			acc.NextEndorseHeight = eh
-			acc.NextEndorseTime = tm.Add(a.params.TimeBetweenBlocks[0] * time.Duration(eh-height))
+			acc.NextEndorseTime = tm.Add(a.params.BlockTime() * time.Duration(eh-height))
 		}
 	}
 	return json.Marshal(acc)
@@ -625,7 +625,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
 	if err != nil {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", args.Table), err))
+		panic(ENotFound(EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", args.Table), err))
 	}
 
 	// translate long column names to short names used in pack tables
@@ -855,7 +855,7 @@ func StreamAccountTable(ctx *ApiContext, args *TableRequest) (interface{}, int) 
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
 					addr, err := tezos.ParseAddress(v)
-					if err != nil || !addr.IsValid() {
+					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)

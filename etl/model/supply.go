@@ -10,8 +10,7 @@ import (
 	"blockwatch.cc/tzgo/tezos"
 )
 
-// Note: removed circulating supply in v9.1 in favour of liquid since
-// TF vesting time is over
+// Note: removed vesting supply in v9.1, TF vesting time is over
 type Supply struct {
 	RowId               uint64    `pack:"I,pk,snappy"  json:"row_id"`             // unique id
 	Height              int64     `pack:"h,snappy"     json:"height"`             // bc: block height (also for orphans)
@@ -20,8 +19,8 @@ type Supply struct {
 	Total               int64     `pack:"t,snappy"     json:"total"`              // total available supply (including unclaimed)
 	Activated           int64     `pack:"A,snappy"     json:"activated"`          // activated fundraiser supply
 	Unclaimed           int64     `pack:"U,snappy"     json:"unclaimed"`          // all non-activated fundraiser supply
-	Circulating         int64     `pack:"L,snappy"     json:"circulating"`        // (total - unclaimed)
-	Liquid              int64     `knox:"L,snappy"     json:"liquid"`             // (total - frozen - unclaimed)
+	Circulating         int64     `pack:"C,snappy"     json:"circulating"`        // (total - unclaimed)
+	Liquid              int64     `pack:"L,snappy"     json:"liquid"`             // (total - frozen - unclaimed)
 	Delegated           int64     `pack:"E,snappy"     json:"delegated"`          // all delegated balances
 	Staking             int64     `pack:"D,snappy"     json:"staking"`            // all delegated + delegate's own balances
 	Shielded            int64     `pack:"S,snappy"     json:"shielded"`           // Sapling shielded supply
@@ -34,6 +33,7 @@ type Supply struct {
 	MintedEndorsing     int64     `pack:"e,snappy"     json:"minted_endorsing"`
 	MintedSeeding       int64     `pack:"s,snappy"     json:"minted_seeding"`
 	MintedAirdrop       int64     `pack:"a,snappy"     json:"minted_airdrop"`
+	MintedSubsidy       int64     `pack:"y,snappy"     json:"minted_subsidy"`
 	Burned              int64     `pack:"B,snappy"     json:"burned"`
 	BurnedDoubleBaking  int64     `pack:"1,snappy"     json:"burned_double_baking"`
 	BurnedDoubleEndorse int64     `pack:"2,snappy"     json:"burned_double_endorse"`
@@ -101,6 +101,10 @@ func (s *Supply) Update(b *Block, delegates map[AccountID]*Account) {
 		case FlowTypeInvoice, FlowTypeAirdrop:
 			s.Total += f.AmountIn
 			s.MintedAirdrop += f.AmountIn
+			s.Minted += f.AmountIn
+		case FlowTypeSubsidy:
+			s.Total += f.AmountIn
+			s.MintedSubsidy += f.AmountIn
 			s.Minted += f.AmountIn
 		case FlowTypeDenunciation:
 			// moves frozen coins between buckets and owners, burn is already accounted for
@@ -179,7 +183,7 @@ func (s *Supply) Update(b *Block, delegates map[AccountID]*Account) {
 	s.Frozen = s.FrozenDeposits + s.FrozenFees + s.FrozenRewards
 
 	// calculate total baking rewards as difference to total rewards
-	s.MintedBaking = s.Minted - s.MintedSeeding - s.MintedEndorsing - s.MintedAirdrop
+	s.MintedBaking = s.Minted - s.MintedSeeding - s.MintedEndorsing - s.MintedAirdrop - s.MintedSubsidy
 
 	// general consensus: frozen is part of circulating even though baking
 	// rewards are subject to slashing

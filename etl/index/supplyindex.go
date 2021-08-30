@@ -17,7 +17,7 @@ import (
 var (
 	SupplyPackSizeLog2    = 15 // 32k packs ~3.6M
 	SupplyJournalSizeLog2 = 16 // 64k - can be big, no search required
-	SupplyCacheSize       = 8  // ~30M
+	SupplyCacheSize       = 2
 	SupplyFillLevel       = 100
 	SupplyIndexKey        = "supply"
 	SupplyTableKey        = "supply"
@@ -125,6 +125,14 @@ func (idx *SupplyIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting supply state at height %d", height)
 	_, err := pack.NewQuery("etl.supply.delete", idx.table).
 		AndEqual("height", height).
+		Delete(ctx)
+	return err
+}
+
+func (idx *SupplyIndex) DeleteCycle(ctx context.Context, cycle int64) error {
+	// log.Debugf("Rollback deleting supply for cycle %d", cycle)
+	_, err := pack.NewQuery("etl.supply.delete", idx.table).
+		AndEqual("cycle", cycle).
 		Delete(ctx)
 	return err
 }

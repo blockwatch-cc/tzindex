@@ -39,7 +39,7 @@ type AccountRank struct {
 // Account is an up-to-date snapshot of the current status. For history look at Flow (balance updates).
 type Account struct {
 	RowId              AccountID         `pack:"I,pk,snappy" json:"row_id"`
-	Hash               tezos.Address     `pack:"H"           json:"address"`
+	Address            tezos.Address     `pack:"H"           json:"address"`
 	DelegateId         AccountID         `pack:"D,snappy"    json:"delegate_id"`
 	CreatorId          AccountID         `pack:"M,snappy"    json:"creator_id"`
 	Pubkey             []byte            `pack:"k"           json:"pubkey"`
@@ -108,7 +108,7 @@ var _ pack.Item = (*Account)(nil)
 func NewAccount(addr tezos.Address) *Account {
 	acc := AllocAccount()
 	acc.Type = addr.Type
-	acc.Hash = addr.Clone()
+	acc.Address = addr.Clone()
 	acc.IsNew = true
 	acc.IsDirty = true
 	acc.IsSpendable = addr.Type != tezos.AddressTypeContract // tz1/2/3 spendable by default
@@ -137,11 +137,7 @@ func (a *Account) SetID(id uint64) {
 }
 
 func (a Account) String() string {
-	return a.Hash.String()
-}
-
-func (a Account) Address() tezos.Address {
-	return a.Hash
+	return a.Address.String()
 }
 
 func (a Account) Key() tezos.Key {
@@ -198,7 +194,7 @@ func (a *Account) GetVersionBytes() []byte {
 
 func (a *Account) Reset() {
 	a.RowId = 0
-	a.Hash = tezos.Address{}
+	a.Address = tezos.Address{}
 	a.DelegateId = 0
 	a.CreatorId = 0
 	a.Pubkey = nil
@@ -257,20 +253,6 @@ func (a *Account) Reset() {
 	a.WasFunded = false
 	a.IsDirty = false
 	a.MustDelete = false
-}
-
-func (a *Account) NeedsBabylonUpgrade(p *tezos.Params) bool {
-	isEligible := a.Type == tezos.AddressTypeContract && !a.IsContract
-	isEligible = isEligible && (a.IsSpendable || (!a.IsSpendable && a.IsDelegatable))
-	return isEligible && p.Version >= 5
-}
-
-func (a *Account) UpgradeToBabylon(p *tezos.Params) {
-	if !a.NeedsBabylonUpgrade(p) {
-		return
-	}
-	a.IsContract = true
-	a.IsDirty = true
 }
 
 func (a *Account) UpdateBalanceN(flows []*Flow) error {
@@ -503,8 +485,8 @@ func (a Account) MarshalBinary() ([]byte, error) {
 	le := binary.LittleEndian
 	buf := bytes.NewBuffer(make([]byte, 0, 2048))
 	binary.Write(buf, le, a.RowId)
-	binary.Write(buf, le, int32(len(a.Hash.Hash)))
-	buf.Write(a.Hash.Hash)
+	binary.Write(buf, le, int32(len(a.Address.Hash)))
+	buf.Write(a.Address.Hash)
 	binary.Write(buf, le, a.DelegateId)
 	binary.Write(buf, le, a.CreatorId)
 	binary.Write(buf, le, int32(len(a.Pubkey)))
@@ -570,11 +552,11 @@ func (a *Account) UnmarshalBinary(data []byte) error {
 	var l int32
 	binary.Read(buf, le, &l)
 	if l > 0 {
-		if cap(a.Hash.Hash) < int(l) {
-			a.Hash.Hash = make([]byte, int(l))
+		if cap(a.Address.Hash) < int(l) {
+			a.Address.Hash = make([]byte, int(l))
 		}
-		a.Hash.Hash = a.Hash.Hash[:int(l)]
-		buf.Read(a.Hash.Hash)
+		a.Address.Hash = a.Address.Hash[:int(l)]
+		buf.Read(a.Address.Hash)
 	}
 	binary.Read(buf, le, &a.DelegateId)
 	binary.Read(buf, le, &a.CreatorId)
@@ -584,7 +566,7 @@ func (a *Account) UnmarshalBinary(data []byte) error {
 		buf.Read(a.Pubkey)
 	}
 	binary.Read(buf, le, &a.Type)
-	a.Hash.Type = a.Type
+	a.Address.Type = a.Type
 	binary.Read(buf, le, &a.FirstIn)
 	binary.Read(buf, le, &a.FirstOut)
 	binary.Read(buf, le, &a.LastIn)

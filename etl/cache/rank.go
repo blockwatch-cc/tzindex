@@ -61,6 +61,11 @@ func (h RankCache) Time() time.Time {
 	return h.ts
 }
 
+func (c *RankCache) Expire() *RankCache {
+	c.ts = time.Time{}
+	return c
+}
+
 func (h RankCache) Expired() bool {
 	return h.ts.Add(time.Minute).Before(time.Now())
 }

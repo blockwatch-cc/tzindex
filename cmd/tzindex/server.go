@@ -34,12 +34,15 @@ var (
 )
 
 func init() {
-	serverCmd.Flags().StringVar(&rpcurl, "rpcurl", "http://127.0.0.1:8732", "RPC url")
-	serverCmd.Flags().StringVar(&rpcuser, "rpcuser", "", "RPC username")
-	serverCmd.Flags().StringVar(&rpcpass, "rpcpass", "", "RPC password")
-	serverCmd.Flags().BoolVar(&norpc, "norpc", false, "disable RPC client")
-	serverCmd.Flags().BoolVar(&notls, "notls", false, "disable RPC TLS support (use http)")
-	serverCmd.Flags().BoolVar(&insecure, "insecure", false, "disable RPC TLS certificate checks (not recommended)")
+	rootCmd.PersistentFlags().StringVar(&rpcurl, "rpcurl", "http://127.0.0.1:8732", "RPC url")
+	rootCmd.PersistentFlags().StringVar(&rpcuser, "rpcuser", "", "RPC username")
+	rootCmd.PersistentFlags().StringVar(&rpcpass, "rpcpass", "", "RPC password")
+	rootCmd.PersistentFlags().BoolVar(&fullIndex, "full", false, "full mode (index all data)")
+	rootCmd.PersistentFlags().BoolVar(&lightIndex, "light", false, "light mode (use to skip baker and gov data)")
+	rootCmd.PersistentFlags().BoolVar(&norpc, "norpc", false, "disable RPC client")
+	rootCmd.PersistentFlags().BoolVar(&notls, "notls", false, "disable RPC TLS support (use http)")
+	rootCmd.PersistentFlags().BoolVar(&insecure, "insecure", false, "disable RPC TLS certificate checks (not recommended)")
+
 	serverCmd.Flags().BoolVar(&noapi, "noapi", false, "disable API server")
 	serverCmd.Flags().BoolVar(&noindex, "noindex", false, "disable indexing")
 	serverCmd.Flags().BoolVar(&nomonitor, "nomonitor", false, "disable block monitor")
@@ -47,7 +50,6 @@ func init() {
 	serverCmd.Flags().BoolVar(&validate, "validate", false, "validate account balances")
 	serverCmd.Flags().Int64Var(&stop, "stop", 0, "stop indexing after `height`")
 	serverCmd.Flags().BoolVar(&cors, "enable-cors", false, "enable API CORS support")
-	serverCmd.Flags().BoolVar(&lightIndex, "light", false, "light mode (use to skip baker and gov data)")
 
 	rootCmd.AddCommand(serverCmd)
 }
@@ -67,6 +69,10 @@ func runServer(args []string) error {
 	server.UserAgent = UserAgent()
 	server.ApiVersion = apiVersion
 	pack.QueryLogMinDuration = config.GetDuration("database.log_slow_queries")
+
+	if fullIndex {
+		lightIndex = false
+	}
 
 	// load metadata extensions
 	if err := metadata.LoadExtensions(); err != nil {

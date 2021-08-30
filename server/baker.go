@@ -201,7 +201,7 @@ func ListBakers(ctx *ApiContext) (interface{}, int) {
 		capacity := v.StakingCapacity(ctx.Params, netRolls)
 		baker := ExplorerBaker{
 			Id:                v.RowId,
-			Address:           v.Address(),
+			Address:           v.Address,
 			BakerSince:        ctx.Indexer.LookupBlockTime(ctx.Context, v.DelegateSince),
 			BakerVersion:      hex.EncodeToString(v.GetVersionBytes()),
 			TotalBalance:      ctx.Params.ConvertValue(v.TotalBalance()),

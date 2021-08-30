@@ -230,7 +230,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
 	if err != nil {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", args.Table), err))
+		panic(ENotFound(EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", args.Table), err))
 	}
 
 	// translate long column names to short names used in pack tables
@@ -348,7 +348,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				// single-account lookup and compile condition
 				addr, err := tezos.ParseAddress(val[0])
-				if err != nil || !addr.IsValid() {
+				if err != nil {
 					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
@@ -377,7 +377,7 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
 					addr, err := tezos.ParseAddress(v)
-					if err != nil || !addr.IsValid() {
+					if err != nil {
 						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)

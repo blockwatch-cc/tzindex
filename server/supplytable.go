@@ -282,7 +282,7 @@ func StreamSupplyTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
 	if err != nil {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", args.Table), err))
+		panic(ENotFound(EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", args.Table), err))
 	}
 
 	// translate long column names to short names used in pack tables

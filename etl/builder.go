@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"blockwatch.cc/packdb/pack"
+	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/rpc"
 	"blockwatch.cc/tzgo/tezos"
 
@@ -45,8 +46,8 @@ func NewBuilder(idx *Indexer, cachesz int, c *rpc.Client, validate bool) *Builde
 		dlgHashMap: make(map[uint64]*Account),
 		conMap:     make(map[AccountID]*Contract),
 		baking:     make([]Right, 0, 64),
-		endorsing:  make([]Right, 0, 32),
-		branches:   make(map[string]*Block, 128), // more than max of 64
+		endorsing:  make([]Right, 0, 256),
+		branches:   make(map[string]*Block, 128),
 		validate:   validate,
 		rpc:        c,
 	}
@@ -84,7 +85,7 @@ func (b *Builder) RegisterDelegate(acc *Account, activate bool) {
 	acc.InitGracePeriod(b.block.Cycle, b.block.Params)
 	acc.IsDirty = true
 
-	isMagic := v001MagicDelegateFilter.Contains(acc.Address())
+	isMagic := v001MagicDelegateFilter.Contains(acc.Address)
 
 	// only activate when explicitly requested
 	if activate || isMagic {
@@ -137,12 +138,12 @@ func (b *Builder) AccountByAddress(addr tezos.Address) (*Account, bool) {
 	key := b.accCache.AddressHashKey(addr)
 	// lookup delegate accounts first
 	acc, ok := b.dlgHashMap[key]
-	if ok && acc.Type == addr.Type && acc.Hash.Equal(addr) {
+	if ok && acc.Type == addr.Type && acc.Address.Equal(addr) {
 		return acc, true
 	}
 	// lookup regular accounts second
 	acc, ok = b.accHashMap[key]
-	if ok && acc.Type == addr.Type && acc.Hash.Equal(addr) {
+	if ok && acc.Type == addr.Type && acc.Address.Equal(addr) {
 		return acc, true
 	}
 	return nil, false
@@ -246,6 +247,10 @@ func (b *Builder) Init(ctx context.Context, tip *ChainTip, c *rpc.Client) error 
 	// to make our crawler happy, we also expose the last block
 	// on load, so any reports can be republished if necessary
 	b.block = b.parent
+	b.block.Parent, err = b.idx.BlockByID(ctx, b.block.ParentId)
+	if err != nil {
+		return err
+	}
 
 	// load all registered bakers; Note: if we ever want to change this,
 	// the cache strategy needs to be reworked (because bakers are not kept
@@ -352,7 +357,7 @@ func (b *Builder) Clean() {
 
 	// clear branches (keep most recent 64 blocks only)
 	for n, v := range b.branches {
-		if v.Height < b.block.Height-tezos.MaxBranchDepth {
+		if v.Height < b.block.Height-int64(b.block.TZ.Block.Metadata.MaxOperationsTTL)-1 {
 			v.Free()
 			delete(b.branches, n)
 		}
@@ -513,14 +518,14 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 
 	// collect from ops
 	var op_n int
-	for _, oll := range b.block.TZ.Block.Operations {
-		for _, oh := range oll {
+	for op_l, oll := range b.block.TZ.Block.Operations {
+		for op_p, oh := range oll {
 			// init branches
 			br := oh.Branch.String()
 			if _, ok := b.branches[br]; !ok {
-				branch, err := b.idx.BlockByHash(ctx, oh.Branch, b.block.Height-tezos.MaxBranchDepth, b.block.Height)
+				branch, err := b.idx.BlockByHash(ctx, oh.Branch, b.block.Height-int64(b.block.TZ.Block.Metadata.MaxOperationsTTL)-1, b.block.Height)
 				if err != nil {
-					return fmt.Errorf("op [%d:%d]: invalid branch %s: %v", oh.Branch, err)
+					return fmt.Errorf("op %s [%d:%d]: invalid branch %s: %v", oh.Hash, op_l, op_p, oh.Branch, err)
 				}
 				b.branches[br] = branch
 			}
@@ -620,6 +625,22 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 		}
 	}
 
+	// collect from implicit block ops
+	for i, op := range b.block.TZ.Block.Metadata.ImplicitOperationsResults {
+		switch op.Kind {
+		case tezos.OpTypeOrigination:
+			for _, v := range op.OriginatedContracts {
+				addresses.AddUnique(v)
+			}
+		case tezos.OpTypeTransaction:
+			for _, v := range op.BalanceUpdates {
+				addresses.AddUnique(v.Address())
+			}
+		default:
+			return fmt.Errorf("implicit block op [%d]: unsupported op branch %s", i, op.Kind)
+		}
+	}
+
 	// collect unknown/unloaded bakers for lookup or creation
 	unknownDelegateIds := make([]uint64, 0)
 
@@ -636,6 +657,9 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if b.block.Height > 2 && len(b.baking) == 0 {
+			return fmt.Errorf("empty baking rights")
+		}
 
 		// endorsements are for block-1
 		err = pack.NewQuery("etl.rights.search", table).
@@ -644,6 +668,9 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 			Execute(ctx, &b.endorsing)
 		if err != nil {
 			return err
+		}
+		if b.block.Height > 2 && len(b.endorsing) == 0 {
+			return fmt.Errorf("empty endorsing rights")
 		}
 
 		// collect from rights: on genesis and when deactivated, bakers are not in map
@@ -985,13 +1012,19 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 				}
 			}
 		}
+	}
 
-		// collect data from header balance updates, note these are no explicit 'operations'
-		// in Tezos (i.e. no op hash exists); handles baker rewards, deposits, unfreeze
-		// and seed nonce slashing
-		if err := b.AppendImplicitOps(ctx); err != nil {
-			return err
-		}
+	// collect data from header balance updates, note these are no explicit 'operations'
+	// in Tezos (i.e. no op hash exists); handles baker rewards, deposits, unfreeze
+	// and seed nonce slashing
+	if err := b.AppendImplicitOps(ctx); err != nil {
+		return err
+	}
+
+	// collect implicit ops from protocol migrations and things like
+	// Granada+ liquidity baking
+	if err := b.AppendImplicitBlockOps(ctx); err != nil {
+		return err
 	}
 
 	// process operations
@@ -1002,51 +1035,33 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 	for op_l, ol := range b.block.TZ.Block.Operations {
 		for op_p, oh := range ol {
 			for op_c, o := range oh.Contents {
+				var err error
 				switch kind := o.OpKind(); kind {
 				case tezos.OpTypeActivateAccount:
-					if err := b.AppendActivationOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
-						return err
-					}
+					err = b.AppendActivationOp(ctx, oh, op_l, op_p, op_c, rollback)
 				case tezos.OpTypeBallot:
-					if err := b.AppendBallotOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
-						return err
-					}
+					err = b.AppendBallotOp(ctx, oh, op_l, op_p, op_c, rollback)
 				case tezos.OpTypeDelegation:
-					if err := b.AppendDelegationOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
-						return err
-					}
+					err = b.AppendDelegationOp(ctx, oh, op_l, op_p, op_c, rollback)
 				case tezos.OpTypeDoubleBakingEvidence:
-					if err := b.AppendDoubleBakingOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
-						return err
-					}
+					err = b.AppendDoubleBakingOp(ctx, oh, op_l, op_p, op_c, rollback)
 				case tezos.OpTypeDoubleEndorsementEvidence:
-					if err := b.AppendDoubleEndorsingOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
-						return err
-					}
+					err = b.AppendDoubleEndorsingOp(ctx, oh, op_l, op_p, op_c, rollback)
 				case tezos.OpTypeEndorsement:
-					if err := b.AppendEndorsementOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
-						return err
-					}
+					err = b.AppendEndorsementOp(ctx, oh, op_l, op_p, op_c, rollback)
 				case tezos.OpTypeOrigination:
-					if err := b.AppendOriginationOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
-						return err
-					}
+					err = b.AppendOriginationOp(ctx, oh, op_l, op_p, op_c, rollback)
 				case tezos.OpTypeProposals:
-					if err := b.AppendProposalsOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
-						return err
-					}
+					err = b.AppendProposalsOp(ctx, oh, op_l, op_p, op_c, rollback)
 				case tezos.OpTypeReveal:
-					if err := b.AppendRevealOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
-						return err
-					}
+					err = b.AppendRevealOp(ctx, oh, op_l, op_p, op_c, rollback)
 				case tezos.OpTypeSeedNonceRevelation:
-					if err := b.AppendSeedNonceOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
-						return err
-					}
+					err = b.AppendSeedNonceOp(ctx, oh, op_l, op_p, op_c, rollback)
 				case tezos.OpTypeTransaction:
-					if err := b.AppendTransactionOp(ctx, oh, op_l, op_p, op_c, rollback); err != nil {
-						return err
-					}
+					err = b.AppendTransactionOp(ctx, oh, op_l, op_p, op_c, rollback)
+				}
+				if err != nil {
+					return err
 				}
 			}
 		}
@@ -1179,8 +1194,9 @@ func (b *Builder) UpdateStats(ctx context.Context) error {
 				return fmt.Errorf("missing endorsement delegate %d: %#v", r.AccountId, r)
 			}
 			num, _ := erights[acc.RowId]
-			erights[acc.RowId] = num + 1
-			count++
+			c := vec.NewBitSetFromBytes(r.Slots, b.block.Params.EndorsersPerBlock).Count()
+			erights[acc.RowId] = num + int(c)
+			count += int(c)
 		}
 
 		for _, op := range b.block.Ops {

@@ -29,7 +29,7 @@ func (id ContractID) Value() uint64 {
 // Contract holds code and info about smart contracts on the Tezos blockchain.
 type Contract struct {
 	RowId         ContractID           `pack:"I,pk,snappy"   json:"row_id"`
-	Hash          tezos.Address        `pack:"H"             json:"address"`
+	Address       tezos.Address        `pack:"H"             json:"address"`
 	AccountId     AccountID            `pack:"A,snappy"      json:"account_id"`
 	CreatorId     AccountID            `pack:"C,snappy"      json:"creator_id"`
 	FirstSeen     int64                `pack:"f,snappy"      json:"first_seen"`
@@ -57,7 +57,7 @@ var _ pack.Item = (*Contract)(nil)
 // assuming the op was successful!
 func NewContract(acc *Account, oop *rpc.OriginationOp, op *Op) *Contract {
 	c := AllocContract()
-	c.Hash = acc.Hash
+	c.Address = acc.Address.Clone()
 	c.AccountId = acc.RowId
 	c.CreatorId = acc.CreatorId
 	c.FirstSeen = op.Height
@@ -84,7 +84,7 @@ func NewContract(acc *Account, oop *rpc.OriginationOp, op *Op) *Contract {
 
 func NewInternalContract(acc *Account, iop *rpc.InternalResult, op *Op) *Contract {
 	c := AllocContract()
-	c.Hash = acc.Hash
+	c.Address = acc.Address.Clone()
 	c.AccountId = acc.RowId
 	c.CreatorId = acc.CreatorId
 	c.FirstSeen = op.Height
@@ -109,17 +109,43 @@ func NewInternalContract(acc *Account, iop *rpc.InternalResult, op *Op) *Contrac
 	return c
 }
 
+func NewImplicitContract(acc *Account, res rpc.ImplicitResult, op *Op) *Contract {
+	c := AllocContract()
+	c.Address = acc.Address.Clone()
+	c.AccountId = acc.RowId
+	c.CreatorId = acc.CreatorId
+	c.FirstSeen = op.Height
+	c.LastSeen = op.Height
+	c.IsSpendable = acc.IsSpendable
+	c.IsDelegatable = acc.IsDelegatable
+	c.StorageSize = res.StorageSize
+	c.StoragePaid = res.PaidStorageSizeDiff
+	if res.Script != nil {
+		c.Script, _ = res.Script.MarshalBinary()
+		c.Storage, _ = res.Script.Storage.MarshalBinary()
+		c.InterfaceHash = res.Script.InterfaceHash()
+		c.CodeHash = res.Script.CodeHash()
+		c.Features = res.Script.Features()
+		c.Interfaces = res.Script.Interfaces()
+		ep, _ := res.Script.Entrypoints(false)
+		c.CallStats = make([]byte, 4*len(ep))
+	}
+	c.IsNew = true
+	c.IsDirty = true
+	return c
+}
+
 // create manager.tz contract, used during migration only
 func NewManagerTzContract(a *Account, height int64) (*Contract, error) {
 	c := AllocContract()
-	c.Hash = a.Hash.Clone()
+	c.Address = a.Address.Clone()
 	c.AccountId = a.RowId
 	c.CreatorId = a.CreatorId
 	c.FirstSeen = a.FirstSeen
 	c.LastSeen = height
 	c.IsSpendable = a.IsSpendable
 	c.IsDelegatable = a.IsDelegatable
-	script, _ := micheline.MakeManagerScript(a.Address().Bytes())
+	script, _ := micheline.MakeManagerScript(a.Address.Bytes())
 	c.Script, _ = script.MarshalBinary()
 	c.Storage, _ = script.Storage.MarshalBinary()
 	c.InterfaceHash = script.InterfaceHash()
@@ -153,12 +179,12 @@ func (c *Contract) SetID(id uint64) {
 }
 
 func (c Contract) String() string {
-	return c.Hash.String()
+	return c.Address.String()
 }
 
 func (c *Contract) Reset() {
 	c.RowId = 0
-	c.Hash = tezos.Address{}
+	c.Address = tezos.Address{}
 	c.AccountId = 0
 	c.CreatorId = 0
 	c.FirstSeen = 0
@@ -301,98 +327,6 @@ func (c *Contract) DecCallStats(entrypoint int) {
 	val := binary.BigEndian.Uint32(c.CallStats[offs:])
 	binary.BigEndian.PutUint32(c.CallStats[offs:], val-1)
 	c.IsDirty = true
-}
-
-// upgrade smart contracts from before babylon
-// - patch code and storage
-// - only applies to mainnet contracts originated before babylon
-// - don't upgrade when query height < babylon to return old params/storage format
-func (c *Contract) NeedsBabylonUpgrade(p *tezos.Params) bool {
-	// babylon activation
-	isEligible := p.IsPostBabylon() && p.IsPreBabylonHeight(c.FirstSeen)
-	// contract upgrade criteria
-	isEligible = isEligible && (c.IsSpendable || (!c.IsSpendable && c.IsDelegatable))
-	return isEligible
-}
-
-func (c *Contract) NeedsBabylonDowngrade(p *tezos.Params, height int64) bool {
-	return p.IsPreBabylonHeight(height) && c.NeedsBabylonUpgrade(p)
-}
-
-func (c *Contract) PreBabylonType(p *tezos.Params) micheline.Type {
-	s, _ := c.LoadScript()
-	typ := s.StorageType()
-
-	if !p.IsPreBabylonHeight(c.FirstSeen) {
-		return typ
-	}
-
-	if !(c.IsSpendable || (!c.IsSpendable && c.IsDelegatable)) {
-		return typ
-	}
-
-	typ = micheline.NewType(typ.Args[1])
-	typ.Prim.Anno = nil
-	return typ
-}
-
-func (c *Contract) UpgradeToBabylon(p *tezos.Params, a *Account) error {
-	if !c.NeedsBabylonUpgrade(p) {
-		return nil
-	}
-
-	// extend call stats array by moving existing stats
-	offs := 1
-	if !c.IsSpendable && c.IsDelegatable {
-		offs++
-	}
-	newcs := make([]byte, offs*4+len(c.CallStats))
-	copy(newcs[offs*4:], c.CallStats)
-	c.CallStats = newcs
-
-	// unmarshal script
-	script := micheline.NewScript()
-	err := script.UnmarshalBinary(c.Script)
-	if err != nil {
-		return err
-	}
-
-	// need manager (creator)
-	mgrHash := a.Address().Bytes()
-
-	// migrate script
-	switch true {
-	case c.IsSpendable:
-		script.MigrateToBabylonAddDo(mgrHash)
-		c.InterfaceHash = script.InterfaceHash()
-		c.CodeHash = script.CodeHash()
-	case !c.IsSpendable && c.IsDelegatable:
-		script.MigrateToBabylonSetDelegate(mgrHash)
-		c.InterfaceHash = script.InterfaceHash()
-		c.CodeHash = script.CodeHash()
-	}
-	c.Features = script.Features()
-	c.Interfaces = script.Interfaces()
-
-	// marshal script
-	c.Script, err = script.MarshalBinary()
-	if err != nil {
-		return err
-	}
-
-	// unmarshal initial storage
-	storage := micheline.Prim{}
-	if err := storage.UnmarshalBinary(c.Storage); err != nil {
-		return err
-	}
-	storage = storage.MigrateToBabylonStorage(mgrHash)
-	c.Storage, err = storage.MarshalBinary()
-	if err != nil {
-		return err
-	}
-
-	c.IsDirty = true
-	return nil
 }
 
 // loads script and upgrades to babylon on-the-fly if originated earlier

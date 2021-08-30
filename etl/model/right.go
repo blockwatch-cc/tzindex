@@ -19,7 +19,8 @@ type Right struct {
 	Type           tezos.RightType `pack:"t,snappy"      json:"type"`             // default accounts
 	Height         int64           `pack:"h,snappy"      json:"height"`           // bc: block height (also for orphans)
 	Cycle          int64           `pack:"c,snappy"      json:"cycle"`            // bc: block cycle (tezos specific)
-	Priority       int             `pack:"p,snappy"      json:"priority"`         // baking prio or endorsing slot
+	Priority       int             `pack:"p,snappy"      json:"priority"`         // baking prio
+	Slots          []byte          `pack:"S,snappy"      json:"slots"`            // endorsing slots as bitmask
 	AccountId      AccountID       `pack:"A,snappy"      json:"account_id"`       // original rights holder
 	IsUsed         bool            `pack:"u,snappy"      json:"is_used"`          // owner used this right
 	IsLost         bool            `pack:"l,snappy"      json:"is_lost"`          // owner lost this baking right
@@ -56,6 +57,7 @@ func (r *Right) Reset() {
 	r.Height = 0
 	r.Cycle = 0
 	r.Priority = 0
+	r.Slots = nil
 	r.AccountId = 0
 	r.IsUsed = false
 	r.IsLost = false

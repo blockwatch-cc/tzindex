@@ -5,15 +5,14 @@ package index
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"math"
-	"math/bits"
 	"sort"
-	"strconv"
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
+	"blockwatch.cc/packdb/vec"
 
 	"blockwatch.cc/tzgo/tezos"
 	. "blockwatch.cc/tzindex/etl/model"
@@ -130,24 +129,33 @@ func (idx *IncomeIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 	// bootstrap first cycles on first block using all genesis bakers as snapshot proxy
 	// block 1 contains all initial rights, this number is fixed at crawler.go
 	if block.Height == 1 {
-		return idx.BootstrapIncome(ctx, block, builder)
+		if err := idx.bootstrapIncome(ctx, block, builder); err != nil {
+			log.Error(err)
+		}
+		return nil
 	}
 
 	// update expected income/deposits and luck on cycle start when params are known
 	if block.Params.IsCycleStart(block.Height) {
-		if err := idx.UpdateCycleIncome(ctx, block, builder); err != nil {
-			return err
+		if err := idx.updateCycleIncome(ctx, block, builder); err != nil {
+			log.Error(err)
+			// return err
+			return nil
 		}
 	}
 
 	// update income from flows and rights
-	if err := idx.UpdateBlockIncome(ctx, block, builder, false); err != nil {
-		return err
+	if err := idx.updateBlockIncome(ctx, block, builder, false); err != nil {
+		log.Error(err)
+		// return err
+		return nil
 	}
 
 	// update burn from nonce revelations, if any
-	if err := idx.UpdateNonceRevelations(ctx, block, builder, false); err != nil {
-		return err
+	if err := idx.updateNonceRevelations(ctx, block, builder, false); err != nil {
+		log.Error(err)
+		// return err
+		return nil
 	}
 
 	// skip when no new rights are defined
@@ -155,23 +163,37 @@ func (idx *IncomeIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 		return nil
 	}
 
-	return idx.CreateCycleIncome(ctx, block, builder)
+	if err := idx.createCycleIncome(ctx, block, builder); err != nil {
+		log.Error(err)
+		// return err
+		return nil
+	}
+
+	return nil
 }
 
 func (idx *IncomeIndex) DisconnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
 	// rollback current income
-	if err := idx.UpdateBlockIncome(ctx, block, builder, true); err != nil {
-		return err
+	if err := idx.updateBlockIncome(ctx, block, builder, true); err != nil {
+		log.Error(err)
+		// return err
+		return nil
 	}
 
 	// update burn from nonce revelations, if any
-	if err := idx.UpdateNonceRevelations(ctx, block, builder, true); err != nil {
-		return err
+	if err := idx.updateNonceRevelations(ctx, block, builder, true); err != nil {
+		log.Error(err)
+		// return err
+		return nil
 	}
 
 	// new rights are fetched in cycles
 	if block.Params.IsCycleStart(block.Height) {
-		return idx.DeleteCycle(ctx, block.Cycle+block.Params.PreservedCycles)
+		if err := idx.DeleteCycle(ctx, block.Cycle+block.Params.PreservedCycles); err != nil {
+			log.Error(err)
+			// return err
+			return nil
+		}
 	}
 	return nil
 }
@@ -180,7 +202,15 @@ func (idx *IncomeIndex) DeleteBlock(ctx context.Context, height int64) error {
 	return nil
 }
 
-func (idx *IncomeIndex) BootstrapIncome(ctx context.Context, block *Block, builder BlockBuilder) error {
+func (idx *IncomeIndex) DeleteCycle(ctx context.Context, cycle int64) error {
+	// log.Debugf("Rollback deleting income for cycle %d", cycle)
+	_, err := pack.NewQuery("etl.income.delete", idx.table).
+		AndEqual("cycle", cycle).
+		Delete(ctx)
+	return err
+}
+
+func (idx *IncomeIndex) bootstrapIncome(ctx context.Context, block *Block, builder BlockBuilder) error {
 	// on bootstrap use the initial params from block 1
 	p := block.Params
 
@@ -289,7 +319,7 @@ func (idx *IncomeIndex) BootstrapIncome(ctx context.Context, block *Block, build
 //
 // also used to update income after upgrade to v006 for all remaining cycles due
 // to changes in rewards
-func (idx *IncomeIndex) UpdateCycleIncome(ctx context.Context, block *Block, builder BlockBuilder) error {
+func (idx *IncomeIndex) updateCycleIncome(ctx context.Context, block *Block, builder BlockBuilder) error {
 	p := block.Params
 
 	// check pre-conditon and pick cycles to update
@@ -351,7 +381,7 @@ func (idx *IncomeIndex) UpdateCycleIncome(ctx context.Context, block *Block, bui
 	return nil
 }
 
-func (idx *IncomeIndex) CreateCycleIncome(ctx context.Context, block *Block, builder BlockBuilder) error {
+func (idx *IncomeIndex) createCycleIncome(ctx context.Context, block *Block, builder BlockBuilder) error {
 	p := block.Params
 	sn := block.TZ.Snapshot
 	incomeMap := make(map[AccountID]*Income)
@@ -366,7 +396,7 @@ func (idx *IncomeIndex) CreateCycleIncome(ctx context.Context, block *Block, bui
 		sort.Slice(accs, func(i, j int) bool { return accs[i].RowId < accs[j].RowId })
 
 		for _, v := range accs {
-			// will later be adjusted in UpdateCycleIncome()
+			// will later be adjusted in updateCycleIncome()
 			rolls := v.StakingBalance() / p.TokensPerRoll
 			totalRolls += rolls
 			incomeMap[v.RowId] = &Income{
@@ -415,8 +445,8 @@ func (idx *IncomeIndex) CreateCycleIncome(ctx context.Context, block *Block, bui
 		if err != nil {
 			return err
 		}
-		// log.Debugf("New income for cycle %d from snapshot [%d/%d] with %d delegates [%d/%d] rights",
-		// 	sn.Cycle, sn.Cycle-(p.PreservedCycles+2), sn.RollSnapshot, len(incomeMap), len(block.TZ.Baking), len(block.TZ.Endorsing))
+		log.Debugf("New income for %d bakers in cycle %d from snapshot [%d/%d] with [%d/%d] rights",
+			len(incomeMap), sn.Cycle, sn.Cycle-(p.PreservedCycles+2), sn.RollSnapshot, len(block.TZ.Baking), len(block.TZ.Endorsing))
 	}
 
 	// pre-calculate deposit and reward amounts
@@ -537,7 +567,7 @@ func (idx *IncomeIndex) CreateCycleIncome(ctx context.Context, block *Block, bui
 	return idx.table.Insert(ctx, ins)
 }
 
-func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, builder BlockBuilder, isRollback bool) error {
+func (idx *IncomeIndex) updateBlockIncome(ctx context.Context, block *Block, builder BlockBuilder, isRollback bool) error {
 	var err error
 	p := block.Params
 	incomeMap := make(map[AccountID]*Income)
@@ -549,6 +579,7 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 	// ideal rewards assume priority 0 blocks with all endorsements
 	// in v005 block reward depends on priority and contained endorsements
 	// in v006 reward calc changed again
+	// in v010 reward calc changed again, more slots 32 -> 256, less $$
 	idealBlockReward, idealEndorseReward := p.BlockReward, p.EndorsementReward
 
 	// handle flows from (baking, endorsing, seed nonce, double baking, double endorsement)
@@ -708,8 +739,9 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 				}
 				incomeMap[in.AccountId] = in
 			}
-			slots, _ := strconv.ParseUint(op.Data, 10, 32)
-			in.NSlotsEndorsed += mul * int64(bits.OnesCount32(uint32(slots)))
+			buf, _ := hex.DecodeString(op.Data)
+			slots := vec.NewBitSetFromBytes(buf, p.EndorsersPerBlock)
+			in.NSlotsEndorsed += mul * int64(slots.Count())
 
 		case tezos.OpTypeDoubleBakingEvidence:
 			// credit sender
@@ -749,7 +781,8 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 	}
 
 	// handle missed endorsements
-	if block.Parent != nil && block.Parent.SlotsEndorsed != math.MaxUint32 {
+	if block.Parent != nil && block.Parent.NSlotsEndorsed < p.EndorsersPerBlock {
+		endorsed := vec.NewBitSetFromBytes(block.Parent.SlotsEndorsed, p.EndorsersPerBlock)
 		for _, v := range builder.Rights(tezos.RightTypeEndorsing) {
 			if !v.IsMissed {
 				continue
@@ -762,8 +795,12 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 				}
 				incomeMap[in.AccountId] = in
 			}
-			in.MissedEndorsingIncome += idealEndorseReward * mul
-			in.NSlotsMissed += mul
+			// count how many slots were missed
+			slots := vec.NewBitSetFromBytes(v.Slots, p.EndorsersPerBlock)
+			missed := slots.AndNot(endorsed)
+			count := int64(missed.Count())
+			in.MissedEndorsingIncome += idealEndorseReward * mul * count
+			in.NSlotsMissed += mul * count
 		}
 	}
 
@@ -797,7 +834,7 @@ func (idx *IncomeIndex) UpdateBlockIncome(ctx context.Context, block *Block, bui
 	return idx.table.Update(ctx, upd)
 }
 
-func (idx *IncomeIndex) UpdateNonceRevelations(ctx context.Context, block *Block, builder BlockBuilder, isRollback bool) error {
+func (idx *IncomeIndex) updateNonceRevelations(ctx context.Context, block *Block, builder BlockBuilder, isRollback bool) error {
 	cycle := block.Cycle - 1
 	if cycle < 0 {
 		return nil
@@ -856,14 +893,6 @@ func (idx *IncomeIndex) UpdateNonceRevelations(ctx context.Context, block *Block
 		upd = append(upd, v)
 	}
 	return idx.table.Update(ctx, upd)
-}
-
-func (idx *IncomeIndex) DeleteCycle(ctx context.Context, cycle int64) error {
-	// log.Debugf("Rollback deleting income for cycle %d", cycle)
-	_, err := pack.NewQuery("etl.income.delete", idx.table).
-		AndEqual("cycle", cycle).
-		Delete(ctx)
-	return err
 }
 
 func (idx *IncomeIndex) loadIncome(ctx context.Context, cycle int64, id AccountID) (*Income, error) {

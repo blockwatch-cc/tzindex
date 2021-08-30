@@ -12,6 +12,7 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/store"
 	"blockwatch.cc/tzgo/tezos"
+	"blockwatch.cc/tzindex/etl/cache"
 	. "blockwatch.cc/tzindex/etl/model"
 )
 
@@ -26,10 +27,11 @@ type IndexerConfig struct {
 // Indexer defines an index manager that manages and stores multiple indexes.
 type Indexer struct {
 	mu        sync.Mutex
-	blocks    atomic.Value // cache for all block hashes and timestamps
-	ranks     atomic.Value // top addresses (>10tez, 100k = 10 MB)
-	rights    atomic.Value // bitset 400 (bakers) * 6 (cycles) * 4096 (blocks) * 33 (rights)
-	addrs     atomic.Value // all on-chain address hashes by id
+	blocks    atomic.Value              // cache for all block hashes and timestamps
+	ranks     atomic.Value              // top addresses (>10tez, 100k = 10 MB)
+	rights    atomic.Value              // bitset 400 (bakers) * 6 (cycles) * 4096 (blocks) * 33 (rights)
+	addrs     atomic.Value              // all on-chain address hashes by id
+	bigmaps   *cache.BigmapHistoryCache // bigmap histpry cache
 	dbpath    string
 	dbopts    interface{}
 	statedb   store.DB
@@ -46,6 +48,7 @@ func NewIndexer(cfg IndexerConfig) *Indexer {
 		dbopts:    cfg.DBOpts,
 		statedb:   cfg.StateDB,
 		indexes:   cfg.Indexes,
+		bigmaps:   cache.NewBigmapHistoryCache(),
 		reg:       NewRegistry(),
 		tips:      make(map[string]*IndexTip),
 		tables:    make(map[string]*pack.Table),
@@ -269,10 +272,6 @@ func (m *Indexer) Close() error {
 func (m *Indexer) ConnectProtocol(ctx context.Context, params *tezos.Params) error {
 	// update previous protocol end
 	prev := m.reg.GetParamsLatest()
-	// if prev != nil && prev.Version >= params.Version {
-	// 	return fmt.Errorf("new protocol %s version mismatch: latest v%d, new v%d",
-	// 		params.Protocol, prev.Version, params.Version)
-	// }
 	err := m.statedb.Update(func(dbTx store.Tx) error {
 		if prev != nil {
 			prev.EndHeight = params.StartHeight - 1

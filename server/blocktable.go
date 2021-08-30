@@ -43,18 +43,24 @@ func init() {
 	// add extra translations
 	blockSourceNames["pct_account_reuse"] = "-"
 	blockSourceNames["baker"] = "B"
+	blockSourceNames["endorsed_slots"] = "-" // rename endorsed_slots
+	blockSourceNames["slot_mask"] = "s"      // rename endorsed_slots
+	blockSourceNames["predecessor"] = "P"    // pred hash, requires parent_id
 
 	blockAllAliases = append(blockAllAliases, "pct_account_reuse")
 	blockAllAliases = append(blockAllAliases, "baker")
+	blockAllAliases = append(blockAllAliases, "slot_mask")
+	// blockAllAliases = append(blockAllAliases, "predecessor") // no default
 }
 
 // configurable marshalling helper
 type Block struct {
 	model.Block
-	verbose bool            // cond. marshal
-	columns util.StringList // cond. cols & order when brief
-	params  *tezos.Params   // blockchain amount conversion
-	ctx     *ApiContext
+	Predecessor tezos.BlockHash `pack:"predecessor" json:"predecessor"`
+	verbose     bool            // cond. marshal
+	columns     util.StringList // cond. cols & order when brief
+	params      *tezos.Params   // blockchain amount conversion
+	ctx         *ApiContext
 }
 
 func (b *Block) MarshalJSON() ([]byte, error) {
@@ -70,6 +76,7 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		RowId               uint64                 `json:"row_id"`
 		ParentId            uint64                 `json:"parent_id"`
 		Hash                string                 `json:"hash"`
+		Predecessor         string                 `json:"predecessor"`
 		IsOrphan            bool                   `json:"is_orphan,omitempty"`
 		Timestamp           int64                  `json:"time"` // convert to UNIX milliseconds
 		Height              int64                  `json:"height"`
@@ -84,7 +91,7 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		VotingPeriodKind    tezos.VotingPeriodKind `json:"voting_period_kind"`
 		BakerId             uint64                 `json:"baker_id"`
 		Baker               string                 `json:"baker"`
-		SlotsEndorsed       uint32                 `json:"endorsed_slots"`
+		SlotMask            string                 `json:"slot_mask"`
 		NSlotsEndorsed      int                    `json:"n_endorsed_slots"`
 		NOps                int                    `json:"n_ops"`
 		NOpsFailed          int                    `json:"n_ops_failed"`
@@ -123,10 +130,13 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		TDD                 float64                `json:"days_destroyed"`
 		PctAccountsReused   float64                `json:"pct_account_reuse"`
 		NOpsImplicit        int                    `json:"n_ops_implicit"`
+		LbEscapeVote        bool                   `json:"lb_esc_vote"`
+		LbEscapeEma         int64                  `json:"lb_esc_ema"`
 	}{
 		RowId:               b.RowId,
 		ParentId:            b.ParentId,
 		Hash:                b.Hash.String(),
+		Predecessor:         b.Predecessor.String(),
 		IsOrphan:            b.IsOrphan,
 		Timestamp:           util.UnixMilliNonZero(b.Timestamp),
 		Height:              b.Height,
@@ -141,7 +151,7 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		VotingPeriodKind:    b.VotingPeriodKind,
 		BakerId:             b.BakerId.Value(),
 		Baker:               b.ctx.Indexer.LookupAddress(b.ctx, b.BakerId).String(),
-		SlotsEndorsed:       b.SlotsEndorsed,
+		SlotMask:            hex.EncodeToString(b.SlotsEndorsed),
 		NSlotsEndorsed:      b.NSlotsEndorsed,
 		NOps:                b.NOps,
 		NOpsFailed:          b.NOpsFailed,
@@ -179,6 +189,8 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		StorageSize:         b.StorageSize,
 		TDD:                 b.TDD,
 		NOpsImplicit:        b.NOpsImplicit,
+		LbEscapeVote:        b.LbEscapeVote,
+		LbEscapeEma:         b.LbEscapeEma,
 	}
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], b.Nonce)
@@ -201,6 +213,8 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendUint(buf, b.ParentId, 10)
 		case "hash":
 			buf = strconv.AppendQuote(buf, b.Hash.String())
+		case "predecessor":
+			buf = strconv.AppendQuote(buf, b.Predecessor.String())
 		case "is_orphan":
 			if b.IsOrphan {
 				buf = append(buf, '1')
@@ -239,8 +253,8 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendUint(buf, b.BakerId.Value(), 10)
 		case "baker":
 			buf = strconv.AppendQuote(buf, b.ctx.Indexer.LookupAddress(b.ctx, b.BakerId).String())
-		case "endorsed_slots":
-			buf = strconv.AppendInt(buf, int64(b.SlotsEndorsed), 10)
+		case "slot_mask":
+			buf = strconv.AppendQuote(buf, hex.EncodeToString(b.SlotsEndorsed))
 		case "n_endorsed_slots":
 			buf = strconv.AppendInt(buf, int64(b.NSlotsEndorsed), 10)
 		case "n_ops":
@@ -321,6 +335,14 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendFloat(buf, reuse, 'f', 6, 64)
 		case "n_ops_implicit":
 			buf = strconv.AppendInt(buf, int64(b.NOpsImplicit), 10)
+		case "lb_esc_vote":
+			if b.LbEscapeVote {
+				buf = append(buf, '1')
+			} else {
+				buf = append(buf, '0')
+			}
+		case "lb_esc_ema":
+			buf = strconv.AppendInt(buf, int64(b.LbEscapeEma), 10)
 		default:
 			continue
 		}
@@ -343,6 +365,8 @@ func (b *Block) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatUint(b.ParentId, 10)
 		case "hash":
 			res[i] = strconv.Quote(b.Hash.String())
+		case "predecessor":
+			res[i] = strconv.Quote(b.Predecessor.String())
 		case "is_orphan":
 			res[i] = strconv.FormatBool(b.IsOrphan)
 		case "time":
@@ -373,8 +397,8 @@ func (b *Block) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatUint(b.BakerId.Value(), 10)
 		case "baker":
 			res[i] = strconv.Quote(b.ctx.Indexer.LookupAddress(b.ctx, b.BakerId).String())
-		case "endorsed_slots":
-			res[i] = strconv.FormatInt(int64(b.SlotsEndorsed), 10)
+		case "slot_mask":
+			res[i] = strconv.Quote(hex.EncodeToString(b.SlotsEndorsed))
 		case "n_endorsed_slots":
 			res[i] = strconv.FormatInt(int64(b.NSlotsEndorsed), 10)
 		case "n_ops":
@@ -455,6 +479,10 @@ func (b *Block) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(reuse, 'f', -1, 64)
 		case "n_ops_implict":
 			res[i] = strconv.FormatInt(int64(b.NOpsImplicit), 10)
+		case "lb_esc_vote":
+			res[i] = strconv.FormatBool(b.LbEscapeVote)
+		case "lb_esc_ema":
+			res[i] = strconv.FormatInt(b.LbEscapeEma, 10)
 		default:
 			continue
 		}
@@ -469,11 +497,14 @@ func StreamBlockTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
 	if err != nil {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", args.Table), err))
+		panic(ENotFound(EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", args.Table), err))
 	}
 
 	// translate long column names to short names used in pack tables
-	var srcNames []string
+	var (
+		srcNames []string
+		needJoin bool
+	)
 	if len(args.Columns) > 0 {
 		// resolve short column names
 		srcNames = make([]string, 0, len(args.Columns))
@@ -484,6 +515,9 @@ func StreamBlockTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			}
 			if n != "-" {
 				srcNames = append(srcNames, n)
+			}
+			if v == "predecessor" {
+				needJoin = true
 			}
 		}
 	} else {
@@ -538,12 +572,21 @@ func StreamBlockTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				}
 				hashes[i] = h.Hash.Hash
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Find("H"),
-				Mode:  pack.FilterModeIn,
-				Value: hashes,
-				Raw:   strings.Join(val, ","), // debugging aid
-			})
+			if len(hashes) == 1 {
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find("H"),
+					Mode:  pack.FilterModeEqual,
+					Value: hashes[0],
+					Raw:   strings.Join(val, ","), // debugging aid
+				})
+			} else {
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find("H"),
+					Mode:  pack.FilterModeIn,
+					Value: hashes,
+					Raw:   strings.Join(val, ","), // debugging aid
+				})
+			}
 		case "baker":
 			// parse baker address and lookup id
 			// valid filter modes: eq, in
@@ -675,13 +718,46 @@ func StreamBlockTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	var (
 		count  int
 		lastId uint64
+		res    *pack.Result
 	)
 
-	// start := time.Now()
-	// ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
-	// defer func() {
-	// 	ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
-	// }()
+	// when predecessor block hash is required, we join the result on parent_id - row_id
+	if needJoin {
+		// ensure primary key field is part of srcNames
+		joinFieldNames := util.StringList(srcNames)
+		joinFieldNames.AddUniqueFront("I")
+
+		join := pack.Join{
+			Type: pack.LeftJoin,
+			Predicate: pack.BinaryCondition{
+				Left:  table.Fields().Find("parent_id"),
+				Right: table.Fields().Find("row_id"),
+				Mode:  pack.FilterModeEqual,
+			},
+			Left: pack.JoinTable{
+				Table:    table,                                    // block table
+				Where:    q.Conditions,                             // use original query conds
+				Fields:   table.Fields().Select(joinFieldNames...), // use user-defined fields (i.e. short names)
+				FieldsAs: joinFieldNames,                           // keep field names (i.e. short names)
+				Limit:    q.Limit,                                  // use original limit
+			},
+			Right: pack.JoinTable{
+				Table:    table,                         // block table, no extra conditions
+				Fields:   table.Fields().Select("hash"), // field
+				FieldsAs: []string{"predecessor"},       // target name
+			},
+		}
+
+		// clear query conditions
+		q.Conditions = pack.ConditionTreeNode{}
+
+		// run join query
+		res, err = join.Query(ctx, pack.Query{Limit: q.Limit})
+		if err != nil {
+			panic(EInternal(EC_DATABASE, "block table join failed", err))
+		}
+		defer res.Close()
+	}
 
 	// prepare return type marshalling
 	block := &Block{
@@ -712,7 +788,7 @@ func StreamBlockTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 
 		// run query and stream results
 		var needComma bool
-		err = table.Stream(ctx, q, func(r pack.Row) error {
+		process := func(r pack.Row) error {
 			if needComma {
 				io.WriteString(ctx.ResponseWriter, ",")
 			} else {
@@ -730,7 +806,13 @@ func StreamBlockTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				return io.EOF
 			}
 			return nil
-		})
+		}
+
+		if res != nil {
+			err = res.Walk(process)
+		} else {
+			err = table.Stream(ctx, q, process)
+		}
 
 		// close JSON bracket
 		io.WriteString(ctx.ResponseWriter, "]")
@@ -743,8 +825,7 @@ func StreamBlockTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			err = enc.EncodeHeader(args.Columns, nil)
 		}
 		if err == nil {
-			// run query and stream results
-			err = table.Stream(ctx, q, func(r pack.Row) error {
+			process := func(r pack.Row) error {
 				if err := r.Decode(block); err != nil {
 					return err
 				}
@@ -757,7 +838,14 @@ func StreamBlockTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 					return io.EOF
 				}
 				return nil
-			})
+			}
+
+			// run query and stream results
+			if res != nil {
+				err = res.Walk(process)
+			} else {
+				err = table.Stream(ctx, q, process)
+			}
 		}
 		// ctx.Log.Tracef("CSV Encoded %d rows", count)
 	}

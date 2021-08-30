@@ -84,10 +84,6 @@ func (b *BlockProgressLogger) LogBlockHeight(block *Block, qlen int, state State
 		return
 	}
 
-	// // Truncate the duration to 10s of milliseconds.
-	// ms := int64(duration / time.Millisecond)
-	// dur := 10 * time.Millisecond * time.Duration(ms/10)
-
 	// Log information about new block height.
 	blockStr := "blocks"
 	if b.nBlocks == 1 {

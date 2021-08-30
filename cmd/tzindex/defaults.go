@@ -72,7 +72,7 @@ func init() {
 	config.SetDefault("rpc.dial_timeout", 10*time.Second)
 	config.SetDefault("rpc.keepalive", 30*time.Minute)
 	config.SetDefault("rpc.idle_timeout", 30*time.Minute)
-	config.SetDefault("rpc.response_timeout", 60*time.Second)
+	config.SetDefault("rpc.response_timeout", 60*time.Minute)
 	config.SetDefault("rpc.continue_timeout", 60*time.Second)
 	config.SetDefault("rpc.idle_conns", 16)
 }

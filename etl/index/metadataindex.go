@@ -158,3 +158,8 @@ func (idx *MetadataIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// noop
 	return nil
 }
+
+func (idx *MetadataIndex) DeleteCycle(ctx context.Context, cycle int64) error {
+	// noop
+	return nil
+}

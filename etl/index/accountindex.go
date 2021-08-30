@@ -211,3 +211,7 @@ func (idx *AccountIndex) DeleteBlock(ctx context.Context, height int64) error {
 		Delete(ctx)
 	return err
 }
+
+func (idx *AccountIndex) DeleteCycle(ctx context.Context, cycle int64) error {
+	return nil
+}

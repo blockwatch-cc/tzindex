@@ -1,5 +1,55 @@
 # Changelog
 
+### 10.1.0
+
+API changes
+
+- API: op added `entrypoint` name
+- API: op table added `block_hash` and `entrypoint` fields
+- API: block table added `predecessor` block hash
+- API: renamed op field `branch` to `branch_hash`
+
+Bugfixes & Performance Improvements
+
+- More sophisticated operation listing filter for delegations
+- Support cache purging via API `PUT /system/purge`
+- Skip sending discarded op hashes via ZMQ in light mode
+- Skip sending non-stored ops via ZMQ in light mode
+- Fix index queries for operation table
+- Fix setting snapshot block marker at protocol upgrade
+- Fix rights cache after Granada upgrade
+- Proxy: fix consensus data fetch and queries
+
+## 10.0.0 (unreleased)
+
+Tezos Granada protocol support, 5x faster and 40% smaller bigmap index and new API features from API version `010-2021-07-24`. See our [complete API docu](https://tzstats.com/docs/api).
+
+- ETL: new bigmap index split into 3 tables (allocs, updates, live keys)
+- ETL: protocol migration: register subsidy contracts
+- ETL: handle liquidity mining block subsidy
+- ETL: added new flow type `subsidy` for liquidity mining flows
+- ETL: fixed Edo governance offset bug
+- ETL: disable index failure in failing checks in governance and income indexes
+- ETL: disable transaction cancellation on shutdown to protect against database corruption
+
+- API: replace single `bigmap` tables with 3 new tables `bigmaps` (allocs), `bigmap_updates` (updates only, not indexed) and `bigmap_values` (live key/value pairs, indexed by key hash)
+- API: removed bigmap info field `is_removed` that used to signal whether a bigmap was deleted
+- API: bigmap updates no longer contain alloc
+- API: added new field `slots` to rights table, only used for endorsing rights to collect all slots assigned to a baker (before each individual slot was stored as a single rights table entry)
+- API: replaced block field `endorsed_slots` (uint32) with `slot_mask` (hex string) on explorer and table endpoints, it remains a bitset (32 or 256 bits)
+- API: added block fields `lb_esc_vote` and `lb_esc_ema` to track liquidity baking
+- API: replaced block field `rights.slot` to `rights.slots` and changed type to array of integers to list all endorsement slots for a baker in a single entry
+- API: op field `data` for type endorsement now contains a 256bit hex string after Granada instead of 32bit
+- API: added field `minted_subsidy` to supply counters
+- API: added blockchain config fields `liquidity_baking_escape_ema_threshold`, `liquidity_baking_subsidy`, `liquidity_baking_sunset_level`, `minimal_block_delay`
+
+- ZMQ: changed block field `endorsed_slots` (now `slot_mask`) from uint32 to hex string
+- ZMQ: added block fields `lb_esc_vote` and `lb_esc_ema` to track liquidity baking
+
+- PROXY: extend rights cache by protocol version to keep versioned rights across protocol upgrades
+- PROXY: add auto-upgrade procedure for rights bucket keys
+
+
 ## 9.1.0
 
 Performance improvements and new API features from API version `009-2021-04-16`. See our [complete API docu](https://tzstats.com/docs/api).

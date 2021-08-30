@@ -131,3 +131,11 @@ func (idx *FlowIndex) DeleteBlock(ctx context.Context, height int64) error {
 		Delete(ctx)
 	return err
 }
+
+func (idx *FlowIndex) DeleteCycle(ctx context.Context, cycle int64) error {
+	// log.Debugf("Rollback deleting flow cycle %d", cycle)
+	_, err := pack.NewQuery("etl.flow.delete", idx.table).
+		AndEqual("cycle", cycle).
+		Delete(ctx)
+	return err
+}

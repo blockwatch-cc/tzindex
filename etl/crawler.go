@@ -26,8 +26,8 @@ const (
 	StateDBName = "state.db"
 
 	// state database schema
-	stateDBSchemaName    = "2021-05-03"
-	stateDBSchemaVersion = 3
+	stateDBSchemaName    = "2021-07-24"
+	stateDBSchemaVersion = 4
 	stateDBKey           = "statedb"
 )
 
@@ -772,8 +772,8 @@ func (c *Crawler) syncBlockchain() {
 	defer drain(c.queue)
 
 	var (
-		tzblock  *Bundle
-		errCount int
+		tzblock    *Bundle
+		ctxNonStop = context.Background()
 	)
 
 	log.Infof("Starting blockchain sync from height %d.", tip.BestHeight+1)
@@ -842,13 +842,6 @@ func (c *Crawler) syncBlockchain() {
 			log.Tracef("Processing block %d %s", tzblock.Height(), tzblock.Hash())
 		}
 
-	again:
-		if errCount > 1 {
-			log.Infof("Stopping blockchain sync due to too many errors at %d.", tip.BestHeight)
-			c.setState(STATE_FAILED)
-			return
-		}
-
 		// under very rare conditions (tick and monitor triggered the same block download,
 		// one via height, the other via hash) we may see a duplicate block in the
 		// ingest queue; check and discard
@@ -869,21 +862,13 @@ func (c *Crawler) syncBlockchain() {
 			bestblock, err := NewBlock(tzblock, nil)
 			if err != nil {
 				log.Errorf("Reorg failed: %v", err)
-				errCount++
-				goto again
+				break
 			}
 
 			// run reorg
 			if err = c.reorganize(ctx, tipblock, bestblock, false, false); err != nil {
 				log.Errorf("Reorg failed: %v", err)
-				c.builder.Purge()
-				if err := c.builder.Init(ctx, tip, c.rpc); err != nil {
-					log.Errorf("Reinit failed: %v", err)
-					errCount += 10
-				} else {
-					errCount++
-				}
-				goto again
+				break
 			}
 
 			// update local tip copy after reorg was successful
@@ -891,14 +876,7 @@ func (c *Crawler) syncBlockchain() {
 			// safety check for non zero parent id
 			if newtip.BestId == 0 {
 				log.Errorf("Zero parent id after reorg for parent block %d %s", newtip.BestHeight, newtip.BestHash)
-				c.builder.Purge()
-				if err := c.builder.Init(ctx, tip, c.rpc); err != nil {
-					log.Errorf("Reinit failed: %v", err)
-					errCount += 10
-				} else {
-					errCount++
-				}
-				goto again
+				break
 			}
 			tip = newtip
 		}
@@ -908,8 +886,6 @@ func (c *Crawler) syncBlockchain() {
 			continue
 		}
 
-		// POINT OF NO RETURN
-
 		// assemble block data and statistics; will lookup and create new accounts
 		block, err := c.builder.Build(ctx, tzblock)
 		if err != nil {
@@ -918,32 +894,17 @@ func (c *Crawler) syncBlockchain() {
 			if err = c.indexer.DeleteBlock(ctx, tzblock); err != nil {
 				log.Errorf("Rollback of data for failed block %d: %v", tzblock.Height(), err)
 			}
-			errCount++
-			// pruge and reinit builder state to last successful block
-			c.builder.Purge()
-			if err := c.builder.Init(ctx, tip, c.rpc); err != nil {
-				log.Errorf("Reinit failed: %v", err)
-				errCount += 10
-			} else {
-				errCount++
-			}
-			goto again
+			break
 		}
 
-		// update indexes; will insert or update rows & generate unique ids
-		// for blocks and flows
-		if err = c.indexer.ConnectBlock(ctx, block, c.builder); err != nil {
+		//
+		// CRITICAL SECTION BEGIN (execute atomic to protect DB state)
+		//
+
+		// update indexes
+		if err = c.indexer.ConnectBlock(ctxNonStop, block, c.builder); err != nil {
 			log.Errorf("Connecting block %d: %v", block.Height, err)
-			errCount++
-			// pruge and reinit builder state to last successful block
-			c.builder.Purge()
-			if err := c.builder.Init(ctx, tip, c.rpc); err != nil {
-				log.Errorf("Reinit failed: %v", err)
-				errCount += 10
-			} else {
-				errCount++
-			}
-			goto again
+			break
 		}
 
 		// update chain tip
@@ -979,20 +940,14 @@ func (c *Crawler) syncBlockchain() {
 		c.updateTip(newTip)
 		tip = newTip
 
-		// trace progress
-		// log.Tracef("block %d ts=%s tx=%d/%d acc=%d/%d vol=%d rwd=%d fee=%d burn=%d q=%d\n",
-		// 	block.Height,
-		// 	block.Timestamp.Format(time.RFC3339),
-		// 	block.NOps,
-		// 	block.Chain.TotalOps,
-		// 	block.SeenAccounts,
-		// 	block.Chain.TotalAccounts,
-		// 	block.Volume,
-		// 	block.Reward,
-		// 	block.Fee,
-		// 	block.BurnedSupply,
-		// 	len(c.queue),
-		// )
+		//
+		// CRITICAL SECTION END
+		//
+
+		// check for shutdown signal
+		if interruptRequested(ctx) {
+			continue
+		}
 
 		// current block may be ahead of bcinfo by one
 		if c.bchead != nil && block.Height >= c.bchead.Level {
@@ -1024,38 +979,28 @@ func (c *Crawler) syncBlockchain() {
 			})
 			if err != nil {
 				log.Errorf("Updating state database for block %d: %v", tip.BestHeight, err)
-				c.setState(STATE_FAILED)
-				return
+				break
 			}
 		}
 
 		// database snapshots
 		if err := c.MaybeSnapshot(ctx); err != nil {
 			log.Errorf("Snapshot failed at block %d: %v", tip.BestHeight, err)
-			// only fail on configured snapshot blocks
-			if c.snap != nil && (len(c.snap.Blocks) > 0 || c.snap.BlockInterval > 0) {
-				c.setState(STATE_FAILED)
-				return
-			}
 		}
 
 		if c.stopHeight > 0 && tip.BestHeight >= c.stopHeight {
-			err := c.db.Update(func(dbTx store.Tx) error {
-				return dbStoreChainTip(dbTx, tip)
-			})
-			if err != nil {
-				log.Errorf("Updating state database for block %d: %v", tip.BestHeight, err)
-				c.setState(STATE_FAILED)
-				return
-			}
 			log.Infof("Stopping blockchain sync after block height %d.", tip.BestHeight)
 			return
 		}
 
 		// remove build state
 		c.builder.Clean()
-		errCount = 0
 	}
+
+	// handle failures
+	c.builder.Purge()
+	log.Infof("Stopping blockchain sync due to too many errors at %d.", tip.BestHeight)
+	c.setState(STATE_FAILED)
 }
 
 func (c *Crawler) fetchParamsForBlock(ctx context.Context, block *rpc.Block) (*tezos.Params, error) {

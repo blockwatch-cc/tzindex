@@ -43,6 +43,7 @@ var (
 
 	// index options
 	lightIndex bool
+	fullIndex  bool
 )
 
 var (
@@ -281,7 +282,7 @@ func enabledIndexes() []model.BlockIndexer {
 			index.NewFlowIndex(tableOptions("flow")),
 			index.NewChainIndex(tableOptions("chain")),
 			index.NewSupplyIndex(tableOptions("supply")),
-			index.NewBigMapIndex(tableOptions("bigmap"), indexOptions("bigmap")),
+			index.NewBigmapIndex(tableOptions("bigmap"), indexOptions("bigmap")),
 			index.NewMetadataIndex(tableOptions("metadata"), indexOptions("metadata")),
 		}
 	} else {
@@ -297,7 +298,7 @@ func enabledIndexes() []model.BlockIndexer {
 			index.NewSnapshotIndex(tableOptions("snapshot")),
 			index.NewIncomeIndex(tableOptions("income")),
 			index.NewGovIndex(tableOptions("gov")),
-			index.NewBigMapIndex(tableOptions("bigmap"), indexOptions("bigmap")),
+			index.NewBigmapIndex(tableOptions("bigmap"), indexOptions("bigmap")),
 			index.NewMetadataIndex(tableOptions("metadata"), indexOptions("metadata")),
 		}
 	}

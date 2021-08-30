@@ -17,12 +17,12 @@ import (
 
 const (
 	OpPackSizeLog2         = 15  // 32k packs ~4M
-	OpJournalSizeLog2      = 18  // 512k
+	OpJournalSizeLog2      = 16  // 64k
 	OpCacheSize            = 128 // 128=512MB
 	OpFillLevel            = 100
-	OpIndexPackSizeLog2    = 15   // 16k packs (32k split size) ~256k
-	OpIndexJournalSizeLog2 = 16   // 64k
-	OpIndexCacheSize       = 1024 // ~256M
+	OpIndexPackSizeLog2    = 15 // 16k packs (32k split size) ~256k
+	OpIndexJournalSizeLog2 = 16 // 64k
+	OpIndexCacheSize       = 2  // minimum, not essential
 	OpIndexFillLevel       = 90
 	OpIndexKey             = "op"
 	OpTableKey             = "op"
@@ -184,6 +184,14 @@ func (idx *OpIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting ops at height %d", height)
 	_, err := pack.NewQuery("etl.op.delete", idx.table).
 		AndEqual("height", height).
+		Delete(ctx)
+	return err
+}
+
+func (idx *OpIndex) DeleteCycle(ctx context.Context, cycle int64) error {
+	// log.Debugf("Rollback deleting op for cycle %d", cycle)
+	_, err := pack.NewQuery("etl.op.delete", idx.table).
+		AndEqual("cycle", cycle).
 		Delete(ctx)
 	return err
 }

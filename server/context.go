@@ -179,6 +179,8 @@ func (api *ApiContext) complete() {
 		switch err := e.(type) {
 		case error:
 			api.handleError(err)
+		case string:
+			api.handleError(fmt.Errorf(err))
 		default:
 			api.handleError(fmt.Errorf("%v", e))
 		}
@@ -218,7 +220,18 @@ func (api *ApiContext) handleError(e error) {
 			}
 		}
 	default:
-		re = EInternal(EC_SERVER, reflect.TypeOf(e).String(), e).(*Error)
+		switch err {
+		case context.DeadlineExceeded:
+			dl, _ := api.Context.Deadline()
+			re = EServiceUnavailable(
+				EC_SERVER,
+				fmt.Sprintf("request timeout: took=%v max=%v", time.Since(api.Now), dl),
+				err).(*Error)
+		case context.Canceled:
+			re = EConnectionClosed(EC_NETWORK, "context canceled", err).(*Error)
+		default:
+			re = EInternal(EC_SERVER, reflect.TypeOf(e).String(), e).(*Error)
+		}
 	}
 	re.SetScope(api.name)
 	re.RequestId = api.RequestID

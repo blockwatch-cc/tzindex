@@ -27,42 +27,38 @@ import (
 
 var (
 	// long -> short form
-	bigmapSourceNames map[string]string
+	bigmapUpdateSourceNames map[string]string
 	// short -> long form
-	bigmapAliasNames map[string]string
+	bigmapUpdateAliasNames map[string]string
 	// all aliases as list
-	bigmapAllAliases []string
+	bigmapUpdateAllAliases []string
 )
 
 func init() {
-	fields, err := pack.Fields(&model.BigmapItem{})
+	fields, err := pack.Fields(&model.BigmapUpdate{})
 	if err != nil {
-		log.Fatalf("bigmap field type error: %v\n", err)
+		log.Fatalf("bigmap update field type error: %v\n", err)
 	}
-	bigmapSourceNames = fields.NameMapReverse()
-	bigmapAllAliases = fields.Aliases()
+	bigmapUpdateSourceNames = fields.NameMapReverse()
+	bigmapUpdateAllAliases = fields.Aliases()
 
 	// add extra transalations for accounts
-	bigmapSourceNames["address"] = "A"
-	bigmapSourceNames["op"] = "O"
-	bigmapSourceNames["key_id"] = "-"
-	bigmapSourceNames["key_hash"] = "-"
-	bigmapAllAliases = append(bigmapAllAliases, "address")
-	bigmapAllAliases = append(bigmapAllAliases, "op")
-	bigmapAllAliases = append(bigmapAllAliases, "key_hash")
+	bigmapUpdateSourceNames["op"] = "o"
+	bigmapUpdateSourceNames["key_hash"] = "-"
+	bigmapUpdateAllAliases = append(bigmapUpdateAllAliases, "op")
+	bigmapUpdateAllAliases = append(bigmapUpdateAllAliases, "key_hash")
 }
 
 // configurable marshalling helper
-type BigMapItem struct {
-	model.BigmapItem
+type BigmapUpdateItem struct {
+	model.BigmapUpdate
 	verbose bool                        // cond. marshal
 	columns util.StringList             // cond. cols & order when brief
-	params  *tezos.Params               // blockchain amount conversion
 	ops     map[model.OpID]tezos.OpHash // op map
 	ctx     *ApiContext
 }
 
-func (b *BigMapItem) MarshalJSON() ([]byte, error) {
+func (b *BigmapUpdateItem) MarshalJSON() ([]byte, error) {
 	if b.verbose {
 		return b.MarshalJSONVerbose()
 	} else {
@@ -70,72 +66,48 @@ func (b *BigMapItem) MarshalJSON() ([]byte, error) {
 	}
 }
 
-func (b *BigMapItem) MarshalJSONVerbose() ([]byte, error) {
+func (b *BigmapUpdateItem) MarshalJSONVerbose() ([]byte, error) {
 	bigmap := struct {
-		RowId      uint64 `json:"row_id"`
-		KeyId      uint64 `json:"key_id"`
-		PrevId     uint64 `json:"prev_id"`
-		Address    string `json:"address"`
-		AccountId  uint64 `json:"account_id"`
-		ContractId uint64 `json:"contract_id"`
-		OpId       uint64 `json:"op_id"`
-		Op         string `json:"op"`
-		Height     int64  `json:"height"`
-		Timestamp  int64  `json:"time"`
-		BigmapId   int64  `json:"bigmap_id"`
-		Action     string `json:"action"`
-		KeyHash    string `json:"key_hash,omitempty"`
-		Key        string `json:"key,omitempty"`
-		Value      string `json:"value,omitempty"`
-		IsReplaced bool   `json:"is_replaced"`
-		IsDeleted  bool   `json:"is_deleted"`
-		IsCopied   bool   `json:"is_copied"`
-		Counter    int64  `json:"counter"`
-		NKeys      int64  `json:"n_keys"`
-		Updated    int64  `json:"updated"`
+		RowId     uint64    `json:"row_id"`
+		BigmapId  int64     `json:"bigmap_id"`
+		KeyId     uint64    `json:"key_id"`
+		Action    string    `json:"action"`
+		OpId      uint64    `json:"op_id"`
+		Op        string    `json:"op"`
+		Height    int64     `json:"height"`
+		Timestamp time.Time `json:"time"`
+		KeyHash   string    `json:"key_hash,omitempty"`
+		Key       string    `json:"key,omitempty"`
+		Value     string    `json:"value,omitempty"`
 	}{
-		RowId:      b.RowId,
-		KeyId:      b.KeyId,
-		PrevId:     b.PrevId,
-		Address:    b.ctx.Indexer.LookupAddress(b.ctx, b.AccountId).String(),
-		AccountId:  b.AccountId.Value(),
-		ContractId: b.ContractId.Value(),
-		OpId:       b.OpId.Value(),
-		Op:         b.ops[b.OpId].String(),
-		Height:     b.Height,
-		Timestamp:  util.UnixMilliNonZero(b.Timestamp),
-		BigmapId:   b.BigmapId,
-		Action:     b.Action.String(),
-		KeyHash:    b.GetKeyHash().String(),
-		Key:        hex.EncodeToString(b.Key),
-		Value:      hex.EncodeToString(b.Value),
-		IsReplaced: b.IsReplaced,
-		IsDeleted:  b.IsDeleted,
-		IsCopied:   b.IsCopied,
-		Counter:    b.Counter,
-		NKeys:      b.NKeys,
-		Updated:    b.Updated,
+		RowId:     b.RowId,
+		BigmapId:  b.BigmapId,
+		KeyId:     b.KeyId,
+		Action:    b.Action.String(),
+		OpId:      b.OpId.Value(),
+		Op:        b.ops[b.OpId].String(),
+		Height:    b.Height,
+		Timestamp: b.ctx.Indexer.LookupBlockTime(b.ctx, b.Height),
+		KeyHash:   b.GetKeyHash().String(),
+		Key:       hex.EncodeToString(b.Key),
+		Value:     hex.EncodeToString(b.Value),
 	}
 	return json.Marshal(bigmap)
 }
 
-func (b *BigMapItem) MarshalJSONBrief() ([]byte, error) {
+func (b *BigmapUpdateItem) MarshalJSONBrief() ([]byte, error) {
 	buf := make([]byte, 0, 2048)
 	buf = append(buf, '[')
 	for i, v := range b.columns {
 		switch v {
 		case "row_id":
 			buf = strconv.AppendUint(buf, b.RowId, 10)
+		case "bigmap_id":
+			buf = strconv.AppendInt(buf, b.BigmapId, 10)
 		case "key_id":
 			buf = strconv.AppendUint(buf, b.KeyId, 10)
-		case "prev_id":
-			buf = strconv.AppendUint(buf, b.PrevId, 10)
-		case "address":
-			buf = strconv.AppendQuote(buf, b.ctx.Indexer.LookupAddress(b.ctx, b.AccountId).String())
-		case "account_id":
-			buf = strconv.AppendUint(buf, b.AccountId.Value(), 10)
-		case "contract_id":
-			buf = strconv.AppendUint(buf, b.ContractId.Value(), 10)
+		case "action":
+			buf = strconv.AppendQuote(buf, b.Action.String())
 		case "op_id":
 			buf = strconv.AppendUint(buf, b.OpId.Value(), 10)
 		case "op":
@@ -143,35 +115,13 @@ func (b *BigMapItem) MarshalJSONBrief() ([]byte, error) {
 		case "height":
 			buf = strconv.AppendInt(buf, b.Height, 10)
 		case "time":
-			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(b.Timestamp), 10)
-		case "bigmap_id":
-			buf = strconv.AppendInt(buf, b.BigmapId, 10)
-		case "action":
-			buf = strconv.AppendQuote(buf, b.Action.String())
+			buf = strconv.AppendInt(buf, b.ctx.Indexer.LookupBlockTimeMs(b.ctx, b.Height), 10)
 		case "key_hash":
 			buf = strconv.AppendQuote(buf, b.GetKeyHash().String())
 		case "key":
 			buf = strconv.AppendQuote(buf, hex.EncodeToString(b.Key))
 		case "value":
 			buf = strconv.AppendQuote(buf, hex.EncodeToString(b.Value))
-		case "is_replaced":
-			if b.IsReplaced {
-				buf = append(buf, '1')
-			} else {
-				buf = append(buf, '0')
-			}
-		case "is_deleted":
-			if b.IsDeleted {
-				buf = append(buf, '1')
-			} else {
-				buf = append(buf, '0')
-			}
-		case "is_copied":
-			if b.IsCopied {
-				buf = append(buf, '1')
-			} else {
-				buf = append(buf, '0')
-			}
 		default:
 			continue
 		}
@@ -183,22 +133,18 @@ func (b *BigMapItem) MarshalJSONBrief() ([]byte, error) {
 	return buf, nil
 }
 
-func (b *BigMapItem) MarshalCSV() ([]string, error) {
+func (b *BigmapUpdateItem) MarshalCSV() ([]string, error) {
 	res := make([]string, len(b.columns))
 	for i, v := range b.columns {
 		switch v {
 		case "row_id":
 			res[i] = strconv.FormatUint(b.RowId, 10)
+		case "bigmap_id":
+			res[i] = strconv.FormatInt(b.BigmapId, 10)
 		case "key_id":
 			res[i] = strconv.FormatUint(b.KeyId, 10)
-		case "prev_id":
-			res[i] = strconv.FormatUint(b.PrevId, 10)
-		case "address":
-			res[i] = strconv.Quote(b.ctx.Indexer.LookupAddress(b.ctx, b.AccountId).String())
-		case "account_id":
-			res[i] = strconv.FormatUint(b.AccountId.Value(), 10)
-		case "contract_id":
-			res[i] = strconv.FormatUint(b.ContractId.Value(), 10)
+		case "action":
+			res[i] = strconv.Quote(b.Action.String())
 		case "op_id":
 			res[i] = strconv.FormatUint(b.OpId.Value(), 10)
 		case "op":
@@ -207,22 +153,12 @@ func (b *BigMapItem) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(b.Height, 10)
 		case "time":
 			res[i] = strconv.Quote(b.Timestamp.Format(time.RFC3339))
-		case "bigmap_id":
-			res[i] = strconv.FormatInt(b.BigmapId, 10)
-		case "action":
-			res[i] = strconv.Quote(b.Action.String())
 		case "key_hash":
 			res[i] = strconv.Quote(b.GetKeyHash().String())
 		case "key":
 			res[i] = strconv.Quote(hex.EncodeToString(b.Key))
 		case "value":
 			res[i] = strconv.Quote(hex.EncodeToString(b.Value))
-		case "is_replaced":
-			res[i] = strconv.FormatBool(b.IsReplaced)
-		case "is_deleted":
-			res[i] = strconv.FormatBool(b.IsDeleted)
-		case "is_copied":
-			res[i] = strconv.FormatBool(b.IsCopied)
 		default:
 			continue
 		}
@@ -230,18 +166,15 @@ func (b *BigMapItem) MarshalCSV() ([]string, error) {
 	return res, nil
 }
 
-func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
-	// fetch chain params at current height
-	params := ctx.Params
-
+func StreamBigmapUpdateTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
 	if err != nil {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", args.Table), err))
+		panic(ENotFound(EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", args.Table), err))
 	}
 	opT, err := ctx.Indexer.Table(index.OpTableKey)
 	if err != nil {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", index.OpTableKey), err))
+		panic(ENotFound(EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", index.OpTableKey), err))
 	}
 
 	// translate long column names to short names used in pack tables
@@ -254,7 +187,7 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 		// resolve short column names
 		srcNames = make([]string, 0, len(args.Columns))
 		for _, v := range args.Columns {
-			n, ok := bigmapSourceNames[v]
+			n, ok := bigmapUpdateSourceNames[v]
 			if !ok {
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("unknown column '%s'", v), nil))
 			}
@@ -275,12 +208,11 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 	} else {
 		// use all table columns in order and reverse lookup their long names
 		srcNames = table.Fields().Names()
-		args.Columns = bigmapAllAliases
+		args.Columns = bigmapUpdateAllAliases
 		needOpT = true
 	}
 
 	// prepare lookup caches
-	// accMap := make(map[model.AccountID]tezos.Address)
 	opMap := make(map[model.OpID]tezos.OpHash)
 	bigmapIds := make([]int64, 0)
 
@@ -335,7 +267,7 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 		keys := strings.Split(key, ".")
 		prefix := keys[0]
 		mode := pack.FilterModeEqual
-		field := bigmapSourceNames[prefix]
+		field := bigmapUpdateSourceNames[prefix]
 		if len(keys) > 1 {
 			mode = pack.ParseFilterMode(keys[1])
 			if !mode.IsValid() {
@@ -361,75 +293,6 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 				Value: id,
 				Raw:   val[0], // debugging aid
 			})
-		case "address":
-			switch mode {
-			case pack.FilterModeEqual, pack.FilterModeNotEqual:
-				if val[0] == "" {
-					// empty address matches id 0 (== missing baker)
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find(field), // account id
-						Mode:  pack.FilterModeEqual,
-						Value: 0,
-						Raw:   val[0], // debugging aid
-					})
-				} else {
-					// single-address lookup and compile condition
-					addr, err := tezos.ParseAddress(val[0])
-					if err != nil || !addr.IsValid() {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
-					}
-					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
-					}
-					// Note: when not found we insert an always false condition
-					if acc == nil || acc.RowId == 0 {
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find(field), // account id
-							Mode:  mode,
-							Value: uint64(math.MaxUint64),
-							Raw:   "account not found", // debugging aid
-						})
-					} else {
-						// add id as extra condition
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find(field), // account id
-							Mode:  mode,
-							Value: acc.RowId,
-							Raw:   val[0], // debugging aid
-						})
-					}
-				}
-			case pack.FilterModeIn, pack.FilterModeNotIn:
-				// multi-address lookup and compile condition
-				ids := make([]uint64, 0)
-				for _, v := range strings.Split(val[0], ",") {
-					addr, err := tezos.ParseAddress(v)
-					if err != nil || !addr.IsValid() {
-						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
-					}
-					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
-					}
-					// skip not found account
-					if acc == nil || acc.RowId == 0 {
-						continue
-					}
-					// collect list of account ids
-					ids = append(ids, acc.RowId.Value())
-				}
-				// Note: when list is empty (no accounts were found, the match will
-				//       always be false and return no result as expected)
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find(field), // account id
-					Mode:  mode,
-					Value: ids,
-					Raw:   val[0], // debugging aid
-				})
-			default:
-				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
-			}
 
 		case "op":
 			// parse op hash and lookup id
@@ -620,7 +483,7 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 
 		default:
 			// translate long column name used in query to short column name used in packs
-			if short, ok := bigmapSourceNames[prefix]; !ok {
+			if short, ok := bigmapUpdateSourceNames[prefix]; !ok {
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("unknown column '%s'", prefix), nil))
 			} else {
 				key = strings.Replace(key, prefix, short, 1)
@@ -646,7 +509,7 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 	// start := time.Now()
 	// ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
 	// defer func() {
-	// 	ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
+	//  ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
 	// }()
 
 	// Step 1: query database
@@ -660,7 +523,7 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 	// Step 2: resolve related op hashes using lookup (when requested)
 	if res.Rows() > 0 && needOpT {
 		// get a unique copy of account id column (clip on request limit)
-		col, _ := res.Uint64Column("O")
+		col, _ := res.Uint64Column("o")
 		find := vec.UniqueUint64Slice(col[:util.Min(len(col), int(args.Limit))])
 
 		// lookup accounts from id
@@ -687,10 +550,9 @@ func StreamBigMapItemTable(ctx *ApiContext, args *TableRequest) (interface{}, in
 	}
 
 	// prepare return type marshalling
-	bigmap := &BigMapItem{
+	bigmap := &BigmapUpdateItem{
 		verbose: args.Verbose,
 		columns: util.StringList(args.Columns),
-		params:  params,
 		ops:     opMap,
 		ctx:     ctx,
 	}

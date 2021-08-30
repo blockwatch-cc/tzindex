@@ -15,13 +15,13 @@ import (
 )
 
 const (
-	BlockPackSizeLog2         = 15 // 32k packs ~3.6M
-	BlockJournalSizeLog2      = 16 // 64k - search only on rollback and lookup
-	BlockCacheSize            = 8  // ~30M
+	BlockPackSizeLog2         = 15 // 32k
+	BlockJournalSizeLog2      = 16 // 64k
+	BlockCacheSize            = 2  // ~2M
 	BlockFillLevel            = 100
-	BlockIndexPackSizeLog2    = 15 // 16k packs (32k split size) ~ 256k
+	BlockIndexPackSizeLog2    = 15 // 16k
 	BlockIndexJournalSizeLog2 = 16 // 64k
-	BlockIndexCacheSize       = 32 // 8M
+	BlockIndexCacheSize       = 2  // not essential
 	BlockIndexFillLevel       = 90
 	BlockIndexKey             = "block"
 	BlockTableKey             = "block"
@@ -158,9 +158,17 @@ func (idx *BlockIndex) ConnectBlock(ctx context.Context, block *Block, b BlockBu
 
 	// fetch and update snapshot block
 	if snap := block.TZ.Snapshot; snap != nil {
-		snapHeight := block.Params.SnapshotBlock(snap.Cycle, snap.RollSnapshot)
-		// log.Debugf("Marking block %d [%d] index %d as roll snapshot for cycle %d",
-		// 	snapHeight, block.Params.CycleFromHeight(snapHeight), snap.RollSnapshot, snap.Cycle)
+		// Some protocol upgrades happen 1 block before cycle end. When an upgrade
+		// changes cycle length we will miss snapshot 15. For this reason we use
+		// the previous protocol's params until cycle end.
+		p := block.Params
+		if block.Parent != nil {
+			p = block.Parent.Params
+		}
+		snapHeight := p.SnapshotBlock(snap.Cycle, snap.RollSnapshot)
+		log.Debugf("Marking block %d [%d] index %d as roll snapshot for cycle %d",
+			snapHeight, block.Params.CycleFromHeight(snapHeight), snap.RollSnapshot, snap.Cycle)
+
 		snapBlock := &Block{}
 		err := pack.NewQuery("block_height.search", idx.table).
 			WithoutCache().
@@ -194,6 +202,14 @@ func (idx *BlockIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting block at height %d", height)
 	_, err := pack.NewQuery("etl.block.delete", idx.table).
 		AndEqual("height", height).
+		Delete(ctx)
+	return err
+}
+
+func (idx *BlockIndex) DeleteCycle(ctx context.Context, cycle int64) error {
+	// log.Debugf("Rollback deleting block cycle %d", cycle)
+	_, err := pack.NewQuery("etl.block.delete", idx.table).
+		AndEqual("cycle", cycle).
 		Delete(ctx)
 	return err
 }

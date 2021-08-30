@@ -126,8 +126,12 @@ func StreamTable(ctx *ApiContext) (interface{}, int) {
 		return StreamBallotTable(ctx, args)
 	case "income":
 		return StreamIncomeTable(ctx, args)
-	case "bigmap":
-		return StreamBigMapItemTable(ctx, args)
+	case "bigmaps":
+		return StreamBigmapAllocTable(ctx, args)
+	case "bigmap_values":
+		return StreamBigmapValueTable(ctx, args)
+	case "bigmap_updates":
+		return StreamBigmapUpdateTable(ctx, args)
 	default:
 		panic(ENotFound(EC_RESOURCE_NOTFOUND, fmt.Sprintf("no such table '%s'", args.Table), nil))
 		return nil, -1

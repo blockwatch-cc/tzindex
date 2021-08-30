@@ -128,3 +128,11 @@ func (idx *ChainIndex) DeleteBlock(ctx context.Context, height int64) error {
 		Delete(ctx)
 	return err
 }
+
+func (idx *ChainIndex) DeleteCycle(ctx context.Context, cycle int64) error {
+	// log.Debugf("Rollback deleting chain cycle %d", cycle)
+	_, err := pack.NewQuery("etl.chain.delete", idx.table).
+		AndEqual("cycle", cycle).
+		Delete(ctx)
+	return err
+}

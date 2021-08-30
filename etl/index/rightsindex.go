@@ -11,6 +11,7 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
+	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/rpc"
 	"blockwatch.cc/tzgo/tezos"
 
@@ -117,7 +118,7 @@ func (idx *RightsIndex) Close() error {
 }
 
 func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
-	upd := make([]pack.Item, 0, 32+block.Priority+block.NSeedNonce)
+	upd := make([]pack.Item, 0, block.Params.EndorsersPerBlock+block.Priority+block.NSeedNonce)
 	// load and update rights when seed nonces are published
 	if block.NSeedNonce > 0 {
 		for _, v := range block.Ops {
@@ -173,24 +174,27 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 		} else if pd == 0 {
 			rights[i].IsStolen = block.Priority > 0
 			rights[i].IsUsed = true
-			rights[i].IsSeedRequired = block.Height%block.Params.BlocksPerCommitment == 0
+			rights[i].IsSeedRequired = block.Params.IsSeedRequired(block.Height)
 		}
 		upd = append(upd, &(rights[i]))
 	}
 
 	// endorsing rights are for parent block
+	// careful: rights is slice of structs, not pointers
 	if block.Parent != nil {
-		missed := ^block.Parent.SlotsEndorsed
-		// careful: rights is slice of structs, not pointers
+		endorsed := vec.NewBitSetFromBytes(block.Parent.SlotsEndorsed, block.Params.EndorsersPerBlock)
 		rights := builder.Rights(tezos.RightTypeEndorsing)
 		for i := range rights {
-			if missed&(0x1<<uint(rights[i].Priority)) == 0 {
+			slots := vec.NewBitSetFromBytes(rights[i].Slots, block.Params.EndorsersPerBlock)
+			nSlots := int64(slots.Count())
+			missed := slots.AndNot(endorsed)
+			if missed.Count() == 0 {
 				rights[i].IsUsed = true
 			} else {
 				rights[i].IsMissed = true
 				// find out if baker was underfunded
 				if dlg, ok := builder.AccountById(rights[i].AccountId); ok {
-					rights[i].IsBondMiss = dlg.SpendableBalance < block.Params.EndorsementSecurityDeposit
+					rights[i].IsBondMiss = dlg.SpendableBalance < nSlots*block.Params.EndorsementSecurityDeposit
 				}
 			}
 			upd = append(upd, &(rights[i]))
@@ -201,7 +205,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 	}
 
 	// at the first reorg-safe block of a new cycle, remove all unused rights from previous cycles
-	isReorgSafe := block.Height == block.Params.CycleStartHeight(block.Cycle)+tezos.MaxBranchDepth
+	isReorgSafe := block.Height == block.Params.CycleStartHeight(block.Cycle)+int64(block.TZ.Block.Metadata.MaxOperationsTTL)+1
 	if block.Cycle > 0 && isReorgSafe {
 		n, err := pack.NewQuery("rights.clear", idx.table).
 			AndEqual("cycle", block.Cycle-1).
@@ -227,7 +231,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 	}
 
 	// insert all baking rights for a cycle, then all endorsing rights
-	ins := make([]pack.Item, 0, (64+32)*block.Params.BlocksPerCycle)
+	ins := make([]pack.Item, 0, len(block.TZ.Baking)+len(block.TZ.Endorsing))
 	for _, v := range block.TZ.Baking {
 		acc, ok := builder.AccountByAddress(v.Address())
 		if !ok {
@@ -241,37 +245,32 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 			AccountId: acc.RowId,
 		})
 	}
-	// sort endorsing rights by slot, they are only sorted by height here
-	height := block.TZ.Endorsing[0].Level
-	erights := make([]*Right, 0, block.Params.EndorsersPerBlock)
+	// sort by height and priority
+	sort.Slice(ins, func(i, j int) bool {
+		return ins[i].(*Right).Height < ins[j].(*Right).Height ||
+			(ins[i].(*Right).Height == ins[j].(*Right).Height && ins[i].(*Right).Priority < ins[j].(*Right).Priority)
+	})
+
+	// add endorsing rights, all slots go into a single rights entry
 	for _, v := range block.TZ.Endorsing {
-		// sort and flush into insert
-		if v.Level > height {
-			sort.Slice(erights, func(i, j int) bool { return erights[i].Priority < erights[j].Priority })
-			for _, r := range erights {
-				ins = append(ins, r)
-			}
-			erights = erights[:0]
-			height = v.Level
-		}
 		acc, ok := builder.AccountByAddress(v.Address())
 		if !ok {
-			return fmt.Errorf("rights: missing endorser account %s", v.Address())
+			// return fmt.Errorf("rights: missing endorser account %s", v.Address())
+			log.Errorf("rights: missing endorser account %s", v.Address())
+			continue
 		}
-		for _, slot := range sort.IntSlice(v.Slots) {
-			erights = append(erights, &Right{
-				Type:      tezos.RightTypeEndorsing,
-				Height:    v.Level,
-				Cycle:     block.Params.CycleFromHeight(v.Level),
-				Priority:  slot,
-				AccountId: acc.RowId,
-			})
+		bits := vec.NewBitSet(block.Params.EndorsersPerBlock)
+		for _, idx := range v.Slots {
+			bits.Set(idx)
 		}
-	}
-	// sort and flush the last bulk
-	sort.Slice(erights, func(i, j int) bool { return erights[i].Priority < erights[j].Priority })
-	for _, r := range erights {
-		ins = append(ins, r)
+		right := &Right{
+			Type:      tezos.RightTypeEndorsing,
+			Height:    v.Level,
+			Cycle:     block.Params.CycleFromHeight(v.Level),
+			AccountId: acc.RowId,
+			Slots:     bits.Bytes(),
+		}
+		ins = append(ins, right)
 	}
 	return idx.table.Insert(ctx, ins)
 }
@@ -279,7 +278,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *Block, builder 
 // Does not work on rollback of the first cycle block!
 func (idx *RightsIndex) DisconnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
 	// reverse right updates
-	upd := make([]pack.Item, 0, 32+block.Priority+block.NSeedNonce)
+	upd := make([]pack.Item, 0, block.Params.EndorsersPerBlock+block.Priority+block.NSeedNonce)
 	// load and update rights when seed nonces are published
 	if block.NSeedNonce > 0 {
 		for _, v := range block.Ops {

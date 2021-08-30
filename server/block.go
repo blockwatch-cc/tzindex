@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/index"
@@ -39,7 +40,7 @@ type ExplorerBlock struct {
 	Priority            int                          `json:"priority"`
 	Nonce               string                       `json:"nonce"`
 	VotingPeriodKind    tezos.VotingPeriodKind       `json:"voting_period_kind"`
-	SlotsEndorsed       uint32                       `json:"endorsed_slots"`
+	SlotMask            string                       `json:"slot_mask"`
 	NSlotsEndorsed      int                          `json:"n_endorsed_slots"`
 	NOps                int                          `json:"n_ops"`
 	NOpsFailed          int                          `json:"n_ops_failed"`
@@ -78,6 +79,8 @@ type ExplorerBlock struct {
 	TDD                 float64                      `json:"days_destroyed"`
 	PctAccountsReused   float64                      `json:"pct_account_reuse"`
 	NOpsImplicit        int                          `json:"n_ops_implicit"`
+	LbEscapeVote        bool                         `json:"lb_esc_vote"`
+	LbEscapeEma         int64                        `json:"lb_esc_ema"`
 	Metadata            map[string]*ExplorerMetadata `json:"metadata,omitempty"`
 	Rights              []ExplorerRight              `json:"rights,omitempty"`
 
@@ -90,16 +93,18 @@ type ExplorerBlock struct {
 }
 
 type ExplorerRight struct {
-	Type       tezos.RightType `json:"type"`
-	Priority   *int            `json:"priority,omitempty"`
-	Slot       *int            `json:"slot,omitempty"`
-	AccountId  model.AccountID `json:"-"`
-	Address    tezos.Address   `json:"address"`
-	IsUsed     *bool           `json:"is_used,omitempty"`
-	IsLost     *bool           `json:"is_lost,omitempty"`
-	IsStolen   *bool           `json:"is_stolen,omitempty"`
-	IsMissed   *bool           `json:"is_missed,omitempty"`
-	IsBondMiss *bool           `json:"is_bond_miss,omitempty"`
+	Type           tezos.RightType `json:"type"`
+	Priority       *int            `json:"priority,omitempty"`
+	Slots          []int           `json:"slots,omitempty"`
+	AccountId      model.AccountID `json:"-"`
+	Address        tezos.Address   `json:"address"`
+	IsUsed         *bool           `json:"is_used,omitempty"`
+	IsLost         *bool           `json:"is_lost,omitempty"`
+	IsStolen       *bool           `json:"is_stolen,omitempty"`
+	IsMissed       *bool           `json:"is_missed,omitempty"`
+	IsBondMiss     *bool           `json:"is_bond_miss,omitempty"`
+	IsSeedRequired *bool           `json:"is_seed_required,omitempty"`
+	IsSeedRevealed *bool           `json:"is_seed_revealed,omitempty"`
 }
 
 func NewExplorerRight(ctx *ApiContext, r model.Right) ExplorerRight {
@@ -111,7 +116,7 @@ func NewExplorerRight(ctx *ApiContext, r model.Right) ExplorerRight {
 	if r.Type == tezos.RightTypeBaking {
 		er.Priority = IntPtr(r.Priority)
 	} else {
-		er.Slot = IntPtr(r.Priority)
+		er.Slots = vec.NewBitSetFromBytes(r.Slots, len(r.Slots)*8).Indexes(nil)
 	}
 	if r.IsUsed {
 		er.IsUsed = BoolPtr(true)
@@ -127,6 +132,12 @@ func NewExplorerRight(ctx *ApiContext, r model.Right) ExplorerRight {
 	}
 	if r.IsBondMiss {
 		er.IsBondMiss = BoolPtr(true)
+	}
+	if r.IsSeedRequired {
+		er.IsSeedRequired = BoolPtr(true)
+	}
+	if r.IsSeedRevealed {
+		er.IsSeedRevealed = BoolPtr(true)
 	}
 	return er
 }
@@ -153,7 +164,7 @@ func NewExplorerBlock(ctx *ApiContext, block *model.Block, args Options) *Explor
 		Priority:            block.Priority,
 		Nonce:               hex.EncodeToString(buf[:]),
 		VotingPeriodKind:    block.VotingPeriodKind,
-		SlotsEndorsed:       block.SlotsEndorsed,
+		SlotMask:            hex.EncodeToString(block.SlotsEndorsed),
 		NSlotsEndorsed:      block.NSlotsEndorsed,
 		NOps:                block.NOps,
 		NOpsFailed:          block.NOpsFailed,
@@ -251,12 +262,12 @@ func NewExplorerBlock(ctx *ApiContext, block *model.Block, args Options) *Explor
 
 	if b.Height == nowHeight {
 		// cache most recent block only until next block and endorsements are due
-		b.expires = b.Timestamp.Add(p.TimeBetweenBlocks[0])
+		b.expires = b.Timestamp.Add(p.BlockTime())
 		b.lastmod = b.Timestamp
-	} else if b.Height+tezos.MaxBranchDepth >= nowHeight {
+	} else if b.Height+p.MaxOperationsTTL >= nowHeight {
 		// cache blocks in the reorg safety zone only until next block is expected
-		b.expires = ctx.Tip.BestTime.Add(p.TimeBetweenBlocks[0])
-		b.lastmod = b.Timestamp.Add(p.TimeBetweenBlocks[0])
+		b.expires = ctx.Tip.BestTime.Add(p.BlockTime())
+		b.lastmod = b.Timestamp.Add(p.BlockTime())
 	} else {
 		b.expires = b.Timestamp.Add(maxCacheExpires)
 		b.lastmod = b.Timestamp

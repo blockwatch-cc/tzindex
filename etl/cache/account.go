@@ -4,7 +4,6 @@
 package cache
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"sync"
@@ -30,9 +29,6 @@ func NewAccountCache(sz int) *AccountCache {
 	c := &AccountCache{
 		idmap: make(map[model.AccountID]uint64),
 	}
-	if sz < 2 {
-		sz = 2
-	}
 	c.cache, _ = lru.New2QWithEvict(1<<uint(sz), func(_, v interface{}) {
 		buf := v.([]byte)
 		// first 8 bytes is row id
@@ -44,7 +40,7 @@ func NewAccountCache(sz int) *AccountCache {
 }
 
 func (c *AccountCache) AccountHashKey(a *model.Account) uint64 {
-	return c.hashKey(a.Hash.Type, a.Hash.Hash)
+	return c.hashKey(a.Address.Type, a.Address.Hash)
 }
 
 func (c *AccountCache) AddressHashKey(a tezos.Address) uint64 {
@@ -108,7 +104,7 @@ func (c *AccountCache) GetAddress(addr tezos.Address) (uint64, *model.Account, b
 	acc := model.AllocAccount()
 	acc.UnmarshalBinary(val.([]byte))
 	// cross-check for hash collisions
-	if acc.RowId == 0 || acc.Type != addr.Type || bytes.Compare(acc.Hash.Hash, addr.Hash) != 0 {
+	if acc.RowId == 0 || !acc.Address.Equal(addr) {
 		acc.Free()
 		atomic.AddInt64(&c.stats.Misses, 1)
 		return key, nil, false

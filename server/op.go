@@ -175,9 +175,10 @@ type ExplorerOp struct {
 	Delegate      *tezos.Address               `json:"delegate,omitempty"`
 	BranchHeight  int64                        `json:"branch_height,omitempty"`
 	BranchDepth   int64                        `json:"branch_depth,omitempty"`
-	BranchHash    *tezos.BlockHash             `json:"branch,omitempty"`
+	BranchHash    *tezos.BlockHash             `json:"branch_hash,omitempty"`
 	IsImplicit    bool                         `json:"is_implicit,omitempty"`
-	Entrypoint    *int                         `json:"entrypoint_id,omitempty"`
+	EntrypointId  *int                         `json:"entrypoint_id,omitempty"`
+	Entrypoint    string                       `json:"entrypoint,omitempty"`
 	IsOrphan      bool                         `json:"is_orphan,omitempty"`
 	IsBatch       bool                         `json:"is_batch,omitempty"`
 	IsSapling     bool                         `json:"is_sapling,omitempty"`
@@ -319,7 +320,7 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 				}
 			}
 			if !found {
-				if h, err := ctx.Indexer.BlockHashById(ctx.Context, op.BranchId); err == nil {
+				if h := ctx.Indexer.LookupBlockHash(ctx.Context, op.BranchHeight); h.IsValid() {
 					o.BranchHash = &h
 					cache[int64(op.BranchId)] = h
 				}
@@ -374,7 +375,9 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 			}
 		}
 
-		o.Entrypoint = IntPtr(op.Entrypoint)
+		o.EntrypointId = IntPtr(op.Entrypoint)
+		o.Entrypoint = op.Data
+		o.Data = nil
 
 		// set params
 		if len(op.Parameters) > 0 && script != nil {
@@ -382,17 +385,10 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 			if err := callParams.UnmarshalBinary(op.Parameters); err != nil {
 				log.Errorf("explorer op: unmarshal %s params: %v", op.Type, err)
 			}
-			// log.Infof("explorer op: %s entrypoint: %s params: %s", o.Hash, callParams.Entrypoint, callParams.Value.Dump())
-			// log.Infof("explorer op: script: %s", script.Code.Param.Dump())
 
 			// find entrypoint
-			ep, prim, err := callParams.MapEntrypoint(script)
-			if err != nil {
-				log.Errorf("explorer op: %s: %v", o.Hash, err)
-				ps, _ := json.Marshal(callParams)
-				log.Errorf("params: %s", ps)
-			} else {
-				// log.Infof("explorer op: using entrypoint: %s params: %s", ep.Call, ep.Prim.Dump())
+			ep, prim, err := callParams.MapEntrypoint(script.ParamType())
+			if err == nil {
 				o.Parameters = &ExplorerParameters{
 					Entrypoint: callParams.Entrypoint, // from params, e.g. "default"
 					Id:         ep.Id,
@@ -429,9 +425,9 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 
 			// always output post-babylon storage
 			// upgrade pre-babylon storage value to post-babylon spec
-			if cc.NeedsBabylonUpgrade(ctx.Params) && ctx.Params.IsPreBabylonHeight(op.Height) {
+			if etl.NeedsBabylonUpgradeContract(cc, ctx.Params) && ctx.Params.IsPreBabylonHeight(op.Height) {
 				if acc, err := ctx.Indexer.LookupAccountId(ctx, cc.CreatorId); err == nil {
-					prim = prim.MigrateToBabylonStorage(acc.Address().Bytes())
+					prim = prim.MigrateToBabylonStorage(acc.Address.Bytes())
 				}
 			}
 
@@ -440,7 +436,7 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 			}
 			if args.WithMeta() {
 				o.Storage.Meta = &ExplorerStorageMeta{
-					Contract: cc.String(),
+					Contract: cc.Address,
 					Time:     op.Timestamp,
 					Height:   op.Height,
 					Block:    blockHash,
@@ -459,7 +455,7 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 
 	if len(op.BigmapDiff) > 0 {
 		var (
-			alloc            *model.BigmapItem
+			alloc            *model.BigmapAlloc
 			keyType, valType micheline.Type
 			err              error
 		)
@@ -477,17 +473,17 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 				switch v.Action {
 				case micheline.DiffActionAlloc:
 					if v.Id < 0 {
-						cache[lookupId] = model.NewBigmapItem(op, cc, v, 0, 0, 0)
+						cache[lookupId] = model.NewBigmapAlloc(op, v)
 					}
 				case micheline.DiffActionCopy:
 					lookupId = v.SourceId
 				}
 				a, ok := cache[lookupId]
 				if ok {
-					alloc, ok = a.(*model.BigmapItem)
+					alloc, ok = a.(*model.BigmapAlloc)
 				}
 				if !ok {
-					alloc, _, err = ctx.Indexer.LookupBigmap(ctx.Context, lookupId, false)
+					alloc, err = ctx.Indexer.LookupBigmapAlloc(ctx.Context, lookupId)
 					if err != nil {
 						// skip (happens only when listing internal contract calls)
 						log.Debugf("%s: unmarshal bigmap %d alloc: %v", op.Hash, lookupId, err)
@@ -498,16 +494,7 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 				if v.Action == micheline.DiffActionCopy {
 					cache[v.DestId] = alloc
 				}
-				keyType, err = alloc.GetKeyType()
-				if err != nil {
-					log.Errorf("%s: bigmap key type unmarshal: %v", op.Hash, err)
-					continue
-				}
-				valType, err = alloc.GetValueType()
-				if err != nil {
-					log.Errorf("%s: bigmap value type unmarshal: %v", op.Hash, err)
-					continue
-				}
+				keyType, valType = alloc.GetKeyType(), alloc.GetValueType()
 			}
 
 			upd := ExplorerBigmapUpdate{
@@ -518,9 +505,9 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 				upd.ExplorerBigmapValue.Meta = &ExplorerBigmapMeta{
 					Contract:     *o.Receiver,
 					BigmapId:     v.Id,
-					UpdateTime:   op.Timestamp,
+					UpdateTime:   &op.Timestamp,
 					UpdateHeight: op.Height,
-					UpdateBlock:  blockHash,
+					UpdateBlock:  &blockHash,
 				}
 			}
 			switch v.Action {
@@ -534,13 +521,12 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 				}
 				// regular bigmap updates
 				upd.Key = v.GetKeyPtr(keyType)
-				kh := v.KeyHash
+				kh := v.KeyHash.Clone()
 				upd.KeyHash = &kh
 				upd.Value = micheline.NewValuePtr(valType, v.Value)
 				if args.WithPrim() {
 					upd.KeyPrim = upd.Key.PrimPtr()
-					vp := v.Value
-					upd.ValuePrim = &vp
+					upd.ValuePrim = &upd.Value.Value
 				}
 				if args.WithUnpack() {
 					if upd.Value.IsPackedAny() {
@@ -563,7 +549,8 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 						keyType = v.Key.BuildType()
 					}
 					upd.Key = v.GetKeyPtr(keyType)
-					upd.KeyHash = &v.KeyHash
+					kh := v.KeyHash.Clone()
+					upd.KeyHash = &kh
 					if args.WithPrim() {
 						upd.KeyPrim = upd.Key.PrimPtr()
 					}
@@ -587,10 +574,9 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 				}
 
 			case micheline.DiffActionCopy:
-				allocDiff := alloc.BigmapDiff()
 				upd.BigmapId = v.DestId
-				upd.KeyType = micheline.NewType(allocDiff.KeyType).TypedefPtr(micheline.CONST_KEY)
-				upd.ValueType = micheline.NewType(allocDiff.ValueType).TypedefPtr(micheline.CONST_VALUE)
+				upd.KeyType = keyType.TypedefPtr(micheline.CONST_KEY)
+				upd.ValueType = valType.TypedefPtr(micheline.CONST_VALUE)
 				upd.SourceId = v.SourceId
 				upd.DestId = v.DestId
 				if v.DestId < 0 {
@@ -600,10 +586,8 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 					upd.ExplorerBigmapValue.Meta.BigmapId = v.DestId
 				}
 				if args.WithPrim() {
-					kt := allocDiff.KeyType.Clone()
-					upd.KeyTypePrim = &kt
-					vt := allocDiff.ValueType.Clone()
-					upd.ValueTypePrim = &vt
+					upd.KeyTypePrim = &keyType.Prim
+					upd.ValueTypePrim = &valType.Prim
 				}
 			}
 			o.BigmapDiff.diff = append(o.BigmapDiff.diff, upd)
@@ -611,7 +595,7 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 	}
 
 	// cache until next block is expected
-	o.expires = ctx.Tip.BestTime.Add(p.TimeBetweenBlocks[0])
+	o.expires = ctx.Tip.BestTime.Add(p.BlockTime())
 
 	return o
 }

@@ -154,7 +154,7 @@ func NewExplorerAccount(ctx *ApiContext, a *model.Account, args Options) *Explor
 		NOrigination:     a.NOrigination,
 		TokenGenMin:      a.TokenGenMin,
 		TokenGenMax:      a.TokenGenMax,
-		expires:          tip.BestTime.Add(p.TimeBetweenBlocks[0]),
+		expires:          tip.BestTime.Add(p.BlockTime()),
 	}
 
 	// resolve block times
@@ -256,7 +256,7 @@ func NewExplorerAccount(ctx *ApiContext, a *model.Account, args Options) *Explor
 			if bh > 0 {
 				acc.NextBakeHeight = &bh
 				acc.NextBakePriority = &zeroInt
-				tm := tip.BestTime.Add(p.TimeBetweenBlocks[0] * time.Duration(bh-tip.BestHeight))
+				tm := tip.BestTime.Add(p.BlockTime() * time.Duration(bh-tip.BestHeight))
 				acc.NextBakeTime = &tm
 			} else {
 				acc.NextBakeHeight = &zeroInt64
@@ -265,7 +265,7 @@ func NewExplorerAccount(ctx *ApiContext, a *model.Account, args Options) *Explor
 			}
 			if eh > 0 {
 				acc.NextEndorseHeight = &eh
-				tm := tip.BestTime.Add(p.TimeBetweenBlocks[0] * time.Duration(eh-tip.BestHeight))
+				tm := tip.BestTime.Add(p.BlockTime() * time.Duration(eh-tip.BestHeight))
 				acc.NextEndorseTime = &tm
 			} else {
 				acc.NextEndorseHeight = &zeroInt64
@@ -492,7 +492,7 @@ func ListAccountOperations(ctx *ApiContext) (interface{}, int) {
 
 	resp := &ExplorerOpList{
 		list:    make([]*ExplorerOp, 0),
-		expires: ctx.Tip.BestTime.Add(ctx.Params.TimeBetweenBlocks[0]),
+		expires: ctx.Tip.BestTime.Add(ctx.Params.BlockTime()),
 	}
 	cache := make(map[int64]interface{})
 	for _, v := range ops {
@@ -521,7 +521,7 @@ func ListAccountBallots(ctx *ApiContext) (interface{}, int) {
 	if err != nil {
 		switch err {
 		case etl.ErrNoTable:
-			panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, err.Error(), nil))
+			panic(ENotFound(EC_RESOURCE_NOTFOUND, "cannot access ballots table", err))
 		default:
 			panic(EInternal(EC_DATABASE, "cannot read account ballots", err))
 		}

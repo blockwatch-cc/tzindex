@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
+	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
@@ -66,7 +68,7 @@ func (r *Right) MarshalJSON() ([]byte, error) {
 
 func (r *Right) TimestampMs() int64 {
 	if diff := r.Height - r.height; diff > 0 {
-		return r.ctx.Tip.BestTime.Add(time.Duration(diff)*r.params.TimeBetweenBlocks[0]).Unix() * 1000
+		return r.ctx.Tip.BestTime.Add(time.Duration(diff)*r.params.BlockTime()).Unix() * 1000
 	}
 	// blocktime cache is lazy initialzed on first use by querying block table
 	return r.ctx.Indexer.LookupBlockTimeMs(context.Background(), r.Height)
@@ -74,7 +76,7 @@ func (r *Right) TimestampMs() int64 {
 
 func (r *Right) Timestamp() time.Time {
 	if diff := r.Height - r.height; diff > 0 {
-		return r.ctx.Tip.BestTime.Add(time.Duration(diff) * r.params.TimeBetweenBlocks[0])
+		return r.ctx.Tip.BestTime.Add(time.Duration(diff) * r.params.BlockTime())
 	}
 	// blocktime cache is lazy initialzed on first use by querying block table
 	return r.ctx.Indexer.LookupBlockTime(context.Background(), r.Height)
@@ -88,6 +90,7 @@ func (r *Right) MarshalJSONVerbose() ([]byte, error) {
 		Timestamp      int64  `json:"time"`
 		Type           string `json:"type"`
 		Priority       int    `json:"priority"`
+		Slots          []int  `json:"slots"`
 		AccountId      uint64 `json:"account_id"`
 		Address        string `json:"address"`
 		IsUsed         bool   `json:"is_used"`
@@ -104,6 +107,7 @@ func (r *Right) MarshalJSONVerbose() ([]byte, error) {
 		Cycle:          r.Cycle,
 		Type:           r.Type.String(),
 		Priority:       r.Priority,
+		Slots:          vec.NewBitSetFromBytes(r.Slots, len(r.Slots)*8).Indexes(nil),
 		AccountId:      r.AccountId.Value(),
 		Address:        r.ctx.Indexer.LookupAddress(r.ctx, r.AccountId).String(),
 		IsUsed:         r.IsUsed,
@@ -134,6 +138,8 @@ func (r *Right) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendQuote(buf, r.Type.String())
 		case "priority":
 			buf = strconv.AppendInt(buf, int64(r.Priority), 10)
+		case "slots":
+			buf = strconv.AppendQuote(buf, hex.EncodeToString(r.Slots))
 		case "account_id":
 			buf = strconv.AppendUint(buf, r.AccountId.Value(), 10)
 		case "address":
@@ -207,6 +213,8 @@ func (r *Right) MarshalCSV() ([]string, error) {
 			res[i] = strconv.Quote(r.Type.String())
 		case "priority":
 			res[i] = strconv.Itoa(r.Priority)
+		case "slots":
+			res[i] = strconv.Quote(hex.EncodeToString(r.Slots))
 		case "account_id":
 			res[i] = strconv.FormatUint(r.AccountId.Value(), 10)
 		case "address":
@@ -239,7 +247,7 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
 	if err != nil {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", args.Table), err))
+		panic(ENotFound(EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", args.Table), err))
 	}
 
 	// translate long column names to short names used in pack tables
@@ -323,13 +331,13 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				if !from.After(bestTime) {
 					fromBlock = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, from)
 				} else {
-					nDiff := int64(from.Sub(bestTime) / params.TimeBetweenBlocks[0])
+					nDiff := int64(from.Sub(bestTime) / params.BlockTime())
 					fromBlock = bestHeight + nDiff
 				}
 				if !to.After(bestTime) {
 					toBlock = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, to)
 				} else {
-					nDiff := int64(to.Sub(bestTime) / params.TimeBetweenBlocks[0])
+					nDiff := int64(to.Sub(bestTime) / params.BlockTime())
 					toBlock = bestHeight + nDiff
 				}
 				q.Conditions.AddAndCondition(&pack.Condition{
@@ -346,7 +354,7 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 					if !v.After(bestTime) {
 						valueBlocks = append(valueBlocks, ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, v))
 					} else {
-						nDiff := int64(v.Sub(bestTime) / params.TimeBetweenBlocks[0])
+						nDiff := int64(v.Sub(bestTime) / params.BlockTime())
 						valueBlocks = append(valueBlocks, bestHeight+nDiff)
 					}
 				}
@@ -364,7 +372,7 @@ func StreamRightsTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 				if !valueTime.After(bestTime) {
 					valueBlock = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, valueTime)
 				} else {
-					nDiff := int64(valueTime.Sub(bestTime) / params.TimeBetweenBlocks[0])
+					nDiff := int64(valueTime.Sub(bestTime) / params.BlockTime())
 					valueBlock = bestHeight + nDiff
 				}
 				q.Conditions.AddAndCondition(&pack.Condition{

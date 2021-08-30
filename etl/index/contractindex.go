@@ -184,27 +184,43 @@ func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *Block, builde
 			if !ok {
 				return fmt.Errorf("contract: missing account %d in %s op", op.ReceiverId, op.Type)
 			}
-			// when contract is new, create model from rpc origination op
-			o, ok := block.GetRpcOp(op.OpL, op.OpP, op.OpC)
-			if !ok {
-				return fmt.Errorf("contract: missing %s op [%d:%d]", o.OpKind(), op.OpL, op.OpP)
-			}
-			if op.IsInternal {
-				// on internal originations, find corresponding internal op
-				top, ok := o.(*rpc.TransactionOp)
+			if op.OpL >= 0 {
+				// when contract is new, create model from rpc origination op
+				o, ok := block.GetRpcOp(op.OpL, op.OpP, op.OpC)
 				if !ok {
-					return fmt.Errorf("contract: internal %s op [%d:%d]: unexpected type %T",
-						o.OpKind(), op.OpL, op.OpP, o)
+					return fmt.Errorf("contract: missing %s op [%d:%d]", o.OpKind(), op.OpL, op.OpP)
 				}
-				iop := top.Metadata.InternalResults[op.OpI]
-				ins = append(ins, NewInternalContract(acc, iop, op))
+				if op.IsInternal {
+					// on internal originations, find corresponding internal op
+					top, ok := o.(*rpc.TransactionOp)
+					if !ok {
+						return fmt.Errorf("contract: internal %s op [%d:%d]: unexpected type %T",
+							o.OpKind(), op.OpL, op.OpP, o)
+					}
+					iop := top.Metadata.InternalResults[op.OpI]
+					ins = append(ins, NewInternalContract(acc, iop, op))
+				} else {
+					oop, ok := o.(*rpc.OriginationOp)
+					if !ok {
+						return fmt.Errorf("contract: %s op [%d:%d]: unexpected type %T",
+							o.OpKind(), op.OpL, op.OpP, o)
+					}
+					ins = append(ins, NewContract(acc, oop, op))
+				}
 			} else {
-				oop, ok := o.(*rpc.OriginationOp)
+				// implicit contracts from migration originations are in builder cache
+				contract, ok := builder.ContractById(op.ReceiverId)
 				if !ok {
-					return fmt.Errorf("contract: %s op [%d:%d]: unexpected type %T",
-						o.OpKind(), op.OpL, op.OpP, o)
+					return fmt.Errorf("contract: missing contract %d in %s op [%d:%d]",
+						op.ReceiverId, op.Type, op.OpL, op.OpP)
 				}
-				ins = append(ins, NewContract(acc, oop, op))
+				if contract.IsNew {
+					// insert new delegator contracts
+					ins = append(ins, contract)
+				} else {
+					// update patched smart contracts (only once is guaranteed)
+					upd = append(upd, contract)
+				}
 			}
 
 		case tezos.OpTypeMigration:
@@ -258,4 +274,8 @@ func (idx *ContractIndex) DeleteBlock(ctx context.Context, height int64) error {
 		AndEqual("first_seen", height).
 		Delete(ctx)
 	return err
+}
+
+func (idx *ContractIndex) DeleteCycle(ctx context.Context, cycle int64) error {
+	return nil
 }

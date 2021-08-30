@@ -45,10 +45,15 @@ func init() {
 	opSourceNames["creator"] = "M"
 	opSourceNames["delegate"] = "D"
 	opSourceNames["branch_id"] = "-"
+	opSourceNames["branch_hash"] = "-"
+	opSourceNames["block_hash"] = "h"
+	opSourceNames["entrypoint"] = "E"
 	opAllAliases = append(opAllAliases, "sender")
 	opAllAliases = append(opAllAliases, "receiver")
 	opAllAliases = append(opAllAliases, "creator")
 	opAllAliases = append(opAllAliases, "delegate")
+	opAllAliases = append(opAllAliases, "block_hash")
+	opAllAliases = append(opAllAliases, "entrypoint")
 }
 
 // configurable marshalling helper
@@ -73,6 +78,7 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		RowId        uint64          `json:"row_id"`
 		Timestamp    int64           `json:"time"`
 		Height       int64           `json:"height"`
+		Block        string          `json:"block_hash"`
 		Cycle        int64           `json:"cycle"`
 		Hash         string          `json:"hash"`
 		Counter      int64           `json:"counter"`
@@ -116,7 +122,8 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		BranchHeight int64           `json:"branch_height"`
 		BranchDepth  int64           `json:"branch_depth"`
 		IsImplicit   bool            `json:"is_implicit"`
-		Entrypoint   int             `json:"entrypoint_id"`
+		EntrypointId int             `json:"entrypoint_id"`
+		Entrypoint   string          `json:"entrypoint"`
 		IsOrphan     bool            `json:"is_orphan"`
 		IsBatch      bool            `json:"is_batch"`
 		IsSapling    bool            `json:"is_sapling"`
@@ -124,6 +131,7 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		RowId:        o.RowId.Value(),
 		Timestamp:    util.UnixMilliNonZero(o.Timestamp),
 		Height:       o.Height,
+		Block:        o.ctx.Indexer.LookupBlockHash(o.ctx.Context, o.Height).String(),
 		Cycle:        o.Cycle,
 		Counter:      o.Counter,
 		OpN:          o.OpN,
@@ -165,16 +173,14 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		BranchHeight: o.BranchHeight,
 		BranchDepth:  o.BranchDepth,
 		IsImplicit:   o.IsImplicit,
-		Entrypoint:   o.Entrypoint,
+		EntrypointId: o.Entrypoint,
 		IsOrphan:     o.IsOrphan,
 		IsBatch:      o.IsBatch,
 		IsSapling:    o.IsSapling,
 	}
 
 	if o.BranchId != 0 {
-		if h, err := o.ctx.Indexer.BlockHashById(o.ctx.Context, o.BranchId); err == nil {
-			op.BranchHash = h.String()
-		}
+		op.BranchHash = o.ctx.Indexer.LookupBlockHash(o.ctx.Context, o.BranchHeight).String()
 	}
 	if !o.Hash.Equal(tezos.ZeroOpHash) {
 		op.Hash = o.Hash.String()
@@ -190,6 +196,9 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 	}
 	if o.Errors != "" {
 		op.Errors = json.RawMessage(o.Errors)
+	}
+	if o.IsContract {
+		op.Entrypoint = o.Data
 	}
 
 	return json.Marshal(op)
@@ -207,6 +216,8 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(o.Timestamp), 10)
 		case "height":
 			buf = strconv.AppendInt(buf, o.Height, 10)
+		case "block_hash":
+			buf = strconv.AppendQuote(buf, o.ctx.Indexer.LookupBlockHash(o.ctx.Context, o.Height).String())
 		case "cycle":
 			buf = strconv.AppendInt(buf, o.Cycle, 10)
 		case "hash":
@@ -346,14 +357,9 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 		case "branch_depth":
 			buf = strconv.AppendInt(buf, o.BranchDepth, 10)
 		case "branch_hash":
-			ok := false
 			if o.BranchId != 0 {
-				if h, err := o.ctx.Indexer.BlockHashById(o.ctx.Context, o.BranchId); err == nil {
-					buf = strconv.AppendQuote(buf, h.String())
-					ok = true
-				}
-			}
-			if !ok {
+				buf = strconv.AppendQuote(buf, o.ctx.Indexer.LookupBlockHash(o.ctx.Context, o.BranchHeight).String())
+			} else {
 				buf = append(buf, []byte(`""`)...)
 			}
 		case "is_implicit":
@@ -364,6 +370,12 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 			}
 		case "entrypoint_id":
 			buf = strconv.AppendInt(buf, int64(o.Entrypoint), 10)
+		case "entrypoint":
+			if o.IsContract {
+				buf = strconv.AppendQuote(buf, o.Data)
+			} else {
+				buf = append(buf, []byte(`""`)...)
+			}
 		case "is_orphan":
 			if o.IsOrphan {
 				buf = append(buf, '1')
@@ -404,6 +416,8 @@ func (o *Op) MarshalCSV() ([]string, error) {
 			res[i] = strconv.Quote(o.Timestamp.Format(time.RFC3339))
 		case "height":
 			res[i] = strconv.FormatInt(o.Height, 10)
+		case "block_hash":
+			res[i] = strconv.Quote(o.ctx.Indexer.LookupBlockHash(o.ctx.Context, o.Height).String())
 		case "cycle":
 			res[i] = strconv.FormatInt(o.Cycle, 10)
 		case "hash":
@@ -491,20 +505,21 @@ func (o *Op) MarshalCSV() ([]string, error) {
 		case "branch_depth":
 			res[i] = strconv.FormatInt(o.BranchDepth, 10)
 		case "branch_hash":
-			ok := false
 			if o.BranchId != 0 {
-				if h, err := o.ctx.Indexer.BlockHashById(o.ctx.Context, o.BranchId); err == nil {
-					res[i] = strconv.Quote(h.String())
-					ok = true
-				}
-			}
-			if !ok {
+				res[i] = strconv.Quote(o.ctx.Indexer.LookupBlockHash(o.ctx.Context, o.BranchHeight).String())
+			} else {
 				res[i] = `""`
 			}
 		case "is_implicit":
 			res[i] = strconv.FormatBool(o.IsImplicit)
 		case "entrypoint_id":
 			res[i] = strconv.FormatInt(int64(o.Entrypoint), 10)
+		case "entrypoint":
+			if o.IsContract {
+				res[i] = strconv.Quote(o.Data)
+			} else {
+				res[i] = `""`
+			}
 		case "is_orphan":
 			res[i] = strconv.FormatBool(o.IsOrphan)
 		case "is_batch":
@@ -525,7 +540,7 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
 	if err != nil {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", args.Table), err))
+		panic(ENotFound(EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", args.Table), err))
 	}
 
 	// translate long column names to short names used in pack tables
@@ -597,16 +612,50 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			for i, v := range val {
 				h, err := tezos.ParseOpHash(v)
 				if err != nil {
-					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid operation hash '%s'", val), err))
+					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid operation hash '%s'", v), err))
 				}
 				hashes[i] = h.Hash.Hash
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Find("H"),
-				Mode:  pack.FilterModeIn,
-				Value: hashes,
-				Raw:   strings.Join(val, ","), // debugging aid
-			})
+			if len(hashes) == 1 {
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find("H"),
+					Mode:  pack.FilterModeEqual,
+					Value: hashes[0],
+					Raw:   val[0], // debugging aid
+				})
+			} else {
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find("H"),
+					Mode:  pack.FilterModeIn,
+					Value: hashes,
+					Raw:   strings.Join(val, ","), // debugging aid
+				})
+			}
+		case "block_hash":
+			// special hash type to []byte conversion
+			heights := make([]int64, len(val))
+			for i, v := range val {
+				b, err := ctx.Indexer.LookupBlock(ctx.Context, v)
+				if err != nil {
+					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid block '%s'", v), err))
+				}
+				heights[i] = b.Height
+			}
+			if len(heights) == 1 {
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find("h"),
+					Mode:  pack.FilterModeEqual,
+					Value: heights[0],
+					Raw:   val[0], // debugging aid
+				})
+			} else {
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find("h"),
+					Mode:  pack.FilterModeIn,
+					Value: heights,
+					Raw:   strings.Join(val, ","), // debugging aid
+				})
+			}
 		case "type":
 			// parse only the first value
 			switch mode {

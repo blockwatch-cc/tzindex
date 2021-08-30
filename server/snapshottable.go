@@ -235,7 +235,7 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
 	if err != nil {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", args.Table), err))
+		panic(ENotFound(EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", args.Table), err))
 	}
 
 	// translate long column names to short names used in pack tables
@@ -401,13 +401,13 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				if !from.After(bestTime) {
 					fromBlock = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, from)
 				} else {
-					nDiff := int64(from.Sub(bestTime) / params.TimeBetweenBlocks[0])
+					nDiff := int64(from.Sub(bestTime) / params.BlockTime())
 					fromBlock = bestHeight + nDiff
 				}
 				if !to.After(bestTime) {
 					toBlock = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, to)
 				} else {
-					nDiff := int64(to.Sub(bestTime) / params.TimeBetweenBlocks[0])
+					nDiff := int64(to.Sub(bestTime) / params.BlockTime())
 					toBlock = bestHeight + nDiff
 				}
 				q.Conditions.AddAndCondition(&pack.Condition{
@@ -424,7 +424,7 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 					if !v.After(bestTime) {
 						valueBlocks = append(valueBlocks, ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, v))
 					} else {
-						nDiff := int64(v.Sub(bestTime) / params.TimeBetweenBlocks[0])
+						nDiff := int64(v.Sub(bestTime) / params.BlockTime())
 						valueBlocks = append(valueBlocks, bestHeight+nDiff)
 					}
 				}
@@ -442,7 +442,7 @@ func StreamSnapshotTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				if !valueTime.After(bestTime) {
 					valueBlock = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, valueTime)
 				} else {
-					nDiff := int64(valueTime.Sub(bestTime) / params.TimeBetweenBlocks[0])
+					nDiff := int64(valueTime.Sub(bestTime) / params.BlockTime())
 					valueBlock = bestHeight + nDiff
 				}
 				q.Conditions.AddAndCondition(&pack.Condition{

@@ -156,6 +156,25 @@ func (b *Ballot) SetID(id uint64) {
 	b.RowId = id
 }
 
+// Roll snapshots
+type RollSnapshot struct {
+	RowId     uint64    `pack:"I,pk,snappy"  json:"row_id"`
+	Height    int64     `pack:"h,snappy"     json:"height"`
+	AccountId AccountID `pack:"A,snappy"     json:"account_id"`
+	Rolls     int64     `pack:"r,snappy"     json:"rolls"`
+	Stake     int64     `pack:"s,snappy"     json:"stake"`
+}
+
+var _ pack.Item = (*RollSnapshot)(nil)
+
+func (b *RollSnapshot) ID() uint64 {
+	return b.RowId
+}
+
+func (b *RollSnapshot) SetID(id uint64) {
+	b.RowId = id
+}
+
 type Voter struct {
 	RowId     AccountID
 	Rolls     int64

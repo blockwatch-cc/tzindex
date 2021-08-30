@@ -88,6 +88,8 @@ func PurgeCaches(ctx *ApiContext) (interface{}, int) {
 	purgeCycleStore()
 	purgeTipStore()
 	purgeGovStore()
+	purgeMetadataStore()
+	ctx.Indexer.PurgeCaches()
 	return nil, http.StatusNoContent
 }
 

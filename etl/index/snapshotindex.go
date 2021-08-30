@@ -119,13 +119,15 @@ func (idx *SnapshotIndex) Close() error {
 func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
 	// handle snapshot index
 	if block.TZ.Snapshot != nil {
-		if err := idx.UpdateCycleSnapshot(ctx, block); err != nil {
-			return err
+		if err := idx.updateCycleSnapshot(ctx, block); err != nil {
+			log.Error(err)
+			// return err
+			return nil
 		}
 	}
 
 	// skip non-snapshot blocks
-	if block.Height == 0 || block.Height%block.Params.BlocksPerRollSnapshot != 0 {
+	if block.Height == 0 || !block.Params.IsSnapshotBlock(block.Height) {
 		return nil
 	}
 
@@ -134,7 +136,7 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *Block, builde
 	// for governance we use snapshot 15 (at end of cycle == start of voting period)
 	// but adjust for unfrozen rewards because technically the voting snapshot
 	// happens after unfreeze
-	sn := ((block.Height - block.Params.BlocksPerRollSnapshot) % block.Params.BlocksPerCycle) / block.Params.BlocksPerRollSnapshot
+	sn := block.Params.SnapshotIndex(block.Height)
 	isCycleEnd := block.Params.IsCycleEnd(block.Height)
 
 	// snapshot all currently funded accounts and delegates
@@ -144,11 +146,12 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *Block, builde
 	}
 
 	// snapshot all active delegates with at least 1 roll (deactivation happens at
-	// start of the next cycle, so here bakers are still active)
+	// start of the next cycle, so here bakers are still active!)
 	q := pack.NewQuery("snapshot_bakers", table).
 		WithoutCache().
 		WithFields("I", "D", "d", "v", "s", "z", "Y", "~", "a", "*", "P").
 		AndEqual("is_active_delegate", true)
+
 	type XAccount struct {
 		Id                AccountID `pack:"I"`
 		DelegateId        AccountID `pack:"D"`
@@ -276,7 +279,7 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *Block, builde
 
 func (idx *SnapshotIndex) DisconnectBlock(ctx context.Context, block *Block, _ BlockBuilder) error {
 	// skip non-snapshot blocks
-	if block.Height == 0 || block.Height%block.Params.BlocksPerRollSnapshot != 0 {
+	if block.Height == 0 || !block.Params.IsSnapshotBlock(block.Height) {
 		return nil
 	}
 	return idx.DeleteBlock(ctx, block.Height)
@@ -290,18 +293,33 @@ func (idx *SnapshotIndex) DeleteBlock(ctx context.Context, height int64) error {
 	return err
 }
 
-func (idx *SnapshotIndex) UpdateCycleSnapshot(ctx context.Context, block *Block) error {
+func (idx *SnapshotIndex) DeleteCycle(ctx context.Context, cycle int64) error {
+	// log.Debugf("Rollback deleting snapshots for cycle %d", cycle)
+	_, err := pack.NewQuery("etl.snapshot.delete", idx.table).
+		AndEqual("cycle", cycle).
+		Delete(ctx)
+	return err
+}
+
+func (idx *SnapshotIndex) updateCycleSnapshot(ctx context.Context, block *Block) error {
 	// update all snapshot rows at snapshot cycle & index
 	snap := block.TZ.Snapshot
 	// fetch all rows from table, updating contents and removing all non-required
 	// snapshot rows to save table space; keep bakers in the last snapshot in a cycle
 	// for governance purposes
 	keepIndex := block.Params.MaxSnapshotIndex()
+
+	// adjust to source snapshot cycle
+	srcCycle := snap.Cycle - (block.Params.PreservedCycles + 2)
+	if srcCycle < 0 {
+		return nil
+	}
+
 	upd := make([]pack.Item, 0)
 	del := make([]uint64, 0)
 	err := pack.NewQuery("snapshot.update", idx.table).
 		WithoutCache().
-		AndEqual("cycle", snap.Cycle-(block.Params.PreservedCycles+2)). // adjust to source snapshot cycle
+		AndEqual("cycle", srcCycle).
 		Stream(ctx, func(r pack.Row) error {
 			s := NewSnapshot()
 			if err := r.Decode(s); err != nil {
@@ -324,7 +342,7 @@ func (idx *SnapshotIndex) UpdateCycleSnapshot(ctx context.Context, block *Block)
 		return err
 	}
 	log.Debugf("Snapshot: deleting %d unused snapshots from cycle %d at block %d [%d]",
-		len(del), block.Cycle-1, block.Height, block.Cycle)
+		len(del), srcCycle, block.Height, block.Cycle)
 	if err := idx.table.DeleteIds(ctx, del); err != nil {
 		return err
 	}

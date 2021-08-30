@@ -6,6 +6,7 @@ package etl
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"blockwatch.cc/tzgo/tezos"
@@ -31,7 +32,18 @@ func (m *Indexer) CacheStats() map[string]interface{} {
 	if b := m.addrs.Load(); b != nil {
 		stats["addresses"] = b.(*cache.AddressCache).Stats()
 	}
+	stats["bigmaps"] = m.bigmaps.Stats()
 	return stats
+}
+
+func (m *Indexer) PurgeCaches() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.blocks = atomic.Value{}
+	m.ranks = atomic.Value{}
+	m.rights = atomic.Value{}
+	m.addrs = atomic.Value{}
+	m.bigmaps.Purge()
 }
 
 func (m *Indexer) NextRights(ctx context.Context, a model.AccountID, height int64) (int64, int64) {
@@ -64,7 +76,7 @@ func (m *Indexer) LookupBlockTime(ctx context.Context, height int64) time.Time {
 	}
 	last := cc.GetTime(l - 1)
 	p := m.reg.GetParamsLatest()
-	return last.Add(time.Duration(height-l+1) * p.TimeBetweenBlocks[0])
+	return last.Add(time.Duration(height-l+1) * p.BlockTime())
 }
 
 // called concurrently from API consumers, uses read-mostly cache
@@ -150,6 +162,10 @@ func (m *Indexer) TopVolume(ctx context.Context, n, o int) ([]*model.AccountRank
 		return nil, err
 	}
 	return ranks.TopVolume(n, o), nil
+}
+
+func (m *Indexer) clearRights() {
+	m.rights.Store(cache.NewRightsCache(0, 0, 0))
 }
 
 func (m *Indexer) getRights(ctx context.Context, height int64) (*cache.RightsCache, error) {

@@ -102,7 +102,7 @@ func (e *Election) MarshalJSONVerbose() ([]byte, error) {
 		p := e.ctx.Params
 		tm := e.ctx.Tip.BestTime
 		diff := int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - (e.ctx.Tip.BestHeight - e.StartHeight)
-		election.EndTime = util.UnixMilliNonZero(tm.Add(time.Duration(diff) * p.TimeBetweenBlocks[0]))
+		election.EndTime = util.UnixMilliNonZero(tm.Add(time.Duration(diff) * p.BlockTime()))
 		election.EndHeight = election.StartHeight + int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - 1
 	}
 	return json.Marshal(election)
@@ -132,7 +132,7 @@ func (e *Election) MarshalJSONBrief() ([]byte, error) {
 		case "end_time":
 			if e.IsOpen {
 				diff := int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - (e.ctx.Tip.BestHeight - e.StartHeight)
-				endTime := tm.Add(time.Duration(diff) * p.TimeBetweenBlocks[0])
+				endTime := tm.Add(time.Duration(diff) * p.BlockTime())
 				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(endTime), 10)
 			} else {
 				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(e.EndTime), 10)
@@ -218,7 +218,7 @@ func (e *Election) MarshalCSV() ([]string, error) {
 		case "end_time":
 			if e.IsOpen {
 				diff := int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - (e.ctx.Tip.BestHeight - e.StartHeight)
-				endTime := tm.Add(time.Duration(diff) * p.TimeBetweenBlocks[0])
+				endTime := tm.Add(time.Duration(diff) * p.BlockTime())
 				res[i] = strconv.Quote(endTime.Format(time.RFC3339))
 			} else {
 				res[i] = strconv.Quote(e.EndTime.Format(time.RFC3339))
@@ -257,7 +257,7 @@ func StreamElectionTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
 	if err != nil {
-		panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, fmt.Sprintf("cannot access table '%s'", args.Table), err))
+		panic(ENotFound(EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", args.Table), err))
 	}
 
 	// translate long column names to short names used in pack tables
