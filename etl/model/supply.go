@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"blockwatch.cc/packdb/pack"
+	"blockwatch.cc/tzgo/rpc"
 	"blockwatch.cc/tzgo/tezos"
 )
 
@@ -38,8 +39,10 @@ type Supply struct {
 	BurnedDoubleBaking  int64     `pack:"1,snappy"     json:"burned_double_baking"`
 	BurnedDoubleEndorse int64     `pack:"2,snappy"     json:"burned_double_endorse"`
 	BurnedOrigination   int64     `pack:"3,snappy"     json:"burned_origination"`
-	BurnedImplicit      int64     `pack:"4,snappy"     json:"burned_implicit"`
+	BurnedAllocation    int64     `pack:"4,snappy"     json:"burned_allocation"`
 	BurnedSeedMiss      int64     `pack:"5,snappy"     json:"burned_seed_miss"`
+	BurnedStorage       int64     `pack:"6,snappy"     json:"burned_storage"`
+	BurnedExplicit      int64     `pack:"7,snappy"     json:"burned_explicit"`
 	Frozen              int64     `pack:"F,snappy"     json:"frozen"`
 	FrozenDeposits      int64     `pack:"d,snappy"     json:"frozen_deposits"`
 	FrozenRewards       int64     `pack:"r,snappy"     json:"frozen_rewards"`
@@ -152,11 +155,36 @@ func (s *Supply) Update(b *Block, delegates map[AccountID]*Account) {
 			s.BurnedDoubleEndorse += op.Burned
 
 		case tezos.OpTypeOrigination:
-			s.BurnedOrigination += op.Burned
+			if op.IsSuccess && op.OpL >= 0 {
+				storageBurn := b.Params.CostPerByte * op.StoragePaid
+				s.BurnedOrigination += op.Burned - storageBurn
+				s.BurnedStorage += storageBurn
+			}
 
 		case tezos.OpTypeTransaction:
-			s.BurnedImplicit += op.Burned
-			// TODO: storage burn
+			if op.IsSuccess && op.OpL >= 0 {
+				// general burn is already accounted for in block.BurnedSupply
+				// here we only assign burn to different reasons
+				storageBurn := b.Params.CostPerByte * op.StoragePaid
+				s.BurnedAllocation += op.Burned - storageBurn
+				s.BurnedStorage += storageBurn
+				if oop, ok := b.GetRpcOp(op.OpL, op.OpP, op.OpC); ok {
+					tx, _ := oop.(*rpc.TransactionOp)
+					if tezos.ZeroAddress.Equal(tx.Destination) {
+						s.BurnedExplicit += op.Volume
+					}
+					for _, iop := range tx.Metadata.InternalResults {
+						if iop.OpKind() != tezos.OpTypeTransaction || iop.Destination == nil {
+							continue
+						}
+						if iop.Destination.Equal(tezos.ZeroAddress) {
+							s.BurnedExplicit += iop.Amount
+						}
+					}
+				}
+			}
+		case tezos.OpTypeRegisterConstant:
+			s.BurnedStorage += op.Burned
 		}
 	}
 	// update supply totals across all delegates

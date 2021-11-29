@@ -47,7 +47,8 @@ func init() {
 	opSourceNames["branch_id"] = "-"
 	opSourceNames["branch_hash"] = "-"
 	opSourceNames["block_hash"] = "h"
-	opSourceNames["entrypoint"] = "E"
+	opSourceNames["entrypoint"] = "a" // stored in data field
+	opSourceNames["address"] = "-"    // any address
 	opAllAliases = append(opAllAliases, "sender")
 	opAllAliases = append(opAllAliases, "receiver")
 	opAllAliases = append(opAllAliases, "creator")
@@ -274,7 +275,7 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 			if o.ReceiverId > 0 {
 				buf = strconv.AppendQuote(buf, o.ctx.Indexer.LookupAddress(o.ctx, o.ReceiverId).String())
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "creator_id":
 			buf = strconv.AppendUint(buf, o.CreatorId.Value(), 10)
@@ -282,7 +283,7 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 			if o.CreatorId > 0 {
 				buf = strconv.AppendQuote(buf, o.ctx.Indexer.LookupAddress(o.ctx, o.CreatorId).String())
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "delegate_id":
 			buf = strconv.AppendUint(buf, o.DelegateId.Value(), 10)
@@ -290,7 +291,7 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 			if o.DelegateId > 0 {
 				buf = strconv.AppendQuote(buf, o.ctx.Indexer.LookupAddress(o.ctx, o.DelegateId).String())
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "is_success":
 			if o.IsSuccess {
@@ -320,35 +321,35 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 			if o.Data != "" {
 				buf = strconv.AppendQuote(buf, o.Data)
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "parameters":
 			// parameters is binary
 			if len(o.Parameters) > 0 {
 				buf = strconv.AppendQuote(buf, hex.EncodeToString(o.Parameters))
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "storage":
 			// storage is binary
 			if len(o.Storage) > 0 {
 				buf = strconv.AppendQuote(buf, hex.EncodeToString(o.Storage))
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "big_map_diff":
 			// big_map_diff is binary
 			if len(o.BigmapDiff) > 0 {
 				buf = strconv.AppendQuote(buf, hex.EncodeToString(o.BigmapDiff))
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "errors":
 			// errors is json
 			if o.Errors != "" {
 				buf = append(buf, o.Errors...)
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "days_destroyed":
 			buf = strconv.AppendFloat(buf, o.TDD, 'f', -1, 64)
@@ -560,6 +561,11 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			switch v {
 			case "data":
 				srcNames = append(srcNames, "has_data")
+			case "address":
+				srcNames = append(srcNames, "sender_id")
+				srcNames = append(srcNames, "receiver_id")
+				srcNames = append(srcNames, "delegate_id")
+				srcNames = append(srcNames, "creator_id")
 			}
 		}
 	} else {
@@ -722,6 +728,70 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 			default:
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
+		case "address":
+			// any address, use OR cond
+			// parse address and lookup id
+			addrs := make([]model.AccountID, 0)
+			for _, v := range strings.Split(val[0], ",") {
+				addr, err := tezos.ParseAddress(v)
+				if err != nil || !addr.IsValid() {
+					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
+				}
+				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
+				if err != nil && err != index.ErrNoAccountEntry {
+					panic(err)
+				}
+				if acc.RowId > 0 {
+					addrs = append(addrs, acc.RowId)
+				}
+			}
+
+			switch mode {
+			case pack.FilterModeEqual: // OR
+				if len(addrs) == 1 {
+					q.Conditions.AddNode(pack.Or(
+						pack.Equal("sender_id", addrs[0]),
+						pack.Equal("receiver_id", addrs[0]),
+						pack.Equal("delegate_id", addrs[0]),
+						pack.Equal("creator_id", addrs[0]),
+					).Bind(table))
+				}
+				fallthrough
+
+			case pack.FilterModeIn: // OR
+				if len(addrs) > 1 {
+					q.Conditions.AddNode(pack.Or(
+						pack.In("sender_id", addrs),
+						pack.In("receiver_id", addrs),
+						pack.In("delegate_id", addrs),
+						pack.In("creator_id", addrs),
+					).Bind(table))
+				}
+
+			case pack.FilterModeNotEqual: // AND
+				if len(addrs) == 1 {
+					q.Conditions.AddNode(pack.And(
+						pack.NotEqual("sender_id", addrs[0]),
+						pack.NotEqual("receiver_id", addrs[0]),
+						pack.NotEqual("delegate_id", addrs[0]),
+						pack.NotEqual("creator_id", addrs[0]),
+					).Bind(table))
+				}
+				fallthrough
+
+			case pack.FilterModeNotIn: // AND
+				if len(addrs) > 1 {
+					q.Conditions.AddNode(pack.And(
+						pack.NotIn("sender_id", addrs),
+						pack.NotIn("receiver_id", addrs),
+						pack.NotIn("delegate_id", addrs),
+						pack.NotIn("creator_id", addrs),
+					).Bind(table))
+				}
+
+			default:
+				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
+			}
 		case "sender", "receiver", "creator", "delegate":
 			// parse address and lookup id
 			// valid filter modes: eq, in
@@ -846,14 +916,6 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 	// 	ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
 	// }()
 
-	// Step 1: query database
-	res, err := table.Query(ctx, q)
-	if err != nil {
-		panic(EInternal(EC_DATABASE, "query failed", err))
-	}
-	// ctx.Log.Tracef("Processing result with %d rows %d cols", res.Rows(), res.Cols())
-	defer res.Close()
-
 	// prepare return type marshalling
 	op := &Op{
 		verbose: args.Verbose,
@@ -883,7 +945,7 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 
 		// run query and stream results
 		var needComma bool
-		err = res.Walk(func(r pack.Row) error {
+		err = table.Stream(ctx, q, func(r pack.Row) error {
 			if needComma {
 				io.WriteString(ctx.ResponseWriter, ",")
 			} else {
@@ -914,7 +976,7 @@ func StreamOpTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		}
 		if err == nil {
 			// run query and stream results
-			err = res.Walk(func(r pack.Row) error {
+			err = table.Stream(ctx, q, func(r pack.Row) error {
 				if err := r.Decode(op); err != nil {
 					return err
 				}

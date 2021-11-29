@@ -17,7 +17,7 @@ import (
 	"blockwatch.cc/tzindex/etl/model"
 )
 
-func (b *Builder) CheckState(ctx context.Context) error {
+func (b *Builder) CheckState(ctx context.Context, offset int64) error {
 	plog := logpkg.NewProgressLogger(log).SetAction("Verified").SetEvent("account")
 
 	// exclusivity
@@ -55,24 +55,22 @@ func (b *Builder) CheckState(ctx context.Context) error {
 					acc, acc.Type.KeyType().String(), want, have)
 			}
 			key := acc.Key()
-			addr := acc.Address
-			if !addr.Equal(key.Address()) {
-				log.Errorf("key mismatch: acc=%s type=%s bad-key=%s", addr, key.Type, key)
+			if !acc.Address.Equal(key.Address()) {
+				log.Errorf("key mismatch: acc=%s type=%s bad-key=%s", acc.Address, key.Type, key)
 			}
 		}
 		// check balance against node rpc
-		addr := acc.Address
-		bal, err := b.rpc.GetContractBalanceHeight(ctx, addr, b.block.Height)
+		bal, err := b.rpc.GetContractBalanceHeight(ctx, acc.Address, b.block.Height-offset)
 		if err != nil {
 			// skip 404 errors on non-funded accounts (they may not exist,
 			// but are indexed because they may have appeared in failed operations)
 			if httpErr, ok := err.(rpc.HTTPStatus); !ok || httpErr.StatusCode() != 404 || acc.SpendableBalance > 0 {
-				return fmt.Errorf("fetching balance for %s: %v", addr, err)
+				return fmt.Errorf("fetching balance for %s: %w", acc.Address, err)
 			}
 		}
 		// use vesting balance too
 		if bal != acc.Balance() {
-			log.Errorf("balance mismatch for %s: index=%d node=%d", addr, acc.Balance(), bal)
+			log.Errorf("balance mismatch for %s: index=%d node=%d", acc.Address, acc.Balance(), bal)
 			failed++
 		}
 		plog.Log(1)
@@ -96,18 +94,17 @@ func (b *Builder) CheckState(ctx context.Context) error {
 				acc, acc.Type.KeyType(), want, have)
 		}
 		key := acc.Key()
-		addr := acc.Address
-		if !addr.Equal(key.Address()) {
-			log.Errorf("baker key mismatch: acc=%s type=%s bad-key=%s", addr, key.Type, key)
+		if !acc.Address.Equal(key.Address()) {
+			log.Errorf("baker key mismatch: acc=%s type=%s bad-key=%s", acc.Address, key.Type, key)
 		}
 		// check balance against node rpc
-		bal, err := b.rpc.GetContractBalanceHeight(ctx, addr, b.block.Height)
+		bal, err := b.rpc.GetContractBalanceHeight(ctx, acc.Address, b.block.Height-offset)
 		if err != nil {
-			return fmt.Errorf("fetching balance for %s: %v", addr, err)
+			return fmt.Errorf("fetching balance for %s: %w", acc.Address, err)
 		}
 		// only use spendable balance here!
 		if bal != acc.SpendableBalance {
-			log.Errorf("balance mismatch for %s: index=%d node=%d", addr, acc.SpendableBalance, bal)
+			log.Errorf("balance mismatch for %s: index=%d node=%d", acc.Address, acc.SpendableBalance, bal)
 			failed++
 		}
 		plog.Log(1)
@@ -121,9 +118,12 @@ func (b *Builder) CheckState(ctx context.Context) error {
 		return nil
 	}
 
-	log.Infof("Checking account database at cycle %d block %d", b.block.Cycle, b.block.Height)
-	if err := b.CheckAccountDatabase(ctx, true); err != nil {
-		return err
+	// only run full check when not in rollback mode
+	if offset == 0 {
+		log.Infof("Checking account database at cycle %d block %d", b.block.Cycle, b.block.Height)
+		if err := b.CheckAccountDatabase(ctx, true); err != nil {
+			return err
+		}
 	}
 
 	if failed > 0 {
@@ -162,9 +162,8 @@ func (b *Builder) CheckAccountDatabase(ctx context.Context, nofail bool) error {
 
 			// check duplicates in DB
 			hash := b.accCache.AccountHashKey(acc)
-			addr := acc.Address
-			if n, ok := seen[hash]; ok && addr.Equal(n) {
-				log.Errorf("Duplicate account %s in database at id %d", addr, acc.RowId)
+			if n, ok := seen[hash]; ok && acc.Address.Equal(n) {
+				log.Errorf("Duplicate account %s in database at id %d", acc.Address, acc.RowId)
 			}
 
 			// key and balance to check
@@ -187,36 +186,36 @@ func (b *Builder) CheckAccountDatabase(ctx context.Context, nofail bool) error {
 
 			// check key matches address
 			if acc.IsRevealed && acc.Type != tezos.AddressTypeContract {
-				if key.IsValid() && !addr.Equal(key.Address()) {
+				if key.IsValid() && !acc.Address.Equal(key.Address()) {
 					if nofail {
-						log.Errorf("pubkey mismatch: acc=%s type=%s bad-key=%s", addr, key.Type, key)
+						log.Errorf("pubkey mismatch: acc=%s type=%s bad-key=%s", acc.Address, key.Type, key)
 						failed++
 					} else {
-						return fmt.Errorf("pubkey mismatch: acc=%s type=%s bad-key=%s", addr, key.Type, key)
+						return fmt.Errorf("pubkey mismatch: acc=%s type=%s bad-key=%s", acc.Address, key.Type, key)
 					}
 				}
 			}
 
 			// check balance against node rpc
-			bal, err := b.rpc.GetContractBalanceHeight(ctx, addr, b.block.Height)
+			bal, err := b.rpc.GetContractBalanceHeight(ctx, acc.Address, b.block.Height)
 			if err != nil {
 				// skip 404 errors on non-funded accounts (they may not exist,
 				// but are indexed because they may have appeared in failed operations)
 				if httpErr, ok := err.(rpc.HTTPStatus); !ok || httpErr.StatusCode() != 404 || acc.SpendableBalance > 0 {
 					if nofail {
-						log.Errorf("fetching balance for %s: %v", addr, err)
+						log.Errorf("fetching balance for %s: %s", acc.Address, err)
 						failed++
 					} else {
-						return fmt.Errorf("fetching balance for %s: %v", addr, err)
+						return fmt.Errorf("fetching balance for %s: %w", acc.Address, err)
 					}
 				}
 			}
 			if bal != indexedBalance {
 				if nofail {
-					log.Errorf("balance mismatch for %s: index=%d node=%d", addr, acc.SpendableBalance, bal)
+					log.Errorf("balance mismatch for %s: index=%d node=%d", acc.Address, acc.SpendableBalance, bal)
 					failed++
 				} else {
-					return fmt.Errorf("balance mismatch for %s: index=%d node=%d", addr, acc.SpendableBalance, bal)
+					return fmt.Errorf("balance mismatch for %s: index=%d node=%d", acc.Address, acc.SpendableBalance, bal)
 				}
 			}
 
@@ -227,7 +226,7 @@ func (b *Builder) CheckAccountDatabase(ctx context.Context, nofail bool) error {
 	if err != nil {
 		return err
 	}
-	stats := table.Stats()
+	stats := table.Stats()[0]
 	cstats := b.accCache.Stats()
 	log.Infof("%d accounts, %d cached (%s), %d packs, %d keys revealed, %d checks failed",
 		stats.TupleCount, cstats.Size, util.ByteSize(cstats.Bytes), stats.PacksCount, count, failed)
@@ -267,9 +266,9 @@ func (b *Builder) DumpState() {
 	// 	})
 	// 	f.Close()
 	// 	if err != nil {
-	// 		log.Errorf("Cache dump error: %v", err)
+	// 		log.Errorf("Cache dump error: %s", err)
 	// 	}
 	// } else {
-	// 	log.Errorf("Cache dump failed: %v", err)
+	// 	log.Errorf("Cache dump failed: %s", err)
 	// }
 }

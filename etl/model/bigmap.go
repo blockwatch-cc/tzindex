@@ -110,6 +110,9 @@ func CopyBigmapAlloc(b *BigmapAlloc, op *Op, dst int64) *BigmapAlloc {
 		Updated:   op.Height,
 		Data:      make([]byte, len(b.Data)),
 	}
+	if op.Type == tezos.OpTypeOrigination && b.BigmapId < 0 {
+		m.AccountId = op.ReceiverId
+	}
 	copy(m.Data, b.Data)
 	return m
 }
@@ -151,18 +154,18 @@ func (m *BigmapAlloc) Reset() {
 	m.NKeys = 0
 	m.Updated = 0
 	m.Data = nil
-	// m.IsDirty = false
 	m.KeyType = micheline.Type{}
 	m.ValueType = micheline.Type{}
 }
 
 // /tables/bigmap_values
 type BigmapKV struct {
-	RowId    uint64 `pack:"I,pk,snappy"   json:"row_id"`    // internal: id
-	BigmapId int64  `pack:"B,snappy"      json:"bigmap_id"` // unique bigmap id
-	KeyId    uint64 `pack:"K,snappy"      json:"key_id"`    // xxhash(BigmapId, KeyHash)
-	Key      []byte `pack:"k,snappy"      json:"key"`       // key/value bytes: binary encoded micheline.Prim Pair
-	Value    []byte `pack:"v,snappy"      json:"value"`     // key/value bytes: binary encoded micheline.Prim Pair
+	RowId    uint64 `pack:"I,pk,snappy"    json:"row_id"`    // internal: id
+	BigmapId int64  `pack:"B,snappy,bloom" json:"bigmap_id"` // unique bigmap id
+	Height   int64  `pack:"h,snappy"       json:"height"`    // update height
+	KeyId    uint64 `pack:"K,snappy"       json:"key_id"`    // xxhash(BigmapId, KeyHash)
+	Key      []byte `pack:"k,snappy"       json:"key"`       // key/value bytes: binary encoded micheline.Prim Pair
+	Value    []byte `pack:"v,snappy"       json:"value"`     // key/value bytes: binary encoded micheline.Prim Pair
 }
 
 var _ pack.Item = (*BigmapKV)(nil)
@@ -189,22 +192,24 @@ func (b *BigmapKV) GetKeyHash() tezos.ExprHash {
 	return micheline.KeyHash(b.Key)
 }
 
-func NewBigmapKV(b micheline.BigmapDiffElem) *BigmapKV {
+func NewBigmapKV(b micheline.BigmapDiffElem, height int64) *BigmapKV {
 	if b.Action != micheline.DiffActionUpdate {
 		return nil
 	}
 	m := &BigmapKV{
 		BigmapId: b.Id,
 		KeyId:    GetKeyId(b.Id, b.KeyHash),
+		Height:   height,
 	}
 	m.Key, _ = b.Key.MarshalBinary()
 	m.Value, _ = b.Value.MarshalBinary()
 	return m
 }
 
-func CopyBigmapKV(b *BigmapKV, dst int64) *BigmapKV {
+func CopyBigmapKV(b *BigmapKV, dst, height int64) *BigmapKV {
 	m := &BigmapKV{
 		BigmapId: dst,
+		Height:   height,
 		KeyId:    GetKeyId(dst, b.GetKeyHash()),
 		Key:      make([]byte, len(b.Key)),
 		Value:    make([]byte, len(b.Value)),
@@ -248,6 +253,7 @@ func (b *BigmapKV) ToUpdateRemove(op *Op) *BigmapUpdate {
 func (m *BigmapKV) Reset() {
 	m.RowId = 0
 	m.BigmapId = 0
+	m.Height = 0
 	m.KeyId = 0
 	m.Key = nil
 	m.Value = nil
@@ -255,15 +261,15 @@ func (m *BigmapKV) Reset() {
 
 // /tables/bigmap_updates
 type BigmapUpdate struct {
-	RowId     uint64               `pack:"I,pk,snappy"   json:"row_id"`    // internal: id
-	BigmapId  int64                `pack:"B,snappy"      json:"bigmap_id"` // unique bigmap id
-	KeyId     uint64               `pack:"K,snappy"      json:"key_id"`    // xxhash(BigmapId, KeyHash)
-	Action    micheline.DiffAction `pack:"a,snappy"      json:"action"`    // action (alloc, copy, update, remove)
-	OpId      OpID                 `pack:"o,snappy"      json:"op_id"`     // operation id
-	Height    int64                `pack:"h,snappy"      json:"height"`    // creation time
-	Timestamp time.Time            `pack:"t,snappy"      json:"time"`      // creation height
-	Key       []byte               `pack:"k,snappy"      json:"key"`       // key/value bytes: binary encoded micheline.Prim
-	Value     []byte               `pack:"v,snappy"      json:"value"`     // key/value bytes: binary encoded micheline.Prim, (Pair(int,int) on copy)
+	RowId     uint64               `pack:"I,pk,snappy"    json:"row_id"`    // internal: id
+	BigmapId  int64                `pack:"B,snappy,bloom" json:"bigmap_id"` // unique bigmap id
+	KeyId     uint64               `pack:"K,snappy"       json:"key_id"`    // xxhash(BigmapId, KeyHash)
+	Action    micheline.DiffAction `pack:"a,snappy"       json:"action"`    // action (alloc, copy, update, remove)
+	OpId      OpID                 `pack:"o,snappy"       json:"op_id"`     // operation id
+	Height    int64                `pack:"h,snappy"       json:"height"`    // creation time
+	Timestamp time.Time            `pack:"t,snappy"       json:"time"`      // creation height
+	Key       []byte               `pack:"k,snappy"       json:"key"`       // key/value bytes: binary encoded micheline.Prim
+	Value     []byte               `pack:"v,snappy"       json:"value"`     // key/value bytes: binary encoded micheline.Prim, (Pair(int,int) on copy)
 }
 
 var _ pack.Item = (*BigmapUpdate)(nil)
@@ -334,6 +340,7 @@ func (b *BigmapUpdate) ToKV() *BigmapKV {
 	m := &BigmapKV{
 		BigmapId: b.BigmapId,
 		KeyId:    b.KeyId,
+		Height:   b.Height,
 		Key:      make([]byte, len(b.Key)),
 		Value:    make([]byte, len(b.Value)),
 	}

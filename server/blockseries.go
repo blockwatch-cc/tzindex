@@ -22,10 +22,11 @@ var (
 	blockSeriesNames = util.StringList([]string{
 		"time",
 		"count",
-		"n_endorsed_slots",
 		"n_ops",
 		"n_ops_failed",
 		"n_ops_contract",
+		"n_ops_implicit",
+		"n_contract_calls",
 		"n_tx",
 		"n_activation",
 		"n_seed_nonce_revelation",
@@ -37,6 +38,7 @@ var (
 		"n_origination",
 		"n_proposal",
 		"n_ballot",
+		"n_register_constant",
 		"volume",
 		"fee",
 		"reward",
@@ -47,57 +49,55 @@ var (
 		"activated_supply",
 		"burned_supply",
 		"n_new_accounts",
-		"n_new_implicit",
-		"n_new_managed",
 		"n_new_contracts",
 		"n_cleared_accounts",
 		"n_funded_accounts",
 		"gas_used",
 		"storage_size",
 		"days_destroyed",
-		"n_ops_implicit",
+		"n_endorsed_slots",
 	})
 )
 
 // Only use fields that can be summed over time
 // configurable marshalling helper
 type BlockSeries struct {
-	Timestamp           time.Time `json:"time"`
-	Count               int       `json:"count"`
-	NSlotsEndorsed      int64     `json:"n_endorsed_slots"`
-	NOps                int64     `json:"n_ops"`
-	NOpsFailed          int64     `json:"n_ops_failed"`
-	NOpsContract        int64     `json:"n_ops_contract"`
-	NTx                 int64     `json:"n_tx"`
-	NActivation         int64     `json:"n_activation"`
-	NSeedNonce          int64     `json:"n_seed_nonce_revelation"`
-	N2Baking            int64     `json:"n_double_baking_evidence"`
-	N2Endorsement       int64     `json:"n_double_endorsement_evidence"`
-	NEndorsement        int64     `json:"n_endorsement"`
-	NDelegation         int64     `json:"n_delegation"`
-	NReveal             int64     `json:"n_reveal"`
-	NOrigination        int64     `json:"n_origination"`
-	NProposal           int64     `json:"n_proposal"`
-	NBallot             int64     `json:"n_ballot"`
-	Volume              int64     `json:"volume"`
-	Fee                 int64     `json:"fee"`
-	Reward              int64     `json:"reward"`
-	Deposit             int64     `json:"deposit"`
-	UnfrozenFees        int64     `json:"unfrozen_fees"`
-	UnfrozenRewards     int64     `json:"unfrozen_rewards"`
-	UnfrozenDeposits    int64     `json:"unfrozen_deposits"`
-	ActivatedSupply     int64     `json:"activated_supply"`
-	BurnedSupply        int64     `json:"burned_supply"`
-	NewAccounts         int64     `json:"n_new_accounts"`
-	NewImplicitAccounts int64     `json:"n_new_implicit"`
-	NewManagedAccounts  int64     `json:"n_new_managed"`
-	NewContracts        int64     `json:"n_new_contracts"`
-	ClearedAccounts     int64     `json:"n_cleared_accounts"`
-	FundedAccounts      int64     `json:"n_funded_accounts"`
-	GasUsed             int64     `json:"gas_used"`
-	StorageSize         int64     `json:"storage_size"`
-	TDD                 float64   `json:"days_destroyed"`
-	NOpsImplicit        int64     `json:"n_ops_implicit"`
+	Timestamp        time.Time `json:"time"`
+	Count            int       `json:"count"`
+	NSlotsEndorsed   int64     `json:"n_endorsed_slots"`
+	NOps             int64     `json:"n_ops"`
+	NOpsFailed       int64     `json:"n_ops_failed"`
+	NOpsContract     int64     `json:"n_ops_contract"`
+	NContractCalls   int64     `json:"n_contract_calls"`
+	NTx              int64     `json:"n_tx"`
+	NActivation      int64     `json:"n_activation"`
+	NSeedNonce       int64     `json:"n_seed_nonce_revelation"`
+	N2Baking         int64     `json:"n_double_baking_evidence"`
+	N2Endorsement    int64     `json:"n_double_endorsement_evidence"`
+	NEndorsement     int64     `json:"n_endorsement"`
+	NDelegation      int64     `json:"n_delegation"`
+	NReveal          int64     `json:"n_reveal"`
+	NOrigination     int64     `json:"n_origination"`
+	NProposal        int64     `json:"n_proposal"`
+	NBallot          int64     `json:"n_ballot"`
+	NRegister        int64     `json:"n_register_constant"`
+	Volume           int64     `json:"volume"`
+	Fee              int64     `json:"fee"`
+	Reward           int64     `json:"reward"`
+	Deposit          int64     `json:"deposit"`
+	UnfrozenFees     int64     `json:"unfrozen_fees"`
+	UnfrozenRewards  int64     `json:"unfrozen_rewards"`
+	UnfrozenDeposits int64     `json:"unfrozen_deposits"`
+	ActivatedSupply  int64     `json:"activated_supply"`
+	BurnedSupply     int64     `json:"burned_supply"`
+	NewAccounts      int64     `json:"n_new_accounts"`
+	NewContracts     int64     `json:"n_new_contracts"`
+	ClearedAccounts  int64     `json:"n_cleared_accounts"`
+	FundedAccounts   int64     `json:"n_funded_accounts"`
+	GasUsed          int64     `json:"gas_used"`
+	StorageSize      int64     `json:"storage_size"`
+	TDD              float64   `json:"days_destroyed"`
+	NOpsImplicit     int64     `json:"n_ops_implicit"`
 
 	columns util.StringList // cond. cols & order when brief
 	params  *tezos.Params
@@ -123,6 +123,7 @@ func (s *BlockSeries) Add(m SeriesModel) {
 	s.NOps += int64(b.NOps)
 	s.NOpsFailed += int64(b.NOpsFailed)
 	s.NOpsContract += int64(b.NOpsContract)
+	s.NContractCalls += int64(b.NContractCalls)
 	s.NTx += int64(b.NTx)
 	s.NActivation += int64(b.NActivation)
 	s.NSeedNonce += int64(b.NSeedNonce)
@@ -134,6 +135,7 @@ func (s *BlockSeries) Add(m SeriesModel) {
 	s.NOrigination += int64(b.NOrigination)
 	s.NProposal += int64(b.NProposal)
 	s.NBallot += int64(b.NBallot)
+	s.NRegister += int64(b.NRegister)
 	s.Volume += int64(b.Volume)
 	s.Fee += int64(b.Fee)
 	s.Reward += int64(b.Reward)
@@ -144,8 +146,6 @@ func (s *BlockSeries) Add(m SeriesModel) {
 	s.ActivatedSupply += int64(b.ActivatedSupply)
 	s.BurnedSupply += int64(b.BurnedSupply)
 	s.NewAccounts += int64(b.NewAccounts)
-	s.NewImplicitAccounts += int64(b.NewImplicitAccounts)
-	s.NewManagedAccounts += int64(b.NewManagedAccounts)
 	s.NewContracts += int64(b.NewContracts)
 	s.ClearedAccounts += int64(b.ClearedAccounts)
 	s.FundedAccounts += int64(b.FundedAccounts)
@@ -162,6 +162,7 @@ func (s *BlockSeries) Reset() {
 	s.NOps = 0
 	s.NOpsFailed = 0
 	s.NOpsContract = 0
+	s.NContractCalls = 0
 	s.NTx = 0
 	s.NActivation = 0
 	s.NSeedNonce = 0
@@ -173,6 +174,7 @@ func (s *BlockSeries) Reset() {
 	s.NOrigination = 0
 	s.NProposal = 0
 	s.NBallot = 0
+	s.NRegister = 0
 	s.Volume = 0
 	s.Fee = 0
 	s.Reward = 0
@@ -183,8 +185,6 @@ func (s *BlockSeries) Reset() {
 	s.ActivatedSupply = 0
 	s.BurnedSupply = 0
 	s.NewAccounts = 0
-	s.NewImplicitAccounts = 0
-	s.NewManagedAccounts = 0
 	s.NewContracts = 0
 	s.ClearedAccounts = 0
 	s.FundedAccounts = 0
@@ -220,46 +220,46 @@ func (s *BlockSeries) Time() time.Time {
 
 func (s *BlockSeries) Clone() SeriesBucket {
 	return &BlockSeries{
-		Timestamp:           s.Timestamp,
-		NSlotsEndorsed:      s.NSlotsEndorsed,
-		NOps:                s.NOps,
-		NOpsFailed:          s.NOpsFailed,
-		NOpsContract:        s.NOpsContract,
-		NTx:                 s.NTx,
-		NActivation:         s.NActivation,
-		NSeedNonce:          s.NSeedNonce,
-		N2Baking:            s.N2Baking,
-		N2Endorsement:       s.N2Endorsement,
-		NEndorsement:        s.NEndorsement,
-		NDelegation:         s.NDelegation,
-		NReveal:             s.NReveal,
-		NOrigination:        s.NOrigination,
-		NProposal:           s.NProposal,
-		NBallot:             s.NBallot,
-		Volume:              s.Volume,
-		Fee:                 s.Fee,
-		Reward:              s.Reward,
-		Deposit:             s.Deposit,
-		UnfrozenFees:        s.UnfrozenFees,
-		UnfrozenRewards:     s.UnfrozenRewards,
-		UnfrozenDeposits:    s.UnfrozenDeposits,
-		ActivatedSupply:     s.ActivatedSupply,
-		BurnedSupply:        s.BurnedSupply,
-		NewAccounts:         s.NewAccounts,
-		NewImplicitAccounts: s.NewImplicitAccounts,
-		NewManagedAccounts:  s.NewManagedAccounts,
-		NewContracts:        s.NewContracts,
-		ClearedAccounts:     s.ClearedAccounts,
-		FundedAccounts:      s.FundedAccounts,
-		GasUsed:             s.GasUsed,
-		StorageSize:         s.StorageSize,
-		TDD:                 s.TDD,
-		NOpsImplicit:        s.NOpsImplicit,
-		Count:               s.Count,
-		columns:             s.columns,
-		params:              s.params,
-		verbose:             s.verbose,
-		null:                s.null,
+		Timestamp:        s.Timestamp,
+		NSlotsEndorsed:   s.NSlotsEndorsed,
+		NOps:             s.NOps,
+		NOpsFailed:       s.NOpsFailed,
+		NOpsContract:     s.NOpsContract,
+		NContractCalls:   s.NContractCalls,
+		NTx:              s.NTx,
+		NActivation:      s.NActivation,
+		NSeedNonce:       s.NSeedNonce,
+		N2Baking:         s.N2Baking,
+		N2Endorsement:    s.N2Endorsement,
+		NEndorsement:     s.NEndorsement,
+		NDelegation:      s.NDelegation,
+		NReveal:          s.NReveal,
+		NOrigination:     s.NOrigination,
+		NProposal:        s.NProposal,
+		NBallot:          s.NBallot,
+		NRegister:        s.NRegister,
+		Volume:           s.Volume,
+		Fee:              s.Fee,
+		Reward:           s.Reward,
+		Deposit:          s.Deposit,
+		UnfrozenFees:     s.UnfrozenFees,
+		UnfrozenRewards:  s.UnfrozenRewards,
+		UnfrozenDeposits: s.UnfrozenDeposits,
+		ActivatedSupply:  s.ActivatedSupply,
+		BurnedSupply:     s.BurnedSupply,
+		NewAccounts:      s.NewAccounts,
+		NewContracts:     s.NewContracts,
+		ClearedAccounts:  s.ClearedAccounts,
+		FundedAccounts:   s.FundedAccounts,
+		GasUsed:          s.GasUsed,
+		StorageSize:      s.StorageSize,
+		TDD:              s.TDD,
+		NOpsImplicit:     s.NOpsImplicit,
+		Count:            s.Count,
+		columns:          s.columns,
+		params:           s.params,
+		verbose:          s.verbose,
+		null:             s.null,
 	}
 }
 
@@ -274,46 +274,46 @@ func (s *BlockSeries) Interpolate(m SeriesBucket, ts time.Time) SeriesBucket {
 		return s
 	default:
 		return &BlockSeries{
-			Timestamp:           ts,
-			NSlotsEndorsed:      s.NSlotsEndorsed + int64(weight*float64(int64(b.NSlotsEndorsed)-s.NSlotsEndorsed)),
-			NOps:                s.NOps + int64(weight*float64(int64(b.NOps)-s.NOps)),
-			NOpsFailed:          s.NOpsFailed + int64(weight*float64(int64(b.NOpsFailed)-s.NOpsFailed)),
-			NOpsContract:        s.NOpsContract + int64(weight*float64(int64(b.NOpsContract)-s.NOpsContract)),
-			NTx:                 s.NTx + int64(weight*float64(int64(b.NTx)-s.NTx)),
-			NActivation:         s.NActivation + int64(weight*float64(int64(b.NActivation)-s.NActivation)),
-			NSeedNonce:          s.NSeedNonce + int64(weight*float64(int64(b.NSeedNonce)-s.NSeedNonce)),
-			N2Baking:            s.N2Baking + int64(weight*float64(int64(b.N2Baking)-s.N2Baking)),
-			N2Endorsement:       s.N2Endorsement + int64(weight*float64(int64(b.N2Endorsement)-s.N2Endorsement)),
-			NEndorsement:        s.NEndorsement + int64(weight*float64(int64(b.NEndorsement)-s.NEndorsement)),
-			NDelegation:         s.NDelegation + int64(weight*float64(int64(b.NDelegation)-s.NDelegation)),
-			NReveal:             s.NReveal + int64(weight*float64(int64(b.NReveal)-s.NReveal)),
-			NOrigination:        s.NOrigination + int64(weight*float64(int64(b.NOrigination)-s.NOrigination)),
-			NProposal:           s.NProposal + int64(weight*float64(int64(b.NProposal)-s.NProposal)),
-			NBallot:             s.NBallot + int64(weight*float64(int64(b.NBallot)-s.NBallot)),
-			Volume:              s.Volume + int64(weight*float64(int64(b.Volume)-s.Volume)),
-			Fee:                 s.Fee + int64(weight*float64(int64(b.Fee)-s.Fee)),
-			Reward:              s.Reward + int64(weight*float64(int64(b.Reward)-s.Reward)),
-			Deposit:             s.Deposit + int64(weight*float64(int64(b.Deposit)-s.Deposit)),
-			UnfrozenFees:        s.UnfrozenFees + int64(weight*float64(int64(b.UnfrozenFees)-s.UnfrozenFees)),
-			UnfrozenRewards:     s.UnfrozenRewards + int64(weight*float64(int64(b.UnfrozenRewards)-s.UnfrozenRewards)),
-			UnfrozenDeposits:    s.UnfrozenDeposits + int64(weight*float64(int64(b.UnfrozenDeposits)-s.UnfrozenDeposits)),
-			ActivatedSupply:     s.ActivatedSupply + int64(weight*float64(int64(b.ActivatedSupply)-s.ActivatedSupply)),
-			BurnedSupply:        s.BurnedSupply + int64(weight*float64(int64(b.BurnedSupply)-s.BurnedSupply)),
-			NewAccounts:         s.NewAccounts + int64(weight*float64(int64(b.NewAccounts)-s.NewAccounts)),
-			NewImplicitAccounts: s.NewImplicitAccounts + int64(weight*float64(int64(b.NewImplicitAccounts)-s.NewImplicitAccounts)),
-			NewManagedAccounts:  s.NewManagedAccounts + int64(weight*float64(int64(b.NewManagedAccounts)-s.NewManagedAccounts)),
-			NewContracts:        s.NewContracts + int64(weight*float64(int64(b.NewContracts)-s.NewContracts)),
-			ClearedAccounts:     s.ClearedAccounts + int64(weight*float64(int64(b.ClearedAccounts)-s.ClearedAccounts)),
-			FundedAccounts:      s.FundedAccounts + int64(weight*float64(int64(b.FundedAccounts)-s.FundedAccounts)),
-			GasUsed:             s.GasUsed + int64(weight*float64(int64(b.GasUsed)-s.GasUsed)),
-			StorageSize:         s.StorageSize + int64(weight*float64(int64(b.StorageSize)-s.StorageSize)),
-			TDD:                 s.TDD + weight*b.TDD - s.TDD,
-			NOpsImplicit:        s.NOpsImplicit + int64(weight*float64(int64(b.NOpsImplicit)-s.NOpsImplicit)),
-			Count:               0,
-			columns:             s.columns,
-			params:              s.params,
-			verbose:             s.verbose,
-			null:                false,
+			Timestamp:        ts,
+			NSlotsEndorsed:   s.NSlotsEndorsed + int64(weight*float64(int64(b.NSlotsEndorsed)-s.NSlotsEndorsed)),
+			NOps:             s.NOps + int64(weight*float64(int64(b.NOps)-s.NOps)),
+			NOpsFailed:       s.NOpsFailed + int64(weight*float64(int64(b.NOpsFailed)-s.NOpsFailed)),
+			NOpsContract:     s.NOpsContract + int64(weight*float64(int64(b.NOpsContract)-s.NOpsContract)),
+			NContractCalls:   s.NContractCalls + int64(weight*float64(int64(b.NContractCalls)-s.NContractCalls)),
+			NTx:              s.NTx + int64(weight*float64(int64(b.NTx)-s.NTx)),
+			NActivation:      s.NActivation + int64(weight*float64(int64(b.NActivation)-s.NActivation)),
+			NSeedNonce:       s.NSeedNonce + int64(weight*float64(int64(b.NSeedNonce)-s.NSeedNonce)),
+			N2Baking:         s.N2Baking + int64(weight*float64(int64(b.N2Baking)-s.N2Baking)),
+			N2Endorsement:    s.N2Endorsement + int64(weight*float64(int64(b.N2Endorsement)-s.N2Endorsement)),
+			NEndorsement:     s.NEndorsement + int64(weight*float64(int64(b.NEndorsement)-s.NEndorsement)),
+			NDelegation:      s.NDelegation + int64(weight*float64(int64(b.NDelegation)-s.NDelegation)),
+			NReveal:          s.NReveal + int64(weight*float64(int64(b.NReveal)-s.NReveal)),
+			NOrigination:     s.NOrigination + int64(weight*float64(int64(b.NOrigination)-s.NOrigination)),
+			NProposal:        s.NProposal + int64(weight*float64(int64(b.NProposal)-s.NProposal)),
+			NBallot:          s.NBallot + int64(weight*float64(int64(b.NBallot)-s.NBallot)),
+			NRegister:        s.NRegister + int64(weight*float64(int64(b.NRegister)-s.NRegister)),
+			Volume:           s.Volume + int64(weight*float64(int64(b.Volume)-s.Volume)),
+			Fee:              s.Fee + int64(weight*float64(int64(b.Fee)-s.Fee)),
+			Reward:           s.Reward + int64(weight*float64(int64(b.Reward)-s.Reward)),
+			Deposit:          s.Deposit + int64(weight*float64(int64(b.Deposit)-s.Deposit)),
+			UnfrozenFees:     s.UnfrozenFees + int64(weight*float64(int64(b.UnfrozenFees)-s.UnfrozenFees)),
+			UnfrozenRewards:  s.UnfrozenRewards + int64(weight*float64(int64(b.UnfrozenRewards)-s.UnfrozenRewards)),
+			UnfrozenDeposits: s.UnfrozenDeposits + int64(weight*float64(int64(b.UnfrozenDeposits)-s.UnfrozenDeposits)),
+			ActivatedSupply:  s.ActivatedSupply + int64(weight*float64(int64(b.ActivatedSupply)-s.ActivatedSupply)),
+			BurnedSupply:     s.BurnedSupply + int64(weight*float64(int64(b.BurnedSupply)-s.BurnedSupply)),
+			NewAccounts:      s.NewAccounts + int64(weight*float64(int64(b.NewAccounts)-s.NewAccounts)),
+			NewContracts:     s.NewContracts + int64(weight*float64(int64(b.NewContracts)-s.NewContracts)),
+			ClearedAccounts:  s.ClearedAccounts + int64(weight*float64(int64(b.ClearedAccounts)-s.ClearedAccounts)),
+			FundedAccounts:   s.FundedAccounts + int64(weight*float64(int64(b.FundedAccounts)-s.FundedAccounts)),
+			GasUsed:          s.GasUsed + int64(weight*float64(int64(b.GasUsed)-s.GasUsed)),
+			StorageSize:      s.StorageSize + int64(weight*float64(int64(b.StorageSize)-s.StorageSize)),
+			TDD:              s.TDD + weight*b.TDD - s.TDD,
+			NOpsImplicit:     s.NOpsImplicit + int64(weight*float64(int64(b.NOpsImplicit)-s.NOpsImplicit)),
+			Count:            0,
+			columns:          s.columns,
+			params:           s.params,
+			verbose:          s.verbose,
+			null:             false,
 		}
 	}
 }
@@ -328,79 +328,79 @@ func (s *BlockSeries) MarshalJSON() ([]byte, error) {
 
 func (b *BlockSeries) MarshalJSONVerbose() ([]byte, error) {
 	block := struct {
-		Timestamp           time.Time `json:"time"`
-		Count               int       `json:"count"`
-		NSlotsEndorsed      int64     `json:"n_endorsed_slots"`
-		NOps                int64     `json:"n_ops"`
-		NOpsFailed          int64     `json:"n_ops_failed"`
-		NOpsContract        int64     `json:"n_ops_contract"`
-		NTx                 int64     `json:"n_tx"`
-		NActivation         int64     `json:"n_activation"`
-		NSeedNonce          int64     `json:"n_seed_nonce_revelation"`
-		N2Baking            int64     `json:"n_double_baking_evidence"`
-		N2Endorsement       int64     `json:"n_double_endorsement_evidence"`
-		NEndorsement        int64     `json:"n_endorsement"`
-		NDelegation         int64     `json:"n_delegation"`
-		NReveal             int64     `json:"n_reveal"`
-		NOrigination        int64     `json:"n_origination"`
-		NProposal           int64     `json:"n_proposal"`
-		NBallot             int64     `json:"n_ballot"`
-		Volume              float64   `json:"volume"`
-		Fee                 float64   `json:"fee"`
-		Reward              float64   `json:"reward"`
-		Deposit             float64   `json:"deposit"`
-		UnfrozenFees        float64   `json:"unfrozen_fees"`
-		UnfrozenRewards     float64   `json:"unfrozen_rewards"`
-		UnfrozenDeposits    float64   `json:"unfrozen_deposits"`
-		ActivatedSupply     float64   `json:"activated_supply"`
-		BurnedSupply        float64   `json:"burned_supply"`
-		NewAccounts         int64     `json:"n_new_accounts"`
-		NewImplicitAccounts int64     `json:"n_new_implicit"`
-		NewManagedAccounts  int64     `json:"n_new_managed"`
-		NewContracts        int64     `json:"n_new_contracts"`
-		ClearedAccounts     int64     `json:"n_cleared_accounts"`
-		FundedAccounts      int64     `json:"n_funded_accounts"`
-		GasUsed             int64     `json:"gas_used"`
-		StorageSize         int64     `json:"storage_size"`
-		TDD                 float64   `json:"days_destroyed"`
-		NOpsImplicit        int64     `json:"n_ops_implicit"`
+		Timestamp        time.Time `json:"time"`
+		Count            int       `json:"count"`
+		NSlotsEndorsed   int64     `json:"n_endorsed_slots"`
+		NOps             int64     `json:"n_ops"`
+		NOpsFailed       int64     `json:"n_ops_failed"`
+		NOpsContract     int64     `json:"n_ops_contract"`
+		NContractCalls   int64     `json:"n_contract_calls"`
+		NTx              int64     `json:"n_tx"`
+		NActivation      int64     `json:"n_activation"`
+		NSeedNonce       int64     `json:"n_seed_nonce_revelation"`
+		N2Baking         int64     `json:"n_double_baking_evidence"`
+		N2Endorsement    int64     `json:"n_double_endorsement_evidence"`
+		NEndorsement     int64     `json:"n_endorsement"`
+		NDelegation      int64     `json:"n_delegation"`
+		NReveal          int64     `json:"n_reveal"`
+		NOrigination     int64     `json:"n_origination"`
+		NProposal        int64     `json:"n_proposal"`
+		NBallot          int64     `json:"n_ballot"`
+		NRegister        int64     `json:"n_register_constant"`
+		Volume           float64   `json:"volume"`
+		Fee              float64   `json:"fee"`
+		Reward           float64   `json:"reward"`
+		Deposit          float64   `json:"deposit"`
+		UnfrozenFees     float64   `json:"unfrozen_fees"`
+		UnfrozenRewards  float64   `json:"unfrozen_rewards"`
+		UnfrozenDeposits float64   `json:"unfrozen_deposits"`
+		ActivatedSupply  float64   `json:"activated_supply"`
+		BurnedSupply     float64   `json:"burned_supply"`
+		NewAccounts      int64     `json:"n_new_accounts"`
+		NewContracts     int64     `json:"n_new_contracts"`
+		ClearedAccounts  int64     `json:"n_cleared_accounts"`
+		FundedAccounts   int64     `json:"n_funded_accounts"`
+		GasUsed          int64     `json:"gas_used"`
+		StorageSize      int64     `json:"storage_size"`
+		TDD              float64   `json:"days_destroyed"`
+		NOpsImplicit     int64     `json:"n_ops_implicit"`
 	}{
-		Timestamp:           b.Timestamp,
-		Count:               b.Count,
-		NSlotsEndorsed:      b.NSlotsEndorsed,
-		NOps:                b.NOps,
-		NOpsFailed:          b.NOpsFailed,
-		NOpsContract:        b.NOpsContract,
-		NTx:                 b.NTx,
-		NActivation:         b.NActivation,
-		NSeedNonce:          b.NSeedNonce,
-		N2Baking:            b.N2Baking,
-		N2Endorsement:       b.N2Endorsement,
-		NEndorsement:        b.NEndorsement,
-		NDelegation:         b.NDelegation,
-		NReveal:             b.NReveal,
-		NOrigination:        b.NOrigination,
-		NProposal:           b.NProposal,
-		NBallot:             b.NBallot,
-		Volume:              b.params.ConvertValue(b.Volume),
-		Fee:                 b.params.ConvertValue(b.Fee),
-		Reward:              b.params.ConvertValue(b.Reward),
-		Deposit:             b.params.ConvertValue(b.Deposit),
-		UnfrozenFees:        b.params.ConvertValue(b.UnfrozenFees),
-		UnfrozenRewards:     b.params.ConvertValue(b.UnfrozenRewards),
-		UnfrozenDeposits:    b.params.ConvertValue(b.UnfrozenDeposits),
-		ActivatedSupply:     b.params.ConvertValue(b.ActivatedSupply),
-		BurnedSupply:        b.params.ConvertValue(b.BurnedSupply),
-		NewAccounts:         b.NewAccounts,
-		NewImplicitAccounts: b.NewImplicitAccounts,
-		NewManagedAccounts:  b.NewManagedAccounts,
-		NewContracts:        b.NewContracts,
-		ClearedAccounts:     b.ClearedAccounts,
-		FundedAccounts:      b.FundedAccounts,
-		GasUsed:             b.GasUsed,
-		StorageSize:         b.StorageSize,
-		TDD:                 b.TDD,
-		NOpsImplicit:        b.NOpsImplicit,
+		Timestamp:        b.Timestamp,
+		Count:            b.Count,
+		NSlotsEndorsed:   b.NSlotsEndorsed,
+		NOps:             b.NOps,
+		NOpsFailed:       b.NOpsFailed,
+		NOpsContract:     b.NOpsContract,
+		NContractCalls:   b.NContractCalls,
+		NTx:              b.NTx,
+		NActivation:      b.NActivation,
+		NSeedNonce:       b.NSeedNonce,
+		N2Baking:         b.N2Baking,
+		N2Endorsement:    b.N2Endorsement,
+		NEndorsement:     b.NEndorsement,
+		NDelegation:      b.NDelegation,
+		NReveal:          b.NReveal,
+		NOrigination:     b.NOrigination,
+		NProposal:        b.NProposal,
+		NBallot:          b.NBallot,
+		NRegister:        b.NRegister,
+		Volume:           b.params.ConvertValue(b.Volume),
+		Fee:              b.params.ConvertValue(b.Fee),
+		Reward:           b.params.ConvertValue(b.Reward),
+		Deposit:          b.params.ConvertValue(b.Deposit),
+		UnfrozenFees:     b.params.ConvertValue(b.UnfrozenFees),
+		UnfrozenRewards:  b.params.ConvertValue(b.UnfrozenRewards),
+		UnfrozenDeposits: b.params.ConvertValue(b.UnfrozenDeposits),
+		ActivatedSupply:  b.params.ConvertValue(b.ActivatedSupply),
+		BurnedSupply:     b.params.ConvertValue(b.BurnedSupply),
+		NewAccounts:      b.NewAccounts,
+		NewContracts:     b.NewContracts,
+		ClearedAccounts:  b.ClearedAccounts,
+		FundedAccounts:   b.FundedAccounts,
+		GasUsed:          b.GasUsed,
+		StorageSize:      b.StorageSize,
+		TDD:              b.TDD,
+		NOpsImplicit:     b.NOpsImplicit,
 	}
 	return json.Marshal(block)
 }
@@ -431,6 +431,8 @@ func (b *BlockSeries) MarshalJSONBrief() ([]byte, error) {
 				buf = strconv.AppendInt(buf, int64(b.NOpsFailed), 10)
 			case "n_ops_contract":
 				buf = strconv.AppendInt(buf, int64(b.NOpsContract), 10)
+			case "n_contract_calls":
+				buf = strconv.AppendInt(buf, int64(b.NContractCalls), 10)
 			case "n_tx":
 				buf = strconv.AppendInt(buf, int64(b.NTx), 10)
 			case "n_activation":
@@ -453,6 +455,8 @@ func (b *BlockSeries) MarshalJSONBrief() ([]byte, error) {
 				buf = strconv.AppendInt(buf, int64(b.NProposal), 10)
 			case "n_ballot":
 				buf = strconv.AppendInt(buf, int64(b.NBallot), 10)
+			case "n_register_constant":
+				buf = strconv.AppendInt(buf, int64(b.NRegister), 10)
 			case "volume":
 				buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Volume), 'f', dec, 64)
 			case "fee":
@@ -473,10 +477,6 @@ func (b *BlockSeries) MarshalJSONBrief() ([]byte, error) {
 				buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.BurnedSupply), 'f', dec, 64)
 			case "n_new_accounts":
 				buf = strconv.AppendInt(buf, int64(b.NewAccounts), 10)
-			case "n_new_implicit":
-				buf = strconv.AppendInt(buf, int64(b.NewImplicitAccounts), 10)
-			case "n_new_managed":
-				buf = strconv.AppendInt(buf, int64(b.NewManagedAccounts), 10)
 			case "n_new_contracts":
 				buf = strconv.AppendInt(buf, int64(b.NewContracts), 10)
 			case "n_cleared_accounts":
@@ -528,6 +528,8 @@ func (b *BlockSeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(int64(b.NOpsFailed), 10)
 		case "n_ops_contract":
 			res[i] = strconv.FormatInt(int64(b.NOpsContract), 10)
+		case "n_contract_calls":
+			res[i] = strconv.FormatInt(int64(b.NContractCalls), 10)
 		case "n_tx":
 			res[i] = strconv.FormatInt(int64(b.NTx), 10)
 		case "n_activation":
@@ -550,6 +552,8 @@ func (b *BlockSeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(int64(b.NProposal), 10)
 		case "n_ballot":
 			res[i] = strconv.FormatInt(int64(b.NBallot), 10)
+		case "n_register_constant":
+			res[i] = strconv.FormatInt(int64(b.NRegister), 10)
 		case "volume":
 			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Volume), 'f', dec, 64)
 		case "fee":
@@ -570,10 +574,6 @@ func (b *BlockSeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.BurnedSupply), 'f', dec, 64)
 		case "n_new_accounts":
 			res[i] = strconv.FormatInt(int64(b.NewAccounts), 10)
-		case "n_new_implicit":
-			res[i] = strconv.FormatInt(int64(b.NewImplicitAccounts), 10)
-		case "n_new_managed":
-			res[i] = strconv.FormatInt(int64(b.NewManagedAccounts), 10)
 		case "n_new_contracts":
 			res[i] = strconv.FormatInt(int64(b.NewContracts), 10)
 		case "n_cleared_accounts":

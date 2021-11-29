@@ -1045,6 +1045,9 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.OperationHead
 		if err != nil {
 			return Errorf("marshal storage: %v", err)
 		}
+		if bytes.Compare(op.Storage, dstcon.Storage) == 0 {
+			op.Storage = nil
+		}
 	}
 	if len(res.BigmapDiff) > 0 {
 		top.Metadata.Result.BigmapDiff, err = b.PatchBigmapDiff(ctx, res.BigmapDiff, dst.Address, nil)
@@ -1317,6 +1320,9 @@ func (b *Builder) AppendInternalTransactionOp(
 		op.Storage, err = res.Storage.MarshalBinary()
 		if err != nil {
 			return Errorf("marshal storage: %v", err)
+		}
+		if bytes.Compare(op.Storage, dstcon.Storage) == 0 {
+			op.Storage = nil
 		}
 	}
 	if len(res.BigmapDiff) > 0 {
@@ -1657,7 +1663,7 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.OperationHead
 			// on Carthagenet block 346116); the actual contract table entry
 			// is later created & inserted separately in contract index and
 			// this temporary object is discarded
-			b.conMap[dst.RowId] = NewContract(dst, oop, op)
+			b.conMap[dst.RowId] = NewContract(dst, oop, op, nil)
 		}
 	} else {
 		if !op.IsSuccess {
@@ -1876,7 +1882,7 @@ func (b *Builder) AppendInternalOriginationOp(
 			// on Carthagenet block 346116); the actual contract table entry
 			// is later created & inserted separately in contract index and
 			// this temporary object is discarded
-			b.conMap[dst.RowId] = NewInternalContract(dst, iop, op)
+			b.conMap[dst.RowId] = NewInternalContract(dst, iop, op, nil)
 		}
 	} else {
 		if !op.IsSuccess {
@@ -2371,6 +2377,125 @@ func (b *Builder) AppendInternalDelegationOp(
 				src.DelegateId = 0
 				src.DelegatedSince = 0
 			}
+		}
+	}
+
+	return nil
+}
+
+func (b *Builder) AppendConstantRegistrationOp(ctx context.Context, oh *rpc.OperationHeader, op_l, op_p, op_c int, rollback bool) error {
+	o := oh.Contents[op_c]
+
+	Errorf := func(format string, args ...interface{}) error {
+		return fmt.Errorf(
+			"%s op [%d:%d:%d]: "+format,
+			append([]interface{}{o.OpKind(), op_l, op_p, op_c}, args...)...,
+		)
+	}
+
+	gop, ok := o.(*rpc.ConstantRegistrationOp)
+	if !ok {
+		return Errorf("unexpected type %T", o)
+	}
+	branch, ok := b.BranchByHash(oh.Branch)
+	if !ok {
+		return Errorf("missing branch %s", oh.Branch)
+	}
+	src, ok := b.AccountByAddress(gop.Source)
+	if !ok {
+		return Errorf("missing source account %s", gop.Source)
+	}
+	var srcdlg *Account
+	if src.DelegateId != 0 {
+		if srcdlg, ok = b.AccountById(src.DelegateId); !ok {
+			return Errorf("missing delegate %d for source account %d", src.DelegateId, src.RowId)
+		}
+	}
+
+	// build op
+	op_n := b.block.NextN()
+	if op_c > 0 {
+		op_n--
+	}
+	op := NewOp(b.block, branch, oh, op_n, op_l, op_p, op_c, 0)
+	op.SenderId = src.RowId
+	op.Counter = gop.Counter
+	op.Fee = gop.Fee
+	op.GasLimit = gop.GasLimit
+	op.StorageLimit = gop.StorageLimit
+	res := gop.Metadata.Result
+	op.Status = res.Status
+	op.IsSuccess = op.Status.IsSuccess()
+	op.GasUsed = res.ConsumedGas
+	op.StorageSize = res.StorageSize
+	op.StoragePaid = res.StorageSize
+	if op.GasUsed > 0 && op.Fee > 0 {
+		op.GasPrice = float64(op.Fee) / float64(op.GasUsed)
+	}
+
+	var (
+		flows []*Flow
+		err   error
+	)
+	if op.IsSuccess {
+		flows, err = b.NewConstantRegistrationFlows(src, srcdlg,
+			gop.Metadata.BalanceUpdates,
+			res.BalanceUpdates,
+			op_n, op_l, op_p, op_c,
+		)
+		if err != nil {
+			return Errorf("building flows: %w", err)
+		}
+
+		// update burn from burn flow
+		for _, f := range flows {
+			if f.IsBurned {
+				op.Burned += f.AmountOut
+			}
+		}
+
+		op.HasData = true
+		op.Data = gop.Metadata.Result.GlobalAddress.String()
+		op.Storage, err = gop.Value.MarshalBinary()
+		if err != nil {
+			return Errorf("marshal value: %w", err)
+		}
+
+	} else {
+		// handle errors
+		if len(res.Errors) > 0 {
+			if buf, err := json.Marshal(res.Errors); err == nil {
+				op.Errors = string(buf)
+			} else {
+				// non-fatal, but error data will be missing from index
+				log.Error(Errorf("marshal op errors: %s", err))
+			}
+		}
+
+		// fees flows
+		flows, err = b.NewConstantRegistrationFlows(src, srcdlg,
+			gop.Metadata.BalanceUpdates, nil, op_n, op_l, op_p, op_c)
+		if err != nil {
+			return Errorf("building flows: %w", err)
+		}
+	}
+
+	b.block.Ops = append(b.block.Ops, op)
+
+	// update sender account
+	if !rollback {
+		src.NOps++
+		src.LastSeen = b.block.Height
+		src.IsDirty = true
+		if !op.IsSuccess {
+			src.NOpsFailed++
+		}
+	} else {
+		src.NOps--
+		src.NOrigination--
+		src.IsDirty = true
+		if !op.IsSuccess {
+			src.NOpsFailed--
 		}
 	}
 

@@ -60,11 +60,10 @@ func (c *Chain) MarshalJSONVerbose() ([]byte, error) {
 		Cycle              int64  `json:"cycle"`
 		Timestamp          int64  `json:"time"`
 		TotalAccounts      int64  `json:"total_accounts"`
-		TotalImplicit      int64  `json:"total_implicit"`
-		TotalManaged       int64  `json:"total_managed"`
 		TotalContracts     int64  `json:"total_contracts"`
 		TotalOps           int64  `json:"total_ops"`
 		TotalContractOps   int64  `json:"total_contract_ops"`
+		TotalContractCalls int64  `json:"total_contract_calls"`
 		TotalActivations   int64  `json:"total_activations"`
 		TotalSeedNonces    int64  `json:"total_seed_nonce_revelations"`
 		TotalEndorsements  int64  `json:"total_endorsements"`
@@ -76,15 +75,16 @@ func (c *Chain) MarshalJSONVerbose() ([]byte, error) {
 		TotalTransactions  int64  `json:"total_transactions"`
 		TotalProposals     int64  `json:"total_proposals"`
 		TotalBallots       int64  `json:"total_ballots"`
+		TotalConstants     int64  `json:"total_constants"`
 		TotalStorageBytes  int64  `json:"total_storage_bytes"`
 		TotalPaidBytes     int64  `json:"total_paid_bytes"`
-		TotalUsedBytes     int64  `json:"total_used_bytes"`
-		TotalOrphans       int64  `json:"total_orphans"`
 		FundedAccounts     int64  `json:"funded_accounts"`
+		DustAccounts       int64  `json:"dust_accounts"`
 		UnclaimedAccounts  int64  `json:"unclaimed_accounts"`
 		TotalDelegators    int64  `json:"total_delegators"`
 		ActiveDelegators   int64  `json:"active_delegators"`
 		InactiveDelegators int64  `json:"inactive_delegators"`
+		DustDelegators     int64  `json:"dust_delegators"`
 		TotalDelegates     int64  `json:"total_delegates"`
 		ActiveDelegates    int64  `json:"active_delegates"`
 		InactiveDelegates  int64  `json:"inactive_delegates"`
@@ -100,11 +100,10 @@ func (c *Chain) MarshalJSONVerbose() ([]byte, error) {
 		Cycle:              c.Cycle,
 		Timestamp:          util.UnixMilliNonZero(c.Timestamp),
 		TotalAccounts:      c.TotalAccounts,
-		TotalImplicit:      c.TotalImplicit,
-		TotalManaged:       c.TotalManaged,
 		TotalContracts:     c.TotalContracts,
 		TotalOps:           c.TotalOps,
 		TotalContractOps:   c.TotalContractOps,
+		TotalContractCalls: c.TotalContractCalls,
 		TotalActivations:   c.TotalActivations,
 		TotalSeedNonces:    c.TotalSeedNonces,
 		TotalEndorsements:  c.TotalEndorsements,
@@ -116,13 +115,14 @@ func (c *Chain) MarshalJSONVerbose() ([]byte, error) {
 		TotalTransactions:  c.TotalTransactions,
 		TotalProposals:     c.TotalProposals,
 		TotalBallots:       c.TotalBallots,
+		TotalConstants:     c.TotalConstants,
 		TotalStorageBytes:  c.TotalStorageBytes,
 		TotalPaidBytes:     c.TotalPaidBytes,
-		TotalUsedBytes:     c.TotalUsedBytes,
-		TotalOrphans:       c.TotalOrphans,
 		FundedAccounts:     c.FundedAccounts,
+		DustAccounts:       c.DustAccounts,
 		UnclaimedAccounts:  c.UnclaimedAccounts,
 		TotalDelegators:    c.TotalDelegators,
+		DustDelegators:     c.DustDelegators,
 		ActiveDelegators:   c.ActiveDelegators,
 		InactiveDelegators: c.InactiveDelegators,
 		TotalDelegates:     c.TotalDelegates,
@@ -153,16 +153,14 @@ func (c *Chain) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(c.Timestamp), 10)
 		case "total_accounts":
 			buf = strconv.AppendInt(buf, c.TotalAccounts, 10)
-		case "total_implicit":
-			buf = strconv.AppendInt(buf, c.TotalImplicit, 10)
-		case "total_managed":
-			buf = strconv.AppendInt(buf, c.TotalManaged, 10)
 		case "total_contracts":
 			buf = strconv.AppendInt(buf, c.TotalContracts, 10)
 		case "total_ops":
 			buf = strconv.AppendInt(buf, c.TotalOps, 10)
 		case "total_contract_ops":
 			buf = strconv.AppendInt(buf, c.TotalContractOps, 10)
+		case "total_contract_calls":
+			buf = strconv.AppendInt(buf, c.TotalContractCalls, 10)
 		case "total_activations":
 			buf = strconv.AppendInt(buf, c.TotalActivations, 10)
 		case "total_seed_nonce_revelations":
@@ -185,20 +183,22 @@ func (c *Chain) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, c.TotalProposals, 10)
 		case "total_ballots":
 			buf = strconv.AppendInt(buf, c.TotalBallots, 10)
+		case "total_constants":
+			buf = strconv.AppendInt(buf, c.TotalConstants, 10)
 		case "total_storage_bytes":
 			buf = strconv.AppendInt(buf, c.TotalStorageBytes, 10)
 		case "total_paid_bytes":
 			buf = strconv.AppendInt(buf, c.TotalPaidBytes, 10)
-		case "total_used_bytes":
-			buf = strconv.AppendInt(buf, c.TotalUsedBytes, 10)
-		case "total_orphans":
-			buf = strconv.AppendInt(buf, c.TotalOrphans, 10)
 		case "funded_accounts":
 			buf = strconv.AppendInt(buf, c.FundedAccounts, 10)
+		case "dust_accounts":
+			buf = strconv.AppendInt(buf, c.DustAccounts, 10)
 		case "unclaimed_accounts":
 			buf = strconv.AppendInt(buf, c.UnclaimedAccounts, 10)
 		case "total_delegators":
 			buf = strconv.AppendInt(buf, c.TotalDelegators, 10)
+		case "dust_delegators":
+			buf = strconv.AppendInt(buf, c.DustDelegators, 10)
 		case "active_delegators":
 			buf = strconv.AppendInt(buf, c.ActiveDelegators, 10)
 		case "inactive_delegators":
@@ -246,16 +246,14 @@ func (c *Chain) MarshalCSV() ([]string, error) {
 			res[i] = strconv.Quote(c.Timestamp.Format(time.RFC3339))
 		case "total_accounts":
 			res[i] = strconv.FormatInt(c.TotalAccounts, 10)
-		case "total_implicit":
-			res[i] = strconv.FormatInt(c.TotalImplicit, 10)
-		case "total_managed":
-			res[i] = strconv.FormatInt(c.TotalManaged, 10)
 		case "total_contracts":
 			res[i] = strconv.FormatInt(c.TotalContracts, 10)
 		case "total_ops":
 			res[i] = strconv.FormatInt(c.TotalOps, 10)
 		case "total_contract_ops":
 			res[i] = strconv.FormatInt(c.TotalContractOps, 10)
+		case "total_contract_calls":
+			res[i] = strconv.FormatInt(c.TotalContractCalls, 10)
 		case "total_activations":
 			res[i] = strconv.FormatInt(c.TotalActivations, 10)
 		case "total_seed_nonce_revelations":
@@ -278,20 +276,22 @@ func (c *Chain) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(c.TotalProposals, 10)
 		case "total_ballots":
 			res[i] = strconv.FormatInt(c.TotalBallots, 10)
+		case "total_constants":
+			res[i] = strconv.FormatInt(c.TotalConstants, 10)
 		case "total_storage_bytes":
 			res[i] = strconv.FormatInt(c.TotalStorageBytes, 10)
 		case "total_paid_bytes":
 			res[i] = strconv.FormatInt(c.TotalPaidBytes, 10)
-		case "total_used_bytes":
-			res[i] = strconv.FormatInt(c.TotalUsedBytes, 10)
-		case "total_orphans":
-			res[i] = strconv.FormatInt(c.TotalOrphans, 10)
 		case "funded_accounts":
 			res[i] = strconv.FormatInt(c.FundedAccounts, 10)
+		case "dust_accounts":
+			res[i] = strconv.FormatInt(c.DustAccounts, 10)
 		case "unclaimed_accounts":
 			res[i] = strconv.FormatInt(c.UnclaimedAccounts, 10)
 		case "total_delegators":
 			res[i] = strconv.FormatInt(c.TotalDelegators, 10)
+		case "dust_delegators":
+			res[i] = strconv.FormatInt(c.DustDelegators, 10)
 		case "active_delegators":
 			res[i] = strconv.FormatInt(c.ActiveDelegators, 10)
 		case "inactive_delegators":

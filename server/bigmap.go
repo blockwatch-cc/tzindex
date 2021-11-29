@@ -436,11 +436,11 @@ func ReadBigmapValue(ctx *ApiContext) (interface{}, int) {
 	typedValue := v.GetValue(valType)
 
 	resp := &ExplorerBigmapValue{
-		Key:     &key,
-		KeyHash: &keyHash,
-		Value:   &typedValue,
-		// modified: items[0].Timestamp, // ??
-		expires: ctx.Tip.BestTime.Add(ctx.Params.BlockTime()),
+		Key:      &key,
+		KeyHash:  &keyHash,
+		Value:    &typedValue,
+		modified: ctx.Indexer.LookupBlockTime(ctx, v.Height),
+		expires:  ctx.Tip.BestTime.Add(ctx.Params.BlockTime()),
 	}
 	if args.WithMeta() {
 		resp.Meta = &ExplorerBigmapMeta{

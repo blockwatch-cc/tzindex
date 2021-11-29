@@ -221,6 +221,9 @@ func (c *Crawler) Status() CrawlerStatus {
 	if tip.BestHeight > 0 && c.bchead != nil && c.bchead.Level > 0 {
 		s.Blocks = c.bchead.Level
 		s.Progress = float64(s.Indexed) / float64(s.Blocks)
+		if s.Progress == 1.0 && s.Indexed < s.Blocks {
+			s.Progress = 0.999999
+		}
 	}
 	return s
 }
@@ -332,6 +335,7 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 				c.setState(STATE_STOPPED)
 				return ctx.Err()
 			case <-time.After(5 * time.Second):
+				c.setState(STATE_CONNECTING)
 			}
 		} else {
 			break
@@ -614,13 +618,13 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 
 		// on missing bchead, wait and retry
 		if c.bchead == nil {
-			c.setState(STATE_CONNECTING)
 			log.Warn("Broken RPC connection. Trying again in 5s...")
 			// keep going
 			select {
 			case <-c.quit:
 			case <-c.ctx.Done():
 			case <-time.After(5 * time.Second):
+				c.setState(STATE_CONNECTING)
 				if err := c.fetchBlockchainInfo(c.ctx); err == nil {
 					log.Info("RPC connection OK.")
 				}
@@ -961,11 +965,9 @@ func (c *Crawler) syncBlockchain() {
 				log.Errorf("flushing tables: %v", err)
 			}
 
-			// update rights cache at cycle start
-			if block.Params.IsCycleStart(block.Height) {
-				if err := c.indexer.updateRights(ctx, block.Height); err != nil {
-					log.Errorf("updating rights cache: %v", err)
-				}
+			// update rights cache at cycle start (or later when we we're not in sync then)
+			if err := c.indexer.updateRights(ctx, block.Height); err != nil {
+				log.Errorf("updating rights cache: %s", err)
 			}
 		}
 

@@ -228,7 +228,7 @@ func getBigmapDiffs(op *model.Op, block *model.Block) (micheline.BigmapDiff, err
 		// load and unpack from op
 		var bmd micheline.BigmapDiff
 		if err := bmd.UnmarshalBinary(op.BigmapDiff); err != nil {
-			return nil, fmt.Errorf("decoding implicit bigmap origination op [%d:%d]: %v",
+			return nil, fmt.Errorf("decoding implicit bigmap origination op [%d:%d]: %w",
 				op.OpL, op.OpP, err)
 		}
 		return bmd, nil
@@ -306,7 +306,7 @@ func (idx *BigmapIndex) loadAlloc(ctx context.Context, id int64) (*model.BigmapA
 		AndEqual("bigmap_id", id).
 		Execute(ctx, alloc)
 	if err != nil {
-		return nil, fmt.Errorf("etl.bigmap.alloc decode: %v", err)
+		return nil, fmt.Errorf("etl.bigmap.alloc decode: %w", err)
 	}
 	idx.allocCache.Add(id, alloc)
 	return alloc, nil
@@ -348,13 +348,13 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 					// alloc real bigmap
 					alloc := model.NewBigmapAlloc(op, diff)
 					if err := idx.allocTable.Insert(ctx, alloc); err != nil {
-						return fmt.Errorf("etl.bigmap_alloc.insert: %v", err)
+						return fmt.Errorf("etl.bigmap_alloc.insert: %w", err)
 					}
 					idx.allocCache.Add(alloc.BigmapId, alloc)
 
 					// store as update
 					if err := idx.updateTable.Insert(ctx, alloc.ToUpdate(op)); err != nil {
-						return fmt.Errorf("etl.bigmap_alloc.insert: %v", err)
+						return fmt.Errorf("etl.bigmap_alloc.insert: %w", err)
 					}
 				}
 
@@ -380,7 +380,7 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 
 					// copy live keys and create updates
 					for _, v := range bm.Live {
-						copied := model.CopyBigmapKV(v, diff.DestId)
+						copied := model.CopyBigmapKV(v, diff.DestId, op.Height)
 						live = append(live, copied)
 						updates = append(updates, copied.ToUpdateCopy(op))
 					}
@@ -391,7 +391,7 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 					// find the source alloc
 					srcAlloc, err := idx.loadAlloc(ctx, diff.SourceId)
 					if err != nil {
-						return fmt.Errorf("etl.bigmap.copy: %v", err)
+						return fmt.Errorf("etl.bigmap.copy: %w", err)
 					}
 					alloc = model.CopyBigmapAlloc(srcAlloc, op, diff.DestId)
 
@@ -406,13 +406,13 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 							if err := r.Decode(source); err != nil {
 								return err
 							}
-							copied := model.CopyBigmapKV(source, diff.DestId)
+							copied := model.CopyBigmapKV(source, diff.DestId, op.Height)
 							live = append(live, copied)
 							updates = append(updates, copied.ToUpdateCopy(op))
 							return nil
 						})
 					if err != nil {
-						return fmt.Errorf("etl.bigmap.copy: %v", err)
+						return fmt.Errorf("etl.bigmap.copy: %w", err)
 					}
 					alloc.NKeys = int64(len(live))
 					alloc.NUpdates = int64(len(live))
@@ -427,7 +427,7 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 				} else {
 					// store copied data
 					if err := idx.allocTable.Insert(ctx, alloc); err != nil {
-						return fmt.Errorf("etl.bigmap.insert: %v", err)
+						return fmt.Errorf("etl.bigmap.insert: %w", err)
 					}
 					idx.allocCache.Add(alloc.BigmapId, alloc)
 					ins := make([]pack.Item, len(live))
@@ -435,14 +435,14 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 						ins[i] = v
 					}
 					if err := idx.valueTable.Insert(ctx, ins); err != nil {
-						return fmt.Errorf("etl.bigmap.insert: %v", err)
+						return fmt.Errorf("etl.bigmap.insert: %w", err)
 					}
 					ins = ins[:0]
 					for _, v := range updates {
 						ins = append(ins, v)
 					}
 					if err := idx.updateTable.Insert(ctx, ins); err != nil {
-						return fmt.Errorf("etl.bigmap.insert: %v", err)
+						return fmt.Errorf("etl.bigmap.insert: %w", err)
 					}
 				}
 
@@ -460,7 +460,7 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 					// for regular bigmaps, update alloc
 					alloc, err := idx.loadAlloc(ctx, diff.Id)
 					if err != nil {
-						return fmt.Errorf("etl.bigmap.empty: %v", err)
+						return fmt.Errorf("etl.bigmap.empty: %w", err)
 					}
 
 					// list all live keys and schedule for deletion
@@ -478,20 +478,20 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 							return nil
 						})
 					if err != nil {
-						return fmt.Errorf("etl.bigmap.empty decode: %v", err)
+						return fmt.Errorf("etl.bigmap.empty decode: %w", err)
 					}
 					alloc.NKeys = 0
 					alloc.NUpdates += int64(len(updates))
 					alloc.Updated = op.Height
 
 					if err := idx.allocTable.Update(ctx, alloc); err != nil {
-						return fmt.Errorf("etl.bigmap.empty: %v", err)
+						return fmt.Errorf("etl.bigmap.empty: %w", err)
 					}
 					if err := idx.updateTable.Insert(ctx, updates); err != nil {
-						return fmt.Errorf("etl.bigmap.empty: %v", err)
+						return fmt.Errorf("etl.bigmap.empty: %w", err)
 					}
 					if err := idx.valueTable.DeleteIds(ctx, ids); err != nil {
-						return fmt.Errorf("etl.bigmap.empty: %v", err)
+						return fmt.Errorf("etl.bigmap.empty: %w", err)
 					}
 
 					// done, next bigmap diff
@@ -538,7 +538,7 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 				// single key removal from regular bigmap
 				alloc, err := idx.loadAlloc(ctx, diff.Id)
 				if err != nil {
-					return fmt.Errorf("etl.bigmap.remove: %v", err)
+					return fmt.Errorf("etl.bigmap.remove: %w", err)
 				}
 
 				// find the previous entry, key should exist
@@ -559,12 +559,12 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 						return nil
 					})
 				if err != nil && err != io.EOF {
-					return fmt.Errorf("etl.bigmap.remove decode: %v", err)
+					return fmt.Errorf("etl.bigmap.remove decode: %w", err)
 				}
 
 				if prev != nil {
 					if err := idx.valueTable.DeleteIds(ctx, []uint64{prev.RowId}); err != nil {
-						return fmt.Errorf("etl.bigmap.remove: %v", err)
+						return fmt.Errorf("etl.bigmap.remove: %w", err)
 					}
 					alloc.NKeys--
 				} else {
@@ -575,10 +575,10 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 				alloc.Updated = op.Height
 				alloc.NUpdates++
 				if err := idx.updateTable.Insert(ctx, model.NewBigmapUpdate(op, diff)); err != nil {
-					return fmt.Errorf("etl.bigmap.remove: %v", err)
+					return fmt.Errorf("etl.bigmap.remove: %w", err)
 				}
 				if err := idx.allocTable.Update(ctx, alloc); err != nil {
-					return fmt.Errorf("etl.bigmap.remove: %v", err)
+					return fmt.Errorf("etl.bigmap.remove: %w", err)
 				}
 
 			case micheline.DiffActionUpdate:
@@ -605,12 +605,12 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 						// add
 						bm.Alloc.NKeys++
 						bm.Alloc.NUpdates++
-						bm.Live = append(bm.Live, model.NewBigmapKV(diff))
+						bm.Live = append(bm.Live, model.NewBigmapKV(diff, op.Height))
 						bm.Updates = append(bm.Updates, model.NewBigmapUpdate(op, diff))
 					} else {
 						// replace
 						bm.Alloc.NUpdates++
-						bm.Live[pos] = model.NewBigmapKV(diff)
+						bm.Live[pos] = model.NewBigmapKV(diff, op.Height)
 						bm.Updates = append(bm.Updates, model.NewBigmapUpdate(op, diff))
 					}
 
@@ -621,7 +621,7 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 				// regular bigmaps
 				alloc, err := idx.loadAlloc(ctx, diff.Id)
 				if err != nil {
-					return fmt.Errorf("etl.bigmap.update: %v", err)
+					return fmt.Errorf("etl.bigmap.update: %w", err)
 				}
 
 				// find the previous entry, key should exist
@@ -641,20 +641,20 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 						return nil
 					})
 				if err != nil {
-					return fmt.Errorf("etl.bigmap.update decode: %v", err)
+					return fmt.Errorf("etl.bigmap.update decode: %w", err)
 				}
 
-				live := model.NewBigmapKV(diff)
+				live := model.NewBigmapKV(diff, op.Height)
 				if prev != nil {
 					// replace
 					live.RowId = prev.RowId
 					if err := idx.valueTable.Update(ctx, live); err != nil {
-						return fmt.Errorf("etl.bigmap.update: %v", err)
+						return fmt.Errorf("etl.bigmap.update: %w", err)
 					}
 				} else {
 					// add
 					if err := idx.valueTable.Insert(ctx, live); err != nil {
-						return fmt.Errorf("etl.bigmap.update: %v", err)
+						return fmt.Errorf("etl.bigmap.update: %w", err)
 					}
 					alloc.NKeys++
 				}
@@ -662,10 +662,10 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 				alloc.NUpdates++
 
 				if err := idx.updateTable.Insert(ctx, model.NewBigmapUpdate(op, diff)); err != nil {
-					return fmt.Errorf("etl.bigmap.update: %v", err)
+					return fmt.Errorf("etl.bigmap.update: %w", err)
 				}
 				if err := idx.allocTable.Update(ctx, alloc); err != nil {
-					return fmt.Errorf("etl.bigmap.update: %v", err)
+					return fmt.Errorf("etl.bigmap.update: %w", err)
 				}
 			}
 		}
@@ -703,7 +703,7 @@ func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 		if !ok {
 			alloc, err = idx.loadAlloc(ctx, v.BigmapId)
 			if err != nil {
-				return fmt.Errorf("rollback: missing alloc for bigmap %d: %v", v.BigmapId, err)
+				return fmt.Errorf("rollback: missing alloc for bigmap %d: %w", v.BigmapId, err)
 			}
 			alloc.Updated = 0
 			allocs[v.BigmapId] = alloc
@@ -733,7 +733,7 @@ func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 				return nil
 			})
 		if err != nil && err != io.EOF {
-			return fmt.Errorf("etl.bigmap.rollback decode: %v", err)
+			return fmt.Errorf("etl.bigmap.rollback decode: %w", err)
 		}
 
 		// rollback update
@@ -754,7 +754,7 @@ func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 				alloc.NKeys++
 				alloc.NUpdates--
 				if err := idx.valueTable.Insert(ctx, live); err != nil {
-					return fmt.Errorf("etl.bigmap.rollback insert live key: %v", err)
+					return fmt.Errorf("etl.bigmap.rollback insert live key: %w", err)
 				}
 			}
 			// beware of same-block updates when resetting alloc update
@@ -780,7 +780,7 @@ func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 					return nil
 				})
 			if err != nil && err != io.EOF {
-				return fmt.Errorf("etl.bigmap.rollback decode: %v", err)
+				return fmt.Errorf("etl.bigmap.rollback decode: %w", err)
 			}
 			if prev == nil {
 				// sanity check
@@ -791,7 +791,7 @@ func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 
 				// this was a first-time insert, delete current live key
 				if err := idx.valueTable.DeleteIds(ctx, []uint64{live.RowId}); err != nil {
-					return fmt.Errorf("etl.bigmap.rollback delete live key: %v", err)
+					return fmt.Errorf("etl.bigmap.rollback delete live key: %w", err)
 				}
 				alloc.NKeys--
 				alloc.NUpdates--
@@ -803,7 +803,7 @@ func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 				if prev.Action == micheline.DiffActionRemove {
 					// this was an insert after remove, remove current live key
 					if err := idx.valueTable.DeleteIds(ctx, []uint64{live.RowId}); err != nil {
-						return fmt.Errorf("etl.bigmap.rollback delete live key: %v", err)
+						return fmt.Errorf("etl.bigmap.rollback delete live key: %w", err)
 					}
 					alloc.NKeys--
 					alloc.NUpdates--
@@ -818,7 +818,7 @@ func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 					lastLive := prev.ToKV()
 					lastLive.RowId = live.RowId
 					if err := idx.valueTable.Update(ctx, lastLive); err != nil {
-						return fmt.Errorf("etl.bigmap.rollback replace live key: %v", err)
+						return fmt.Errorf("etl.bigmap.rollback replace live key: %w", err)
 					}
 					alloc.NUpdates--
 				}

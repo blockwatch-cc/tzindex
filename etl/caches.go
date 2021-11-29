@@ -44,6 +44,11 @@ func (m *Indexer) PurgeCaches() {
 	m.rights = atomic.Value{}
 	m.addrs = atomic.Value{}
 	m.bigmaps.Purge()
+	for _, idx := range m.indexes {
+		for _, t := range idx.Tables() {
+			t.PurgeCache()
+		}
+	}
 }
 
 func (m *Indexer) NextRights(ctx context.Context, a model.AccountID, height int64) (int64, int64) {
@@ -62,6 +67,14 @@ func (m *Indexer) LookupBlockTimePtr(ctx context.Context, height int64) *time.Ti
 	}
 	t := m.LookupBlockTime(ctx, height)
 	return &t
+}
+
+func (m *Indexer) BestHeight() int64 {
+	cc, err := m.getBlocks(context.Background())
+	if err != nil {
+		return 0
+	}
+	return int64(cc.Len())
 }
 
 // called concurrently from API consumers, uses read-mostly cache
@@ -164,10 +177,6 @@ func (m *Indexer) TopVolume(ctx context.Context, n, o int) ([]*model.AccountRank
 	return ranks.TopVolume(n, o), nil
 }
 
-func (m *Indexer) clearRights() {
-	m.rights.Store(cache.NewRightsCache(0, 0, 0))
-}
-
 func (m *Indexer) getRights(ctx context.Context, height int64) (*cache.RightsCache, error) {
 	// lazy-load on first call
 	rights := m.rights.Load()
@@ -189,15 +198,27 @@ func (m *Indexer) getRights(ctx context.Context, height int64) (*cache.RightsCac
 }
 
 func (m *Indexer) updateRights(ctx context.Context, height int64) error {
+	// check if we need a rebuild
+	params := m.ParamsByHeight(height)
+	startCycle := params.CycleFromHeight(height)
+	startHeight := params.CycleStartHeight(startCycle)
+	rights := m.rights.Load()
+	if rights != nil && rights.(*cache.RightsCache).Start() == startHeight {
+		return nil
+	}
+
+	// run rebuild
 	startTime := time.Now()
 	table, err := m.Table(index.RightsTableKey)
 	if err != nil {
+		// ignore not found errors in light mode
+		if m.lightMode {
+			return nil
+		}
 		return err
 	}
-	params := m.ParamsByHeight(height)
-	startCycle := params.CycleFromHeight(height)
-	next := cache.NewRightsCache(params.BlocksPerCycle, params.PreservedCycles+1, params.CycleStartHeight(startCycle))
-	if err := next.Build(ctx, height, startCycle, table); err != nil {
+	next := cache.NewRightsCache(params.BlocksPerCycle, params.PreservedCycles+1, startHeight)
+	if err := next.Build(ctx, startCycle, table); err != nil {
 		return err
 	}
 	m.rights.Store(next)

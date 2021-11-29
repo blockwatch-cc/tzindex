@@ -46,11 +46,13 @@ func init() {
 	blockSourceNames["endorsed_slots"] = "-" // rename endorsed_slots
 	blockSourceNames["slot_mask"] = "s"      // rename endorsed_slots
 	blockSourceNames["predecessor"] = "P"    // pred hash, requires parent_id
+	blockSourceNames["protocol"] = "-"
 
 	blockAllAliases = append(blockAllAliases, "pct_account_reuse")
 	blockAllAliases = append(blockAllAliases, "baker")
 	blockAllAliases = append(blockAllAliases, "slot_mask")
 	// blockAllAliases = append(blockAllAliases, "predecessor") // no default
+	blockAllAliases = append(blockAllAliases, "protocol")
 }
 
 // configurable marshalling helper
@@ -72,125 +74,130 @@ func (b *Block) MarshalJSON() ([]byte, error) {
 }
 
 func (b *Block) MarshalJSONVerbose() ([]byte, error) {
+	if !b.params.ContainsHeight(b.Height) {
+		b.params = b.ctx.Crawler.ParamsByHeight(b.Height)
+	}
 	block := struct {
-		RowId               uint64                 `json:"row_id"`
-		ParentId            uint64                 `json:"parent_id"`
-		Hash                string                 `json:"hash"`
-		Predecessor         string                 `json:"predecessor"`
-		IsOrphan            bool                   `json:"is_orphan,omitempty"`
-		Timestamp           int64                  `json:"time"` // convert to UNIX milliseconds
-		Height              int64                  `json:"height"`
-		Cycle               int64                  `json:"cycle"`
-		IsCycleSnapshot     bool                   `json:"is_cycle_snapshot"`
-		Solvetime           int                    `json:"solvetime"`
-		Version             int                    `json:"version"`
-		Validation          int                    `json:"validation_pass"`
-		Fitness             uint64                 `json:"fitness"`
-		Priority            int                    `json:"priority"`
-		Nonce               string                 `json:"nonce"`
-		VotingPeriodKind    tezos.VotingPeriodKind `json:"voting_period_kind"`
-		BakerId             uint64                 `json:"baker_id"`
-		Baker               string                 `json:"baker"`
-		SlotMask            string                 `json:"slot_mask"`
-		NSlotsEndorsed      int                    `json:"n_endorsed_slots"`
-		NOps                int                    `json:"n_ops"`
-		NOpsFailed          int                    `json:"n_ops_failed"`
-		NOpsContract        int                    `json:"n_ops_contract"`
-		NTx                 int                    `json:"n_tx"`
-		NActivation         int                    `json:"n_activation"`
-		NSeedNonce          int                    `json:"n_seed_nonce_revelation"`
-		N2Baking            int                    `json:"n_double_baking_evidence"`
-		N2Endorsement       int                    `json:"n_double_endorsement_evidence"`
-		NEndorsement        int                    `json:"n_endorsement"`
-		NDelegation         int                    `json:"n_delegation"`
-		NReveal             int                    `json:"n_reveal"`
-		NOrigination        int                    `json:"n_origination"`
-		NProposal           int                    `json:"n_proposal"`
-		NBallot             int                    `json:"n_ballot"`
-		Volume              float64                `json:"volume"`
-		Fee                 float64                `json:"fee"`
-		Reward              float64                `json:"reward"`
-		Deposit             float64                `json:"deposit"`
-		UnfrozenFees        float64                `json:"unfrozen_fees"`
-		UnfrozenRewards     float64                `json:"unfrozen_rewards"`
-		UnfrozenDeposits    float64                `json:"unfrozen_deposits"`
-		ActivatedSupply     float64                `json:"activated_supply"`
-		BurnedSupply        float64                `json:"burned_supply"`
-		SeenAccounts        int                    `json:"n_accounts"`
-		NewAccounts         int                    `json:"n_new_accounts"`
-		NewImplicitAccounts int                    `json:"n_new_implicit"`
-		NewManagedAccounts  int                    `json:"n_new_managed"`
-		NewContracts        int                    `json:"n_new_contracts"`
-		ClearedAccounts     int                    `json:"n_cleared_accounts"`
-		FundedAccounts      int                    `json:"n_funded_accounts"`
-		GasLimit            int64                  `json:"gas_limit"`
-		GasUsed             int64                  `json:"gas_used"`
-		GasPrice            float64                `json:"gas_price"`
-		StorageSize         int64                  `json:"storage_size"`
-		TDD                 float64                `json:"days_destroyed"`
-		PctAccountsReused   float64                `json:"pct_account_reuse"`
-		NOpsImplicit        int                    `json:"n_ops_implicit"`
-		LbEscapeVote        bool                   `json:"lb_esc_vote"`
-		LbEscapeEma         int64                  `json:"lb_esc_ema"`
+		RowId             uint64                 `json:"row_id"`
+		ParentId          uint64                 `json:"parent_id"`
+		Hash              string                 `json:"hash"`
+		Predecessor       string                 `json:"predecessor"`
+		IsOrphan          bool                   `json:"is_orphan,omitempty"`
+		Timestamp         int64                  `json:"time"` // convert to UNIX milliseconds
+		Height            int64                  `json:"height"`
+		Cycle             int64                  `json:"cycle"`
+		IsCycleSnapshot   bool                   `json:"is_cycle_snapshot"`
+		Solvetime         int                    `json:"solvetime"`
+		Version           int                    `json:"version"`
+		Validation        int                    `json:"validation_pass"`
+		Fitness           uint64                 `json:"fitness"`
+		Priority          int                    `json:"priority"`
+		Nonce             string                 `json:"nonce"`
+		VotingPeriodKind  tezos.VotingPeriodKind `json:"voting_period_kind"`
+		BakerId           uint64                 `json:"baker_id"`
+		Baker             string                 `json:"baker"`
+		SlotMask          string                 `json:"slot_mask"`
+		NSlotsEndorsed    int                    `json:"n_endorsed_slots"`
+		NOps              int                    `json:"n_ops"`
+		NOpsFailed        int                    `json:"n_ops_failed"`
+		NOpsContract      int                    `json:"n_ops_contract"`
+		NContractCalls    int                    `json:"n_contract_calls"`
+		NTx               int                    `json:"n_tx"`
+		NActivation       int                    `json:"n_activation"`
+		NSeedNonce        int                    `json:"n_seed_nonce_revelation"`
+		N2Baking          int                    `json:"n_double_baking_evidence"`
+		N2Endorsement     int                    `json:"n_double_endorsement_evidence"`
+		NEndorsement      int                    `json:"n_endorsement"`
+		NDelegation       int                    `json:"n_delegation"`
+		NReveal           int                    `json:"n_reveal"`
+		NOrigination      int                    `json:"n_origination"`
+		NProposal         int                    `json:"n_proposal"`
+		NBallot           int                    `json:"n_ballot"`
+		NRegister         int                    `json:"n_register_constant"`
+		Volume            float64                `json:"volume"`
+		Fee               float64                `json:"fee"`
+		Reward            float64                `json:"reward"`
+		Deposit           float64                `json:"deposit"`
+		UnfrozenFees      float64                `json:"unfrozen_fees"`
+		UnfrozenRewards   float64                `json:"unfrozen_rewards"`
+		UnfrozenDeposits  float64                `json:"unfrozen_deposits"`
+		ActivatedSupply   float64                `json:"activated_supply"`
+		BurnedSupply      float64                `json:"burned_supply"`
+		SeenAccounts      int                    `json:"n_accounts"`
+		NewAccounts       int                    `json:"n_new_accounts"`
+		NewContracts      int                    `json:"n_new_contracts"`
+		ClearedAccounts   int                    `json:"n_cleared_accounts"`
+		FundedAccounts    int                    `json:"n_funded_accounts"`
+		GasLimit          int64                  `json:"gas_limit"`
+		GasUsed           int64                  `json:"gas_used"`
+		GasPrice          float64                `json:"gas_price"`
+		StorageSize       int64                  `json:"storage_size"`
+		TDD               float64                `json:"days_destroyed"`
+		PctAccountsReused float64                `json:"pct_account_reuse"`
+		NOpsImplicit      int                    `json:"n_ops_implicit"`
+		LbEscapeVote      bool                   `json:"lb_esc_vote"`
+		LbEscapeEma       int64                  `json:"lb_esc_ema"`
+		Protocol          tezos.ProtocolHash     `json:"protocol"`
 	}{
-		RowId:               b.RowId,
-		ParentId:            b.ParentId,
-		Hash:                b.Hash.String(),
-		Predecessor:         b.Predecessor.String(),
-		IsOrphan:            b.IsOrphan,
-		Timestamp:           util.UnixMilliNonZero(b.Timestamp),
-		Height:              b.Height,
-		Cycle:               b.Cycle,
-		IsCycleSnapshot:     b.IsCycleSnapshot,
-		Solvetime:           b.Solvetime,
-		Version:             b.Version,
-		Validation:          b.Validation,
-		Fitness:             b.Fitness,
-		Priority:            b.Priority,
-		Nonce:               "",
-		VotingPeriodKind:    b.VotingPeriodKind,
-		BakerId:             b.BakerId.Value(),
-		Baker:               b.ctx.Indexer.LookupAddress(b.ctx, b.BakerId).String(),
-		SlotMask:            hex.EncodeToString(b.SlotsEndorsed),
-		NSlotsEndorsed:      b.NSlotsEndorsed,
-		NOps:                b.NOps,
-		NOpsFailed:          b.NOpsFailed,
-		NOpsContract:        b.NOpsContract,
-		NTx:                 b.NTx,
-		NActivation:         b.NActivation,
-		NSeedNonce:          b.NSeedNonce,
-		N2Baking:            b.N2Baking,
-		N2Endorsement:       b.N2Endorsement,
-		NEndorsement:        b.NEndorsement,
-		NDelegation:         b.NDelegation,
-		NReveal:             b.NReveal,
-		NOrigination:        b.NOrigination,
-		NProposal:           b.NProposal,
-		NBallot:             b.NBallot,
-		Volume:              b.params.ConvertValue(b.Volume),
-		Fee:                 b.params.ConvertValue(b.Fee),
-		Reward:              b.params.ConvertValue(b.Reward),
-		Deposit:             b.params.ConvertValue(b.Deposit),
-		UnfrozenFees:        b.params.ConvertValue(b.UnfrozenFees),
-		UnfrozenRewards:     b.params.ConvertValue(b.UnfrozenRewards),
-		UnfrozenDeposits:    b.params.ConvertValue(b.UnfrozenDeposits),
-		ActivatedSupply:     b.params.ConvertValue(b.ActivatedSupply),
-		BurnedSupply:        b.params.ConvertValue(b.BurnedSupply),
-		SeenAccounts:        b.SeenAccounts,
-		NewAccounts:         b.NewAccounts,
-		NewImplicitAccounts: b.NewImplicitAccounts,
-		NewManagedAccounts:  b.NewManagedAccounts,
-		NewContracts:        b.NewContracts,
-		ClearedAccounts:     b.ClearedAccounts,
-		FundedAccounts:      b.FundedAccounts,
-		GasLimit:            b.GasLimit,
-		GasUsed:             b.GasUsed,
-		GasPrice:            b.GasPrice,
-		StorageSize:         b.StorageSize,
-		TDD:                 b.TDD,
-		NOpsImplicit:        b.NOpsImplicit,
-		LbEscapeVote:        b.LbEscapeVote,
-		LbEscapeEma:         b.LbEscapeEma,
+		RowId:            b.RowId,
+		ParentId:         b.ParentId,
+		Hash:             b.Hash.String(),
+		Predecessor:      b.Predecessor.String(),
+		IsOrphan:         b.IsOrphan,
+		Timestamp:        util.UnixMilliNonZero(b.Timestamp),
+		Height:           b.Height,
+		Cycle:            b.Cycle,
+		IsCycleSnapshot:  b.IsCycleSnapshot,
+		Solvetime:        b.Solvetime,
+		Version:          b.Version,
+		Validation:       b.Validation,
+		Fitness:          b.Fitness,
+		Priority:         b.Priority,
+		Nonce:            "",
+		VotingPeriodKind: b.VotingPeriodKind,
+		BakerId:          b.BakerId.Value(),
+		Baker:            b.ctx.Indexer.LookupAddress(b.ctx, b.BakerId).String(),
+		SlotMask:         hex.EncodeToString(b.SlotsEndorsed),
+		NSlotsEndorsed:   b.NSlotsEndorsed,
+		NOps:             b.NOps,
+		NOpsFailed:       b.NOpsFailed,
+		NOpsContract:     b.NOpsContract,
+		NContractCalls:   b.NContractCalls,
+		NTx:              b.NTx,
+		NActivation:      b.NActivation,
+		NSeedNonce:       b.NSeedNonce,
+		N2Baking:         b.N2Baking,
+		N2Endorsement:    b.N2Endorsement,
+		NEndorsement:     b.NEndorsement,
+		NDelegation:      b.NDelegation,
+		NReveal:          b.NReveal,
+		NOrigination:     b.NOrigination,
+		NProposal:        b.NProposal,
+		NBallot:          b.NBallot,
+		NRegister:        b.NRegister,
+		Volume:           b.params.ConvertValue(b.Volume),
+		Fee:              b.params.ConvertValue(b.Fee),
+		Reward:           b.params.ConvertValue(b.Reward),
+		Deposit:          b.params.ConvertValue(b.Deposit),
+		UnfrozenFees:     b.params.ConvertValue(b.UnfrozenFees),
+		UnfrozenRewards:  b.params.ConvertValue(b.UnfrozenRewards),
+		UnfrozenDeposits: b.params.ConvertValue(b.UnfrozenDeposits),
+		ActivatedSupply:  b.params.ConvertValue(b.ActivatedSupply),
+		BurnedSupply:     b.params.ConvertValue(b.BurnedSupply),
+		SeenAccounts:     b.SeenAccounts,
+		NewAccounts:      b.NewAccounts,
+		NewContracts:     b.NewContracts,
+		ClearedAccounts:  b.ClearedAccounts,
+		FundedAccounts:   b.FundedAccounts,
+		GasLimit:         b.GasLimit,
+		GasUsed:          b.GasUsed,
+		GasPrice:         b.GasPrice,
+		StorageSize:      b.StorageSize,
+		TDD:              b.TDD,
+		NOpsImplicit:     b.NOpsImplicit,
+		LbEscapeVote:     b.LbEscapeVote,
+		LbEscapeEma:      b.LbEscapeEma,
+		Protocol:         b.params.Protocol,
 	}
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], b.Nonce)
@@ -202,6 +209,9 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 }
 
 func (b *Block) MarshalJSONBrief() ([]byte, error) {
+	if !b.params.ContainsHeight(b.Height) {
+		b.params = b.ctx.Crawler.ParamsByHeight(b.Height)
+	}
 	dec := b.params.Decimals
 	buf := make([]byte, 0, 2048)
 	buf = append(buf, '[')
@@ -263,6 +273,8 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, int64(b.NOpsFailed), 10)
 		case "n_ops_contract":
 			buf = strconv.AppendInt(buf, int64(b.NOpsContract), 10)
+		case "n_contract_calls":
+			buf = strconv.AppendInt(buf, int64(b.NContractCalls), 10)
 		case "n_tx":
 			buf = strconv.AppendInt(buf, int64(b.NTx), 10)
 		case "n_activation":
@@ -285,6 +297,8 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, int64(b.NProposal), 10)
 		case "n_ballot":
 			buf = strconv.AppendInt(buf, int64(b.NBallot), 10)
+		case "n_register_constant":
+			buf = strconv.AppendInt(buf, int64(b.NRegister), 10)
 		case "volume":
 			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Volume), 'f', dec, 64)
 		case "fee":
@@ -307,10 +321,6 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, int64(b.SeenAccounts), 10)
 		case "n_new_accounts":
 			buf = strconv.AppendInt(buf, int64(b.NewAccounts), 10)
-		case "n_new_implicit":
-			buf = strconv.AppendInt(buf, int64(b.NewImplicitAccounts), 10)
-		case "n_new_managed":
-			buf = strconv.AppendInt(buf, int64(b.NewManagedAccounts), 10)
 		case "n_new_contracts":
 			buf = strconv.AppendInt(buf, int64(b.NewContracts), 10)
 		case "n_cleared_accounts":
@@ -329,7 +339,7 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendFloat(buf, b.TDD, 'f', 6, 64)
 		case "pct_account_reuse":
 			var reuse float64
-			if b.SeenAccounts > 0 {
+			if b.SeenAccounts != 0 {
 				reuse = float64(b.SeenAccounts-b.NewAccounts) / float64(b.SeenAccounts) * 100
 			}
 			buf = strconv.AppendFloat(buf, reuse, 'f', 6, 64)
@@ -343,6 +353,8 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 			}
 		case "lb_esc_ema":
 			buf = strconv.AppendInt(buf, int64(b.LbEscapeEma), 10)
+		case "protocol":
+			buf = strconv.AppendQuote(buf, b.params.Protocol.String())
 		default:
 			continue
 		}
@@ -355,6 +367,9 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 }
 
 func (b *Block) MarshalCSV() ([]string, error) {
+	if !b.params.ContainsHeight(b.Height) {
+		b.params = b.ctx.Crawler.ParamsByHeight(b.Height)
+	}
 	dec := b.params.Decimals
 	res := make([]string, len(b.columns))
 	for i, v := range b.columns {
@@ -407,6 +422,8 @@ func (b *Block) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(int64(b.NOpsFailed), 10)
 		case "n_ops_contract":
 			res[i] = strconv.FormatInt(int64(b.NOpsContract), 10)
+		case "n_contract_calls":
+			res[i] = strconv.FormatInt(int64(b.NContractCalls), 10)
 		case "n_tx":
 			res[i] = strconv.FormatInt(int64(b.NTx), 10)
 		case "n_activation":
@@ -429,6 +446,8 @@ func (b *Block) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(int64(b.NProposal), 10)
 		case "n_ballot":
 			res[i] = strconv.FormatInt(int64(b.NBallot), 10)
+		case "n_register_constant":
+			res[i] = strconv.FormatInt(int64(b.NRegister), 10)
 		case "volume":
 			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Volume), 'f', dec, 64)
 		case "fee":
@@ -451,10 +470,6 @@ func (b *Block) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(int64(b.SeenAccounts), 10)
 		case "n_new_accounts":
 			res[i] = strconv.FormatInt(int64(b.NewAccounts), 10)
-		case "n_new_implicit":
-			res[i] = strconv.FormatInt(int64(b.NewImplicitAccounts), 10)
-		case "n_new_managed":
-			res[i] = strconv.FormatInt(int64(b.NewManagedAccounts), 10)
 		case "n_new_contracts":
 			res[i] = strconv.FormatInt(int64(b.NewContracts), 10)
 		case "n_cleared_accounts":
@@ -473,7 +488,7 @@ func (b *Block) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(b.TDD, 'f', -1, 64)
 		case "pct_account_reuse":
 			var reuse float64
-			if b.SeenAccounts > 0 {
+			if b.SeenAccounts != 0 {
 				reuse = float64(b.SeenAccounts-b.NewAccounts) / float64(b.SeenAccounts) * 100
 			}
 			res[i] = strconv.FormatFloat(reuse, 'f', -1, 64)
@@ -483,6 +498,8 @@ func (b *Block) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatBool(b.LbEscapeVote)
 		case "lb_esc_ema":
 			res[i] = strconv.FormatInt(b.LbEscapeEma, 10)
+		case "protocol":
+			res[i] = strconv.Quote(b.params.Protocol.String())
 		default:
 			continue
 		}
@@ -524,6 +541,7 @@ func StreamBlockTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		// use all table columns in order and reverse lookup their long names
 		srcNames = table.Fields().Names()
 		args.Columns = blockAllAliases
+		// needJoin = true
 	}
 
 	// build table query
@@ -750,7 +768,7 @@ func StreamBlockTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 
 		// clear query conditions
 		q.Conditions = pack.ConditionTreeNode{}
-
+		// log.Info(join.Dump())
 		// run join query
 		res, err = join.Query(ctx, pack.Query{Limit: q.Limit})
 		if err != nil {
@@ -758,6 +776,12 @@ func StreamBlockTable(ctx *ApiContext, args *TableRequest) (interface{}, int) {
 		}
 		defer res.Close()
 	}
+
+	// start := time.Now()
+	// ctx.Log.Tracef("Streaming max %d rows from %s", args.Limit, args.Table)
+	// defer func() {
+	// 	ctx.Log.Tracef("Streamed %d rows in %s", count, time.Since(start))
+	// }()
 
 	// prepare return type marshalling
 	block := &Block{

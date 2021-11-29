@@ -132,6 +132,8 @@ func StreamTable(ctx *ApiContext) (interface{}, int) {
 		return StreamBigmapValueTable(ctx, args)
 	case "bigmap_updates":
 		return StreamBigmapUpdateTable(ctx, args)
+	case "constant":
+		return StreamConstantTable(ctx, args)
 	default:
 		panic(ENotFound(EC_RESOURCE_NOTFOUND, fmt.Sprintf("no such table '%s'", args.Table), nil))
 		return nil, -1

@@ -277,6 +277,7 @@ func enabledIndexes() []model.BlockIndexer {
 		return []model.BlockIndexer{
 			index.NewAccountIndex(tableOptions("account"), indexOptions("account")),
 			index.NewContractIndex(tableOptions("contract"), indexOptions("contract")),
+			index.NewConstantIndex(tableOptions("constant"), indexOptions("constant")),
 			index.NewBlockIndex(tableOptions("block"), indexOptions("block")),
 			index.NewOpIndex(tableOptions("op"), indexOptions("op")),
 			index.NewFlowIndex(tableOptions("flow")),
@@ -289,6 +290,7 @@ func enabledIndexes() []model.BlockIndexer {
 		return []model.BlockIndexer{
 			index.NewAccountIndex(tableOptions("account"), indexOptions("account")),
 			index.NewContractIndex(tableOptions("contract"), indexOptions("contract")),
+			index.NewConstantIndex(tableOptions("constant"), indexOptions("constant")),
 			index.NewBlockIndex(tableOptions("block"), indexOptions("block")),
 			index.NewOpIndex(tableOptions("op"), indexOptions("op")),
 			index.NewFlowIndex(tableOptions("flow")),

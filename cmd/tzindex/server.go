@@ -38,7 +38,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&rpcuser, "rpcuser", "", "RPC username")
 	rootCmd.PersistentFlags().StringVar(&rpcpass, "rpcpass", "", "RPC password")
 	rootCmd.PersistentFlags().BoolVar(&fullIndex, "full", false, "full mode (index all data)")
-	rootCmd.PersistentFlags().BoolVar(&lightIndex, "light", false, "light mode (use to skip baker and gov data)")
+	rootCmd.PersistentFlags().BoolVar(&lightIndex, "light", true, "light mode (use to skip baker and gov data)")
 	rootCmd.PersistentFlags().BoolVar(&norpc, "norpc", false, "disable RPC client")
 	rootCmd.PersistentFlags().BoolVar(&notls, "notls", false, "disable RPC TLS support (use http)")
 	rootCmd.PersistentFlags().BoolVar(&insecure, "insecure", false, "disable RPC TLS certificate checks (not recommended)")

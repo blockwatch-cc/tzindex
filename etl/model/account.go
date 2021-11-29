@@ -14,7 +14,9 @@ import (
 	"blockwatch.cc/tzgo/tezos"
 )
 
-const AccountCacheLineSize = 320 // with padding
+const (
+	DustLimit int64 = 1_000_000
+)
 
 var accountPool = &sync.Pool{
 	New: func() interface{} { return new(Account) },
@@ -98,6 +100,7 @@ type Account struct {
 	// used during block processing, not stored in DB
 	IsNew      bool `pack:"-" json:"-"` // first seen this block
 	WasFunded  bool `pack:"-" json:"-"` // true if account was funded before processing this block
+	WasDust    bool `pack:"-" json:"-"` // true if account had 0 < balance < 1tez at start of block
 	IsDirty    bool `pack:"-" json:"-"` // indicates an update happened
 	MustDelete bool `pack:"-" json:"-"` // indicates the account should be deleted (during rollback)
 }
@@ -147,6 +150,11 @@ func (a Account) Key() tezos.Key {
 	}
 	_ = key.UnmarshalBinary(a.Pubkey)
 	return key
+}
+
+func (a Account) IsDust() bool {
+	b := a.Balance()
+	return b > 0 && b < DustLimit
 }
 
 func (a Account) Balance() int64 {
@@ -251,6 +259,7 @@ func (a *Account) Reset() {
 	a.BakerVersion = 0
 	a.IsNew = false
 	a.WasFunded = false
+	a.WasDust = false
 	a.IsDirty = false
 	a.MustDelete = false
 }

@@ -198,14 +198,14 @@ func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *Block, builde
 							o.OpKind(), op.OpL, op.OpP, o)
 					}
 					iop := top.Metadata.InternalResults[op.OpI]
-					ins = append(ins, NewInternalContract(acc, iop, op))
+					ins = append(ins, NewInternalContract(acc, iop, op, builder.Constants()))
 				} else {
 					oop, ok := o.(*rpc.OriginationOp)
 					if !ok {
 						return fmt.Errorf("contract: %s op [%d:%d]: unexpected type %T",
 							o.OpKind(), op.OpL, op.OpP, o)
 					}
-					ins = append(ins, NewContract(acc, oop, op))
+					ins = append(ins, NewContract(acc, oop, op, builder.Constants()))
 				}
 			} else {
 				// implicit contracts from migration originations are in builder cache

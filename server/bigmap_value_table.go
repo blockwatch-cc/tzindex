@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
@@ -38,7 +39,9 @@ func init() {
 
 	// add extra translations for accounts
 	bigmapValueSourceNames["key_hash"] = "-"
+	bigmapValueSourceNames["time"] = "h"
 	bigmapValueAllAliases = append(bigmapValueAllAliases, "key_hash")
+	bigmapValueAllAliases = append(bigmapValueAllAliases, "time")
 }
 
 // configurable marshalling helper
@@ -59,19 +62,23 @@ func (b *BigmapValueItem) MarshalJSON() ([]byte, error) {
 
 func (b *BigmapValueItem) MarshalJSONVerbose() ([]byte, error) {
 	bigmap := struct {
-		RowId    uint64 `json:"row_id"`
-		BigmapId int64  `json:"bigmap_id"`
-		KeyId    uint64 `json:"key_id"`
-		KeyHash  string `json:"key_hash"`
-		Key      string `json:"key"`
-		Value    string `json:"value"`
+		RowId    uint64    `json:"row_id"`
+		BigmapId int64     `json:"bigmap_id"`
+		Height   int64     `json:"height"`
+		KeyId    uint64    `json:"key_id"`
+		KeyHash  string    `json:"key_hash"`
+		Key      string    `json:"key"`
+		Value    string    `json:"value"`
+		Time     time.Time `json:"time"`
 	}{
 		RowId:    b.RowId,
 		BigmapId: b.BigmapId,
+		Height:   b.Height,
 		KeyId:    b.KeyId,
 		KeyHash:  b.GetKeyHash().String(),
 		Key:      hex.EncodeToString(b.Key),
 		Value:    hex.EncodeToString(b.Value),
+		Time:     b.ctx.Indexer.LookupBlockTime(b.ctx.Context, b.Height),
 	}
 	return json.Marshal(bigmap)
 }
@@ -85,6 +92,8 @@ func (b *BigmapValueItem) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendUint(buf, b.RowId, 10)
 		case "bigmap_id":
 			buf = strconv.AppendInt(buf, b.BigmapId, 10)
+		case "height":
+			buf = strconv.AppendInt(buf, b.Height, 10)
 		case "key_id":
 			buf = strconv.AppendUint(buf, b.KeyId, 10)
 		case "key_hash":
@@ -93,6 +102,8 @@ func (b *BigmapValueItem) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendQuote(buf, hex.EncodeToString(b.Key))
 		case "value":
 			buf = strconv.AppendQuote(buf, hex.EncodeToString(b.Value))
+		case "time":
+			buf = strconv.AppendInt(buf, b.ctx.Indexer.LookupBlockTimeMs(b.ctx.Context, b.Height), 10)
 		default:
 			continue
 		}
@@ -112,6 +123,8 @@ func (b *BigmapValueItem) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatUint(b.RowId, 10)
 		case "bigmap_id":
 			res[i] = strconv.FormatInt(b.BigmapId, 10)
+		case "height":
+			res[i] = strconv.FormatInt(b.Height, 10)
 		case "key_id":
 			res[i] = strconv.FormatUint(b.KeyId, 10)
 		case "key_hash":
@@ -120,6 +133,8 @@ func (b *BigmapValueItem) MarshalCSV() ([]string, error) {
 			res[i] = strconv.Quote(hex.EncodeToString(b.Key))
 		case "value":
 			res[i] = strconv.Quote(hex.EncodeToString(b.Value))
+		case "time":
+			res[i] = strconv.FormatInt(b.ctx.Indexer.LookupBlockTimeMs(b.ctx.Context, b.Height), 10)
 		default:
 			continue
 		}
@@ -305,6 +320,72 @@ func StreamBigmapValueTable(ctx *ApiContext, args *TableRequest) (interface{}, i
 				})
 			default:
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
+			}
+
+		case "time":
+			// translate time into height, use val[0] only
+			bestTime := ctx.Tip.BestTime
+			cond, err := pack.ParseCondition(key, val[0], pack.FieldList{
+				pack.Field{
+					Name: "time",
+					Type: pack.FieldTypeDatetime,
+				},
+			})
+			if err != nil {
+				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, val[0]), err))
+			}
+			// re-use the block height -> time slice because it's already loaded
+			// into memory, the binary search should be faster than a block query
+			switch cond.Mode {
+			case pack.FilterModeRange:
+				// use cond.From and con.To
+				from, to := cond.From.(time.Time), cond.To.(time.Time)
+				var fromBlock, toBlock int64
+				if from.After(bestTime) {
+					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid future time %s", from), nil))
+				}
+				if to.After(bestTime) {
+					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid future time %s", to), nil))
+				}
+				fromBlock = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, from)
+				toBlock = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, to)
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find("h"), // height
+					Mode:  cond.Mode,
+					From:  fromBlock,
+					To:    toBlock,
+					Raw:   val[0], // debugging aid
+				})
+			case pack.FilterModeIn, pack.FilterModeNotIn:
+				// cond.Value is slice
+				valueBlocks := make([]int64, 0)
+				for _, v := range cond.Value.([]time.Time) {
+					if v.After(bestTime) {
+						panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid future time %s", v), nil))
+					}
+					valueBlocks = append(valueBlocks, ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, v))
+				}
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find("h"), // height
+					Mode:  cond.Mode,
+					Value: valueBlocks,
+					Raw:   val[0], // debugging aid
+				})
+
+			default:
+				// cond.Value is time.Time
+				valueTime := cond.Value.(time.Time)
+				var valueBlock int64
+				if valueTime.After(bestTime) {
+					panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid future time %s", valueTime), nil))
+				}
+				valueBlock = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, valueTime)
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find("h"), // height
+					Mode:  cond.Mode,
+					Value: valueBlock,
+					Raw:   val[0], // debugging aid
+				})
 			}
 
 		default:

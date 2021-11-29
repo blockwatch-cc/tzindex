@@ -277,7 +277,7 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 			if a.DelegateId > 0 {
 				buf = strconv.AppendQuote(buf, a.ctx.Indexer.LookupAddress(a.ctx, a.DelegateId).String())
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "creator_id", "manager_id":
 			buf = strconv.AppendUint(buf, a.CreatorId.Value(), 10)
@@ -285,13 +285,13 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 			if a.CreatorId > 0 {
 				buf = strconv.AppendQuote(buf, a.ctx.Indexer.LookupAddress(a.ctx, a.CreatorId).String())
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "pubkey":
 			if len(a.Pubkey) > 0 {
 				buf = strconv.AppendQuote(buf, a.Key().String())
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "first_in":
 			buf = strconv.AppendInt(buf, a.FirstIn, 10)
@@ -419,7 +419,7 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 			if a.BakerVersion > 0 {
 				buf = strconv.AppendQuote(buf, hex.EncodeToString(a.GetVersionBytes()))
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "first_seen_time":
 			buf = strconv.AppendInt(buf, a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.FirstSeen), 10)

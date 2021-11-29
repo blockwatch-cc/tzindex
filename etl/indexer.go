@@ -71,26 +71,16 @@ func (m *Indexer) ParamsByDeployment(v int) (*tezos.Params, error) {
 func (m *Indexer) Table(key string) (*pack.Table, error) {
 	t, ok := m.tables[key]
 	if !ok {
-		return nil, fmt.Errorf("table %s not found", key)
+		return nil, ErrNoTable
 	}
 	return t, nil
 }
 
-func (m *Indexer) TableStats() map[string]pack.TableStats {
-	stats := make(map[string]pack.TableStats)
+func (m *Indexer) TableStats() []pack.TableStats {
+	stats := make([]pack.TableStats, 0)
 	for _, idx := range m.indexes {
 		for _, t := range idx.Tables() {
-			stats[t.Name()] = t.Stats()
-		}
-	}
-	return stats
-}
-
-func (m *Indexer) MemStats() map[string]pack.TableSizeStats {
-	stats := make(map[string]pack.TableSizeStats)
-	for _, idx := range m.indexes {
-		for _, t := range idx.Tables() {
-			stats[t.Name()] = t.Size()
+			stats = append(stats, t.Stats()...)
 		}
 	}
 	return stats

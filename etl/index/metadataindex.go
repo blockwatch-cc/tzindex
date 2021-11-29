@@ -15,12 +15,12 @@ import (
 )
 
 const (
-	MetadataPackSizeLog2         = 11 // 2048
-	MetadataJournalSizeLog2      = 12 // 4096
+	MetadataPackSizeLog2         = 12
+	MetadataJournalSizeLog2      = 12
 	MetadataCacheSize            = 4
 	MetadataFillLevel            = 100
-	MetadataIndexPackSizeLog2    = 11 // 2048
-	MetadataIndexJournalSizeLog2 = 12 // 4096
+	MetadataIndexPackSizeLog2    = 12
+	MetadataIndexJournalSizeLog2 = 12
 	MetadataIndexCacheSize       = 4
 	MetadataIndexFillLevel       = 90
 	MetadataIndexKey             = "metadata"

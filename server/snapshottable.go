@@ -137,7 +137,7 @@ func (s *Snapshot) MarshalJSONBrief() ([]byte, error) {
 			if s.AccountId > 0 {
 				buf = strconv.AppendQuote(buf, s.ctx.Indexer.LookupAddress(s.ctx, s.AccountId).String())
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "delegate_id":
 			buf = strconv.AppendUint(buf, s.DelegateId.Value(), 10)
@@ -145,7 +145,7 @@ func (s *Snapshot) MarshalJSONBrief() ([]byte, error) {
 			if s.DelegateId > 0 {
 				buf = strconv.AppendQuote(buf, s.ctx.Indexer.LookupAddress(s.ctx, s.DelegateId).String())
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "is_delegate":
 			if s.IsDelegate {

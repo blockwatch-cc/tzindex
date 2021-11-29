@@ -49,18 +49,21 @@ func (t SystemRequest) RegisterDirectRoutes(r *mux.Router) error {
 }
 
 func (t SystemRequest) RegisterRoutes(r *mux.Router) error {
+	// stats & info
+	r.HandleFunc("/config", C(GetConfig)).Methods("GET")
 	r.HandleFunc("/tables", C(GetTableStats)).Methods("GET")
 	r.HandleFunc("/caches", C(GetCacheStats)).Methods("GET")
-	r.HandleFunc("/mem", C(GetMemStats)).Methods("GET")
-	r.HandleFunc("/config", C(GetConfig)).Methods("GET")
-	r.HandleFunc("/purge", C(PurgeCaches)).Methods("PUT")
-	r.HandleFunc("/snapshot", C(SnapshotDatabases)).Methods("PUT")
-	r.HandleFunc("/flush", C(FlushDatabases)).Methods("PUT")
-	r.HandleFunc("/flush_journal", C(FlushJournals)).Methods("PUT")
-	r.HandleFunc("/gc", C(GcDatabases)).Methods("PUT")
+	r.HandleFunc("/sysstat", C(GetSysStats)).Methods("GET")
+
+	// actions
+	r.HandleFunc("/tables/snapshot", C(SnapshotDatabases)).Methods("PUT")
+	r.HandleFunc("/tables/flush", C(FlushDatabases)).Methods("PUT")
+	r.HandleFunc("/tables/flush_journal", C(FlushJournals)).Methods("PUT")
+	r.HandleFunc("/tables/gc", C(GcDatabases)).Methods("PUT")
+	r.HandleFunc("/tables/dump/{table}/{part}", C(DumpTable)).Methods("PUT")
+	r.HandleFunc("/caches/purge", C(PurgeCaches)).Methods("PUT")
 	r.HandleFunc("/rollback", C(RollbackDatabases)).Methods("PUT")
 	r.HandleFunc("/log/{subsystem}/{level}", C(UpdateLog)).Methods("PUT")
-	r.HandleFunc("/dump/{table}/{part}", C(DumpTable)).Methods("PUT")
 	return nil
 }
 
@@ -76,8 +79,12 @@ func GetCacheStats(ctx *ApiContext) (interface{}, int) {
 	return cs, http.StatusOK
 }
 
-func GetMemStats(ctx *ApiContext) (interface{}, int) {
-	return ctx.Indexer.MemStats(), http.StatusOK
+func GetSysStats(ctx *ApiContext) (interface{}, int) {
+	s, err := GetSysStat(ctx.Context)
+	if err != nil {
+		panic(EInternal(EC_SERVER, "sysstat failed", err))
+	}
+	return s, http.StatusOK
 }
 
 func GetConfig(ctx *ApiContext) (interface{}, int) {

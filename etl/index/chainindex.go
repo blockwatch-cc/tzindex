@@ -17,7 +17,7 @@ import (
 var (
 	ChainPackSizeLog2    = 15 // 32k packs ~3.6M
 	ChainJournalSizeLog2 = 16 // 64k - can be big, no search required
-	ChainCacheSize       = 8  // ~30M
+	ChainCacheSize       = 2  // minimum
 	ChainFillLevel       = 100
 	ChainIndexKey        = "chain"
 	ChainTableKey        = "chain"

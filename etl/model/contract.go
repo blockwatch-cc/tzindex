@@ -55,7 +55,7 @@ type Contract struct {
 var _ pack.Item = (*Contract)(nil)
 
 // assuming the op was successful!
-func NewContract(acc *Account, oop *rpc.OriginationOp, op *Op) *Contract {
+func NewContract(acc *Account, oop *rpc.OriginationOp, op *Op, dict micheline.ConstantDict) *Contract {
 	c := AllocContract()
 	c.Address = acc.Address.Clone()
 	c.AccountId = acc.RowId
@@ -68,11 +68,15 @@ func NewContract(acc *Account, oop *rpc.OriginationOp, op *Op) *Contract {
 	c.StorageSize = res.StorageSize
 	c.StoragePaid = res.PaidStorageSizeDiff
 	if oop.Script != nil {
+		c.Features = oop.Script.Features()
+		if c.Features.Contains(micheline.FeatureGlobalConstant) {
+			oop.Script.ExpandConstants(dict)
+			c.Features |= oop.Script.Features()
+		}
 		c.Script, _ = oop.Script.MarshalBinary()
 		c.Storage, _ = oop.Script.Storage.MarshalBinary()
 		c.InterfaceHash = oop.Script.InterfaceHash()
 		c.CodeHash = oop.Script.CodeHash()
-		c.Features = oop.Script.Features()
 		c.Interfaces = oop.Script.Interfaces()
 		ep, _ := oop.Script.Entrypoints(false)
 		c.CallStats = make([]byte, 4*len(ep))
@@ -82,7 +86,7 @@ func NewContract(acc *Account, oop *rpc.OriginationOp, op *Op) *Contract {
 	return c
 }
 
-func NewInternalContract(acc *Account, iop *rpc.InternalResult, op *Op) *Contract {
+func NewInternalContract(acc *Account, iop *rpc.InternalResult, op *Op, dict micheline.ConstantDict) *Contract {
 	c := AllocContract()
 	c.Address = acc.Address.Clone()
 	c.AccountId = acc.RowId
@@ -95,11 +99,15 @@ func NewInternalContract(acc *Account, iop *rpc.InternalResult, op *Op) *Contrac
 	c.StorageSize = res.StorageSize
 	c.StoragePaid = res.PaidStorageSizeDiff
 	if iop.Script != nil {
+		c.Features = iop.Script.Features()
+		if c.Features.Contains(micheline.FeatureGlobalConstant) {
+			iop.Script.ExpandConstants(dict)
+			c.Features |= iop.Script.Features()
+		}
 		c.Script, _ = iop.Script.MarshalBinary()
 		c.Storage, _ = iop.Script.Storage.MarshalBinary()
 		c.InterfaceHash = iop.Script.InterfaceHash()
 		c.CodeHash = iop.Script.CodeHash()
-		c.Features = iop.Script.Features()
 		c.Interfaces = iop.Script.Interfaces()
 		ep, _ := iop.Script.Entrypoints(false)
 		c.CallStats = make([]byte, 4*len(ep))
@@ -259,22 +267,6 @@ func (c *Contract) ListCallStats() map[string]int {
 		res[name] = int(binary.BigEndian.Uint32(c.CallStats[i*4:]))
 	}
 	return res
-}
-
-func (c *Contract) ListFeatures() micheline.Features {
-	script, err := c.LoadScript()
-	if err != nil {
-		return 0
-	}
-	return script.Features()
-}
-
-func (c *Contract) ListInterfaces() micheline.Interfaces {
-	script, err := c.LoadScript()
-	if err != nil {
-		return nil
-	}
-	return script.Interfaces()
 }
 
 func (c *Contract) NamedBigmaps(ids []int64) map[string]int64 {

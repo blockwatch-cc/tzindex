@@ -15,11 +15,10 @@ type Chain struct {
 	Cycle              int64     `pack:"c,snappy"      json:"cycle"`                              // bc: block cycle (tezos specific)
 	Timestamp          time.Time `pack:"T,snappy"      json:"time"`                               // bc: block creation time
 	TotalAccounts      int64     `pack:"A,snappy"      json:"total_accounts"`                     // default accounts
-	TotalImplicit      int64     `pack:"J,snappy"      json:"total_implicit"`                     // implicit accounts
-	TotalManaged       int64     `pack:"M,snappy"      json:"total_managed"`                      // managed/originated accounts for delegation (KT1 without code)
 	TotalContracts     int64     `pack:"C,snappy"      json:"total_contracts"`                    // smart contracts (KT1 with code)
 	TotalOps           int64     `pack:"O,snappy"      json:"total_ops"`                          //
 	TotalContractOps   int64     `pack:"G,snappy"      json:"total_contract_ops"`                 // ops on KT1 contracts
+	TotalContractCalls int64     `pack:"a,snappy"      json:"total_contract_calls"`               // calls from EOA to KT1 contracts with params
 	TotalActivations   int64     `pack:"t,snappy"      json:"total_activations"`                  // fundraiser accounts activated
 	TotalSeedNonces    int64     `pack:"N,snappy"      json:"total_seed_nonce_revelations"`       //
 	TotalEndorsements  int64     `pack:"E,snappy"      json:"total_endorsements"`                 //
@@ -31,15 +30,16 @@ type Chain struct {
 	TotalTransactions  int64     `pack:"x,snappy"      json:"total_transactions"`                 //
 	TotalProposals     int64     `pack:"p,snappy"      json:"total_proposals"`                    //
 	TotalBallots       int64     `pack:"b,snappy"      json:"total_ballots"`                      //
+	TotalConstants     int64     `pack:"n,snappy"      json:"total_constants"`                    // registered global constants
 	TotalStorageBytes  int64     `pack:"S,snappy"      json:"total_storage_bytes"`                //
 	TotalPaidBytes     int64     `pack:"P,snappy"      json:"total_paid_bytes"`                   // storage paid for KT1 and contract store
-	TotalUsedBytes     int64     `pack:"B,snappy"      json:"total_used_bytes"`                   // ? (used by txscan.io)
-	TotalOrphans       int64     `pack:"U,snappy"      json:"total_orphans"`                      // alternative block headers
 	FundedAccounts     int64     `pack:"f,snappy"      json:"funded_accounts"`                    // total number of accounts qith non-zero balance
+	DustAccounts       int64     `pack:"d,snappy"      json:"dust_accounts"`                      // accounts with a balance < 1 tez
 	UnclaimedAccounts  int64     `pack:"u,snappy"      json:"unclaimed_accounts"`                 // fundraiser accounts unclaimed
 	TotalDelegators    int64     `pack:"2,snappy"      json:"total_delegators"`                   // count of all non-zero balance delegators
 	ActiveDelegators   int64     `pack:"3,snappy"      json:"active_delegators"`                  // KT1 delegating to active delegates
 	InactiveDelegators int64     `pack:"4,snappy"      json:"inactive_delegators"`                // KT1 delegating to inactive delegates
+	DustDelegators     int64     `pack:"8,snappy"      json:"dust_delegators"`                    // KT1 delegating to inactive delegates
 	TotalDelegates     int64     `pack:"5,snappy"      json:"total_delegates"`                    // count of all delegates (active and inactive)
 	ActiveDelegates    int64     `pack:"6,snappy"      json:"active_delegates"`                   // tz* active delegates
 	InactiveDelegates  int64     `pack:"7,snappy"      json:"inactive_delegates"`                 // tz* inactive delegates
@@ -67,17 +67,16 @@ func (c Chain) Time() time.Time {
 	return c.Timestamp
 }
 
-func (c *Chain) Update(b *Block, delegates map[AccountID]*Account) {
+func (c *Chain) Update(b *Block, accounts, delegates map[AccountID]*Account) {
 	c.RowId = 0 // force allocating new id
 	c.Height = b.Height
 	c.Cycle = b.Cycle
 	c.Timestamp = b.Timestamp
 	c.TotalAccounts += int64(b.NewAccounts)
-	c.TotalImplicit += int64(b.NewImplicitAccounts)
-	c.TotalManaged += int64(b.NewManagedAccounts)
 	c.TotalContracts += int64(b.NewContracts)
 	c.TotalOps += int64(b.NOps)
 	c.TotalContractOps += int64(b.NOpsContract)
+	c.TotalContractCalls += int64(b.NContractCalls)
 	c.TotalActivations += int64(b.NActivation)
 	c.UnclaimedAccounts -= int64(b.NActivation)
 	c.TotalSeedNonces += int64(b.NSeedNonce)
@@ -90,6 +89,7 @@ func (c *Chain) Update(b *Block, delegates map[AccountID]*Account) {
 	c.TotalTransactions += int64(b.NTx)
 	c.TotalProposals += int64(b.NProposal)
 	c.TotalBallots += int64(b.NBallot)
+	c.TotalConstants += int64(b.NRegister)
 	c.TotalStorageBytes += int64(b.StorageSize)
 	for _, op := range b.Ops {
 		c.TotalPaidBytes += op.StoragePaid
@@ -109,10 +109,42 @@ func (c *Chain) Update(b *Block, delegates map[AccountID]*Account) {
 	c.MultiDelegates = 0
 	c.Rolls = 0
 	c.RollOwners = 0
+
+	for _, acc := range accounts {
+		// sanity checks
+		if acc.IsDelegate {
+			continue
+		}
+
+		// update dust metrics
+		if acc.WasDust != acc.IsDust() {
+			if acc.WasDust {
+				c.DustAccounts--
+				if acc.IsDelegated {
+					c.DustDelegators--
+				}
+			} else {
+				c.DustAccounts++
+				if acc.IsDelegated {
+					c.DustDelegators++
+				}
+			}
+		}
+	}
+
 	for _, acc := range delegates {
 		// sanity checks
 		if !acc.IsDelegate {
 			continue
+		}
+
+		// update dust metrics
+		if acc.WasDust != acc.IsDust() {
+			if acc.WasDust {
+				c.DustAccounts--
+			} else {
+				c.DustAccounts++
+			}
 		}
 
 		// all delegators, except when they have zero balance
@@ -166,13 +198,6 @@ func (c *Chain) Update(b *Block, delegates map[AccountID]*Account) {
 			}
 		}
 	}
-
-	if b.IsOrphan {
-		c.TotalOrphans++
-	}
-
-	// TODO
-	// s.TotalUsedBytes +=
 }
 
 func (c *Chain) Rollback(b *Block) {

@@ -9,6 +9,7 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/vec"
+	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/rpc"
 	"blockwatch.cc/tzgo/tezos"
 
@@ -25,6 +26,7 @@ type Builder struct {
 	dlgHashMap map[uint64]*Account     // bakers by hash
 	dlgMap     map[AccountID]*Account  // bakers by id
 	conMap     map[AccountID]*Contract // smart contracts by account id
+	constDict  micheline.ConstantDict  // global constants used in smart contracts this block
 
 	// build state
 	validate  bool        // enables validation
@@ -193,6 +195,10 @@ func (b *Builder) Contracts() map[AccountID]*Contract {
 	return b.conMap
 }
 
+func (b *Builder) Constants() micheline.ConstantDict {
+	return b.constDict
+}
+
 func (b *Builder) Rights(typ tezos.RightType) []Right {
 	switch typ {
 	case tezos.RightTypeBaking:
@@ -235,7 +241,7 @@ func (b *Builder) Init(ctx context.Context, tip *ChainTip, c *rpc.Client) error 
 	// deployment the protocol version in the header has already switched
 	// to the next protocol
 	version := b.parent.Version
-	p := b.idx.ParamsByHeight(-1)
+	p := b.idx.ParamsByHeight(tip.BestHeight)
 	if p.IsCycleEnd(tip.BestHeight) && version > 0 {
 		version--
 	}
@@ -302,7 +308,7 @@ func (b *Builder) Build(ctx context.Context, tz *Bundle) (*Block, error) {
 
 	// 5  sanity checks
 	if b.validate {
-		if err := b.CheckState(ctx); err != nil {
+		if err := b.CheckState(ctx, 0); err != nil {
 			b.DumpState()
 			return nil, fmt.Errorf("build stage 5: %v", err)
 		}
@@ -321,6 +327,7 @@ func (b *Builder) Clean() {
 		acc.IsDirty = false
 		acc.IsNew = false
 		acc.WasFunded = false
+		acc.WasDust = false
 
 		// keep bakers out of cache
 		if acc.IsDelegate && !acc.MustDelete {
@@ -340,28 +347,29 @@ func (b *Builder) Clean() {
 		acc.IsDirty = false
 		acc.IsNew = false
 		acc.WasFunded = false
+		acc.WasDust = false
 	}
 
 	// clear build state
 	b.accHashMap = make(map[uint64]*Account)
 	b.accMap = make(map[AccountID]*Account)
 	b.conMap = make(map[AccountID]*Contract)
+	b.constDict = nil
 	b.baking = b.baking[:0]
 	b.endorsing = b.endorsing[:0]
 
-	// free previous parent block
-	if b.parent != nil {
-		b.parent.Free()
-		b.parent = nil
-	}
-
-	// clear branches (keep most recent 64 blocks only)
-	for n, v := range b.branches {
-		if v.Height < b.block.Height-int64(b.block.TZ.Block.Metadata.MaxOperationsTTL)-1 {
-			v.Free()
-			delete(b.branches, n)
+	// clear branches (keep most recent N blocks only)
+	if ttl := int64(b.block.TZ.Block.Metadata.MaxOperationsTTL); ttl > 1 {
+		for n, v := range b.branches {
+			if v.Height < b.block.Height-ttl-1 {
+				v.Free()
+				delete(b.branches, n)
+			}
 		}
 	}
+	// drop block contents
+	b.block.Clean()
+	b.branches[b.block.Hash.String()] = b.block
 
 	// keep current block as parent
 	b.parent = b.block
@@ -377,6 +385,7 @@ func (b *Builder) Purge() {
 	b.accHashMap = make(map[uint64]*Account)
 	b.accMap = make(map[AccountID]*Account)
 	b.conMap = make(map[AccountID]*Contract)
+	b.constDict = nil
 
 	// clear delegate state
 	b.dlgHashMap = make(map[uint64]*Account)
@@ -388,11 +397,8 @@ func (b *Builder) Purge() {
 	}
 	b.branches = make(map[string]*Block, 128)
 
-	// free previous parent block
-	if b.parent != nil {
-		b.parent.Free()
-		b.parent = nil
-	}
+	// free previous parent block (already done in branch free)
+	b.parent = nil
 
 	if b.block != nil {
 		b.block.Free()
@@ -431,7 +437,7 @@ func (b *Builder) BuildReorg(ctx context.Context, tz *Bundle, parent *Block) (*B
 
 	// 5  validity checks (expensive)
 	if b.validate {
-		if err := b.CheckState(ctx); err != nil {
+		if err := b.CheckState(ctx, -1); err != nil {
 			return nil, fmt.Errorf("build stage 5: %v", err)
 		}
 	}
@@ -448,6 +454,7 @@ func (b *Builder) CleanReorg() {
 		acc.IsDirty = false
 		acc.IsNew = false
 		acc.WasFunded = false
+		acc.WasDust = false
 
 		// keep bakers out of cache
 		if acc.IsDelegate && !acc.MustDelete {
@@ -462,6 +469,7 @@ func (b *Builder) CleanReorg() {
 	b.accHashMap = make(map[uint64]*Account)
 	b.accMap = make(map[AccountID]*Account)
 	b.conMap = make(map[AccountID]*Contract)
+	b.constDict = nil
 	b.baking = b.baking[:0]
 	b.endorsing = b.endorsing[:0]
 
@@ -470,6 +478,7 @@ func (b *Builder) CleanReorg() {
 		acc.IsDirty = false
 		acc.IsNew = false
 		acc.WasFunded = false
+		acc.WasDust = false
 	}
 
 	// don't clear branches during reorg because we'll need them later
@@ -521,13 +530,12 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 	for op_l, oll := range b.block.TZ.Block.Operations {
 		for op_p, oh := range oll {
 			// init branches
-			br := oh.Branch.String()
-			if _, ok := b.branches[br]; !ok {
+			if _, ok := b.BranchByHash(oh.Branch); !ok {
 				branch, err := b.idx.BlockByHash(ctx, oh.Branch, b.block.Height-int64(b.block.TZ.Block.Metadata.MaxOperationsTTL)-1, b.block.Height)
 				if err != nil {
-					return fmt.Errorf("op %s [%d:%d]: invalid branch %s: %v", oh.Hash, op_l, op_p, oh.Branch, err)
+					return fmt.Errorf("op %s [%d:%d]: invalid branch %s: %w", oh.Hash, op_l, op_p, oh.Branch, err)
 				}
-				b.branches[br] = branch
+				b.branches[oh.Branch.String()] = branch
 			}
 			// parse operations
 			for op_c, op := range oh.Contents {
@@ -540,7 +548,7 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 					aop := op.(*rpc.AccountActivationOp)
 					bkey, err := tezos.BlindAddress(aop.Pkh, aop.Secret)
 					if err != nil {
-						return fmt.Errorf("activation op [%d:%d]: blinded address creation failed: %v",
+						return fmt.Errorf("activation op [%d:%d]: blinded address creation failed: %w",
 							op_n, op_c, err)
 					}
 					addresses.AddUnique(bkey)
@@ -619,6 +627,9 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 							addresses.AddUnique(v)
 						}
 					}
+				case tezos.OpTypeRegisterConstant:
+					reg := op.(*rpc.ConstantRegistrationOp)
+					addresses.AddUnique(reg.Source)
 				}
 			}
 			op_n++
@@ -752,6 +763,7 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 			acc.FirstSeen = b.block.Height
 			acc.LastSeen = b.block.Height
 			lookup = append(lookup, v.Bytes22())
+			// log.Infof("Lookup addr %s %x", v, v.Bytes22())
 			// store in map, will be overwritten when resolved from db
 			// or kept as new address when this is the first time we see it
 			b.accHashMap[hashKey] = acc
@@ -786,6 +798,7 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 				}
 
 				hashKey := b.accCache.AccountHashKey(acc)
+				// log.Infof("Found %s hashkey=%d %#v", acc, hashKey, acc)
 
 				// return temp addrs to pool (Note: don't free addrs loaded from cache!)
 				if tmp, ok := b.accHashMap[hashKey]; ok && tmp.RowId == 0 {
@@ -840,6 +853,7 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 				log.Warnf("Existing account %d %s with NEW flag", v.RowId, v)
 				continue
 			}
+			// log.Infof("New account %s %#v", v, v)
 			newacc = append(newacc, v)
 		}
 	}
@@ -877,7 +891,8 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 				}
 			}
 
-			// cross check if we have missed a deactivation and fail
+			// cross check if we have missed a deactivation from cycle before
+			// we still keep the deactivated list around in parent block
 			for _, v := range b.parent.TZ.Block.Metadata.Deactivated {
 				acc, ok := b.AccountByAddress(v)
 				if !ok {
@@ -892,7 +907,6 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 						log.Warnf("Delegate %s forcefully deactivated with grace period %d at cycle %d",
 							acc, acc.GracePeriod, b.block.Cycle-1)
 						b.DeactivateDelegate(acc)
-						// return fmt.Errorf("deactivate: found non-deactivated delegate %s", v)
 					}
 				}
 			}
@@ -921,8 +935,6 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 			}
 
 			// special actions on protocol upgrades
-
-			// fix bugs by updating state
 			if !rollback {
 				err := b.MigrateProtocol(ctx, prevparams, nextparams)
 				if err != nil {
@@ -1027,7 +1039,7 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 		return err
 	}
 
-	// process operations
+	// process regular operations
 	// - create new op and flow objects
 	// - init/update accounts
 	// - sum op volume, fees, rewards, deposits
@@ -1059,12 +1071,69 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 					err = b.AppendSeedNonceOp(ctx, oh, op_l, op_p, op_c, rollback)
 				case tezos.OpTypeTransaction:
 					err = b.AppendTransactionOp(ctx, oh, op_l, op_p, op_c, rollback)
+				case tezos.OpTypeRegisterConstant:
+					err = b.AppendConstantRegistrationOp(ctx, oh, op_l, op_p, op_c, rollback)
 				}
 				if err != nil {
 					return err
 				}
 			}
 		}
+	}
+
+	// analyze contract originations and load referenced global constants
+	requiredConstants := make([]tezos.ExprHash, 0)
+	for _, ol := range b.block.TZ.Block.Operations {
+		for _, oh := range ol {
+			for _, o := range oh.Contents {
+				switch kind := o.OpKind(); kind {
+				case tezos.OpTypeOrigination:
+					// direct
+					oop := o.(*rpc.OriginationOp)
+					if oop.Script != nil && oop.Script.Features().Contains(micheline.FeatureGlobalConstant) {
+						requiredConstants = append(requiredConstants, oop.Script.Constants()...)
+					}
+				case tezos.OpTypeTransaction:
+					// may contain internal originations
+					top := o.(*rpc.TransactionOp)
+					for _, iop := range top.Metadata.InternalResults {
+						if iop.OpKind() == tezos.OpTypeOrigination {
+							if iop.Script != nil && iop.Script.Features().Contains(micheline.FeatureGlobalConstant) {
+								requiredConstants = append(requiredConstants, iop.Script.Constants()...)
+							}
+						}
+					}
+
+				case tezos.OpTypeRegisterConstant:
+					// register new constants to in case they are used right away
+					cop := o.(*rpc.ConstantRegistrationOp)
+					b.constDict.Add(cop.Metadata.Result.GlobalAddress, cop.Value)
+				}
+			}
+		}
+	}
+	// load all required constants
+	for {
+		// constants can recursively include other constants, so we must keep going
+		// until everything is resolved
+		more := make([]tezos.ExprHash, 0)
+		for _, v := range requiredConstants {
+			if b.constDict.Has(v) {
+				continue
+			}
+			if c, err := b.idx.LookupConstant(ctx, v); err != nil {
+				return fmt.Errorf("missing constant %s", v)
+			} else {
+				var p micheline.Prim
+				_ = p.UnmarshalBinary(c.Value)
+				b.constDict.Add(c.Address, p)
+				more = append(more, p.Constants()...)
+			}
+		}
+		if len(more) == 0 {
+			break
+		}
+		requiredConstants = more
 	}
 
 	return nil
@@ -1120,9 +1189,11 @@ func (b *Builder) UpdateStats(ctx context.Context) error {
 	// init pre-funded state
 	for _, acc := range b.accMap {
 		acc.WasFunded = acc.Balance() > 0
+		acc.WasDust = acc.IsDust()
 	}
 	for _, acc := range b.dlgMap {
 		acc.WasFunded = acc.Balance() > 0
+		acc.WasDust = acc.IsDust()
 	}
 
 	// apply pure in-flows
@@ -1227,7 +1298,7 @@ func (b *Builder) UpdateStats(ctx context.Context) error {
 
 	// update supplies and totals
 	b.block.Update(b.accMap, b.dlgMap)
-	b.block.Chain.Update(b.block, b.dlgMap)
+	b.block.Chain.Update(b.block, b.accMap, b.dlgMap)
 	b.block.Supply.Update(b.block, b.dlgMap)
 	return nil
 }
@@ -1236,9 +1307,13 @@ func (b *Builder) RollbackStats(ctx context.Context) error {
 	// init pre-funded state (at the end of block processing using current state)
 	for _, acc := range b.accMap {
 		acc.WasFunded = acc.Balance() > 0
+		acc.WasDust = acc.IsDust()
+		acc.MustDelete = acc.FirstSeen == b.block.Height
 	}
 	for _, acc := range b.dlgMap {
 		acc.WasFunded = acc.Balance() > 0
+		acc.WasDust = acc.IsDust()
+		acc.MustDelete = acc.FirstSeen == b.block.Height
 	}
 
 	// reverse apply out-flows and in/out-flows

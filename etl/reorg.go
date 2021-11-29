@@ -170,7 +170,11 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 	// setup builder for attaching
 	// on forward reorg use forkblock as initial parent
 	// when no block will be attached, this sets the correct parent block as well
-	c.builder.parent = forkBlock
+	c.builder.Purge()
+	if err := c.builder.Init(ctx, tip, c.rpc); err != nil {
+		log.Errorf("REORGANIZE: failed builder re-init at fork point %s %d: %v", tip.BestHash, tip.BestHeight, err)
+		return err
+	}
 
 	for e := attach.Front(); e != nil; e = e.Next() {
 		if interruptRequested(ctx) {

@@ -9,6 +9,7 @@ import (
 	"github.com/gorilla/mux"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,7 +32,145 @@ const (
 	FillModeLast    FillMode = "last"
 	FillModeLinear  FillMode = "linear"
 	FillModeZero    FillMode = "zero"
+
+	collapseUnits string = "mhdwMy"
 )
+
+type Collapse struct {
+	Value int
+	Unit  rune
+}
+
+func (c Collapse) String() string {
+	return strconv.Itoa(c.Value) + string(c.Unit)
+}
+
+func ParseCollapse(s string) (Collapse, error) {
+	var c Collapse
+	if len(s) < 1 {
+		return c, fmt.Errorf("collapse: invalid value %q", s)
+	}
+	if u := s[len(s)-1]; !strings.Contains(collapseUnits, string(u)) {
+		return c, fmt.Errorf("collapse: invalid unit %q", u)
+	} else {
+		c.Unit = rune(u)
+	}
+	if val, err := strconv.Atoi(s[:len(s)-1]); err != nil {
+		return c, fmt.Errorf("collapse: %v", err)
+	} else {
+		c.Value = val
+	}
+	if c.Value < 0 {
+		c.Value = -c.Value
+	}
+	if c.Value == 0 {
+		c.Value = 1
+	}
+	return c, nil
+}
+
+func (c Collapse) MarshalText() ([]byte, error) {
+	return []byte(c.String()), nil
+}
+
+func (c *Collapse) UnmarshalText(data []byte) error {
+	cc, err := ParseCollapse(string(data))
+	if err != nil {
+		return err
+	}
+	*c = cc
+	return nil
+}
+
+func (c Collapse) Duration() time.Duration {
+	base := time.Minute
+	switch c.Unit {
+	case 'm':
+		base = time.Minute
+	case 'h':
+		base = time.Hour
+	case 'd':
+		base = 24 * time.Hour
+	case 'w':
+		base = 24 * 7 * time.Hour
+	case 'M':
+		base = 30*24*time.Hour + 629*time.Minute + 28*time.Second // 30.437 days
+	case 'y':
+		base = 365 * 24 * time.Hour
+	}
+	return time.Duration(c.Value) * base
+}
+
+func (c Collapse) Truncate(t time.Time) time.Time {
+	switch c.Unit {
+	default:
+		// anything below a day is fine for go's time library
+		return t.Truncate(c.Duration() * time.Duration(c.Value))
+	case 'w':
+		// truncate to midnight on first day of week (weekdays are zero-based)
+		if c.Value == 1 {
+			yy, mm, dd := t.AddDate(0, 0, -int(t.Weekday())).Date()
+			return time.Date(yy, mm, dd, 0, 0, 0, 0, time.UTC)
+		}
+
+		// round down to n weeks
+		_, w := t.ISOWeek()
+		w = w % c.Value
+		yy, mm, dd := t.AddDate(0, 0, int(-t.Weekday())-w*7).Date()
+		return time.Date(yy, mm, dd, 0, 0, 0, 0, time.UTC)
+
+	case 'M':
+		// truncate to midnight on first day of month
+		yy, mm, _ := t.Date()
+		val := yy*12 + int(mm) - 1
+		if c.Value > 1 {
+			val = val - (val % c.Value)
+		}
+		yy = val / 12
+		mm = time.Month(val%12 + 1)
+		return time.Date(yy, mm, 1, 0, 0, 0, 0, time.UTC)
+
+	case 'y':
+		// truncate to midnight on first day of year
+		yy := t.Year()
+		if c.Value > 1 {
+			yy = yy - (yy % c.Value)
+		}
+		return time.Date(yy, time.January, 1, 0, 0, 0, 0, time.UTC)
+	}
+}
+
+func (c Collapse) Next(t time.Time, n int) time.Time {
+	switch c.Unit {
+	default:
+		// add n*m units
+		return c.Truncate(t).Add(time.Duration(n) * c.Duration())
+	case 'w':
+		// add n*m weeks
+		return c.Truncate(t).AddDate(0, 0, n*c.Value*7)
+	case 'M':
+		// add n*m months
+		return c.Truncate(t).AddDate(0, n*c.Value, 0)
+	case 'y':
+		// add n*m years
+		return c.Truncate(t).AddDate(n*c.Value, 0, 0)
+	}
+}
+
+func (c Collapse) Steps(from, to time.Time) []time.Time {
+	steps := make([]time.Time, 0)
+	if from.After(to) {
+		from, to = to, from
+	}
+	for {
+		from = c.Next(from, 1)
+		if !from.Before(to) {
+			break
+		}
+		steps = append(steps, from)
+	}
+	return steps
+}
 
 func ParseFillMode(s string) FillMode {
 	switch m := FillMode(strings.ToLower(s)); m {
@@ -103,7 +242,7 @@ var _ RESTful = (*SeriesRequest)(nil)
 type SeriesRequest struct {
 	Series   string          `schema:"-"`
 	Columns  util.StringList `schema:"columns"`
-	Collapse util.Duration   `schema:"collapse"`
+	Collapse Collapse        `schema:"collapse"`
 	FillMode FillMode        `schema:"fill"`
 	From     util.Time       `schema:"start_date"`
 	To       util.Time       `schema:"end_date"`
@@ -118,8 +257,8 @@ type SeriesRequest struct {
 	model          SeriesModel
 	bucket         SeriesBucket
 	prevBucket     SeriesBucket
-	window         time.Duration
 	sign           time.Duration
+	window         time.Duration
 	nextBucketTime time.Time
 }
 
@@ -170,13 +309,6 @@ func (r *SeriesRequest) Parse(ctx *ApiContext) {
 		r.FillMode = FillModeZero
 	}
 
-	// clamp duration
-	if d := r.Collapse.Duration(); d < time.Minute {
-		r.Collapse = util.Duration(time.Minute)
-	} else if d > 365*24*time.Hour {
-		r.Collapse = util.Duration(365 * 24 * time.Hour)
-	}
-
 	// ensure time column is included as first item (if not requested otherwise)
 	r.Columns.AddUniqueFront("time")
 
@@ -196,8 +328,6 @@ func (r *SeriesRequest) Parse(ctx *ApiContext) {
 		panic(EBadRequest(EC_CONTENTTYPE_UNSUPPORTED, fmt.Sprintf("unsupported format '%s'", r.Format), nil))
 	}
 
-	// adjust time range to request limit
-	window := r.Collapse.Duration()
 	switch true {
 	case !r.To.IsZero() && !r.From.IsZero():
 		// flip start and end when unordered
@@ -205,37 +335,37 @@ func (r *SeriesRequest) Parse(ctx *ApiContext) {
 			r.From, r.To = r.To, r.From
 		}
 		// truncate from/to to collapse
-		r.From = r.From.Truncate(window)
-		r.To = r.To.Truncate(window).Add(window)
+		r.From = util.NewTime(r.Collapse.Truncate(r.From.Time()))
+		r.To = util.NewTime(r.Collapse.Next(r.To.Time(), 1))
 
 	case r.From.IsZero() && !r.To.IsZero():
 		// adjust start time if not set
-		r.To = r.To.Truncate(window).Add(window)
-		r.From = r.To.Add(-time.Duration(r.Limit) * window)
+		r.From = util.NewTime(r.Collapse.Next(r.To.Time(), -int(r.Limit)))
+		r.To = util.NewTime(r.Collapse.Next(r.To.Time(), 1))
 
 	case r.To.IsZero() && !r.From.IsZero():
 		// adjust end time if not set
-		r.From = r.From.Truncate(window)
-		r.To = r.From.Add(time.Duration(r.Limit) * window)
+		r.From = util.NewTime(r.Collapse.Truncate(r.From.Time()))
+		r.To = util.NewTime(r.Collapse.Next(r.From.Time(), int(r.Limit)))
 
 	case r.To.IsZero() && r.From.IsZero():
 		// set default end to now when both are zero
-		r.To = util.NewTime(ctx.Now).Truncate(window).Add(window)
-		r.From = r.To.Add(-time.Duration(r.Limit) * window)
+		r.From = util.NewTime(r.Collapse.Next(ctx.Now, -int(r.Limit-1)))
+		r.To = util.NewTime(r.Collapse.Next(ctx.Now, 1))
 	}
 
 	// make sure we never cross realtime
-	if now := ctx.Now; r.To.Time().After(now) {
-		r.To = util.NewTime(ctx.Now).Truncate(window).Add(window)
+	if r.To.Time().After(ctx.Now) {
+		r.To = util.NewTime(r.Collapse.Next(ctx.Now, 1))
 	}
 
 	// limit
 	if ctx.Cfg.Http.MaxSeriesDuration > 0 && r.To.Time().Sub(r.From.Time()) > ctx.Cfg.Http.MaxSeriesDuration {
 		log.Warnf("Duration overflow %s > %s", r.To.Time().Sub(r.From.Time()), ctx.Cfg.Http.MaxSeriesDuration)
-		panic(ERequestTooLarge(EC_PARAM_INVALID, "series duration longer than 90 days", nil))
+		panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("series duration longer than %s", ctx.Cfg.Http.MaxSeriesDuration), nil))
 	}
 
-	// log.Infof("SERIES %s %s -> %s %s", r.Series, r.From.Time(), r.To.Time(), r.FillMode)
+	// log.Infof("SERIES %s collapse=%s %s -> %s mode=%s", r.Series, r.Collapse, r.From.Time(), r.To.Time(), r.FillMode)
 }
 
 func StreamSeries(ctx *ApiContext) (interface{}, int) {
@@ -259,7 +389,6 @@ func StreamSeries(ctx *ApiContext) (interface{}, int) {
 		args.model = &model.Supply{}
 	default:
 		panic(ENotFound(EC_RESOURCE_NOTFOUND, fmt.Sprintf("no such series '%s'", args.Series), nil))
-		return nil, -1
 	}
 	return args.StreamResponse(ctx)
 }
@@ -273,7 +402,7 @@ func (args *SeriesRequest) StreamResponse(ctx *ApiContext) (interface{}, int) {
 	args.bucket.SetTime(args.From.Time())
 	args.prevBucket = args.bucket.Clone().SetTime(args.From.Time())
 	args.window = args.Collapse.Duration()
-	args.nextBucketTime = args.From.Add(args.window).Time()
+	args.nextBucketTime = args.Collapse.Next(args.From.Time(), 1)
 	args.sign = 1
 	if args.Order == pack.OrderDesc {
 		args.sign = -1
@@ -375,8 +504,8 @@ func (args *SeriesRequest) StreamJSON(ctx *ApiContext) error {
 
 		// init next time window from data
 		if args.bucket.Time().IsZero() {
-			args.bucket.SetTime(modelTime.Truncate(args.window))
-			args.nextBucketTime = args.bucket.Time().Add(args.window * args.sign)
+			args.bucket.SetTime(args.Collapse.Truncate(modelTime))
+			args.nextBucketTime = args.Collapse.Next(args.bucket.Time(), int(args.sign))
 			// log.Infof("NEXT %s -> %s", args.bucket.Time(), args.nextBucketTime)
 		}
 
@@ -509,8 +638,8 @@ func (args *SeriesRequest) StreamCSV(ctx *ApiContext) error {
 		// init next time window from data
 		if args.bucket.Time().IsZero() {
 			// prepare for next accumulation window
-			args.bucket.SetTime(modelTime.Truncate(args.window))
-			args.nextBucketTime = args.bucket.Time().Add(args.window * args.sign)
+			args.bucket.SetTime(args.Collapse.Truncate(modelTime))
+			args.nextBucketTime = args.Collapse.Next(args.bucket.Time(), int(args.sign))
 			// log.Infof("NEXT %s -> %s", args.bucket.Time(), args.nextBucketTime)
 		}
 
@@ -563,8 +692,7 @@ func (args *SeriesRequest) StreamCSV(ctx *ApiContext) error {
 }
 
 func (args *SeriesRequest) Fill(from, to time.Time, fillFunc func(SeriesBucket) error) error {
-	window := args.Collapse.Duration()
-	for _, ts := range util.StepsBetween(from, to.Truncate(window), window) {
+	for _, ts := range args.Collapse.Steps(from, to) {
 		if args.Limit > 0 && args.count >= int(args.Limit) {
 			return io.EOF
 		}

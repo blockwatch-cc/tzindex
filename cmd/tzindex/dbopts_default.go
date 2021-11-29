@@ -1,6 +1,7 @@
 // Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
-// +build !linux,!windows
+//go:build !linux
+// +build !linux
 
 package main
 

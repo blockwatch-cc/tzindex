@@ -24,65 +24,66 @@ func init() {
 var _ RESTful = (*ExplorerBlock)(nil)
 
 type ExplorerBlock struct {
-	Hash                tezos.BlockHash              `json:"hash"`
-	ParentHash          tezos.BlockHash              `json:"predecessor"`
-	FollowerHash        tezos.BlockHash              `json:"successor"`
-	Baker               tezos.Address                `json:"baker"`
-	IsOrphan            bool                         `json:"is_orphan,omitempty"`
-	Height              int64                        `json:"height"`
-	Cycle               int64                        `json:"cycle"`
-	IsCycleSnapshot     bool                         `json:"is_cycle_snapshot"`
-	Timestamp           time.Time                    `json:"time"`
-	Solvetime           int                          `json:"solvetime"`
-	Version             int                          `json:"version"`
-	Validation          int                          `json:"validation_pass"`
-	Fitness             uint64                       `json:"fitness"`
-	Priority            int                          `json:"priority"`
-	Nonce               string                       `json:"nonce"`
-	VotingPeriodKind    tezos.VotingPeriodKind       `json:"voting_period_kind"`
-	SlotMask            string                       `json:"slot_mask"`
-	NSlotsEndorsed      int                          `json:"n_endorsed_slots"`
-	NOps                int                          `json:"n_ops"`
-	NOpsFailed          int                          `json:"n_ops_failed"`
-	NOpsContract        int                          `json:"n_ops_contract"`
-	NTx                 int                          `json:"n_tx"`
-	NActivation         int                          `json:"n_activation"`
-	NSeedNonce          int                          `json:"n_seed_nonce_revelations"`
-	N2Baking            int                          `json:"n_double_baking_evidences"`
-	N2Endorsement       int                          `json:"n_double_endorsement_evidences"`
-	NEndorsement        int                          `json:"n_endorsement"`
-	NDelegation         int                          `json:"n_delegation"`
-	NReveal             int                          `json:"n_reveal"`
-	NOrigination        int                          `json:"n_origination"`
-	NProposal           int                          `json:"n_proposal"`
-	NBallot             int                          `json:"n_ballot"`
-	Volume              float64                      `json:"volume"`
-	Fee                 float64                      `json:"fee"`
-	Reward              float64                      `json:"reward"`
-	Deposit             float64                      `json:"deposit"`
-	UnfrozenFees        float64                      `json:"unfrozen_fees"`
-	UnfrozenRewards     float64                      `json:"unfrozen_rewards"`
-	UnfrozenDeposits    float64                      `json:"unfrozen_deposits"`
-	ActivatedSupply     float64                      `json:"activated_supply"`
-	BurnedSupply        float64                      `json:"burned_supply"`
-	SeenAccounts        int                          `json:"n_accounts"`
-	NewAccounts         int                          `json:"n_new_accounts"`
-	NewImplicitAccounts int                          `json:"n_new_implicit"`
-	NewManagedAccounts  int                          `json:"n_new_managed"`
-	NewContracts        int                          `json:"n_new_contracts"`
-	ClearedAccounts     int                          `json:"n_cleared_accounts"`
-	FundedAccounts      int                          `json:"n_funded_accounts"`
-	GasLimit            int64                        `json:"gas_limit"`
-	GasUsed             int64                        `json:"gas_used"`
-	GasPrice            float64                      `json:"gas_price"`
-	StorageSize         int64                        `json:"storage_size"`
-	TDD                 float64                      `json:"days_destroyed"`
-	PctAccountsReused   float64                      `json:"pct_account_reuse"`
-	NOpsImplicit        int                          `json:"n_ops_implicit"`
-	LbEscapeVote        bool                         `json:"lb_esc_vote"`
-	LbEscapeEma         int64                        `json:"lb_esc_ema"`
-	Metadata            map[string]*ExplorerMetadata `json:"metadata,omitempty"`
-	Rights              []ExplorerRight              `json:"rights,omitempty"`
+	Hash              tezos.BlockHash              `json:"hash"`
+	ParentHash        tezos.BlockHash              `json:"predecessor"`
+	FollowerHash      tezos.BlockHash              `json:"successor"`
+	Baker             tezos.Address                `json:"baker"`
+	IsOrphan          bool                         `json:"is_orphan,omitempty"`
+	Height            int64                        `json:"height"`
+	Cycle             int64                        `json:"cycle"`
+	IsCycleSnapshot   bool                         `json:"is_cycle_snapshot"`
+	Timestamp         time.Time                    `json:"time"`
+	Solvetime         int                          `json:"solvetime"`
+	Version           int                          `json:"version"`
+	Validation        int                          `json:"validation_pass"`
+	Fitness           uint64                       `json:"fitness"`
+	Priority          int                          `json:"priority"`
+	Nonce             string                       `json:"nonce"`
+	VotingPeriodKind  tezos.VotingPeriodKind       `json:"voting_period_kind"`
+	SlotMask          string                       `json:"slot_mask"`
+	NSlotsEndorsed    int                          `json:"n_endorsed_slots"`
+	NOps              int                          `json:"n_ops"`
+	NOpsFailed        int                          `json:"n_ops_failed"`
+	NOpsContract      int                          `json:"n_ops_contract"`
+	NContractCalls    int                          `json:"n_contract_calls"`
+	NTx               int                          `json:"n_tx"`
+	NActivation       int                          `json:"n_activation"`
+	NSeedNonce        int                          `json:"n_seed_nonce_revelations"`
+	N2Baking          int                          `json:"n_double_baking_evidences"`
+	N2Endorsement     int                          `json:"n_double_endorsement_evidences"`
+	NEndorsement      int                          `json:"n_endorsement"`
+	NDelegation       int                          `json:"n_delegation"`
+	NReveal           int                          `json:"n_reveal"`
+	NOrigination      int                          `json:"n_origination"`
+	NProposal         int                          `json:"n_proposal"`
+	NBallot           int                          `json:"n_ballot"`
+	NRegister         int                          `json:"n_register_constant"`
+	Volume            float64                      `json:"volume"`
+	Fee               float64                      `json:"fee"`
+	Reward            float64                      `json:"reward"`
+	Deposit           float64                      `json:"deposit"`
+	UnfrozenFees      float64                      `json:"unfrozen_fees"`
+	UnfrozenRewards   float64                      `json:"unfrozen_rewards"`
+	UnfrozenDeposits  float64                      `json:"unfrozen_deposits"`
+	ActivatedSupply   float64                      `json:"activated_supply"`
+	BurnedSupply      float64                      `json:"burned_supply"`
+	SeenAccounts      int                          `json:"n_accounts"`
+	NewAccounts       int                          `json:"n_new_accounts"`
+	NewContracts      int                          `json:"n_new_contracts"`
+	ClearedAccounts   int                          `json:"n_cleared_accounts"`
+	FundedAccounts    int                          `json:"n_funded_accounts"`
+	GasLimit          int64                        `json:"gas_limit"`
+	GasUsed           int64                        `json:"gas_used"`
+	GasPrice          float64                      `json:"gas_price"`
+	StorageSize       int64                        `json:"storage_size"`
+	TDD               float64                      `json:"days_destroyed"`
+	PctAccountsReused float64                      `json:"pct_account_reuse"`
+	NOpsImplicit      int                          `json:"n_ops_implicit"`
+	LbEscapeVote      bool                         `json:"lb_esc_vote"`
+	LbEscapeEma       int64                        `json:"lb_esc_ema"`
+	Metadata          map[string]*ExplorerMetadata `json:"metadata,omitempty"`
+	Rights            []ExplorerRight              `json:"rights,omitempty"`
+	Protocol          tezos.ProtocolHash           `json:"protocol"`
 
 	// LEGACY
 	Ops *ExplorerOpList `json:"ops,omitempty"`
@@ -150,62 +151,65 @@ func NewExplorerBlock(ctx *ApiContext, block *model.Block, args Options) *Explor
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], block.Nonce)
 	b := &ExplorerBlock{
-		Hash:                block.Hash,
-		IsOrphan:            block.IsOrphan,
-		Baker:               ctx.Indexer.LookupAddress(ctx, block.BakerId),
-		Height:              block.Height,
-		Cycle:               block.Cycle,
-		IsCycleSnapshot:     block.IsCycleSnapshot,
-		Timestamp:           block.Timestamp,
-		Solvetime:           block.Solvetime,
-		Version:             block.Version,
-		Validation:          block.Validation,
-		Fitness:             block.Fitness,
-		Priority:            block.Priority,
-		Nonce:               hex.EncodeToString(buf[:]),
-		VotingPeriodKind:    block.VotingPeriodKind,
-		SlotMask:            hex.EncodeToString(block.SlotsEndorsed),
-		NSlotsEndorsed:      block.NSlotsEndorsed,
-		NOps:                block.NOps,
-		NOpsFailed:          block.NOpsFailed,
-		NOpsContract:        block.NOpsContract,
-		NTx:                 block.NTx,
-		NActivation:         block.NActivation,
-		NSeedNonce:          block.NSeedNonce,
-		N2Baking:            block.N2Baking,
-		N2Endorsement:       block.N2Endorsement,
-		NEndorsement:        block.NEndorsement,
-		NDelegation:         block.NDelegation,
-		NReveal:             block.NReveal,
-		NOrigination:        block.NOrigination,
-		NProposal:           block.NProposal,
-		NBallot:             block.NBallot,
-		Volume:              p.ConvertValue(block.Volume),
-		Fee:                 p.ConvertValue(block.Fee),
-		Reward:              p.ConvertValue(block.Reward),
-		Deposit:             p.ConvertValue(block.Deposit),
-		UnfrozenFees:        p.ConvertValue(block.UnfrozenFees),
-		UnfrozenRewards:     p.ConvertValue(block.UnfrozenRewards),
-		UnfrozenDeposits:    p.ConvertValue(block.UnfrozenDeposits),
-		ActivatedSupply:     p.ConvertValue(block.ActivatedSupply),
-		BurnedSupply:        p.ConvertValue(block.BurnedSupply),
-		SeenAccounts:        block.SeenAccounts,
-		NewAccounts:         block.NewAccounts,
-		NewImplicitAccounts: block.NewImplicitAccounts,
-		NewManagedAccounts:  block.NewManagedAccounts,
-		NewContracts:        block.NewContracts,
-		ClearedAccounts:     block.ClearedAccounts,
-		FundedAccounts:      block.FundedAccounts,
-		GasLimit:            block.GasLimit,
-		GasUsed:             block.GasUsed,
-		GasPrice:            block.GasPrice,
-		StorageSize:         block.StorageSize,
-		TDD:                 block.TDD,
-		NOpsImplicit:        block.NOpsImplicit,
+		Hash:             block.Hash,
+		IsOrphan:         block.IsOrphan,
+		Baker:            ctx.Indexer.LookupAddress(ctx, block.BakerId),
+		Height:           block.Height,
+		Cycle:            block.Cycle,
+		IsCycleSnapshot:  block.IsCycleSnapshot,
+		Timestamp:        block.Timestamp,
+		Solvetime:        block.Solvetime,
+		Version:          block.Version,
+		Validation:       block.Validation,
+		Fitness:          block.Fitness,
+		Priority:         block.Priority,
+		Nonce:            hex.EncodeToString(buf[:]),
+		VotingPeriodKind: block.VotingPeriodKind,
+		SlotMask:         hex.EncodeToString(block.SlotsEndorsed),
+		NSlotsEndorsed:   block.NSlotsEndorsed,
+		NOps:             block.NOps,
+		NOpsFailed:       block.NOpsFailed,
+		NOpsContract:     block.NOpsContract,
+		NContractCalls:   block.NContractCalls,
+		NTx:              block.NTx,
+		NActivation:      block.NActivation,
+		NSeedNonce:       block.NSeedNonce,
+		N2Baking:         block.N2Baking,
+		N2Endorsement:    block.N2Endorsement,
+		NEndorsement:     block.NEndorsement,
+		NDelegation:      block.NDelegation,
+		NReveal:          block.NReveal,
+		NOrigination:     block.NOrigination,
+		NProposal:        block.NProposal,
+		NBallot:          block.NBallot,
+		NRegister:        block.NRegister,
+		Volume:           p.ConvertValue(block.Volume),
+		Fee:              p.ConvertValue(block.Fee),
+		Reward:           p.ConvertValue(block.Reward),
+		Deposit:          p.ConvertValue(block.Deposit),
+		UnfrozenFees:     p.ConvertValue(block.UnfrozenFees),
+		UnfrozenRewards:  p.ConvertValue(block.UnfrozenRewards),
+		UnfrozenDeposits: p.ConvertValue(block.UnfrozenDeposits),
+		ActivatedSupply:  p.ConvertValue(block.ActivatedSupply),
+		BurnedSupply:     p.ConvertValue(block.BurnedSupply),
+		SeenAccounts:     block.SeenAccounts,
+		NewAccounts:      block.NewAccounts,
+		NewContracts:     block.NewContracts,
+		ClearedAccounts:  block.ClearedAccounts,
+		FundedAccounts:   block.FundedAccounts,
+		GasLimit:         block.GasLimit,
+		GasUsed:          block.GasUsed,
+		GasPrice:         block.GasPrice,
+		StorageSize:      block.StorageSize,
+		TDD:              block.TDD,
+		NOpsImplicit:     block.NOpsImplicit,
+		LbEscapeVote:     block.LbEscapeVote,
+		LbEscapeEma:      block.LbEscapeEma,
+		Protocol:         p.Protocol,
 	}
 	nowHeight := ctx.Tip.BestHeight
-	if block.SeenAccounts > 0 {
-		b.PctAccountsReused = float64(block.SeenAccounts-block.NewAccounts) / float64(block.SeenAccounts) * 100
+	if b.SeenAccounts != 0 {
+		b.PctAccountsReused = float64(b.SeenAccounts-b.NewAccounts) / float64(b.SeenAccounts) * 100
 	}
 
 	// use database lookups here (not cache) to correctly link orphans

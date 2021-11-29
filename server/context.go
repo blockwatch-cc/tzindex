@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -117,7 +118,7 @@ func NewContext(ctx context.Context, r *http.Request, w http.ResponseWriter, f A
 		done:           make(chan *Error, 1),
 		f:              f,
 		name:           name,
-		Log:            log.Clone(requestId),
+		Log:            log.Clone().WithTag(requestId),
 	}
 }
 
@@ -207,30 +208,27 @@ func (api *ApiContext) handleError(e error) {
 		case syscall.EPIPE:
 			re = EConnectionClosed(EC_NETWORK, "connection closed", err).(*Error)
 		default:
-			switch errStr := err.Error(); errStr {
-			case "http2: stream closed":
-				// ignore
-				return
+			errStr := err.Error()
+			switch {
+			case errors.Is(err, context.DeadlineExceeded):
+				dl, _ := api.Context.Deadline()
+				re = EServiceUnavailable(
+					EC_SERVER,
+					fmt.Sprintf("request timeout: took=%v max=%v", time.Since(api.Now), dl),
+					err).(*Error)
+			case errors.Is(err, context.Canceled):
+				re = EConnectionClosed(EC_NETWORK, "context canceled", err).(*Error)
 			default:
+				if errStr == "http2: stream closed" {
+					// ignore
+					return
+				}
 				api.Log.Errorf("Unhandled error %T: %v", err, err)
-				re = EInternal(EC_SERVER, "uncaught exception", err).(*Error)
 				if b, _ := api.jsonStack(); len(b) > 0 {
 					api.Log.Error(string(b))
 				}
+				re = EInternal(EC_SERVER, reflect.TypeOf(e).String(), err).(*Error)
 			}
-		}
-	default:
-		switch err {
-		case context.DeadlineExceeded:
-			dl, _ := api.Context.Deadline()
-			re = EServiceUnavailable(
-				EC_SERVER,
-				fmt.Sprintf("request timeout: took=%v max=%v", time.Since(api.Now), dl),
-				err).(*Error)
-		case context.Canceled:
-			re = EConnectionClosed(EC_NETWORK, "context canceled", err).(*Error)
-		default:
-			re = EInternal(EC_SERVER, reflect.TypeOf(e).String(), e).(*Error)
 		}
 	}
 	re.SetScope(api.name)
@@ -418,7 +416,10 @@ func (api *ApiContext) writeResponseHeaders(contentType, trailers string) {
 		if api.result != nil {
 			// disable cache for all regular responses unless they implement Expires()
 			if res, ok := api.result.(Resource); ok {
-				w.Header().Set("Last-Modified", res.LastModified().Format(http.TimeFormat))
+				modtime := res.LastModified()
+				if !modtime.IsZero() {
+					w.Header().Set("Last-Modified", modtime.Format(http.TimeFormat))
+				}
 				exptime := res.Expires()
 				if !exptime.IsZero() {
 					if expires = exptime.Sub(now); expires < 0 {

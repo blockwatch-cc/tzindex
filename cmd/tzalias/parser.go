@@ -199,57 +199,101 @@ func fillStruct(m map[string]string, alias *tzstats.Metadata) error {
 			if alias.Alias == nil {
 				alias.Alias = &tzstats.AliasMetadata{}
 			}
-			err = setField(alias.Alias, keyParts[1], v)
+			if len(keyParts) > 1 {
+				err = setField(alias.Alias, keyParts[1], v)
+			} else if v == "null" {
+				alias.Alias = nil
+			}
 		case "baker":
 			if alias.Baker == nil {
 				alias.Baker = &tzstats.BakerMetadata{}
 			}
-			err = setField(alias.Baker, keyParts[1], v)
+			if len(keyParts) > 1 {
+				err = setField(alias.Baker, keyParts[1], v)
+			} else if v == "null" {
+				alias.Baker = nil
+			}
 		case "payout":
 			if alias.Payout == nil {
 				alias.Payout = &tzstats.PayoutMetadata{}
 			}
-			err = setField(alias.Payout, keyParts[1], v)
+			if len(keyParts) > 1 {
+				err = setField(alias.Payout, keyParts[1], v)
+			} else if v == "null" {
+				alias.Payout = nil
+			}
 		case "asset":
 			if alias.Asset == nil {
 				alias.Asset = &tzstats.AssetMetadata{}
 			}
-			err = setField(alias.Asset, keyParts[1], v)
+			if len(keyParts) > 1 {
+				err = setField(alias.Asset, keyParts[1], v)
+			} else if v == "null" {
+				alias.Asset = nil
+			}
 		case "location":
 			if alias.Location == nil {
 				alias.Location = &tzstats.LocationMetadata{}
 			}
-			err = setField(alias.Location, keyParts[1], v)
+			if len(keyParts) > 1 {
+				err = setField(alias.Location, keyParts[1], v)
+			} else if v == "null" {
+				alias.Location = nil
+			}
 		case "domain":
 			if alias.Domain == nil {
 				alias.Domain = &tzstats.DomainMetadata{}
 			}
-			err = setField(alias.Domain, keyParts[1], v)
+			if len(keyParts) > 1 {
+				err = setField(alias.Domain, keyParts[1], v)
+			} else if v == "null" {
+				alias.Domain = nil
+			}
 		case "media":
 			if alias.Media == nil {
 				alias.Media = &tzstats.MediaMetadata{}
 			}
-			err = setField(alias.Media, keyParts[1], v)
+			if len(keyParts) > 1 {
+				err = setField(alias.Media, keyParts[1], v)
+			} else if v == "null" {
+				alias.Media = nil
+			}
 		case "rights":
 			if alias.Rights == nil {
 				alias.Rights = &tzstats.RightsMetadata{}
 			}
-			err = setField(alias.Rights, keyParts[1], v)
+			if len(keyParts) > 1 {
+				err = setField(alias.Rights, keyParts[1], v)
+			} else if v == "null" {
+				alias.Rights = nil
+			}
 		case "social":
 			if alias.Social == nil {
 				alias.Social = &tzstats.SocialMetadata{}
 			}
-			err = setField(alias.Social, keyParts[1], v)
+			if len(keyParts) > 1 {
+				err = setField(alias.Social, keyParts[1], v)
+			} else if v == "null" {
+				alias.Social = nil
+			}
 		case "tz16":
 			if alias.Tz16 == nil {
 				alias.Tz16 = &tzstats.Tz16Metadata{}
 			}
-			err = setField(alias.Tz16, keyParts[1], v)
+			if len(keyParts) > 1 {
+				err = setField(alias.Tz16, keyParts[1], v)
+			} else if v == "null" {
+				alias.Tz16 = nil
+			}
 		case "tz21":
 			if alias.Tz21 == nil {
 				alias.Tz21 = &tzstats.Tz21Metadata{}
 			}
-			err = setField(alias.Tz21, keyParts[1], v)
+			if len(keyParts) > 1 {
+				err = setField(alias.Tz21, keyParts[1], v)
+			} else if v == "null" {
+				alias.Tz21 = nil
+			}
 		case "updated":
 			if alias.Updated == nil {
 				alias.Updated = &tzstats.UpdatedMetadata{}
@@ -264,18 +308,22 @@ func fillStruct(m map[string]string, alias *tzstats.Metadata) error {
 			if !ok {
 				desc = make(map[string]interface{})
 			}
-			// check value type
-			if descVal, ok := desc.(map[string]interface{}); ok {
-				descVal[keyParts[1]] = v
-			} else {
-				if err := setField(desc, keyParts[1], v); err != nil {
-					return err
+			if len(keyParts) > 1 {
+				// check value type
+				if descVal, ok := desc.(map[string]interface{}); ok {
+					descVal[keyParts[1]] = v
+				} else {
+					if err := setField(desc, keyParts[1], v); err != nil {
+						return err
+					}
 				}
+				alias.Extra[ns] = desc
+			} else if v == "null" {
+				delete(alias.Extra, ns)
 			}
-			alias.Extra[ns] = desc
 		}
 		if err != nil {
-			return fmt.Errorf("Setting %s=%s: %v", k, v, err)
+			return fmt.Errorf("Setting %s=%s: %w", k, v, err)
 		}
 	}
 	return nil

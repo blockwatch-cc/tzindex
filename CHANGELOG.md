@@ -1,5 +1,63 @@
 # Changelog
 
+### v11.0.0 (v011-2021-11-20)
+
+Tezos Hangzhou protocol support.
+
+- ETL: support for new Michelson smart contract on-chain **views**, **global constants** and **timelocks**
+- ETL: new global constants table
+- ETL: global constants are automatically injected into new originated contracts
+- API: new endpoints `/tables/constant` and `/explorer/constant/{hash}`
+- API: new typedefs for on-chain views in `/explorer/contracts/{address}/script`
+
+Fixes and enhancements
+
+- TZTOP: new live monitoring tool to gain insights into indexer query performance and memory usage
+- ETL: deduplicate storage updates, reduces operation table size by 25%
+- ETL: improve TTL block cache usage to reduces memory required for indexing
+- ETL: improved burned supply accounting, count coins sent to burn address, count storage burn
+- ETL: fix bigmap copy owner on origination
+- ETL: update Tezos domains metadata model
+- API: fix future vote end date
+- API: disable bigmap ptr patching on origination storage
+- ALIAS: support removal of empty metadata trees
+- BUILD: Support windows build
+
+Breaking changes
+- CLI: `--light` mode has become default, for gov/income data run in `--full` mode
+- API: block table field order has changed due to removal/addition of fields
+- API: chain table field order has changed due to removal/addition of fields
+- API: supply table field order has changed due to addition of fields
+
+REST API
+
+- API: new virtual argument `address` on operation table to filter for any occurence of an address across sender, receiver, creator and delegate fields
+- API: improved historic bigmap cache build time by reusing existing state
+- API: support long time-series collapse intervals `w` week, `M` month, `y` year
+- API: block table (note: breaking changes to table field order)
+  - removed `n_new_managed`, `n_new_implicit`
+  - changed `n_new_accounts` to count EOA only (before this also counted new contracts)
+  - new `n_register_constant`, `n_contract_calls`
+- API: chain table and series (note: breaking changes to table field order)
+  - removed `total_implicit`, `total_managed`
+  - changed `total_accounts` to count EOA only (before this also counted new contracts)
+  - new `total_constants`, `total_contract_calls`
+  - new `dust_accounts` and `dust_delegators` for accounts with balance <1tez
+- API: supply table and series (note: breaking changes to table field order)
+  - renamed `burned_implicit` to `burned_allocation`
+  - new `burned_storage` (storage fees) and `burned_explicit` (sent to burn address)
+- API: deprecated `/system/mem` statistics and merged into `/system/tables`
+- API: new `/system/sysstat` and `/system/apistat` endpoints
+- API: moved internal management API endpoints
+    - `/system/snapshot` -> `/system/tables/snapshot`
+    - `/system/flush` -> `/system/tables/flush`
+    - `/system/flush_journal` -> `/system/tables/flush_journal`
+    - `/system/gc` -> `/system/tables/gc`
+    - `/system/dump` -> `/system/tables/dump`
+    - `/system/purge` -> `/system/caches/purge`
+- API: calling `PUT /system/caches/purge` now purges table caches in addition to indexer caches
+
+
 ### 10.1.0
 
 API changes

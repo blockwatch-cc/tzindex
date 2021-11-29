@@ -4,7 +4,6 @@
 package server
 
 import (
-	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -71,7 +70,7 @@ func (r *Right) TimestampMs() int64 {
 		return r.ctx.Tip.BestTime.Add(time.Duration(diff)*r.params.BlockTime()).Unix() * 1000
 	}
 	// blocktime cache is lazy initialzed on first use by querying block table
-	return r.ctx.Indexer.LookupBlockTimeMs(context.Background(), r.Height)
+	return r.ctx.Indexer.LookupBlockTimeMs(r.ctx.Context, r.Height)
 }
 
 func (r *Right) Timestamp() time.Time {
@@ -79,7 +78,7 @@ func (r *Right) Timestamp() time.Time {
 		return r.ctx.Tip.BestTime.Add(time.Duration(diff) * r.params.BlockTime())
 	}
 	// blocktime cache is lazy initialzed on first use by querying block table
-	return r.ctx.Indexer.LookupBlockTime(context.Background(), r.Height)
+	return r.ctx.Indexer.LookupBlockTime(r.ctx.Context, r.Height)
 }
 
 func (r *Right) MarshalJSONVerbose() ([]byte, error) {

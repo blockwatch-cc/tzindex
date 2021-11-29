@@ -797,3 +797,65 @@ func (b *Builder) NewInternalOriginationFlows(origsrc, src, dst, origdlg, srcdlg
 	b.block.Flows = append(b.block.Flows, flows...)
 	return flows, nil
 }
+
+func (b *Builder) NewConstantRegistrationFlows(src, srcdlg *Account, feeupd, upd rpc.BalanceUpdates, n, l, p, c int) ([]*Flow, error) {
+	flows := make([]*Flow, 0)
+
+	// fees paid by sender
+	var paid int64
+	for _, v := range feeupd {
+		switch v.BalanceUpdateKind() {
+		case "contract":
+			// fees paid by src
+			u := v.(*rpc.ContractBalanceUpdate)
+			f := NewFlow(b.block, src, b.block.Baker, n, l, p, c, 0)
+			f.Category = FlowCategoryBalance
+			f.Operation = FlowTypeConstantRegistration
+			f.AmountOut = -u.Change // note the negation!
+			f.IsFee = true
+			paid += -u.Change
+			flows = append(flows, f)
+		case "freezer":
+			// fees received by baker
+			u := v.(*rpc.FreezerBalanceUpdate)
+			switch u.Category {
+			case "fees":
+				f := NewFlow(b.block, b.block.Baker, src, n, l, p, c, 0)
+				f.Category = FlowCategoryFees
+				f.Operation = FlowTypeConstantRegistration
+				f.AmountIn = u.Change
+				f.IsFrozen = true
+				f.IsFee = true
+				flows = append(flows, f)
+			}
+		}
+	}
+
+	// rest is burned
+	for _, v := range upd {
+		switch v.BalanceUpdateKind() {
+		case "contract":
+			u := v.(*rpc.ContractBalanceUpdate)
+			// deducted from source as burn
+			f := NewFlow(b.block, src, nil, n, l, p, c, 0)
+			f.Category = FlowCategoryBalance
+			f.Operation = FlowTypeConstantRegistration
+			f.AmountOut = -u.Change
+			paid += -u.Change
+			f.IsBurned = true
+			flows = append(flows, f)
+		}
+	}
+
+	// deduct fee+burn from original source delegation iff not self-delegated
+	if srcdlg != nil && srcdlg.RowId != src.RowId {
+		f := NewFlow(b.block, srcdlg, src, n, l, p, c, 0)
+		f.Category = FlowCategoryDelegation
+		f.Operation = FlowTypeConstantRegistration
+		f.AmountOut = paid
+		flows = append(flows, f)
+	}
+
+	b.block.Flows = append(b.block.Flows, flows...)
+	return flows, nil
+}

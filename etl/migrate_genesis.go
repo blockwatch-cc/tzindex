@@ -74,7 +74,6 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		}
 
 		// update block counters
-		b.block.NewImplicitAccounts++
 		b.block.FundedAccounts++
 		b.block.NewAccounts++
 		b.block.SeenAccounts++
@@ -188,7 +187,7 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 			Script:   &v.Script,
 			Metadata: &rpc.OriginationOpMetadata{}, // empty is OK
 		}
-		contracts = append(contracts, model.NewContract(acc, oop, op))
+		contracts = append(contracts, model.NewContract(acc, oop, op, nil))
 
 		log.Debug(newLogClosure(func() string {
 			var as, vs, ds, rs string
@@ -218,7 +217,6 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		acc.IsDelegatable = true
 
 		// update block counters
-		b.block.NewImplicitAccounts++
 		b.block.NewAccounts++
 		b.block.SeenAccounts++
 
@@ -248,7 +246,7 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 
 	// init chain counters from block
 	// set initial unclaimed accounts to number of blinded accounts
-	b.block.Chain.Update(b.block, b.dlgMap)
+	b.block.Chain.Update(b.block, b.accMap, b.dlgMap)
 	b.block.Chain.UnclaimedAccounts = int64(len(gen.Commitments))
 
 	// update supply counters

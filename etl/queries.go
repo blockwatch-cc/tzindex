@@ -174,7 +174,7 @@ func (m *Indexer) BlockByID(ctx context.Context, id uint64) (*model.Block, error
 		return nil, err
 	}
 	b := &model.Block{}
-	err = pack.NewQuery("block_by_parent_id", blocks).
+	err = pack.NewQuery("block_by_id", blocks).
 		AndEqual("I", id).
 		Execute(ctx, b)
 	if err != nil {
@@ -260,7 +260,7 @@ func (m *Indexer) BlockByHeight(ctx context.Context, height int64) (*model.Block
 		return nil, err
 	}
 	b := &model.Block{}
-	err = pack.NewQuery("block_hash_by_height", blocks).
+	err = pack.NewQuery("block_by_height", blocks).
 		AndEqual("height", height).
 		AndEqual("is_orphan", false).
 		Execute(ctx, b)
@@ -381,78 +381,6 @@ func (m *Indexer) LookupLastEndorsedBlock(ctx context.Context, a *model.Account)
 		return nil, index.ErrNoBlockEntry
 	}
 	return m.BlockByHeight(ctx, op.Height)
-}
-
-func (m *Indexer) LookupNextRight(ctx context.Context, a *model.Account, height int64, typ tezos.RightType, prio int64) (*model.Right, error) {
-	rights, err := m.Table(index.RightsTableKey)
-	if err != nil {
-		return nil, err
-	}
-	q := pack.NewQuery("next_right", rights).
-		WithFields("h", "t", "A", "p").
-		WithLimit(1).
-		AndGt("height", height).        // from block height
-		AndEqual("type", typ).          // right type
-		AndEqual("account_id", a.RowId) // delegate id
-	if prio >= 0 {
-		q = q.AndEqual("priority", 0)
-	}
-	right := &model.Right{}
-	err = q.Execute(ctx, right)
-	if err != nil {
-		return nil, err
-	}
-	if right.RowId == 0 {
-		return nil, index.ErrNoRightsEntry
-	}
-	return right, nil
-}
-
-// assuming the lock is more expensive than streaming/decoding results
-func (m *Indexer) LookupNextRights(ctx context.Context, a *model.Account, height int64) (bakeright, endorseright model.Right, rerr error) {
-	rights, err := m.Table(index.RightsTableKey)
-	if err != nil {
-		rerr = err
-		return
-	}
-	q := pack.NewQuery("next_rights", rights).
-		WithFields("h", "t", "A", "p").
-		AndGt("height", height).
-		AndEqual("account_id", a.RowId).
-		AndLte("priority", 31) // priority for bake & endorse
-	right := &model.Right{}
-	err = q.Stream(ctx, func(r pack.Row) error {
-		if err := r.Decode(right); err != nil {
-			return err
-		}
-		switch right.Type {
-		case tezos.RightTypeBaking:
-			if right.Priority > 0 {
-				return nil
-			}
-			if bakeright.RowId > 0 {
-				if endorseright.RowId > 0 {
-					return io.EOF
-				}
-				return nil
-			}
-			bakeright = *right
-		case tezos.RightTypeEndorsing:
-			if endorseright.RowId > 0 {
-				if bakeright.RowId > 0 {
-					return io.EOF
-				}
-				return nil
-			}
-			endorseright = *right
-		}
-		return nil
-	})
-	if err != nil && err != io.EOF {
-		rerr = err
-		return
-	}
-	return
 }
 
 func (m *Indexer) ListBlockRights(ctx context.Context, height int64, typ tezos.RightType) ([]model.Right, error) {
@@ -998,15 +926,6 @@ func (m *Indexer) ListAccountOps(ctx context.Context, r ListRequest) ([]*model.O
 
 	switch {
 	case r.SenderId > 0:
-		// FIXME: packdb condition tree bug, having AND(sender) first produces
-		// AND
-		// + OR
-		// | + AND
-		// | | + S = 36740
-		// | + R = 39598
-		// | + D = 39598
-		// + h > 25768
-		// + h <= 25773
 		if onlyDelegation {
 			q = q.Or(
 				// regular delegation is del + delegate set
@@ -1035,7 +954,6 @@ func (m *Indexer) ListAccountOps(ctx context.Context, r ListRequest) ([]*model.O
 		}
 		q = q.AndEqual("sender_id", r.SenderId)
 	case r.ReceiverId > 0:
-		// FIXME: packdb condition bug
 		if onlyDelegation {
 			q = q.Or(
 				// regular delegation is del + delegate set
@@ -1137,7 +1055,6 @@ func (m *Indexer) ListAccountOpsCollapsed(ctx context.Context, r ListRequest) ([
 
 	switch {
 	case r.SenderId > 0:
-		// FIXME: packdb condition bug
 		if onlyDelegation {
 			q = q.Or(
 				// regular delegation is del + delegate set
@@ -1167,7 +1084,6 @@ func (m *Indexer) ListAccountOpsCollapsed(ctx context.Context, r ListRequest) ([
 		q = q.AndEqual("sender_id", r.SenderId)
 
 	case r.ReceiverId > 0:
-		// FIXME: packdb condition bug
 		if onlyDelegation {
 			q = q.Or(
 				// regular delegation is del + delegate set
@@ -1733,12 +1649,27 @@ func (m *Indexer) ListHistoricBigmapKeys(ctx context.Context, r ListRequest) ([]
 		if err != nil {
 			return nil, err
 		}
-		hist, err = m.bigmaps.Build(ctx, table, r.BigmapId, r.Since)
-		if err != nil {
-			return nil, err
+
+		// check of we have any previous bigmap state cached
+		prev, ok := m.bigmaps.GetBest(r.BigmapId, r.Since)
+		if ok {
+			// update from existing cache
+			hist, err = m.bigmaps.Update(ctx, prev, table, r.Since)
+			if err != nil {
+				return nil, err
+			}
+			log.Debugf("Updated history cache for bigmap %d from height %d to height %d with %d entries in %s",
+				r.BigmapId, prev.Height, r.Since, hist.Len(), time.Since(start))
+
+		} else {
+			// build a new cache
+			hist, err = m.bigmaps.Build(ctx, table, r.BigmapId, r.Since)
+			if err != nil {
+				return nil, err
+			}
+			log.Debugf("Built history cache for bigmap %d at height %d with %d entries in %s",
+				r.BigmapId, r.Since, hist.Len(), time.Since(start))
 		}
-		log.Debugf("Built history cache for bigmap %d at height %d with %d entries in %s",
-			r.BigmapId, r.Since, hist.Len(), time.Since(start))
 	}
 
 	// cursor and offset are mutually exclusive, we use offset below
@@ -2045,4 +1976,25 @@ func (m *Indexer) UpsertMetadata(ctx context.Context, entries []*model.Metadata)
 	}
 
 	return nil
+}
+
+func (m *Indexer) LookupConstant(ctx context.Context, hash tezos.ExprHash) (*model.Constant, error) {
+	if !hash.IsValid() {
+		return nil, ErrInvalidHash
+	}
+	table, err := m.Table(index.ConstantTableKey)
+	if err != nil {
+		return nil, err
+	}
+	cc := &model.Constant{}
+	err = pack.NewQuery("constant_by_hash", table).
+		AndEqual("address", hash.Bytes()).
+		Execute(ctx, cc)
+	if err != nil {
+		return nil, err
+	}
+	if cc.RowId == 0 {
+		return nil, index.ErrNoConstantEntry
+	}
+	return cc, nil
 }

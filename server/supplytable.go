@@ -76,11 +76,14 @@ func (s *Supply) MarshalJSONVerbose() ([]byte, error) {
 		MintedEndorsing     float64   `json:"minted_endorsing"`
 		MintedSeeding       float64   `json:"minted_seeding"`
 		MintedAirdrop       float64   `json:"minted_airdrop"`
+		MintedSubsidy       float64   `json:"minted_subsidy"`
 		Burned              float64   `json:"burned"`
 		BurnedDoubleBaking  float64   `json:"burned_double_baking"`
 		BurnedDoubleEndorse float64   `json:"burned_double_endorse"`
 		BurnedOrigination   float64   `json:"burned_origination"`
-		BurnedImplicit      float64   `json:"burned_implicit"`
+		BurnedAllocation    float64   `json:"burned_allocation"`
+		BurnedStorage       float64   `json:"burned_storage"`
+		BurnedExplicit      float64   `json:"burned_explicit"`
 		BurnedSeedMiss      float64   `json:"burned_seed_miss"`
 		Frozen              float64   `json:"frozen"`
 		FrozenDeposits      float64   `json:"frozen_deposits"`
@@ -108,11 +111,14 @@ func (s *Supply) MarshalJSONVerbose() ([]byte, error) {
 		MintedEndorsing:     s.params.ConvertValue(s.MintedEndorsing),
 		MintedSeeding:       s.params.ConvertValue(s.MintedSeeding),
 		MintedAirdrop:       s.params.ConvertValue(s.MintedAirdrop),
+		MintedSubsidy:       s.params.ConvertValue(s.MintedSubsidy),
 		Burned:              s.params.ConvertValue(s.Burned),
 		BurnedDoubleBaking:  s.params.ConvertValue(s.BurnedDoubleBaking),
 		BurnedDoubleEndorse: s.params.ConvertValue(s.BurnedDoubleEndorse),
 		BurnedOrigination:   s.params.ConvertValue(s.BurnedOrigination),
-		BurnedImplicit:      s.params.ConvertValue(s.BurnedImplicit),
+		BurnedAllocation:    s.params.ConvertValue(s.BurnedAllocation),
+		BurnedStorage:       s.params.ConvertValue(s.BurnedStorage),
+		BurnedExplicit:      s.params.ConvertValue(s.BurnedExplicit),
 		BurnedSeedMiss:      s.params.ConvertValue(s.BurnedSeedMiss),
 		Frozen:              s.params.ConvertValue(s.Frozen),
 		FrozenDeposits:      s.params.ConvertValue(s.FrozenDeposits),
@@ -170,6 +176,8 @@ func (s *Supply) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.MintedSeeding), 'f', dec, 64)
 		case "minted_airdrop":
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.MintedAirdrop), 'f', dec, 64)
+		case "minted_subsidy":
+			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.MintedSubsidy), 'f', dec, 64)
 		case "burned":
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Burned), 'f', dec, 64)
 		case "burned_double_baking":
@@ -178,8 +186,12 @@ func (s *Supply) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedDoubleEndorse), 'f', dec, 64)
 		case "burned_origination":
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedOrigination), 'f', dec, 64)
-		case "burned_implicit":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedImplicit), 'f', dec, 64)
+		case "burned_allocation":
+			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedAllocation), 'f', dec, 64)
+		case "burned_storage":
+			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedStorage), 'f', dec, 64)
+		case "burned_explicit":
+			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedExplicit), 'f', dec, 64)
 		case "burned_seed_miss":
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedSeedMiss), 'f', dec, 64)
 		case "frozen":
@@ -248,6 +260,8 @@ func (s *Supply) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.MintedSeeding), 'f', dec, 64)
 		case "minted_airdrop":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.MintedAirdrop), 'f', dec, 64)
+		case "minted_subsidy":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.MintedSubsidy), 'f', dec, 64)
 		case "burned":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Burned), 'f', dec, 64)
 		case "burned_double_baking":
@@ -256,8 +270,12 @@ func (s *Supply) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.BurnedDoubleEndorse), 'f', dec, 64)
 		case "burned_origination":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.BurnedOrigination), 'f', dec, 64)
-		case "burned_implicit":
-			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.BurnedImplicit), 'f', dec, 64)
+		case "burned_allocation":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.BurnedAllocation), 'f', dec, 64)
+		case "burned_storage":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.BurnedStorage), 'f', dec, 64)
+		case "burned_explicit":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.BurnedExplicit), 'f', dec, 64)
 		case "burned_seed_miss":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.BurnedSeedMiss), 'f', dec, 64)
 		case "frozen":

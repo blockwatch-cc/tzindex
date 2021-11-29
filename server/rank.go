@@ -68,7 +68,7 @@ func GetTrafficList(ctx *ApiContext) (interface{}, int) {
 	}
 	resp := &RankList{
 		list:     make([]RankListItem, len(list)),
-		expires:  tip.BestTime.Add(params.TimeBetweenBlocks[0]),
+		expires:  tip.BestTime.Add(params.BlockTime()),
 		modified: tip.BestTime,
 	}
 	for i, v := range list {
@@ -96,7 +96,7 @@ func GetVolumeList(ctx *ApiContext) (interface{}, int) {
 	}
 	resp := &RankList{
 		list:     make([]RankListItem, len(list)),
-		expires:  tip.BestTime.Add(params.TimeBetweenBlocks[0]),
+		expires:  tip.BestTime.Add(params.BlockTime()),
 		modified: tip.BestTime,
 	}
 	for i, v := range list {
@@ -124,7 +124,7 @@ func GetRichList(ctx *ApiContext) (interface{}, int) {
 	}
 	resp := &RankList{
 		list:     make([]RankListItem, len(list)),
-		expires:  tip.BestTime.Add(params.TimeBetweenBlocks[0]),
+		expires:  tip.BestTime.Add(params.BlockTime()),
 		modified: tip.BestTime,
 	}
 	for i, v := range list {

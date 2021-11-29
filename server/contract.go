@@ -4,11 +4,9 @@
 package server
 
 import (
-	"bytes"
 	"encoding/hex"
 	"fmt"
 	"github.com/gorilla/mux"
-	"io"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -65,8 +63,8 @@ func NewExplorerContract(ctx *ApiContext, c *model.Contract, a *model.Account, a
 		InterfaceHash: hex.EncodeToString(c.InterfaceHash),
 		CodeHash:      hex.EncodeToString(c.CodeHash),
 		CallStats:     c.ListCallStats(),
-		Features:      c.ListFeatures(),
-		Interfaces:    c.ListInterfaces(),
+		Features:      c.Features,
+		Interfaces:    c.Interfaces,
 		expires:       ctx.Tip.BestTime.Add(p.BlockTime()),
 	}
 
@@ -404,6 +402,7 @@ type ExplorerScript struct {
 	Script      *micheline.Script     `json:"script,omitempty"`
 	Type        micheline.Typedef     `json:"storage_type"`
 	Entrypoints micheline.Entrypoints `json:"entrypoints"`
+	Views       micheline.Views       `json:"views,omitempty"`
 	Bigmaps     map[string]int64      `json:"bigmaps,omitempty"`
 	modified    time.Time             `json:"-"`
 }
@@ -435,14 +434,22 @@ func ReadContractScript(ctx *ApiContext) (interface{}, int) {
 
 	ep, err := script.Entrypoints(args.WithPrim())
 	if err != nil {
-		panic(EInternal(EC_SERVER, "script entrypoint parsing failed", err))
+		ctx.Log.Errorf("script entrypoint parsing failed", err)
 	}
-	ids, _ := ctx.Indexer.ListContractBigmapIds(ctx.Context, cc.AccountId)
+	views, err := script.Views(args.WithPrim(), args.WithPrim())
+	if err != nil {
+		ctx.Log.Errorf("script view parsing failed", err)
+	}
+	ids, err := ctx.Indexer.ListContractBigmapIds(ctx.Context, cc.AccountId)
+	if err != nil {
+		ctx.Log.Errorf("script bigmap parsing failed", err)
+	}
 
 	resp := &ExplorerScript{
 		Script:      script,
 		Type:        script.StorageType().Typedef("storage"),
 		Entrypoints: ep,
+		Views:       views,
 		Bigmaps:     cc.NamedBigmaps(ids),
 		modified:    ctx.Indexer.LookupBlockTime(ctx.Context, cc.FirstSeen),
 	}
@@ -471,11 +478,11 @@ func ReadContractStorage(ctx *ApiContext) (interface{}, int) {
 
 	// type is always the most recently upgraded type stored in contract table
 	var (
-		prim         micheline.Prim = micheline.Prim{}
-		typ          micheline.Type = script.StorageType()
-		ts           time.Time
-		height       int64
-		patchBigmaps bool
+		prim   micheline.Prim = micheline.Prim{}
+		typ    micheline.Type = script.StorageType()
+		ts     time.Time
+		height int64
+		// patchBigmaps bool
 	)
 
 	if args.BlockHeight == 0 || args.BlockHeight >= cc.LastSeen {
@@ -485,7 +492,7 @@ func ReadContractStorage(ctx *ApiContext) (interface{}, int) {
 			log.Errorf("explorer: storage unmarshal in contract %s: %v", cc, err)
 		}
 		// when data is loaded from origination, we must patch bigmap pointers
-		patchBigmaps = cc.FirstSeen == cc.LastSeen && bytes.Count(cc.CallStats, []byte{0}) == len(cc.CallStats)
+		// patchBigmaps = cc.FirstSeen == cc.LastSeen && bytes.Count(cc.CallStats, []byte{0}) == len(cc.CallStats)
 		ts = ctx.Indexer.LookupBlockTime(ctx.Context, height)
 	} else {
 		// find earlier incoming call before height
@@ -505,7 +512,7 @@ func ReadContractStorage(ctx *ApiContext) (interface{}, int) {
 			if err != nil {
 				panic(EInternal(EC_DATABASE, err.Error(), nil))
 			}
-			patchBigmaps = true
+			// patchBigmaps = true
 		}
 
 		// unmarshal from op
@@ -516,24 +523,27 @@ func ReadContractStorage(ctx *ApiContext) (interface{}, int) {
 		}
 	}
 
+	// FIXME: broken on a few contracts because it mis-detects map/set as bigmap
+	//
 	// patch bigmap pointers when storage is loaded from origination
-	if patchBigmaps && len(ids) > 0 {
-		// Note: This is a heuristic only, and should work in the majority of cases.
-		// Reason is that in value trees we cannot distinguish between bigmaps
-		// and any other container type using PrimSequence as encoding (list, map, set).
-		//
-		var i int
-		prim.Visit(func(p *micheline.Prim) error {
-			if p.LooksLikeContainer() {
-				*p = micheline.NewBigmapRef(ids[i])
-				i++
-				if len(ids) <= i {
-					return io.EOF
-				}
-			}
-			return nil
-		})
-	}
+	// if patchBigmaps && len(ids) > 0 {
+	// 	// Note: This is a heuristic only, and should work in the majority of cases.
+	// 	// Reason is that in value trees we cannot distinguish between bigmaps
+	// 	// and any other container type using PrimSequence as encoding (list, map, set).
+	// 	//
+	// 	var i int
+	// 	prim.Visit(func(p *micheline.Prim) error {
+	// 		if p.LooksLikeContainer() && p.LooksLikeMap() {
+	// 			*p = micheline.NewBigmapRef(ids[i])
+	// 			i++
+	// 			if len(ids) <= i {
+	// 				return io.EOF
+	// 			}
+	// 			return micheline.PrimSkip
+	// 		}
+	// 		return nil
+	// 	})
+	// }
 
 	resp := &ExplorerStorageValue{
 		Value:    micheline.NewValue(typ, prim),

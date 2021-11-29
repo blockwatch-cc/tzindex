@@ -41,8 +41,8 @@ func init() {
 
 	// add extra transalations for accounts
 	contractSourceNames["creator"] = "C"
-	contractSourceNames["is_spendable"] = "-" // hide in v8+
-	contractSourceNames["is_delegatable"] = "-"
+	contractSourceNames["first_seen_time"] = "f"
+	contractSourceNames["last_seen_time"] = "l"
 	contractAllAliases = append(contractAllAliases, "creator")
 }
 
@@ -100,8 +100,8 @@ func (c *Contract) MarshalJSONVerbose() ([]byte, error) {
 		InterfaceHash: hex.EncodeToString(c.InterfaceHash),
 		CodeHash:      hex.EncodeToString(c.CodeHash),
 		CallStats:     hex.EncodeToString(c.CallStats),
-		Features:      c.ListFeatures().String(),
-		Interfaces:    c.ListInterfaces().String(),
+		Features:      c.Features.String(),
+		Interfaces:    c.Interfaces.String(),
 	}
 	return json.Marshal(contract)
 }
@@ -162,9 +162,9 @@ func (c *Contract) MarshalJSONBrief() ([]byte, error) {
 		case "call_stats":
 			buf = strconv.AppendQuote(buf, hex.EncodeToString(c.CallStats))
 		case "features":
-			buf = strconv.AppendQuote(buf, c.ListFeatures().String())
+			buf = strconv.AppendQuote(buf, c.Features.String())
 		case "interfaces":
-			buf = strconv.AppendQuote(buf, c.ListInterfaces().String())
+			buf = strconv.AppendQuote(buf, c.Interfaces.String())
 		default:
 			continue
 		}
@@ -213,9 +213,9 @@ func (c *Contract) MarshalCSV() ([]string, error) {
 		case "call_stats":
 			res[i] = strconv.Quote(hex.EncodeToString(c.CallStats))
 		case "features":
-			res[i] = strconv.Quote(c.ListFeatures().String())
+			res[i] = strconv.Quote(c.Features.String())
 		case "interfaces":
-			res[i] = strconv.Quote(c.ListInterfaces().String())
+			res[i] = strconv.Quote(c.Interfaces.String())
 		default:
 			continue
 		}
@@ -247,8 +247,10 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				continue
 			}
 			switch v {
-			case "features", "interfaces":
-				srcNames = append(srcNames, "s") // script
+			case "first_seen_time":
+				srcNames = append(srcNames, "f")
+			case "last_seen_time":
+				srcNames = append(srcNames, "l")
 			}
 			srcNames = append(srcNames, n)
 		}
@@ -336,6 +338,81 @@ func StreamContractTable(ctx *ApiContext, args *TableRequest) (interface{}, int)
 				})
 			default:
 				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
+			}
+
+		case "first_seen_time", "last_seen_time":
+			// translate time into height, use val[0] only
+			bestTime := ctx.Tip.BestTime
+			bestHeight := ctx.Tip.BestHeight
+			cond, err := pack.ParseCondition(key, val[0], pack.FieldList{
+				pack.Field{
+					Name: "time",
+					Type: pack.FieldTypeDatetime,
+				},
+			})
+			if err != nil {
+				panic(EBadRequest(EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, val[0]), err))
+			}
+			// re-use the block height -> time slice because it's already loaded
+			// into memory, the binary search should be faster than a block query
+			switch cond.Mode {
+			case pack.FilterModeRange:
+				// use cond.From and con.To
+				from, to := cond.From.(time.Time), cond.To.(time.Time)
+				var fromBlock, toBlock int64
+				if !from.After(bestTime) {
+					fromBlock = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, from)
+				} else {
+					nDiff := int64(from.Sub(bestTime) / params.BlockTime())
+					fromBlock = bestHeight + nDiff
+				}
+				if !to.After(bestTime) {
+					toBlock = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, to)
+				} else {
+					nDiff := int64(to.Sub(bestTime) / params.BlockTime())
+					toBlock = bestHeight + nDiff
+				}
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find(field),
+					Mode:  cond.Mode,
+					From:  fromBlock,
+					To:    toBlock,
+					Raw:   val[0], // debugging aid
+				})
+			case pack.FilterModeIn, pack.FilterModeNotIn:
+				// cond.Value is slice
+				valueBlocks := make([]int64, 0)
+				for _, v := range cond.Value.([]time.Time) {
+					if !v.After(bestTime) {
+						valueBlocks = append(valueBlocks, ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, v))
+					} else {
+						nDiff := int64(v.Sub(bestTime) / params.BlockTime())
+						valueBlocks = append(valueBlocks, bestHeight+nDiff)
+					}
+				}
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find(field),
+					Mode:  cond.Mode,
+					Value: valueBlocks,
+					Raw:   val[0], // debugging aid
+				})
+
+			default:
+				// cond.Value is time.Time
+				valueTime := cond.Value.(time.Time)
+				var valueBlock int64
+				if !valueTime.After(bestTime) {
+					valueBlock = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, valueTime)
+				} else {
+					nDiff := int64(valueTime.Sub(bestTime) / params.BlockTime())
+					valueBlock = bestHeight + nDiff
+				}
+				q.Conditions.AddAndCondition(&pack.Condition{
+					Field: table.Fields().Find(field),
+					Mode:  cond.Mode,
+					Value: valueBlock,
+					Raw:   val[0], // debugging aid
+				})
 			}
 
 		case "creator":

@@ -128,12 +128,31 @@ func (c *BigmapHistoryCache) Get(id, height int64) (*BigmapHistory, bool) {
 	return nil, false
 }
 
+func (c *BigmapHistoryCache) GetBest(id, height int64) (*BigmapHistory, bool) {
+	var bestHeight int64
+	for _, v := range c.cache.Keys() {
+		if v.(int64)>>32 != id {
+			continue
+		}
+		keyHeight := v.(int64) & 0xffffffff
+		if keyHeight > height {
+			continue
+		}
+		if bestHeight < keyHeight {
+			bestHeight = keyHeight
+		}
+	}
+	if bestHeight == 0 {
+		return nil, false
+	}
+	return c.Get(id, bestHeight)
+}
+
 func (c *BigmapHistoryCache) Build(ctx context.Context, updates *pack.Table, id, height int64) (*BigmapHistory, error) {
 	kvStore := make(map[uint64]*model.BigmapKV)
 	upd := &model.BigmapUpdate{}
 	var count int
 	err := pack.NewQuery("build_history_cache", updates).
-		WithoutCache().
 		WithFields("a", "k", "v").
 		AndEqual("bigmap_id", id).
 		AndLte("height", height).
@@ -156,7 +175,8 @@ func (c *BigmapHistoryCache) Build(ctx context.Context, updates *pack.Table, id,
 		return nil, err
 	}
 
-	log.Debugf("Processed %d updates, found %d live keys", count, len(kvStore))
+	log.Debugf("Bigmap Cache Build: Processed %d updates, found %d live keys",
+		count, len(kvStore))
 
 	// compile into compact cacheable form
 	hist := &BigmapHistory{
@@ -178,4 +198,75 @@ func (c *BigmapHistoryCache) Build(ctx context.Context, updates *pack.Table, id,
 	c.stats.CountInserts(1)
 	atomic.AddInt64(&c.size, hist.Size())
 	return hist, nil
+}
+
+func (c *BigmapHistoryCache) Update(ctx context.Context, hist *BigmapHistory, updates *pack.Table, height int64) (*BigmapHistory, error) {
+	// unpack all cached values into kvStore map (cached store is read-only)
+	kvStore := make(map[uint64]*model.BigmapKV, len(hist.KeyOffsets))
+	for i, v := range hist.KeyOffsets {
+		kStart, kEnd := v, hist.ValueOffsets[i]
+		vStart, vEnd := kEnd, len(hist.Data)
+		if i < hist.Len()-1 {
+			vEnd = int(hist.KeyOffsets[i+1])
+		}
+		kid := model.GetKeyId(hist.BigmapId, micheline.KeyHash(hist.Data[kStart:kEnd]))
+		kvStore[kid] = &model.BigmapKV{
+			RowId:    uint64(i + 1),
+			BigmapId: hist.BigmapId,
+			KeyId:    kid,
+			Key:      hist.Data[kStart:kEnd],
+			Value:    hist.Data[vStart:vEnd],
+		}
+	}
+
+	// apply updates between hist.Height+1 and request height
+	upd := &model.BigmapUpdate{}
+	var count int
+	err := pack.NewQuery("update_history_cache", updates).
+		WithFields("a", "k", "v").
+		AndEqual("bigmap_id", hist.BigmapId).
+		AndGt("height", hist.Height).
+		AndLte("height", height).
+		Stream(ctx, func(r pack.Row) error {
+			if err := r.Decode(upd); err != nil {
+				return err
+			}
+			count++
+			switch upd.Action {
+			case micheline.DiffActionAlloc, micheline.DiffActionCopy:
+				// ignore
+			case micheline.DiffActionUpdate:
+				kvStore[upd.KeyId] = upd.ToKV()
+			case micheline.DiffActionRemove:
+				delete(kvStore, upd.KeyId)
+			}
+			return nil
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	log.Debugf("Bigmap Cache Update: Processed %d new updates, found %d live keys",
+		count, len(kvStore))
+
+	// compile into compact cacheable form
+	hist2 := &BigmapHistory{
+		BigmapId:     hist.BigmapId,
+		Height:       height,
+		KeyOffsets:   make([]uint32, len(kvStore)),
+		ValueOffsets: make([]uint32, len(kvStore)),
+		Data:         make([]byte, 0, len(hist.Data)+(len(kvStore)-len(hist.KeyOffsets))*16), // guess
+	}
+	count = 0
+	for _, v := range kvStore {
+		hist2.KeyOffsets[count] = uint32(len(hist2.Data))
+		hist2.Data = append(hist2.Data, v.Key...)
+		hist2.ValueOffsets[count] = uint32(len(hist2.Data))
+		hist2.Data = append(hist2.Data, v.Value...)
+		count++
+	}
+	c.cache.Add(c.makeKey(hist2.BigmapId, height), hist2)
+	c.stats.CountInserts(1)
+	atomic.AddInt64(&c.size, hist2.Size())
+	return hist2, nil
 }

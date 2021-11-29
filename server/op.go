@@ -188,6 +188,7 @@ type ExplorerOp struct {
 	Internal      []*ExplorerOp                `json:"internal,omitempty"`
 	NOps          int                          `json:"n_ops,omitempty"`
 	Confirmations int64                        `json:"confirmations"`
+	Value         *micheline.Prim              `json:"value,omitempty"`
 
 	expires time.Time `json:"-"`
 }
@@ -335,6 +336,12 @@ func NewExplorerOp(ctx *ApiContext, op *model.Op, block *model.Block, cc *model.
 			if err := json.Unmarshal([]byte(op.Data), &o.Data); err != nil {
 				o.Data = nil
 				log.Errorf("explorer op: unmarshal %s data: %v", op.Type, err)
+			}
+		case tezos.OpTypeRegisterConstant:
+			o.Value = &micheline.Prim{}
+			if err := o.Value.UnmarshalBinary(op.Storage); err != nil {
+				o.Value = nil
+				log.Errorf("explorer op: unmarshal %s value: %v", op.Type, err)
 			}
 		default:
 			if op.Data != "" {

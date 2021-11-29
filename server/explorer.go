@@ -73,6 +73,8 @@ type BlockchainTip struct {
 
 	TotalAccounts  int64 `json:"total_accounts"`
 	FundedAccounts int64 `json:"funded_accounts"`
+	DustAccounts   int64 `json:"dust_accounts"`
+	DustDelegators int64 `json:"dust_delegators"`
 	TotalOps       int64 `json:"total_ops"`
 	Delegators     int64 `json:"delegators"`
 	Delegates      int64 `json:"delegates"`
@@ -184,6 +186,8 @@ func buildBlockchainTip(ctx *ApiContext, tip *model.ChainTip) *BlockchainTip {
 		TotalOps:       ch.TotalOps,
 		TotalAccounts:  ch.TotalAccounts,
 		FundedAccounts: ch.FundedAccounts,
+		DustAccounts:   ch.DustAccounts,
+		DustDelegators: ch.DustDelegators,
 		Delegators:     ch.ActiveDelegators,
 		Delegates:      ch.ActiveDelegates,
 		Rolls:          ch.Rolls,
@@ -207,7 +211,7 @@ func buildBlockchainTip(ctx *ApiContext, tip *model.ChainTip) *BlockchainTip {
 		Deployments: tip.Deployments,
 
 		// expires when next block is expected
-		expires: tip.BestTime.Add(params.TimeBetweenBlocks[0]),
+		expires: tip.BestTime.Add(params.BlockTime()),
 	}
 }
 
@@ -348,7 +352,7 @@ func GetBlockchainConfig(ctx *ApiContext) (interface{}, int) {
 		ProofOfWorkThreshold:         p.ProofOfWorkThreshold,
 		SeedNonceRevelationTip:       p.ConvertValue(p.SeedNonceRevelationTip),
 		TimeBetweenBlocks: [2]int{
-			int(p.TimeBetweenBlocks[0] / time.Second),
+			int(p.BlockTime() / time.Second),
 			int(p.TimeBetweenBlocks[1] / time.Second),
 		},
 		TokensPerRoll:     p.ConvertValue(p.TokensPerRoll),
@@ -371,7 +375,7 @@ func GetBlockchainConfig(ctx *ApiContext) (interface{}, int) {
 		MinimalBlockDelay:                 int(p.MinimalBlockDelay / time.Second),
 		NumVotingPeriods:                  p.NumVotingPeriods,
 		timestamp:                         ctx.Tip.BestTime,
-		expires:                           ctx.Tip.BestTime.Add(p.TimeBetweenBlocks[0]),
+		expires:                           ctx.Tip.BestTime.Add(p.BlockTime()),
 	}
 	return cfg, http.StatusOK
 }
@@ -457,7 +461,7 @@ func estimateHealth(ctx *ApiContext, height, history int64) int {
 	// check if next block is past due and estimate expected priority
 	if height == nowheight && isSync {
 		delay := ctx.Now.Sub(ctx.Tip.BestTime)
-		t1 := params.TimeBetweenBlocks[0]
+		t1 := params.BlockTime()
 		t2 := params.TimeBetweenBlocks[1]
 		if t2 == 0 {
 			t2 = t1

@@ -103,14 +103,15 @@ func allMetadataById(ctx *ApiContext) metaByIdMap {
 	return metaMap
 }
 
-func cacheSingleMetadata(meta *ExplorerMetadata, remove bool) {
+func cacheSingleMetadata(ctx *ApiContext, meta *ExplorerMetadata, remove bool) {
 	if meta == nil {
 		return
 	}
 
 	// copy by-address map
-	m2 := make(metaByAddressMap)
-	for k, v := range metaByAddressStore.Load().(metaByAddressMap) {
+	m1 := metaByAddressStore.Load().(metaByAddressMap)
+	m2 := make(metaByAddressMap, len(m1)+1)
+	for k, v := range m1 {
 		if remove && v.Equal(meta) {
 			continue
 		}
@@ -121,8 +122,9 @@ func cacheSingleMetadata(meta *ExplorerMetadata, remove bool) {
 	}
 
 	// copy by-id map
-	i2 := make(metaByIdMap)
-	for k, v := range metaByIdStore.Load().(metaByIdMap) {
+	i1 := metaByIdStore.Load().(metaByIdMap)
+	i2 := make(metaByIdMap, len(i1)+1)
+	for k, v := range i1 {
 		if remove && v.Equal(meta) {
 			continue
 		}
@@ -145,14 +147,16 @@ func cacheMultiMetadata(meta []*ExplorerMetadata) {
 	}
 
 	// copy by-address map
-	m2 := make(metaByAddressMap)
-	for k, v := range metaByAddressStore.Load().(metaByAddressMap) {
+	m1 := metaByAddressStore.Load().(metaByAddressMap)
+	m2 := make(metaByAddressMap, len(m1)+len(meta))
+	for k, v := range m1 {
 		m2[k] = v
 	}
 
 	// copy by-id map
-	i2 := make(metaByIdMap)
-	for k, v := range metaByIdStore.Load().(metaByIdMap) {
+	i1 := metaByIdStore.Load().(metaByIdMap)
+	i2 := make(metaByIdMap, len(i1)+len(meta))
+	for k, v := range i1 {
 		i2[k] = v
 	}
 
@@ -535,7 +539,7 @@ func CreateMetadata(ctx *ApiContext) (interface{}, int) {
 	if err := ctx.Indexer.UpsertMetadata(ctx.Context, ups); err != nil {
 		switch err {
 		case etl.ErrNoTable:
-			panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, err.Error(), nil))
+			panic(ENotFound(EC_RESOURCE_NOTFOUND, "cannot access metadata table", err))
 		default:
 			panic(EInternal(EC_DATABASE, "cannot create metadata", err))
 		}
@@ -574,7 +578,7 @@ func UpdateMetadata(ctx *ApiContext) (interface{}, int) {
 	if err := ctx.Indexer.UpdateMetadata(ctx.Context, md); err != nil {
 		switch err {
 		case etl.ErrNoTable:
-			panic(EConflict(EC_RESOURCE_STATE_UNEXPECTED, err.Error(), nil))
+			panic(ENotFound(EC_RESOURCE_NOTFOUND, "cannot access metadata table", err))
 		default:
 			panic(EInternal(EC_DATABASE, "cannot update metadata", err))
 		}
@@ -582,7 +586,7 @@ func UpdateMetadata(ctx *ApiContext) (interface{}, int) {
 
 	// cache and return the updated version
 	upd = NewExplorerMetadata(md)
-	cacheSingleMetadata(upd, false)
+	cacheSingleMetadata(ctx, upd, false)
 	return upd, http.StatusOK
 }
 
@@ -592,7 +596,7 @@ func RemoveMetadata(ctx *ApiContext) (interface{}, int) {
 	if err != nil {
 		panic(EInternal(EC_DATABASE, "cannot remove metadata", err))
 	}
-	cacheSingleMetadata(meta, true)
+	cacheSingleMetadata(ctx, meta, true)
 	return nil, http.StatusNoContent
 }
 

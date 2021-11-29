@@ -112,7 +112,7 @@ func (c *RightsCache) Lookup(id model.AccountID, height int64) (int64, int64) {
 	return nextBakeHeight, nextEndorseHeight
 }
 
-func (c *RightsCache) Build(ctx context.Context, height, startCycle int64, table *pack.Table) error {
+func (c *RightsCache) Build(ctx context.Context, startCycle int64, table *pack.Table) error {
 	c.stats.CountUpdates(1)
 	right := &model.Right{}
 	return pack.NewQuery("init_cache", table).

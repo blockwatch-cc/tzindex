@@ -55,19 +55,20 @@ func (c FlowCategory) String() string {
 type FlowType byte
 
 const (
-	FlowTypeActivation      FlowType = iota // 0
-	FlowTypeDenunciation                    // 1
-	FlowTypeTransaction                     // 2
-	FlowTypeOrigination                     // 3
-	FlowTypeDelegation                      // 4
-	FlowTypeReveal                          // 5
-	FlowTypeEndorsement                     // 6
-	FlowTypeBaking                          // 7
-	FlowTypeNonceRevelation                 // 8
-	FlowTypeInternal                        // 9 - used for unfreeze
-	FlowTypeInvoice                         // 10 - invoice feature
-	FlowTypeAirdrop                         // 11 - Babylon Airdrop
-	FlowTypeSubsidy                         // 12 - Granada liquidity baking
+	FlowTypeActivation           FlowType = iota // 0
+	FlowTypeDenunciation                         // 1
+	FlowTypeTransaction                          // 2
+	FlowTypeOrigination                          // 3
+	FlowTypeDelegation                           // 4
+	FlowTypeReveal                               // 5
+	FlowTypeEndorsement                          // 6
+	FlowTypeBaking                               // 7
+	FlowTypeNonceRevelation                      // 8
+	FlowTypeInternal                             // 9 - used for unfreeze
+	FlowTypeInvoice                              // 10 - invoice feature
+	FlowTypeAirdrop                              // 11 - Babylon Airdrop
+	FlowTypeSubsidy                              // 12 - Granada liquidity baking
+	FlowTypeConstantRegistration                 // 13 - Hangzhou+
 	FlowTypeInvalid
 )
 
@@ -99,6 +100,8 @@ func ParseFlowType(s string) FlowType {
 		return FlowTypeAirdrop
 	case "subsidy":
 		return FlowTypeSubsidy
+	case "constant":
+		return FlowTypeConstantRegistration
 	default:
 		return FlowTypeInvalid
 	}
@@ -136,6 +139,8 @@ func (t FlowType) String() string {
 		return "airdrop"
 	case FlowTypeSubsidy:
 		return "subsidy"
+	case FlowTypeConstantRegistration:
+		return "constant"
 	default:
 		return "invalid"
 	}

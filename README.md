@@ -10,7 +10,7 @@ For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](h
 
 - indexes and cross-checks full on-chain state
 - feature-rich [REST API](https://tzstats.com/docs/api/index.html) with objects, bulk tables and time-series
-- supports protocols up to Granada (v010)
+- supports protocols up to Hangzhou (v011)
 - auto-detects and locks Tezos network (never mixes data from different networks)
 - indexes all accounts and smart-contracts (including genesis data)
 - follows chain reorgs as they are resolved
@@ -40,10 +40,11 @@ For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](h
 - baker **income**: per-cycle statistics on baker income, efficiency, etc
 - **bigmap**: bigmap smart contract storage index
 - **metadata**: standardized and custom account/token metadata
+- **constants**: global constants (e.g. smart contract code/type macros to lower contract size and reuse common features)
 
 **Operation modes**
 
-- **Full** regular operation mode that builds all indexes
+- **Full** regular operation mode that builds all indexes (CLI: `--full`)
 - **Light** (default) light-weight mode without consensus and governance indexes (CLI: `--light`)
 - **Validate** state validation mode for checking accounts and balances each block/cycle (CLI: `--validate`)
 
@@ -61,7 +62,7 @@ Light mode saves roughly \~50% storage costs and \~50% indexing time. Keep in mi
 
 ### Requirements
 
-- Storage: 10GB (full Mainnet index, Aug 2021), 4G (light mode)
+- Storage: 22GB (full Mainnet index, Nov 2021), 17G (light mode)
 - RAM:  4-24GB (configurable, use more memory for better query latency)
 - CPU:  2+ cores (configurable, use more for better query parallelism)
 - Tezos node in archive mode

@@ -22,7 +22,7 @@ import (
 //
 func (b *Builder) MigrateGranada(ctx context.Context, oldparams, params *tezos.Params) error {
 	// nothing to do in light mode
-	if b.idx.lightMode {
+	if b.idx.lightMode || b.block.Height <= 2 {
 		return nil
 	}
 

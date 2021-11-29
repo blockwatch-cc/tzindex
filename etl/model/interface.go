@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"blockwatch.cc/packdb/pack"
+	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
 )
 
@@ -58,6 +59,9 @@ type BlockBuilder interface {
 
 	// returns a map of all contracts referenced in the current block
 	Contracts() map[AccountID]*Contract
+
+	// returns a map of all constants referenced in the current block
+	Constants() micheline.ConstantDict
 
 	// returns block rights
 	Rights(tezos.RightType) []Right

@@ -140,6 +140,17 @@ func (c *AccountCache) GetId(id model.AccountID) (uint64, *model.Account, bool) 
 func (c AccountCache) Stats() Stats {
 	s := c.stats.Get()
 	s.Size = c.cache.Len()
+	// correct size
+	if c.size < 0 {
+		c.size = 0
+		for _, key := range c.cache.Keys() {
+			val, ok := c.cache.Peek(key)
+			if !ok {
+				continue
+			}
+			c.size += int64(len(val.([]byte)))
+		}
+	}
 	s.Bytes = c.size
 	return s
 }
@@ -147,9 +158,9 @@ func (c AccountCache) Stats() Stats {
 func (c *AccountCache) Walk(fn func(key uint64, acc *model.Account) error) error {
 	acc := model.AllocAccount()
 	for _, key := range c.cache.Keys() {
-		val, ok := c.cache.Get(key)
+		val, ok := c.cache.Peek(key)
 		if !ok {
-			return fmt.Errorf("missing cache key %v", key)
+			return fmt.Errorf("missing cache key %w", key)
 		}
 		if err := acc.UnmarshalBinary(val.([]byte)); err != nil {
 			return err
