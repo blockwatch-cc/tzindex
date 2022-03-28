@@ -1,20 +1,17 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package model
 
 import (
-	"blockwatch.cc/tzgo/rpc"
 	"blockwatch.cc/tzgo/tezos"
+	"blockwatch.cc/tzindex/rpc"
 )
 
 type Bundle struct {
-	Block     *rpc.Block
-	Params    *tezos.Params
-	Cycle     int64
-	Baking    []rpc.BakingRight
-	Endorsing []rpc.EndorsingRight
-	Snapshot  *rpc.SnapshotIndex
+	Block  *rpc.Block
+	Params *tezos.Params
+	Cycle  int64
 }
 
 func (b *Bundle) Height() int64 {

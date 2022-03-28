@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -9,7 +9,7 @@ import (
 
 	"blockwatch.cc/packdb/store"
 	"blockwatch.cc/tzgo/tezos"
-	. "blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/model"
 )
 
 var (
@@ -27,8 +27,8 @@ var (
 	deploymentsBucketName = []byte("deployments")
 )
 
-func dbLoadChainTip(dbTx store.Tx) (*ChainTip, error) {
-	tip := &ChainTip{}
+func dbLoadChainTip(dbTx store.Tx) (*model.ChainTip, error) {
+	tip := &model.ChainTip{}
 	bucket := dbTx.Bucket(tipBucketName)
 	if bucket == nil {
 		return nil, ErrNoChainTip
@@ -44,7 +44,7 @@ func dbLoadChainTip(dbTx store.Tx) (*ChainTip, error) {
 	return tip, nil
 }
 
-func dbStoreChainTip(dbTx store.Tx, tip *ChainTip) error {
+func dbStoreChainTip(dbTx store.Tx, tip *model.ChainTip) error {
 	buf, err := json.Marshal(tip)
 	if err != nil {
 		return err
@@ -86,7 +86,7 @@ func dbLoadIndexTip(dbTx store.Tx, key string) (*IndexTip, error) {
 	return tip, nil
 }
 
-func dbLoadDeployments(dbTx store.Tx, tip *ChainTip) ([]*tezos.Params, error) {
+func dbLoadDeployments(dbTx store.Tx, tip *model.ChainTip) ([]*tezos.Params, error) {
 	plist := make([]*tezos.Params, 0, len(tip.Deployments))
 	bucket := dbTx.Bucket([]byte(deploymentsBucketName))
 	for _, v := range tip.Deployments {

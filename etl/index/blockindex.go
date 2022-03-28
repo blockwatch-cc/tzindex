@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -11,15 +11,15 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 
-	. "blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/model"
 )
 
 const (
-	BlockPackSizeLog2         = 15 // 32k
-	BlockJournalSizeLog2      = 16 // 64k
-	BlockCacheSize            = 2  // ~2M
+	BlockPackSizeLog2         = 15 // 32k packs
+	BlockJournalSizeLog2      = 16 // 64k - search only on rollback and lookup
+	BlockCacheSize            = 2
 	BlockFillLevel            = 100
-	BlockIndexPackSizeLog2    = 15 // 16k
+	BlockIndexPackSizeLog2    = 15 // 16k packs (32k split size)
 	BlockIndexJournalSizeLog2 = 16 // 64k
 	BlockIndexCacheSize       = 2  // not essential
 	BlockIndexFillLevel       = 90
@@ -46,7 +46,7 @@ type BlockIndex struct {
 	table *pack.Table
 }
 
-var _ BlockIndexer = (*BlockIndex)(nil)
+var _ model.BlockIndexer = (*BlockIndex)(nil)
 
 func NewBlockIndex(opts, iopts pack.Options) *BlockIndex {
 	return &BlockIndex{opts: opts, iopts: iopts}
@@ -69,17 +69,17 @@ func (idx *BlockIndex) Name() string {
 }
 
 func (idx *BlockIndex) Create(path, label string, opts interface{}) error {
-	fields, err := pack.Fields(Block{})
+	fields, err := pack.Fields(model.Block{})
 	if err != nil {
 		return err
 	}
 	db, err := pack.CreateDatabase(path, idx.Key(), label, opts)
 	if err != nil {
-		return fmt.Errorf("creating %s database: %v", idx.Key(), err)
+		return fmt.Errorf("creating %s database: %w", idx.Key(), err)
 	}
 	defer db.Close()
 
-	table, err := db.CreateTableIfNotExists(
+	_, err = db.CreateTableIfNotExists(
 		BlockTableKey,
 		fields,
 		pack.Options{
@@ -87,20 +87,6 @@ func (idx *BlockIndex) Create(path, label string, opts interface{}) error {
 			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, BlockJournalSizeLog2),
 			CacheSize:       util.NonZero(idx.opts.CacheSize, BlockCacheSize),
 			FillLevel:       util.NonZero(idx.opts.FillLevel, BlockFillLevel),
-		})
-	if err != nil {
-		return err
-	}
-
-	_, err = table.CreateIndexIfNotExists(
-		"hash",
-		fields.Find("H"),   // any type
-		pack.IndexTypeHash, // hash table, index stores hash(field) -> pk value
-		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.iopts.PackSizeLog2, BlockIndexPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.iopts.JournalSizeLog2, BlockIndexJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.iopts.CacheSize, BlockIndexCacheSize),
-			FillLevel:       util.NonZero(idx.iopts.FillLevel, BlockIndexFillLevel),
 		})
 	if err != nil {
 		return err
@@ -132,10 +118,51 @@ func (idx *BlockIndex) Init(path, label string, opts interface{}) error {
 	return nil
 }
 
+func (idx *BlockIndex) FinalizeSync(ctx context.Context) error {
+	if idxs := idx.table.Indexes(); len(idxs) > 0 {
+		return nil
+	}
+	index, err := idx.table.CreateIndex(
+		"hash",
+		idx.table.Fields().Find("H"), // any type
+		pack.IndexTypeHash,           // hash table, index stores hash(field) -> pk value
+		pack.Options{
+			PackSizeLog2:    util.NonZero(idx.iopts.PackSizeLog2, BlockIndexPackSizeLog2),
+			JournalSizeLog2: util.NonZero(idx.iopts.JournalSizeLog2, BlockIndexJournalSizeLog2),
+			CacheSize:       util.NonZero(idx.iopts.CacheSize, BlockIndexCacheSize),
+			FillLevel:       util.NonZero(idx.iopts.FillLevel, BlockIndexFillLevel),
+		})
+	if err != nil {
+		if err != pack.ErrIndexExists {
+			return err
+		}
+		return nil
+	}
+	log.Infof("Building %s ... (this may take some time)", idx.Name())
+
+	progress := make(chan float64, 100)
+	defer close(progress)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case f := <-progress:
+				log.Infof("%s build progress %.2f%%", idx.Name(), f)
+				if f == 100 {
+					return
+				}
+			}
+		}
+	}()
+
+	return index.Reindex(ctx, 128, progress)
+}
+
 func (idx *BlockIndex) Close() error {
 	if idx.table != nil {
 		if err := idx.table.Close(); err != nil {
-			log.Errorf("Closing %s: %v", idx.Name(), err)
+			log.Errorf("Closing %s: %s", idx.Name(), err)
 		}
 		idx.table = nil
 	}
@@ -148,43 +175,11 @@ func (idx *BlockIndex) Close() error {
 	return nil
 }
 
-func (idx *BlockIndex) ConnectBlock(ctx context.Context, block *Block, b BlockBuilder) error {
+func (idx *BlockIndex) ConnectBlock(ctx context.Context, block *model.Block, b model.BlockBuilder) error {
 	// update parent block to write blocks endorsed bitmap
-	if block.Parent != nil && block.Parent.Height > 0 {
+	if block.Parent != nil && block.Parent.RowId > 0 {
 		if err := idx.table.Update(ctx, []pack.Item{block.Parent}); err != nil {
-			return fmt.Errorf("parent update: %v", err)
-		}
-	}
-
-	// fetch and update snapshot block
-	if snap := block.TZ.Snapshot; snap != nil {
-		// Some protocol upgrades happen 1 block before cycle end. When an upgrade
-		// changes cycle length we will miss snapshot 15. For this reason we use
-		// the previous protocol's params until cycle end.
-		p := block.Params
-		if block.Parent != nil {
-			p = block.Parent.Params
-		}
-		snapHeight := p.SnapshotBlock(snap.Cycle, snap.RollSnapshot)
-		log.Debugf("Marking block %d [%d] index %d as roll snapshot for cycle %d",
-			snapHeight, block.Params.CycleFromHeight(snapHeight), snap.RollSnapshot, snap.Cycle)
-
-		snapBlock := &Block{}
-		err := pack.NewQuery("block_height.search", idx.table).
-			WithoutCache().
-			WithLimit(1).
-			AndEqual("height", snapHeight).
-			AndEqual("is_orphan", false).
-			Execute(ctx, snapBlock)
-		if err != nil {
-			return fmt.Errorf("snapshot index block %d for cycle %d: %v", snapHeight, snap.Cycle, err)
-		}
-		if snapBlock.RowId == 0 {
-			return fmt.Errorf("missing snapshot index block %d for cycle %d", snapHeight, snap.Cycle)
-		}
-		snapBlock.IsCycleSnapshot = true
-		if err := idx.table.Update(ctx, []pack.Item{snapBlock}); err != nil {
-			return fmt.Errorf("snapshot index block %d: %v", snapHeight, err)
+			return fmt.Errorf("parent update: %w", err)
 		}
 	}
 
@@ -193,9 +188,9 @@ func (idx *BlockIndex) ConnectBlock(ctx context.Context, block *Block, b BlockBu
 	return idx.table.Insert(ctx, []pack.Item{block})
 }
 
-func (idx *BlockIndex) DisconnectBlock(ctx context.Context, block *Block, _ BlockBuilder) error {
+func (idx *BlockIndex) DisconnectBlock(ctx context.Context, block *model.Block, _ model.BlockBuilder) error {
 	// parent update will be done on next connect
-	return idx.table.Update(ctx, []pack.Item{block})
+	return idx.DeleteBlock(ctx, block.Height)
 }
 
 func (idx *BlockIndex) DeleteBlock(ctx context.Context, height int64) error {
@@ -212,4 +207,13 @@ func (idx *BlockIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 		AndEqual("cycle", cycle).
 		Delete(ctx)
 	return err
+}
+
+func (idx *BlockIndex) Flush(ctx context.Context) error {
+	for _, v := range idx.Tables() {
+		if err := v.Flush(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
 }

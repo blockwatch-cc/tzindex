@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -9,8 +9,6 @@ import (
 	"github.com/gorilla/schema"
 	"net/http/pprof"
 	"time"
-
-	"blockwatch.cc/packdb/pack"
 )
 
 var (
@@ -18,7 +16,7 @@ var (
 )
 
 type ParsableRequest interface {
-	Parse(ctx *ApiContext)
+	Parse(ctx *Context)
 }
 
 type Options interface {
@@ -27,7 +25,8 @@ type Options interface {
 	WithHeight() int64
 	WithMeta() bool
 	WithRights() bool
-	WithCollapse() bool
+	WithMerge() bool
+	WithStorage() bool
 }
 
 type Resource interface {
@@ -42,29 +41,9 @@ type RESTful interface {
 	RegisterDirectRoutes(r *mux.Router) error
 }
 
-func BoolPtr(b bool) *bool {
-	return &b
-}
-
-func IntPtr(i int) *int {
-	return &i
-}
-
-func Float64Ptr(f float64) *float64 {
-	return &f
-}
-
-// generic list request
-type ListRequest struct {
-	Limit  uint           `schema:"limit"`
-	Offset uint           `schema:"offset"`
-	Cursor uint64         `schema:"cursor"`
-	Order  pack.OrderType `schema:"order"`
-}
-
 var models = map[string]RESTful{}
 
-func register(model RESTful) {
+func Register(model RESTful) {
 	models[model.RESTPrefix()] = model
 }
 

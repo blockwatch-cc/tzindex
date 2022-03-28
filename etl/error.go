@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -19,6 +19,10 @@ var (
 	// ErrNoTable is an error that indicates a requested table does
 	// not exist in the database.
 	ErrNoTable = errors.New("no such table")
+
+	// ErrNoIndex is an error that indicates a requested indexer does
+	// not exist.
+	ErrNoIndex = errors.New("no such index")
 
 	// ErrNoDb is an error that indicates a requested database does
 	// not exist in the database.

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -12,7 +12,7 @@ import (
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/packdb/vec"
 
-	. "blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/model"
 )
 
 const (
@@ -26,20 +26,23 @@ const (
 	AccountIndexFillLevel       = 90
 	AccountIndexKey             = "account"
 	AccountTableKey             = "account"
+	BakerTableKey               = "baker"
 )
 
 var (
 	ErrNoAccountEntry = errors.New("account not indexed")
+	ErrNoBakerEntry   = errors.New("baker not indexed")
 )
 
 type AccountIndex struct {
-	db    *pack.DB
-	opts  pack.Options
-	iopts pack.Options
-	table *pack.Table
+	db       *pack.DB
+	opts     pack.Options
+	iopts    pack.Options
+	accounts *pack.Table
+	bakers   *pack.Table
 }
 
-var _ BlockIndexer = (*AccountIndex)(nil)
+var _ model.BlockIndexer = (*AccountIndex)(nil)
 
 func NewAccountIndex(opts, iopts pack.Options) *AccountIndex {
 	return &AccountIndex{opts: opts, iopts: iopts}
@@ -50,7 +53,10 @@ func (idx *AccountIndex) DB() *pack.DB {
 }
 
 func (idx *AccountIndex) Tables() []*pack.Table {
-	return []*pack.Table{idx.table}
+	return []*pack.Table{
+		idx.accounts,
+		idx.bakers,
+	}
 }
 
 func (idx *AccountIndex) Key() string {
@@ -62,19 +68,23 @@ func (idx *AccountIndex) Name() string {
 }
 
 func (idx *AccountIndex) Create(path, label string, opts interface{}) error {
-	fields, err := pack.Fields(Account{})
+	accountFields, err := pack.Fields(model.Account{})
+	if err != nil {
+		return err
+	}
+	bakerFields, err := pack.Fields(model.Baker{})
 	if err != nil {
 		return err
 	}
 	db, err := pack.CreateDatabase(path, idx.Key(), label, opts)
 	if err != nil {
-		return fmt.Errorf("creating %s database: %v", idx.Key(), err)
+		return fmt.Errorf("creating %s database: %w", idx.Key(), err)
 	}
 	defer db.Close()
 
-	table, err := db.CreateTableIfNotExists(
+	accounts, err := db.CreateTableIfNotExists(
 		AccountTableKey,
-		fields,
+		accountFields,
 		pack.Options{
 			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, AccountPackSizeLog2),
 			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, AccountJournalSizeLog2),
@@ -85,10 +95,37 @@ func (idx *AccountIndex) Create(path, label string, opts interface{}) error {
 		return err
 	}
 
-	_, err = table.CreateIndexIfNotExists(
+	_, err = accounts.CreateIndexIfNotExists(
 		"address",
-		fields.Find("H"),   // account hash field (21 byte hashes)
-		pack.IndexTypeHash, // hash table, index stores hash(field) -> pk value
+		accountFields.Find("H"), // account hash field (21 byte hashes)
+		pack.IndexTypeHash,      // hash table, index stores hash(field) -> pk value
+		pack.Options{
+			PackSizeLog2:    util.NonZero(idx.iopts.PackSizeLog2, AccountIndexPackSizeLog2),
+			JournalSizeLog2: util.NonZero(idx.iopts.JournalSizeLog2, AccountIndexJournalSizeLog2),
+			CacheSize:       util.NonZero(idx.iopts.CacheSize, AccountIndexCacheSize),
+			FillLevel:       util.NonZero(idx.iopts.FillLevel, AccountIndexFillLevel),
+		})
+	if err != nil {
+		return err
+	}
+
+	bakers, err := db.CreateTableIfNotExists(
+		BakerTableKey,
+		bakerFields,
+		pack.Options{
+			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, AccountPackSizeLog2),
+			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, AccountJournalSizeLog2),
+			CacheSize:       util.NonZero(idx.opts.CacheSize, AccountCacheSize),
+			FillLevel:       util.NonZero(idx.opts.FillLevel, AccountFillLevel),
+		})
+	if err != nil {
+		return err
+	}
+
+	_, err = bakers.CreateIndexIfNotExists(
+		"address",
+		bakerFields.Find("H"), // account hash field (21 byte hashes)
+		pack.IndexTypeHash,    // hash table, index stores hash(field) -> pk value
 		pack.Options{
 			PackSizeLog2:    util.NonZero(idx.iopts.PackSizeLog2, AccountIndexPackSizeLog2),
 			JournalSizeLog2: util.NonZero(idx.iopts.JournalSizeLog2, AccountIndexJournalSizeLog2),
@@ -108,8 +145,22 @@ func (idx *AccountIndex) Init(path, label string, opts interface{}) error {
 	if err != nil {
 		return err
 	}
-	idx.table, err = idx.db.Table(
+	idx.accounts, err = idx.db.Table(
 		AccountTableKey,
+		pack.Options{
+			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, AccountJournalSizeLog2),
+			CacheSize:       util.NonZero(idx.opts.CacheSize, AccountCacheSize),
+		},
+		pack.Options{
+			JournalSizeLog2: util.NonZero(idx.iopts.JournalSizeLog2, AccountIndexJournalSizeLog2),
+			CacheSize:       util.NonZero(idx.iopts.CacheSize, AccountIndexCacheSize),
+		})
+	if err != nil {
+		idx.Close()
+		return err
+	}
+	idx.bakers, err = idx.db.Table(
+		BakerTableKey,
 		pack.Options{
 			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, AccountJournalSizeLog2),
 			CacheSize:       util.NonZero(idx.opts.CacheSize, AccountCacheSize),
@@ -125,13 +176,20 @@ func (idx *AccountIndex) Init(path, label string, opts interface{}) error {
 	return nil
 }
 
+func (idx *AccountIndex) FinalizeSync(_ context.Context) error {
+	return nil
+}
+
 func (idx *AccountIndex) Close() error {
-	if idx.table != nil {
-		if err := idx.table.Close(); err != nil {
-			log.Errorf("Closing %s: %v", idx.Name(), err)
+	for _, v := range idx.Tables() {
+		if v != nil {
+			if err := v.Close(); err != nil {
+				log.Errorf("Closing %s table: %s", v.Name(), err)
+			}
 		}
-		idx.table = nil
 	}
+	idx.accounts = nil
+	idx.bakers = nil
 	if idx.db != nil {
 		if err := idx.db.Close(); err != nil {
 			return err
@@ -141,54 +199,90 @@ func (idx *AccountIndex) Close() error {
 	return nil
 }
 
-func (idx *AccountIndex) ConnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
-	upd := make([]pack.Item, 0, len(builder.Accounts()))
+func (idx *AccountIndex) ConnectBlock(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
+	accupd := make([]pack.Item, 0)
+	bkrupd := make([]pack.Item, 0)
+	bkrins := make([]pack.Item, 0)
 	// regular accounts
 	for _, acc := range builder.Accounts() {
 		if !acc.IsDirty {
 			continue
 		}
-		upd = append(upd, acc)
+		accupd = append(accupd, acc)
 	}
-	// delegate accounts
-	for _, acc := range builder.Delegates() {
-		if !acc.IsDirty {
-			continue
+	// baker accounts
+	for _, bkr := range builder.Bakers() {
+		if bkr.Account.IsDirty {
+			accupd = append(accupd, bkr.Account)
 		}
-		upd = append(upd, acc)
+		if bkr.IsNew {
+			bkrins = append(bkrins, bkr)
+		} else if bkr.IsDirty {
+			bkrupd = append(bkrupd, bkr)
+		}
 	}
-	return idx.table.Update(ctx, upd)
+	// send to tables
+	if len(accupd) > 0 {
+		if err := idx.accounts.Update(ctx, accupd); err != nil {
+			return err
+		}
+	}
+	if len(bkrins) > 0 {
+		if err := idx.bakers.Insert(ctx, bkrins); err != nil {
+			return err
+		}
+	}
+	if len(bkrupd) > 0 {
+		if err := idx.bakers.Update(ctx, bkrupd); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func (idx *AccountIndex) DisconnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
+func (idx *AccountIndex) DisconnectBlock(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
 	// accounts to delete
-	del := make([]uint64, 0)
+	accdel := make([]uint64, 0)
+	bkrdel := make([]uint64, 0)
 	// accounts to update
-	upd := make([]pack.Item, 0, len(builder.Accounts()))
+	accupd := make([]pack.Item, 0)
+	bkrupd := make([]pack.Item, 0)
 
 	// regular accounts
 	for _, acc := range builder.Accounts() {
 		if acc.MustDelete {
-			del = append(del, acc.RowId.Value())
+			accdel = append(accdel, acc.RowId.Value())
 		} else if acc.IsDirty {
-			upd = append(upd, acc)
+			accupd = append(accupd, acc)
 		}
 	}
 
 	// delegate accounts
-	for _, acc := range builder.Delegates() {
-		if acc.MustDelete {
-			del = append(del, acc.RowId.Value())
-		} else if acc.IsDirty {
-			upd = append(upd, acc)
+	for _, bkr := range builder.Bakers() {
+		if bkr.Account.MustDelete {
+			accdel = append(accdel, bkr.Account.RowId.Value())
+			bkrdel = append(bkrdel, bkr.RowId.Value())
+		} else if bkr.Account.IsDirty {
+			accupd = append(accupd, bkr.Account)
+		}
+		if bkr.IsDirty {
+			bkrupd = append(bkrupd, bkr)
 		}
 	}
 
-	if len(del) > 0 {
+	if len(accdel) > 0 {
 		// remove duplicates and sort; returns new slice
-		del = vec.UniqueUint64Slice(del)
+		accdel = vec.UniqueUint64Slice(accdel)
 		// log.Debugf("Rollback removing accounts %#v", del)
-		if err := idx.table.DeleteIds(ctx, del); err != nil {
+		if err := idx.accounts.DeleteIds(ctx, accdel); err != nil {
+			return err
+		}
+	}
+	if len(bkrdel) > 0 {
+		// remove duplicates and sort; returns new slice
+		accdel = vec.UniqueUint64Slice(bkrdel)
+		// log.Debugf("Rollback removing accounts %#v", del)
+		if err := idx.bakers.DeleteIds(ctx, bkrdel); err != nil {
 			return err
 		}
 	}
@@ -198,20 +292,43 @@ func (idx *AccountIndex) DisconnectBlock(ctx context.Context, block *Block, buil
 	// after reorg completes these counters are set properly again
 
 	// update accounts
-	if err := idx.table.Update(ctx, upd); err != nil {
-		return err
+	if len(accupd) > 0 {
+		if err := idx.accounts.Update(ctx, accupd); err != nil {
+			return err
+		}
+	}
+	// update bakers
+	if len(bkrupd) > 0 {
+		if err := idx.bakers.Update(ctx, bkrupd); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 func (idx *AccountIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting accounts at height %d", height)
-	_, err := pack.NewQuery("etl.account.delete", idx.table).
+	_, err := pack.NewQuery("etl.account.delete", idx.accounts).
 		AndEqual("first_seen", height).
+		Delete(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = pack.NewQuery("etl.baker.delete", idx.bakers).
+		AndEqual("baker_since", height).
 		Delete(ctx)
 	return err
 }
 
 func (idx *AccountIndex) DeleteCycle(ctx context.Context, cycle int64) error {
+	return nil
+}
+
+func (idx *AccountIndex) Flush(ctx context.Context) error {
+	for _, v := range idx.Tables() {
+		if err := v.Flush(ctx); err != nil {
+			return err
+		}
+	}
 	return nil
 }

@@ -17,8 +17,9 @@ func init() {
 	config.SetDefault("database.log_slow_queries", time.Second)
 
 	// crawling
-	config.SetDefault("crawler.cache_size_log2", 17) // 128k
+	config.SetDefault("crawler.cache_size_log2", 15)
 	config.SetDefault("crawler.queue", 100)
+	config.SetDefault("crawler.delay", 1)
 	config.SetDefault("crawler.snapshot_path", "./db/snapshots/")
 	config.SetDefault("crawler.snapshot_blocks", nil)
 	config.SetDefault("crawler.snapshot_interval", 0)
@@ -34,10 +35,10 @@ func init() {
 	config.SetDefault("server.header_timeout", 2*time.Second)
 	config.SetDefault("server.write_timeout", 90*time.Second)
 	config.SetDefault("server.keepalive", 90*time.Second)
-	config.SetDefault("server.shutdown_timeout", 30*time.Second)
+	config.SetDefault("server.shutdown_timeout", 60*time.Second)
 	config.SetDefault("server.max_list_count", 500000)
 	config.SetDefault("server.default_list_count", 500)
-	config.SetDefault("server.max_series_duration", 90*24*time.Hour)
+	config.SetDefault("server.max_series_duration", 0)
 	config.SetDefault("server.max_explore_count", 100)
 	config.SetDefault("server.default_explore_count", 20)
 	config.SetDefault("server.cors_enable", false)
@@ -48,6 +49,8 @@ func init() {
 	config.SetDefault("server.cors_maxage", "86400")
 	config.SetDefault("server.cors_credentials", "true")
 	config.SetDefault("server.cache_control", "public")
+	config.SetDefault("server.cache_expires", 30*time.Second)
+	config.SetDefault("server.cache_max", 24*time.Hour)
 
 	// logging
 	config.SetDefault("logging.progress", 10*time.Second)
@@ -58,13 +61,12 @@ func init() {
 	config.SetDefault("logging.database", "info")
 	config.SetDefault("logging.rpc", "info")
 	config.SetDefault("logging.server", "info")
-	config.SetDefault("logging.report", "info")
 	config.SetDefault("logging.micheline", "info")
 
 	// REST client
 	config.SetDefault("rpc.host", "127.0.0.1")
 	config.SetDefault("rpc.port", 8732)
-	config.SetDefault("rpc.disable_tls", false)
+	config.SetDefault("rpc.disable_tls", true)
 	config.SetDefault("rpc.insecure_tls", false)
 	config.SetDefault("rpc.proxy", "")
 	// config.SetDefault("rpc.proxy_user", "")

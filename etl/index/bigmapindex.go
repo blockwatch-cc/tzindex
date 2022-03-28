@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -14,9 +14,6 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/micheline"
-	"blockwatch.cc/tzgo/rpc"
-	"blockwatch.cc/tzgo/tezos"
-
 	"blockwatch.cc/tzindex/etl/model"
 )
 
@@ -25,18 +22,10 @@ const (
 	BigmapJournalSizeLog2      = 16 // 64k
 	BigmapCacheSize            = 128
 	BigmapFillLevel            = 100
-	BigmapIndexPackSizeLog2    = 14 // 16k packs (32k split size) ~256kB
+	BigmapIndexPackSizeLog2    = 14 // 16k packs (32k split size)
 	BigmapIndexJournalSizeLog2 = 16 // 64k
 	BigmapIndexCacheSize       = 1024
 	BigmapIndexFillLevel       = 90
-
-	// TODO: separate config options
-	// BigmapAllocPackSizeLog2  = 15 // 32k
-	// BigmapAllocCacheSize     = 16
-	// BigmapLivePackSizeLog2   = 15 // 32k
-	// BigmapLiveCacheSize      = 256
-	// BigmapUpdatePackSizeLog2 = 16 // 64k
-	// BigmapUpdateCacheSize    = 2  // minimum
 
 	BigmapIndexKey       = "bigmap"
 	BigmapAllocTableKey  = "bigmaps"
@@ -61,7 +50,7 @@ type BigmapIndex struct {
 var _ model.BlockIndexer = (*BigmapIndex)(nil)
 
 func NewBigmapIndex(opts, iopts pack.Options) *BigmapIndex {
-	ac, _ := lru.New(1024)
+	ac, _ := lru.New(1 << 15) // 32k
 	return &BigmapIndex{opts: opts, iopts: iopts, allocCache: ac}
 }
 
@@ -100,7 +89,7 @@ func (idx *BigmapIndex) Create(path, label string, opts interface{}) error {
 	}
 	db, err := pack.CreateDatabase(path, idx.Key(), label, opts)
 	if err != nil {
-		return fmt.Errorf("creating database: %v", err)
+		return fmt.Errorf("creating database: %w", err)
 	}
 	defer db.Close()
 
@@ -201,12 +190,16 @@ func (idx *BigmapIndex) Init(path, label string, opts interface{}) error {
 	return nil
 }
 
+func (idx *BigmapIndex) FinalizeSync(_ context.Context) error {
+	return nil
+}
+
 func (idx *BigmapIndex) Close() error {
 	idx.allocCache.Purge()
 	for _, v := range idx.Tables() {
 		if v != nil {
 			if err := v.Close(); err != nil {
-				log.Errorf("Closing %s table: %v", v.Name(), err)
+				log.Errorf("Closing %s table: %s", v.Name(), err)
 			}
 		}
 	}
@@ -220,65 +213,6 @@ func (idx *BigmapIndex) Close() error {
 		idx.db = nil
 	}
 	return nil
-}
-
-func getBigmapDiffs(op *model.Op, block *model.Block) (micheline.BigmapDiff, error) {
-	// implicit ops (from block metadata) can only contain originations
-	if op.IsImplicit {
-		// load and unpack from op
-		var bmd micheline.BigmapDiff
-		if err := bmd.UnmarshalBinary(op.BigmapDiff); err != nil {
-			return nil, fmt.Errorf("decoding implicit bigmap origination op [%d:%d]: %w",
-				op.OpL, op.OpP, err)
-		}
-		return bmd, nil
-	}
-
-	// load rpc op
-	o, ok := block.GetRpcOp(op.OpL, op.OpP, op.OpC)
-	if !ok {
-		return nil, fmt.Errorf("missing bigmap transaction op [%d:%d]", op.OpL, op.OpP)
-	}
-
-	// extract deserialized bigmap diff
-	switch op.Type {
-	case tezos.OpTypeTransaction:
-		if op.IsInternal {
-			// on internal tx, find corresponding internal op
-			top, ok := o.(*rpc.TransactionOp)
-			if !ok {
-				return nil, fmt.Errorf("internal bigmap transaction op [%d:%d]: unexpected type %T",
-					op.OpL, op.OpP, o)
-			}
-			return top.Metadata.InternalResults[op.OpI].Result.BigmapDiff, nil
-		} else {
-			top, ok := o.(*rpc.TransactionOp)
-			if !ok {
-				return nil, fmt.Errorf("contract bigmap transaction op [%d:%d]: unexpected type %T",
-					op.OpL, op.OpP, o)
-			}
-			return top.Metadata.Result.BigmapDiff, nil
-		}
-	case tezos.OpTypeOrigination:
-		switch true {
-		case op.IsInternal:
-			// on internal tx, find corresponding internal op
-			top, ok := o.(*rpc.TransactionOp)
-			if !ok {
-				return nil, fmt.Errorf("internal bigmap origination op [%d:%d]: unexpected type %T",
-					op.OpL, op.OpP, o)
-			}
-			return top.Metadata.InternalResults[op.OpI].Result.BigmapDiff, nil
-		default:
-			oop, ok := o.(*rpc.OriginationOp)
-			if !ok {
-				return nil, fmt.Errorf("contract bigmap origination op [%d:%d]: unexpected type %T",
-					op.OpL, op.OpP, o)
-			}
-			return oop.Metadata.Result.BigmapDiff, nil
-		}
-	}
-	return nil, nil
 }
 
 type InMemoryBigmap struct {
@@ -322,20 +256,14 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 		}
 
 		// reset temp bigmap after a batch of internal ops has been processed
-		if !op.IsInternal {
+		if !op.IsInternal && len(tmp) > 0 {
 			for k := range tmp {
 				delete(tmp, k)
 			}
 		}
 
-		bmd, err := getBigmapDiffs(op, block)
-		if err != nil {
-			log.Error(err)
-			continue
-		}
-
 		// process bigmapdiffs
-		for _, diff := range bmd {
+		for _, diff := range op.BigmapDiff {
 			switch diff.Action {
 			case micheline.DiffActionAlloc:
 				// insert immediately to allow sequence of updates
@@ -464,8 +392,8 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 					}
 
 					// list all live keys and schedule for deletion
-					ids := make([]uint64, 0, int(alloc.NKeys))
-					updates := make([]pack.Item, 0, int(alloc.NKeys))
+					ids := make([]uint64, 0, 1024)
+					updates := make([]pack.Item, 0, 1024)
 					err = pack.NewQuery("etl.bigmap.empty", idx.valueTable).
 						AndEqual("bigmap_id", diff.Id).
 						Stream(ctx, func(r pack.Row) error {
@@ -545,14 +473,14 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 				var prev *model.BigmapKV
 				err = pack.NewQuery("etl.bigmap.remove", idx.valueTable).
 					AndEqual("key_id", model.GetKeyId(diff.Id, diff.KeyHash)).
-					AndEqual("bigmap_id", diff.Id).
+					WithDesc().
 					Stream(ctx, func(r pack.Row) error {
 						source := &model.BigmapKV{}
 						if err := r.Decode(source); err != nil {
 							return err
 						}
 						// additional check for hash collision safety
-						if source.GetKeyHash().Equal(diff.KeyHash) {
+						if source.BigmapId == diff.Id && source.GetKeyHash().Equal(diff.KeyHash) {
 							prev = source
 							return io.EOF
 						}
@@ -628,19 +556,20 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 				var prev *model.BigmapKV
 				err = pack.NewQuery("etl.bigmap.update", idx.valueTable).
 					AndEqual("key_id", model.GetKeyId(diff.Id, diff.KeyHash)).
-					AndEqual("bigmap_id", diff.Id).
+					WithDesc().
 					Stream(ctx, func(r pack.Row) error {
 						source := &model.BigmapKV{}
 						if err := r.Decode(source); err != nil {
 							return err
 						}
 						// additional check for hash collision safety
-						if source.GetKeyHash().Equal(diff.KeyHash) {
+						if source.BigmapId == diff.Id && source.GetKeyHash().Equal(diff.KeyHash) {
 							prev = source
+							return io.EOF
 						}
 						return nil
 					})
-				if err != nil {
+				if err != nil && err != io.EOF {
 					return fmt.Errorf("etl.bigmap.update decode: %w", err)
 				}
 
@@ -649,12 +578,12 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 					// replace
 					live.RowId = prev.RowId
 					if err := idx.valueTable.Update(ctx, live); err != nil {
-						return fmt.Errorf("etl.bigmap.update: %w", err)
+						return fmt.Errorf("etl.bigmap.replace: %w", err)
 					}
 				} else {
 					// add
 					if err := idx.valueTable.Insert(ctx, live); err != nil {
-						return fmt.Errorf("etl.bigmap.update: %w", err)
+						return fmt.Errorf("etl.bigmap.insert: %w", err)
 					}
 					alloc.NKeys++
 				}
@@ -662,7 +591,7 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 				alloc.NUpdates++
 
 				if err := idx.updateTable.Insert(ctx, model.NewBigmapUpdate(op, diff)); err != nil {
-					return fmt.Errorf("etl.bigmap.update: %w", err)
+					return fmt.Errorf("etl.bigmap.insert: %w", err)
 				}
 				if err := idx.allocTable.Update(ctx, alloc); err != nil {
 					return fmt.Errorf("etl.bigmap.update: %w", err)
@@ -716,7 +645,6 @@ func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 		)
 		err = pack.NewQuery("etl.bigmap.rollback", idx.updateTable).
 			AndEqual("key_id", key).
-			AndEqual("bigmap_id", v.BigmapId).
 			AndLt("I", v.RowId).            // exclude self
 			AndLte("height", height).       // limit search scope
 			AndGte("height", alloc.Height). // limit search scope
@@ -726,7 +654,7 @@ func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 					return err
 				}
 				// additional check for hash collision safety
-				if source.GetKeyHash().Equal(hash) {
+				if source.BigmapId == v.BigmapId && source.GetKeyHash().Equal(hash) {
 					prev = source
 					return io.EOF
 				}
@@ -766,14 +694,13 @@ func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 			// load current live key, may not exist
 			err = pack.NewQuery("etl.bigmap.rollback", idx.valueTable).
 				AndEqual("key_id", key).
-				AndEqual("bigmap_id", v.BigmapId).
 				Stream(ctx, func(r pack.Row) error {
 					source := &model.BigmapKV{}
 					if err := r.Decode(source); err != nil {
 						return err
 					}
 					// additional check for hash collision safety
-					if source.GetKeyHash().Equal(hash) {
+					if source.BigmapId == v.BigmapId && source.GetKeyHash().Equal(hash) {
 						live = source
 						return io.EOF
 					}
@@ -796,7 +723,7 @@ func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 				alloc.NKeys--
 				alloc.NUpdates--
 
-				// FIXME: we don't know previous update height here, but its ok
+				// NOTE: we don't know previous update height here, but its ok
 				// since alloc.Updated field is not relevant for correctness
 
 			} else {
@@ -863,5 +790,14 @@ func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 }
 
 func (idx *BigmapIndex) DeleteCycle(ctx context.Context, cycle int64) error {
+	return nil
+}
+
+func (idx *BigmapIndex) Flush(ctx context.Context) error {
+	for _, v := range idx.Tables() {
+		if err := v.Flush(ctx); err != nil {
+			return err
+		}
+	}
 	return nil
 }

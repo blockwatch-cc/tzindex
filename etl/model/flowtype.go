@@ -1,7 +1,11 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package model
+
+import (
+	"fmt"
+)
 
 type FlowCategory byte
 
@@ -55,56 +59,77 @@ func (c FlowCategory) String() string {
 type FlowType byte
 
 const (
-	FlowTypeActivation           FlowType = iota // 0
-	FlowTypeDenunciation                         // 1
-	FlowTypeTransaction                          // 2
-	FlowTypeOrigination                          // 3
-	FlowTypeDelegation                           // 4
-	FlowTypeReveal                               // 5
-	FlowTypeEndorsement                          // 6
-	FlowTypeBaking                               // 7
-	FlowTypeNonceRevelation                      // 8
-	FlowTypeInternal                             // 9 - used for unfreeze
-	FlowTypeInvoice                              // 10 - invoice feature
-	FlowTypeAirdrop                              // 11 - Babylon Airdrop
-	FlowTypeSubsidy                              // 12 - Granada liquidity baking
-	FlowTypeConstantRegistration                 // 13 - Hangzhou+
-	FlowTypeInvalid
+	FlowTypeEndorsement      FlowType = iota // 0
+	FlowTypeTransaction                      // 1
+	FlowTypeOrigination                      // 2
+	FlowTypeDelegation                       // 3
+	FlowTypeReveal                           // 4
+	FlowTypeBaking                           // 5
+	FlowTypeNonceRevelation                  // 6
+	FlowTypeActivation                       // 7
+	FlowTypePenalty                          // 8
+	FlowTypeInternal                         // 9 - used for unfreeze
+	FlowTypeInvoice                          // 10 - invoice feature
+	FlowTypeAirdrop                          // 11 - Babylon Airdrop
+	FlowTypeSubsidy                          // 12 - Granada liquidity baking
+	FlowTypeRegisterConstant                 // 13 - Hangzhou+
+	FlowTypeBonus                            // 14 - Ithaca+ baking bonus
+	FlowTypeReward                           // 15 - Ithaca+ endorsing reward (or slash)
+	FlowTypeDeposit                          // 16 - Ithaca+ deposit transfer
+	FlowTypeDepositsLimit                    // 17 - Ithaca+
+	FlowTypeInvalid          = 255
 )
 
-func ParseFlowType(s string) FlowType {
-	switch s {
-	case "activation":
-		return FlowTypeActivation
-	case "denunciation":
-		return FlowTypeDenunciation
-	case "transaction":
-		return FlowTypeTransaction
-	case "origination":
-		return FlowTypeOrigination
-	case "delegation":
-		return FlowTypeDelegation
-	case "reveal":
-		return FlowTypeReveal
-	case "endorsement":
-		return FlowTypeEndorsement
-	case "baking":
-		return FlowTypeBaking
-	case "noncerevelation":
-		return FlowTypeNonceRevelation
-	case "internal":
-		return FlowTypeInternal
-	case "invoice":
-		return FlowTypeInvoice
-	case "airdrop":
-		return FlowTypeAirdrop
-	case "subsidy":
-		return FlowTypeSubsidy
-	case "constant":
-		return FlowTypeConstantRegistration
-	default:
-		return FlowTypeInvalid
+var (
+	flowTypeStrings = map[FlowType]string{
+		FlowTypeEndorsement:      "endorsement",
+		FlowTypeTransaction:      "transaction",
+		FlowTypeOrigination:      "origination",
+		FlowTypeDelegation:       "delegation",
+		FlowTypeReveal:           "reveal",
+		FlowTypeBaking:           "baking",
+		FlowTypeNonceRevelation:  "nonce_revelation",
+		FlowTypeActivation:       "activation",
+		FlowTypePenalty:          "penalty",
+		FlowTypeInternal:         "internal",
+		FlowTypeInvoice:          "invoice",
+		FlowTypeAirdrop:          "airdrop",
+		FlowTypeSubsidy:          "subsidy",
+		FlowTypeRegisterConstant: "register_constant",
+		FlowTypeBonus:            "bonus",
+		FlowTypeReward:           "reward",
+		FlowTypeDeposit:          "deposit",
+		FlowTypeDepositsLimit:    "deposits_limit",
+		FlowTypeInvalid:          "invalid",
 	}
+	flowTypeReverseStrings = make(map[string]FlowType)
+)
+
+func init() {
+	for n, v := range flowTypeStrings {
+		flowTypeReverseStrings[v] = n
+	}
+}
+
+func (t *FlowType) UnmarshalText(data []byte) error {
+	v := ParseFlowType(string(data))
+	if !v.IsValid() {
+		return fmt.Errorf("invalid flow type '%s'", string(data))
+	}
+	*t = v
+	return nil
+}
+
+func (t *FlowType) MarshalText() ([]byte, error) {
+	return []byte(t.String()), nil
+}
+
+func ParseFlowType(s string) FlowType {
+	t, ok := flowTypeReverseStrings[s]
+	if !ok {
+		t = FlowTypeInvalid
+	}
+	return t
 }
 
 func (t FlowType) IsValid() bool {
@@ -112,36 +137,39 @@ func (t FlowType) IsValid() bool {
 }
 
 func (t FlowType) String() string {
-	switch t {
-	case FlowTypeActivation:
-		return "activation"
-	case FlowTypeDenunciation:
-		return "denunciation"
-	case FlowTypeTransaction:
-		return "transaction"
-	case FlowTypeOrigination:
-		return "origination"
-	case FlowTypeDelegation:
-		return "delegation"
-	case FlowTypeReveal:
-		return "reveal"
-	case FlowTypeEndorsement:
-		return "endorsement"
-	case FlowTypeBaking:
-		return "baking"
-	case FlowTypeNonceRevelation:
-		return "noncerevelation"
-	case FlowTypeInternal:
-		return "internal"
-	case FlowTypeInvoice:
-		return "invoice"
-	case FlowTypeAirdrop:
-		return "airdrop"
-	case FlowTypeSubsidy:
-		return "subsidy"
-	case FlowTypeConstantRegistration:
-		return "constant"
+	return flowTypeStrings[t]
+}
+
+func MapFlowType(typ OpType) FlowType {
+	switch typ {
+	case OpTypeActivation:
+		return FlowTypeActivation
+	case OpTypeDoubleBaking,
+		OpTypeDoubleEndorsement,
+		OpTypeDoublePreendorsement:
+		return FlowTypePenalty
+	case OpTypeTransaction:
+		return FlowTypeTransaction
+	case OpTypeOrigination:
+		return FlowTypeOrigination
+	case OpTypeDelegation:
+		return FlowTypeDelegation
+	case OpTypeReveal:
+		return FlowTypeReveal
+	case OpTypeEndorsement,
+		OpTypePreendorsement:
+		return FlowTypeEndorsement
+	case OpTypeNonceRevelation:
+		return FlowTypeNonceRevelation
+	case OpTypeInvoice:
+		return FlowTypeInvoice
+	case OpTypeAirdrop:
+		return FlowTypeAirdrop
+	case OpTypeRegisterConstant:
+		return FlowTypeRegisterConstant
+	case OpTypeDepositsLimit:
+		return FlowTypeDepositsLimit
 	default:
-		return "invalid"
+		return FlowTypeInvalid
 	}
 }

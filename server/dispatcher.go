@@ -4,18 +4,18 @@
 package server
 
 // A buffered channel that we can send work requests on.
-var jobQueue chan *ApiContext
+var jobQueue chan *Context
 
 type Worker struct {
-	WorkerPool chan chan *ApiContext
-	JobChannel chan *ApiContext
+	WorkerPool chan chan *Context
+	JobChannel chan *Context
 	quit       chan bool
 }
 
-func NewWorker(workerPool chan chan *ApiContext) Worker {
+func NewWorker(workerPool chan chan *Context) Worker {
 	return Worker{
 		WorkerPool: workerPool,
-		JobChannel: make(chan *ApiContext),
+		JobChannel: make(chan *Context),
 		quit:       make(chan bool)}
 }
 
@@ -61,14 +61,14 @@ func (w Worker) Stop() {
 
 type Dispatcher struct {
 	// A pool of workers channels that are registered with the dispatcher
-	pool       chan chan *ApiContext
+	pool       chan chan *Context
 	maxWorkers int
 	maxQueue   int
 }
 
 func NewDispatcher(maxWorkers int, maxQueue int) *Dispatcher {
-	jobQueue = make(chan *ApiContext, maxQueue)
-	pool := make(chan chan *ApiContext, maxWorkers)
+	jobQueue = make(chan *Context, maxQueue)
+	pool := make(chan chan *Context, maxWorkers)
 	return &Dispatcher{pool: pool, maxWorkers: maxWorkers, maxQueue: maxQueue}
 }
 

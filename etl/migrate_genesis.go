@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -8,11 +8,10 @@ import (
 	"fmt"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/tzgo/rpc"
-	"blockwatch.cc/tzgo/tezos"
 
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 )
 
 func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
@@ -47,30 +46,22 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		acc.SpendableBalance = v.Value
 		acc.IsFunded = true
 		acc.IsActivated = true
-		acc.IsSpendable = true
-		acc.IsDelegatable = true
+		acc.IsDirty = true
 
 		// revealed accounts are registered as active bakers (i.e. foundation bakers)
 		if v.Key.IsValid() {
 			acc.IsRevealed = true
 			acc.Pubkey = v.Key.Bytes()
-			acc.IsDelegate = true
-			acc.IsActiveDelegate = true
-			acc.DelegateSince = b.block.Height
-			acc.DelegateId = acc.RowId
-			b.block.NDelegation++
-			b.RegisterDelegate(acc, true)
-			b.AppendMagicBakerRegistrationOp(ctx, acc, i)
+			acc.IsBaker = true
+			acc.BakerId = acc.RowId
+			bkr := b.RegisterBaker(acc, true)
+			b.AppendMagicBakerRegistrationOp(ctx, bkr, i)
 
 			// update supply counters
 			b.block.Supply.ActiveStaking += v.Value
 
 			// log.Debugf("1 BOOT REG SELF %d %s -> %d bal=%d",
 			//  acc.RowId, acc, acc.ActiveDelegations, acc.Balance())
-		} else {
-			b.accCache.Add(acc)
-			b.accMap[acc.RowId] = acc
-			b.accHashMap[b.accCache.AccountHashKey(acc)] = acc
 		}
 
 		// update block counters
@@ -81,7 +72,13 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		b.block.Supply.Activated += v.Value
 
 		// register activation flows (will not be applied, just saved!)
-		f := model.NewFlow(b.block, acc, nil, opCounter, OPL_PROTOCOL_UPGRADE, flowCounter, 0, 0)
+		id := model.OpRef{
+			Kind: model.OpTypeActivation,
+			N:    opCounter,
+			L:    model.OPL_PROTOCOL_UPGRADE,
+			P:    flowCounter,
+		}
+		f := model.NewFlow(b.block, acc, nil, id)
 		f.Category = model.FlowCategoryBalance
 		f.Operation = model.FlowTypeActivation
 		f.AmountIn = acc.SpendableBalance
@@ -89,7 +86,7 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		flowCounter++
 
 		// register implicit activation ops
-		op := model.NewImplicitOp(b.block, 0, tezos.OpTypeActivateAccount, opCounter, OPL_PROTOCOL_UPGRADE, opCounter)
+		op := model.NewEventOp(b.block, 0, id)
 		op.SenderId = acc.RowId
 		op.Counter = int64(opCounter)
 		op.Volume = acc.SpendableBalance
@@ -100,18 +97,18 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		accounts = append(accounts, acc)
 
 		log.Debug(newLogClosure(func() string {
-			var as, vs, ds, rs string
+			var sfx string
 			if acc.IsActivated {
-				as = " [activated]"
+				sfx += " [activated]"
 			}
-			if acc.IsDelegate {
-				ds = " [delegated]"
+			if acc.IsBaker {
+				sfx += " [baker]"
 			}
 			if acc.IsRevealed {
-				rs = " [revealed]"
+				sfx += " [revealed]"
 			}
-			return fmt.Sprintf("Registered %d %s %.6f%s%s%s%s", acc.RowId, acc,
-				b.block.Params.ConvertValue(acc.Balance()), as, ds, rs, vs)
+			return fmt.Sprintf("Registered %d %s %.6f%s", acc.RowId, acc,
+				b.block.Params.ConvertValue(acc.Balance()), sfx)
 		}))
 	}
 
@@ -123,9 +120,10 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		acc.CreatorId = acc.RowId // satisfy invariant
 		acc.FirstSeen = b.block.Height
 		acc.LastSeen = b.block.Height
+		acc.SpendableBalance = v.Value
 		acc.IsContract = true
 		acc.IsFunded = true
-		acc.SpendableBalance = v.Value
+		acc.IsDirty = true
 
 		// update block counters
 		b.block.NewAccounts++
@@ -140,25 +138,45 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		b.block.Supply.ActiveDelegated += v.Value
 
 		// register activation flows (will not be applied, just saved!)
-		f := model.NewFlow(b.block, acc, nil, opCounter, OPL_PROTOCOL_UPGRADE, flowCounter, 0, 0)
+		id := model.OpRef{
+			Kind: model.OpTypeOrigination,
+			N:    opCounter,
+			L:    model.OPL_PROTOCOL_UPGRADE,
+			P:    flowCounter,
+		}
+		f := model.NewFlow(b.block, acc, nil, id)
 		f.Category = model.FlowCategoryBalance
 		f.Operation = model.FlowTypeActivation
 		f.AmountIn = acc.Balance()
 		b.block.Flows = append(b.block.Flows, f)
-		flowCounter++
 
-		// link to and update delegate
-		dlg, _ := b.AccountByAddress(v.Delegate)
+		// register implicit origination ops
+		op := model.NewEventOp(b.block, 0, id)
+		op.ReceiverId = acc.RowId
+		op.Counter = int64(opCounter)
+		op.Volume = acc.Balance()
+		b.block.Ops = append(b.block.Ops, op)
+		opCounter++
+
+		// link to and update baker
+		bkr, _ := b.BakerByAddress(v.Delegate)
 		acc.IsDelegated = true
-		acc.DelegateId = dlg.RowId
+		acc.BakerId = bkr.AccountId
 		acc.DelegatedSince = b.block.Height
-		dlg.TotalDelegations++
-		dlg.ActiveDelegations++
-		dlg.DelegatedBalance += acc.Balance()
-		// log.Debugf("1 BOOT ADD delegation %d %s -> %d (%d %s) bal=%d",
-		//  dlg.RowId, dlg, dlg.ActiveDelegations, acc.RowId, acc, acc.Balance())
+		bkr.TotalDelegations++
+		bkr.ActiveDelegations++
+		bkr.DelegatedBalance += acc.Balance()
+		// log.Debugf("1 BOOT ADD delegation %s %d bal=%d -> %s %d delegations=%d",
+		//  acc, acc.RowId, acc.Balance(), bkr, bkr.AccountId, bkr.ActiveDelegations)
+
+		id = model.OpRef{
+			Kind: model.OpTypeDelegation,
+			N:    opCounter,
+			L:    model.OPL_PROTOCOL_UPGRADE,
+			P:    flowCounter,
+		}
 		// register delegation flows (will not be applied, just saved!)
-		f = model.NewFlow(b.block, dlg, acc, opCounter, OPL_PROTOCOL_UPGRADE, flowCounter, 0, 0)
+		f = model.NewFlow(b.block, bkr.Account, acc, id)
 		f.Category = model.FlowCategoryDelegation
 		f.Operation = model.FlowTypeDelegation
 		f.AmountIn = acc.Balance()
@@ -166,42 +184,42 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		flowCounter++
 
 		// register implicit delegation ops
-		op := model.NewImplicitOp(b.block, 0, tezos.OpTypeDelegation, opCounter, OPL_PROTOCOL_UPGRADE, opCounter)
+		op = model.NewEventOp(b.block, 0, id)
 		op.SenderId = acc.RowId
-		op.DelegateId = dlg.RowId
+		op.BakerId = bkr.AccountId
 		op.Counter = int64(opCounter)
 		op.Volume = acc.Balance()
 		b.block.Ops = append(b.block.Ops, op)
 		opCounter++
 
-		// put in cache
-		b.accCache.Add(acc)
-		b.accMap[acc.RowId] = acc
-		b.accHashMap[b.accCache.AccountHashKey(acc)] = acc
-
 		// prepare for insert
 		accounts = append(accounts, acc)
 
 		// save as contract (not spendable, not delegatebale, no fee, no gas, no limits)
-		oop := &rpc.OriginationOp{
-			Script:   &v.Script,
-			Metadata: &rpc.OriginationOpMetadata{}, // empty is OK
+		var not bool
+		oop := &rpc.Origination{
+			Script:      &v.Script,
+			Spendable:   &not,
+			Delegatable: &not,
 		}
-		contracts = append(contracts, model.NewContract(acc, oop, op, nil))
+		contracts = append(contracts, model.NewContract(acc, oop, op, nil, b.block.Params))
 
 		log.Debug(newLogClosure(func() string {
-			var as, vs, ds, rs string
+			var sfx string
 			if acc.IsActivated {
-				as = " [activated]"
+				sfx += " [activated]"
 			}
-			if acc.IsDelegate {
-				ds = " [delegated]"
+			if acc.IsBaker {
+				sfx += " [baker]"
+			}
+			if acc.IsContract {
+				sfx += " [contract]"
 			}
 			if acc.IsRevealed {
-				rs = " [revealed]"
+				sfx += " [revealed]"
 			}
-			return fmt.Sprintf("Registered %d %s %.6f%s%s%s%s", acc.RowId, acc,
-				b.block.Params.ConvertValue(acc.Balance()), as, ds, rs, vs)
+			return fmt.Sprintf("Registered %d %s %.6f%s", acc.RowId, acc,
+				b.block.Params.ConvertValue(acc.Balance()), sfx)
 		}))
 	}
 
@@ -213,8 +231,6 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		acc.FirstSeen = b.block.Height
 		acc.LastSeen = b.block.Height
 		acc.UnclaimedBalance = v.Value
-		acc.IsSpendable = true
-		acc.IsDelegatable = true
 
 		// update block counters
 		b.block.NewAccounts++
@@ -244,9 +260,19 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		return nil, err
 	}
 
+	// add all non-baker accounts to builder to be picked up by indexers
+	for _, v := range accounts {
+		acc := v.(*model.Account)
+		if acc.IsBaker || acc.SpendableBalance == 0 {
+			continue
+		}
+		b.accMap[acc.RowId] = acc
+		b.accHashMap[b.accCache.AccountHashKey(acc)] = acc
+	}
+
 	// init chain counters from block
 	// set initial unclaimed accounts to number of blinded accounts
-	b.block.Chain.Update(b.block, b.accMap, b.dlgMap)
+	b.block.Chain.Update(b.block, b.accMap, b.bakerMap)
 	b.block.Chain.UnclaimedAccounts = int64(len(gen.Commitments))
 
 	// update supply counters

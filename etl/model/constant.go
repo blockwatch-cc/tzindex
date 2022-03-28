@@ -6,8 +6,8 @@ package model
 import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzgo/micheline"
-	"blockwatch.cc/tzgo/rpc"
 	"blockwatch.cc/tzgo/tezos"
+	"blockwatch.cc/tzindex/rpc"
 )
 
 type ConstantID uint64
@@ -33,7 +33,7 @@ type Constant struct {
 var _ pack.Item = (*Constant)(nil)
 
 // assuming the op was successful!
-func NewConstant(rop *rpc.ConstantRegistrationOp, op *Op) *Constant {
+func NewConstant(rop *rpc.ConstantRegistration, op *Op) *Constant {
 	res := rop.Metadata.Result
 	g := &Constant{
 		Address:     res.GlobalAddress.Clone(),

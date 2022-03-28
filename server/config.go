@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"time"
 
-	"blockwatch.cc/tzgo/rpc"
 	"blockwatch.cc/tzindex/etl"
+	"blockwatch.cc/tzindex/rpc"
 )
 
 type Config struct {
@@ -96,6 +96,8 @@ type HttpConfig struct {
 	CorsCredentials     string        `json:"cors_credentials"`
 	CacheEnable         bool          `json:"cache_enable"`
 	CacheControl        string        `json:"cache_control"`
+	CacheExpires        time.Duration `json:"cache_expires"`
+	CacheMaxExpires     time.Duration `json:"cache_max"`
 }
 
 func (c HttpConfig) Address() string {
@@ -120,6 +122,8 @@ func NewHttpConfig() HttpConfig {
 		DefaultExploreCount: 20,
 		MaxExploreCount:     100,
 		MaxSeriesDuration:   90 * 24 * time.Hour,
+		CacheExpires:        30 * time.Second,
+		CacheMaxExpires:     24 * time.Hour,
 	}
 }
 

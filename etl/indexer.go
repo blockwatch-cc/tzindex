@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -13,46 +13,49 @@ import (
 	"blockwatch.cc/packdb/store"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/cache"
-	. "blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 )
 
 type IndexerConfig struct {
 	DBPath    string
 	DBOpts    interface{}
 	StateDB   store.DB
-	Indexes   []BlockIndexer
+	Indexes   []model.BlockIndexer
 	LightMode bool
 }
 
 // Indexer defines an index manager that manages and stores multiple indexes.
 type Indexer struct {
-	mu        sync.Mutex
-	blocks    atomic.Value              // cache for all block hashes and timestamps
-	ranks     atomic.Value              // top addresses (>10tez, 100k = 10 MB)
-	rights    atomic.Value              // bitset 400 (bakers) * 6 (cycles) * 4096 (blocks) * 33 (rights)
-	addrs     atomic.Value              // all on-chain address hashes by id
-	bigmaps   *cache.BigmapHistoryCache // bigmap histpry cache
-	dbpath    string
-	dbopts    interface{}
-	statedb   store.DB
-	reg       *Registry
-	indexes   []BlockIndexer
-	tips      map[string]*IndexTip
-	tables    map[string]*pack.Table
-	lightMode bool
+	mu             sync.Mutex
+	blocks         atomic.Value              // cache for all block hashes and timestamps
+	addrs          atomic.Value              // all on-chain address hashes by id
+	bigmap_values  *cache.BigmapHistoryCache // bigmap history cache
+	bigmap_types   *cache.BigmapCache        // bigmap allocs
+	contract_types *cache.ContractTypeCache  // contract type data
+	dbpath         string
+	dbopts         interface{}
+	statedb        store.DB
+	reg            *Registry
+	indexes        []model.BlockIndexer
+	tips           map[string]*IndexTip
+	tables         map[string]*pack.Table
+	lightMode      bool
 }
 
 func NewIndexer(cfg IndexerConfig) *Indexer {
 	return &Indexer{
-		dbpath:    cfg.DBPath,
-		dbopts:    cfg.DBOpts,
-		statedb:   cfg.StateDB,
-		indexes:   cfg.Indexes,
-		bigmaps:   cache.NewBigmapHistoryCache(),
-		reg:       NewRegistry(),
-		tips:      make(map[string]*IndexTip),
-		tables:    make(map[string]*pack.Table),
-		lightMode: cfg.LightMode,
+		dbpath:         cfg.DBPath,
+		dbopts:         cfg.DBOpts,
+		statedb:        cfg.StateDB,
+		indexes:        cfg.Indexes,
+		bigmap_values:  cache.NewBigmapHistoryCache(0),
+		bigmap_types:   cache.NewBigmapCache(0),
+		contract_types: cache.NewContractTypeCache(0),
+		reg:            NewRegistry(),
+		tips:           make(map[string]*IndexTip),
+		tables:         make(map[string]*pack.Table),
+		lightMode:      cfg.LightMode,
 	}
 }
 
@@ -68,12 +71,25 @@ func (m *Indexer) ParamsByDeployment(v int) (*tezos.Params, error) {
 	return m.reg.GetParamsByDeployment(v)
 }
 
+func (m *Indexer) IsLightMode() bool {
+	return m.lightMode
+}
+
 func (m *Indexer) Table(key string) (*pack.Table, error) {
 	t, ok := m.tables[key]
 	if !ok {
 		return nil, ErrNoTable
 	}
 	return t, nil
+}
+
+func (m *Indexer) Index(key string) (model.BlockIndexer, error) {
+	for _, v := range m.indexes {
+		if v.Key() == key {
+			return v, nil
+		}
+	}
+	return nil, ErrNoIndex
 }
 
 func (m *Indexer) TableStats() []pack.TableStats {
@@ -86,7 +102,7 @@ func (m *Indexer) TableStats() []pack.TableStats {
 	return stats
 }
 
-func (m *Indexer) Init(ctx context.Context, tip *ChainTip, mode Mode) error {
+func (m *Indexer) Init(ctx context.Context, tip *model.ChainTip, mode Mode) error {
 	// Nothing to do when no indexes are enabled.
 	if len(m.indexes) == 0 {
 		return nil
@@ -186,6 +202,15 @@ func (m *Indexer) Init(ctx context.Context, tip *ChainTip, mode Mode) error {
 	return nil
 }
 
+func (m *Indexer) Finalize(ctx context.Context) error {
+	for _, idx := range m.indexes {
+		if err := idx.FinalizeSync(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (m *Indexer) Flush(ctx context.Context) error {
 	for _, idx := range m.indexes {
 		for _, t := range idx.Tables() {
@@ -260,7 +285,6 @@ func (m *Indexer) Close() error {
 }
 
 func (m *Indexer) ConnectProtocol(ctx context.Context, params *tezos.Params) error {
-	// update previous protocol end
 	prev := m.reg.GetParamsLatest()
 	err := m.statedb.Update(func(dbTx store.Tx) error {
 		if prev != nil {
@@ -277,8 +301,8 @@ func (m *Indexer) ConnectProtocol(ctx context.Context, params *tezos.Params) err
 	return m.reg.Register(params)
 }
 
-func (m *Indexer) ConnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
-	// insert data
+func (m *Indexer) ConnectBlock(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
+	// insert block into all indexes
 	for _, t := range m.indexes {
 		key := t.Key()
 		tip, ok := m.tips[string(key)]
@@ -302,6 +326,11 @@ func (m *Indexer) ConnectBlock(ctx context.Context, block *Block, builder BlockB
 		tip.Height = block.Height
 	}
 
+	// check context
+	if interruptRequested(ctx) {
+		return nil
+	}
+
 	// update live caches
 	if err := m.updateBlocks(ctx, block); err != nil {
 		return err
@@ -309,11 +338,10 @@ func (m *Indexer) ConnectBlock(ctx context.Context, block *Block, builder BlockB
 	if err := m.updateAddrs(ctx, builder.Accounts()); err != nil {
 		return err
 	}
-
 	return nil
 }
 
-func (m *Indexer) DisconnectBlock(ctx context.Context, block *Block, builder BlockBuilder, ignoreErrors bool) error {
+func (m *Indexer) DisconnectBlock(ctx context.Context, block *model.Block, builder model.BlockBuilder, ignoreErrors bool) error {
 	for _, t := range m.indexes {
 		key := t.Key()
 		tip, ok := m.tips[string(key)]
@@ -330,7 +358,7 @@ func (m *Indexer) DisconnectBlock(ctx context.Context, block *Block, builder Blo
 		}
 
 		// Update the current tip.
-		cloned := block.TZ.Parent().Clone()
+		cloned := block.TZ.ParentHash().Clone()
 		tip.Hash = &cloned
 		tip.Height = block.Height - 1
 	}
@@ -341,7 +369,7 @@ func (m *Indexer) DisconnectBlock(ctx context.Context, block *Block, builder Blo
 	return nil
 }
 
-func (m *Indexer) DeleteBlock(ctx context.Context, tz *Bundle) error {
+func (m *Indexer) DeleteBlock(ctx context.Context, tz *rpc.Bundle) error {
 	for _, t := range m.indexes {
 		key := t.Key()
 		tip, ok := m.tips[string(key)]
@@ -356,7 +384,7 @@ func (m *Indexer) DeleteBlock(ctx context.Context, tz *Bundle) error {
 			return err
 		}
 		// Update the current tip.
-		cloned := tz.Parent().Clone()
+		cloned := tz.ParentHash().Clone()
 		tip.Hash = &cloned
 		tip.Height = tz.Height() - 1
 	}
@@ -365,7 +393,7 @@ func (m *Indexer) DeleteBlock(ctx context.Context, tz *Bundle) error {
 
 // maybeCreateIndex determines if each of the enabled index indexes has already
 // been created and creates them if not.
-func (m *Indexer) maybeCreateIndex(ctx context.Context, dbTx store.Tx, idx BlockIndexer, sym string) error {
+func (m *Indexer) maybeCreateIndex(ctx context.Context, dbTx store.Tx, idx model.BlockIndexer, sym string) error {
 	// Create the bucket for the current tips as needed.
 	b, err := dbTx.Root().CreateBucketIfNotExists(tipsBucketName)
 	if err != nil {

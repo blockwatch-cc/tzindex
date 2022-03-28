@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -9,10 +9,12 @@ import (
 
 	"blockwatch.cc/tzgo/tezos"
 
+	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 )
 
-// Bakers implicitly activated by a bug in v001 (called magic delegates by us)
+// Bakers implicitly activated by a bug in v001 (called magic bakers by us)
 //
 // Sadly, there is no documentation about broken baker activation rules.
 // Core devs are unable or unwilling to answer questions regarding this issue.
@@ -20,7 +22,7 @@ import (
 // resulted in excess total rolls and in turn in wrong luck and payout
 // share calculations.
 //
-var v001MagicDelegates = []tezos.Address{
+var v001MagicBakers = []tezos.Address{
 	tezos.MustParseAddress("tz1T7NFTcJQULn4GVoEEcod8v5f7fRJwF2JJ"),
 	tezos.MustParseAddress("tz1LGdjnU54XLWBTb3jeqoYdxwdzfbtLDikY"),
 	tezos.MustParseAddress("tz1aMdq4MVVcNAinaLbBbz1RaiEYDAj32gLM"),
@@ -42,7 +44,7 @@ var v001MagicDelegates = []tezos.Address{
 
 // Bakers in the magic list that are deactivaed by v002 for whatever
 // fucked up reason.
-var v001IllegalDelegates = []tezos.Address{
+var v001IllegalBakers = []tezos.Address{
 	tezos.MustParseAddress("tz1aMdq4MVVcNAinaLbBbz1RaiEYDAj32gLM"),
 	tezos.MustParseAddress("tz1e6ousJm7xbVUudCCrijZbaMfk2sjv3C91"),
 	tezos.MustParseAddress("tz1eU1Xb57o9cgHymUYJ45VYm1uLvwBFQA9N"),
@@ -51,11 +53,11 @@ var v001IllegalDelegates = []tezos.Address{
 }
 
 // hash table for lookup
-var v001MagicDelegateFilter = tezos.NewAddressFilter(v001MagicDelegates...)
+var v001MagicBakerFilter = tezos.NewAddressFilter(v001MagicBakers...)
 
 // activated by v002 migration (list compiled from research about roll
 // distributions and babylon airdrop)
-var v002MagicDelegates = []tezos.Address{
+var v002MagicBakers = []tezos.Address{
 	tezos.MustParseAddress("tz1a8jxLZv6M8cDjmNYwAXweQiKUnXgFWVQN"),
 	tezos.MustParseAddress("tz1ajpiR5wkPXghYDdT4tizu3BG8iy4WJLz4"),
 	tezos.MustParseAddress("tz1aR3E7CGyceYDa2BHBde8AL1RvWbS1ZgYJ"),
@@ -885,49 +887,48 @@ var v002MagicDelegates = []tezos.Address{
 // it provides us with a sufficiently accurate estimate that overestimates the
 // number of delegates, but is safe to move forward
 //
-// We usually register all delegates as soon as they send an op to include them into
+// We usually register all bakers as soon as they send an op to include them into
 // snapshots. In protocols that have params.HasOriginationBug set we do this as soon
-// as the origination is sent to a non registered delegate. That's why here we
-// re-register such delegates to update their grace period and set a proper delegate id
-// which does not happen during origination on purpose. That way we can discern such
-// delegates from correctly registered delegates by checking
+// as the origination is sent to a non registered baker. That's why here we
+// re-register such bakers to update their grace period and set baker id == src id
+// which does not happen during origination on purpose. To distinguish such
+// bakers from properly registered bakers use
 //
-//   IsDelegate == true && DelegateId == 0
+//   IsBaker == true && BakerId == 0 // magic baker
 //
 func (b *Builder) FixOriginationBug(ctx context.Context, params *tezos.Params) error {
 	var count int
 	var err error
 
-	for i, addr := range v002MagicDelegates {
-		dlg, ok := b.AccountByAddress(addr)
+	for i, addr := range v002MagicBakers {
+		acc, ok := b.AccountByAddress(addr)
 		if !ok {
-			dlg, err = b.idx.LookupAccount(ctx, addr)
+			acc, err = b.idx.LookupAccount(ctx, addr)
 			if err != nil {
 				return fmt.Errorf("Upgrade v%03d: missing account %s", params.Version, addr)
 			}
 		}
 
 		// skip properly registered bakers
-		if dlg.DelegateId > 0 {
+		if acc.BakerId > 0 {
 			continue
 		}
 
 		// activate magic bakers
-		dlg.DelegateId = dlg.RowId
-		b.RegisterDelegate(dlg, true)
+		bkr := b.RegisterBaker(acc, true)
 		count++
 
 		// inject an implicit baker registration
-		b.AppendMagicBakerRegistrationOp(ctx, dlg, i)
+		b.AppendMagicBakerRegistrationOp(ctx, bkr, i)
 	}
 	log.Infof("Migrate v%03d: registered %d extra bakers", params.Version, count)
 
 	// reset grace period for v001 magic bakers
 	count = 0
-	for _, addr := range v001MagicDelegates {
-		dlg, ok := b.AccountByAddress(addr)
+	for _, addr := range v001MagicBakers {
+		bkr, ok := b.BakerByAddress(addr)
 		if !ok {
-			dlg, err = b.idx.LookupAccount(ctx, addr)
+			bkr, err = b.idx.LookupBaker(ctx, addr)
 			if err != nil {
 				return fmt.Errorf("Migrate v%03d: missing baker account %s", params.Version, addr)
 			}
@@ -937,57 +938,66 @@ func (b *Builder) FixOriginationBug(ctx context.Context, params *tezos.Params) e
 		// - tz1b3SaPHFSw51r92ARcV5mGyYbSSsdFd5Gz has 14 (stays at 14)
 		// - tz1fahTqRiZ88aozjxt593aqEyGhXzPMPqp6 has 17 (reinit to 6 + 11)
 		// - tz1UcuaXouNppYnbJr3JWGV31Fa2fnzesmJ4 has 17 (reinit to 6 + 11)
-		if dlg.GracePeriod <= b.block.Cycle+b.block.Params.PreservedCycles+2 {
-			dlg.InitGracePeriod(b.block.Cycle, b.block.Params)
-			count++
-		}
+		// if bkr.GracePeriod < b.block.Cycle+2*b.block.Params.PreservedCycles+1 {
+		bkr.InitGracePeriod(b.block.Cycle, b.block.Params)
+		count++
+		// }
 	}
 	log.Infof("Migrate v%03d: updated %d extra bakers", params.Version, count)
 
 	// unregister non-baker accounts
-	drop := make([]*model.Account, 0)
-	for _, dlg := range b.dlgMap {
-		if dlg.DelegateId > 0 {
+	drop := make([]*model.Baker, 0)
+	for _, bkr := range b.bakerMap {
+		if bkr.Account.IsBaker && bkr.Account.BakerId > 0 {
 			continue
 		}
-		drop = append(drop, dlg)
+		drop = append(drop, bkr)
 	}
 
 	// demote a few illegal bakers (with rolls & rights!!!) - you know ;)
-	for _, ill := range v001IllegalDelegates {
+	for _, ill := range v001IllegalBakers {
 		hash := b.accCache.AddressHashKey(ill)
-		dlg, ok := b.dlgHashMap[hash]
+		bkr, ok := b.bakerHashMap[hash]
 		if !ok {
 			continue
 		}
-		drop = append(drop, dlg)
+		drop = append(drop, bkr)
 	}
 
 	for _, v := range drop {
 		log.Debugf("Migrate v%03d: deregistering baker %s", params.Version, v)
-		b.UnregisterDelegate(v)
+		b.UnregisterBaker(v)
 	}
 
+	// remove baker records
+	delIds := make([]uint64, 0)
+	for _, v := range drop {
+		delIds = append(delIds, v.RowId.Value())
+	}
+	bakers, err := b.idx.Table(index.BakerTableKey)
+	if err == nil {
+		_ = bakers.DeleteIds(ctx, delIds)
+	}
 	log.Infof("Migrate v%03d: dropped %d non-bakers", params.Version, len(drop))
 
 	// get a list of all active delegates
 	if b.validate {
-		delegates, err := b.rpc.ListActiveDelegates(ctx, b.block.Height)
+		realbakers, err := b.rpc.ListActiveDelegates(ctx, rpc.BlockLevel(b.block.Height))
 		if err != nil {
-			return fmt.Errorf("listing delegates: %v", err)
+			return fmt.Errorf("listing delegates: %w", err)
 		}
 		missing := make(map[string]struct{})
 		illegal := make(map[string]struct{})
-		for _, v := range delegates {
+		for _, v := range realbakers {
 			hash := b.accCache.AddressHashKey(v)
-			if _, ok := b.dlgHashMap[hash]; !ok {
+			if _, ok := b.bakerHashMap[hash]; !ok {
 				missing[v.String()] = struct{}{}
 			}
 		}
-		for _, v := range b.dlgMap {
+		for _, v := range b.bakerMap {
 			a := v.Address
 			var found bool
-			for _, vv := range delegates {
+			for _, vv := range realbakers {
 				if vv.Equal(a) {
 					found = true
 					break
@@ -997,12 +1007,12 @@ func (b *Builder) FixOriginationBug(ctx context.Context, params *tezos.Params) e
 				illegal[a.String()] = struct{}{}
 			}
 		}
-		log.Infof("Validated %d missing, %d illegal bakers", len(missing), len(illegal))
+		log.Infof("Audit: %d missing, %d illegal bakers", len(missing), len(illegal))
 		for n, _ := range missing {
-			log.Infof("Missing %s", n)
+			log.Infof("Audit: missing baker %s", n)
 		}
 		for n, _ := range illegal {
-			log.Infof("Illegal %s", n)
+			log.Infof("Audit: illegal baker %s", n)
 		}
 	}
 

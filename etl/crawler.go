@@ -6,7 +6,6 @@ package etl
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"runtime/debug"
 	"sync"
@@ -16,18 +15,18 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/store"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzgo/rpc"
 	"blockwatch.cc/tzgo/tezos"
 
-	. "blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 )
 
 const (
 	StateDBName = "state.db"
 
 	// state database schema
-	stateDBSchemaName    = "2021-07-24"
-	stateDBSchemaVersion = 4
+	stateDBSchemaName    = "2022-02-22"
+	stateDBSchemaVersion = 5
 	stateDBKey           = "statedb"
 )
 
@@ -58,6 +57,7 @@ type CrawlerConfig struct {
 	Indexer       *Indexer
 	Client        *rpc.Client
 	Queue         int
+	Delay         int
 	CacheSizeLog2 int
 	StopBlock     int64
 	Snapshot      *SnapshotConfig
@@ -83,14 +83,17 @@ type Crawler struct {
 	enableMonitor bool
 	stopHeight    int64
 
-	db      store.DB
-	rpc     *rpc.Client
-	builder *Builder
-	indexer *Indexer
-	queue   chan *Bundle
-	plog    *BlockProgressLogger
-	bchead  *rpc.BlockHeader
-	chainId tezos.ChainIdHash
+	db        store.DB
+	rpc       *rpc.Client
+	builder   *Builder
+	indexer   *Indexer
+	finalized chan *rpc.Bundle
+	filter    *ReorgDelayFilter
+	plog      *BlockProgressLogger
+	bchead    *rpc.BlockHeader
+	chainId   tezos.ChainIdHash
+	delay     int64
+	wasInSync bool
 
 	// read-mostly thread-safe access
 	tipStore atomic.Value
@@ -106,6 +109,7 @@ type Crawler struct {
 }
 
 func NewCrawler(cfg CrawlerConfig) *Crawler {
+	queue := make(chan *rpc.Bundle, cfg.Queue)
 	return &Crawler{
 		state:         STATE_LOADING,
 		mode:          MODE_SYNC,
@@ -117,14 +121,16 @@ func NewCrawler(cfg CrawlerConfig) *Crawler {
 		rpc:           cfg.Client,
 		builder:       NewBuilder(cfg.Indexer, cfg.CacheSizeLog2, cfg.Client, cfg.Validate),
 		indexer:       cfg.Indexer,
-		queue:         make(chan *Bundle, cfg.Queue),
+		finalized:     queue,
+		filter:        NewReorgDelayFilter(cfg.Delay, queue),
+		delay:         int64(cfg.Delay),
 		plog:          NewBlockProgressLogger("Processed"),
 		quit:          make(chan struct{}),
 	}
 }
 
-func (c *Crawler) Tip() *ChainTip {
-	return c.tipStore.Load().(*ChainTip)
+func (c *Crawler) Tip() *model.ChainTip {
+	return c.tipStore.Load().(*model.ChainTip)
 }
 
 func (c *Crawler) Height() int64 {
@@ -135,7 +141,7 @@ func (c *Crawler) Time() time.Time {
 	return c.Tip().BestTime
 }
 
-func (c *Crawler) updateTip(tip *ChainTip) {
+func (c *Crawler) updateTip(tip *model.ChainTip) {
 	c.tipStore.Store(tip)
 }
 
@@ -151,12 +157,13 @@ func (c *Crawler) setState(state State, args ...string) {
 	isMonActive := c.useMonitor
 	if state == STATE_SYNCHRONIZED {
 		if c.enableMonitor {
-			if !isMonActive {
+			if !isMonActive && !c.wasInSync {
 				logStr := "Fully synchronized. Switching to monitor mode."
 				if len(args) > 0 {
 					logStr = args[0]
 				}
 				log.Info(logStr)
+				c.wasInSync = true
 			}
 			isMonActive = true
 		}
@@ -183,15 +190,15 @@ func (c *Crawler) Table(key string) (*pack.Table, error) {
 	return c.indexer.Table(key)
 }
 
-func (c *Crawler) ChainByHeight(ctx context.Context, height int64) (*Chain, error) {
+func (c *Crawler) ChainByHeight(ctx context.Context, height int64) (*model.Chain, error) {
 	return c.indexer.ChainByHeight(ctx, height)
 }
 
-func (c *Crawler) SupplyByHeight(ctx context.Context, height int64) (*Supply, error) {
+func (c *Crawler) SupplyByHeight(ctx context.Context, height int64) (*model.Supply, error) {
 	return c.indexer.SupplyByHeight(ctx, height)
 }
 
-func (c *Crawler) BlockByHeight(ctx context.Context, height int64) (*Block, error) {
+func (c *Crawler) BlockByHeight(ctx context.Context, height int64) (*model.Block, error) {
 	return c.indexer.BlockByHeight(ctx, height)
 }
 
@@ -200,28 +207,31 @@ func (c *Crawler) CacheStats() map[string]interface{} {
 }
 
 type CrawlerStatus struct {
-	Mode     Mode    `json:"mode"`
-	Status   State   `json:"status"`
-	Blocks   int64   `json:"blocks"`
-	Indexed  int64   `json:"indexed"`
-	Progress float64 `json:"progress"`
+	Mode      Mode    `json:"mode"`
+	Status    State   `json:"status"`
+	Blocks    int64   `json:"blocks"`
+	Finalized int64   `json:"finalized"`
+	Indexed   int64   `json:"indexed"`
+	Progress  float64 `json:"progress"`
 }
 
 func (c *Crawler) Status() CrawlerStatus {
 	tip := c.Tip()
 	s := CrawlerStatus{
-		Mode:    c.mode,
-		Status:  c.state,
-		Blocks:  -1,
-		Indexed: tip.BestHeight,
+		Mode:      c.mode,
+		Status:    c.state,
+		Blocks:    -1,
+		Finalized: -1,
+		Indexed:   tip.BestHeight,
 	}
 	if c.indexer.lightMode {
 		s.Mode = MODE_LIGHT
 	}
 	if tip.BestHeight > 0 && c.bchead != nil && c.bchead.Level > 0 {
 		s.Blocks = c.bchead.Level
-		s.Progress = float64(s.Indexed) / float64(s.Blocks)
-		if s.Progress == 1.0 && s.Indexed < s.Blocks {
+		s.Finalized = c.bchead.Level - 1
+		s.Progress = float64(s.Indexed) / float64(s.Finalized)
+		if s.Progress == 1.0 && s.Indexed < s.Finalized {
 			s.Progress = 0.999999
 		}
 	}
@@ -276,7 +286,7 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 	if firstRun {
 		// create initial state
 		log.Info("Creating blockchain storage.")
-		tip := &ChainTip{
+		tip := &model.ChainTip{
 			BestHeight: -1,
 			Name:       tezos.Name,
 			Symbol:     tezos.Symbol,
@@ -329,7 +339,7 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 				c.setState(STATE_STOPPED)
 				return err
 			}
-			log.Errorf("Connection failed: %v", err)
+			log.Errorf("Connection failed: %s", err)
 			select {
 			case <-ctx.Done():
 				c.setState(STATE_STOPPED)
@@ -452,7 +462,7 @@ func (c *Crawler) Stop(ctx context.Context) {
 		close(done)
 	}
 
-	// force-shutdown blocking tasks
+	// force-shutdown blocking tasks, i.e. unblock downstream report buffers
 	// and cancel long-running downstream RPC/HTTP calls
 	c.cancel()
 
@@ -478,10 +488,10 @@ func (c *Crawler) runMonitor(next chan<- tezos.BlockHash) {
 		// check context cancellation
 		select {
 		case <-c.quit:
-			log.Errorf("Exiting monitor loop on quit.")
+			log.Infof("Exiting monitor loop on quit.")
 			return
 		case <-c.ctx.Done():
-			log.Errorf("Exiting monitor loop on cancelled context.")
+			log.Infof("Exiting monitor loop on cancelled context.")
 			return
 		default:
 		}
@@ -492,7 +502,7 @@ func (c *Crawler) runMonitor(next chan<- tezos.BlockHash) {
 			// may block when no HTTP headers are sent
 			if err := c.rpc.MonitorBlockHeader(c.ctx, mon); err != nil {
 				if err != context.Canceled {
-					log.Errorf("monitor error: %v", err)
+					log.Errorf("monitor error: %s", err)
 				}
 				c.useMonitor = false
 				mon.Close()
@@ -500,10 +510,10 @@ func (c *Crawler) runMonitor(next chan<- tezos.BlockHash) {
 				// wait 5 sec, but also return on shutdown
 				select {
 				case <-c.quit:
-					log.Errorf("Exiting monitor loop on quit.")
+					log.Infof("Exiting monitor loop on quit.")
 					return
 				case <-c.ctx.Done():
-					log.Errorf("Exiting monitor loop on cancelled context.")
+					log.Infof("Exiting monitor loop on cancel.")
 					return
 				case <-time.After(5 * time.Second):
 				}
@@ -516,19 +526,20 @@ func (c *Crawler) runMonitor(next chan<- tezos.BlockHash) {
 		// reconnect on error unless context was cancelled
 		if err != nil {
 			if err == context.Canceled {
-				log.Errorf("Exiting monitor loop on cancelled context")
+				log.Infof("Exiting monitor loop on cancel.")
 				return
 			}
 			// prepare for reconnect
 			mon.Close()
 			mon = nil
+			log.Debugf("Exiting monitor mode on error: %v", err)
 			c.useMonitor = false
 			continue
 		}
 
 		// skip messages until we have caught up with chain head
 		if !c.useMonitor {
-			// log.Debugf("Monitor skipping block %d %s (not synchronized)", head.Level, head.Hash)
+			// log.Infof("Monitor skipping block %d %s (not synchronized)", head.Level, head.Hash)
 			continue
 		}
 
@@ -547,9 +558,9 @@ func (c *Crawler) runMonitor(next chan<- tezos.BlockHash) {
 		// then forward to avoid send on closed channel
 		select {
 		case next <- head.Hash:
-			// log.Debugf("Monitor new block %d %s", head.Level, head.Hash)
+			log.Debugf("crawler: monitor new block %d %s", head.Level, head.Hash)
 		default:
-			// log.Debugf("Monitor send on full channel, skipping block")
+			log.Debugf("crawler: monitor send on full channel, skipping block")
 		}
 	}
 }
@@ -560,7 +571,7 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 	c.wg.Add(1)
 	defer c.wg.Done()
 	defer close(next)
-	defer close(c.queue)
+	defer close(c.finalized)
 
 	// init current state
 	var nextHash tezos.BlockHash
@@ -578,8 +589,14 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 			useMon bool
 		)
 		select {
+		case <-c.quit:
+			log.Infof("Stopping blockchain ingest on quit.")
+			return
+		case <-c.ctx.Done():
+			log.Infof("Stopping blockchain ingest on cancel.")
+			return
 		case <-tick.C:
-			// log.Debugf("Tick %v", c.useMonitor)
+			// log.Debugf("Tick %s", c.useMonitor)
 			c.RLock()
 			useMon = c.useMonitor
 			state = c.state
@@ -595,12 +612,6 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 				}
 			}
 			continue
-		case <-c.quit:
-			log.Infof("Stopping blockchain ingest.")
-			return
-		case <-c.ctx.Done():
-			log.Infof("Context cancelled. Stopping blockchain ingest.")
-			return
 		case nextHash = <-next:
 			c.RLock()
 			useMon = c.useMonitor
@@ -609,7 +620,7 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 			// on startup, check if we're already synchronized even
 			// without having processed a block
 			if !nextHash.IsValid() && state == STATE_CONNECTING {
-				if c.bchead != nil && c.Height() == c.bchead.Level {
+				if c.bchead != nil && c.Height()+c.delay == c.bchead.Level {
 					c.setState(STATE_SYNCHRONIZED, "Already synchronized. Starting in monitor mode.")
 				}
 			}
@@ -618,7 +629,7 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 
 		// on missing bchead, wait and retry
 		if c.bchead == nil {
-			log.Warn("Broken RPC connection. Trying again in 5s...")
+			log.Warn("crawler: broken RPC connection. Trying again in 5s...")
 			// keep going
 			select {
 			case <-c.quit:
@@ -626,7 +637,7 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 			case <-time.After(5 * time.Second):
 				c.setState(STATE_CONNECTING)
 				if err := c.fetchBlockchainInfo(c.ctx); err == nil {
-					log.Info("RPC connection OK.")
+					log.Info("crawler: RPC connection OK.")
 				}
 				select {
 				case next <- nextHash:
@@ -648,10 +659,10 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 			if interruptRequested(c.ctx) {
 				continue
 			}
-			// log.Tracef("Fetching next block %d %s", lastblock+1, nextHash)
+			// log.Infof("Fetching next block %d %s", lastblock+1, nextHash)
 
 			var (
-				tzblock *Bundle
+				tzblock *rpc.Bundle
 				err     error
 			)
 			if nextHash.IsValid() {
@@ -662,22 +673,44 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 
 			// be resilient to network errors
 			if tzblock != nil {
-				// push block into queue; may block
-				// log.Tracef("Queuing block %d %s", tzblock.Height(), tzblock.Hash())
-				select {
-				case <-c.quit:
-					continue
-				case <-c.ctx.Done():
-					continue
-				case c.queue <- tzblock:
-				}
+				// push block through reorg/delay filter and into finalized queue; may block
+				// log.Debugf("crawler: queuing block %d %s q=%d", tzblock.Height(), tzblock.Hash(), len(c.finalized))
+				err := c.filter.Push(c.ctx, tzblock, c.quit)
+				if err != nil {
+					switch err {
+					case ErrGapDetected:
+						// leave monitor mode and fall back to crawling
+						log.Debugf("crawler: gap size %d detected. Falling back to crawl mode.", tzblock.Height()-lastblock-1)
+						c.setState(STATE_SYNCHRONIZING)
+						c.RLock()
+						c.useMonitor = false
+						c.RUnlock()
 
-				// continue with next block (may be empty when at tip)
-				lastblock = tzblock.Height()
+					case ErrReorgDetected:
+						// clear filter, leave monitor mode and fall back to crawling
+						log.Debugf("crawler: reorg detected at %d. Falling back to crawl mode.", tzblock.Height())
+						c.filter.Reset()
+						c.setState(STATE_SYNCHRONIZING)
+						c.RLock()
+						c.useMonitor = false
+						useMon = false
+						lastblock -= c.delay
+						c.RUnlock()
+						// give the node/proxy some time to catch up
+						time.Sleep(time.Second)
+
+					default:
+						// quit signal
+						continue
+					}
+				} else {
+					// continue with next block (may be empty when at tip)
+					lastblock = tzblock.Height()
+				}
 
 				// stop request
 				if c.stopHeight > 0 && lastblock >= c.stopHeight {
-					log.Infof("Stopping ingest at requested block %d", c.stopHeight)
+					log.Infof("crawler: stopping ingest at requested block %d", c.stopHeight)
 					tick.Stop()
 					return
 				}
@@ -692,7 +725,8 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 					}
 				}
 			} else {
-				// log.Debugf("Block %d download failed: %v", lastblock+1, err)
+				// handle the case where we did not receive a new block from the node
+				// log.Debugf("Block %d download failed: %s", lastblock+1, err)
 				if interruptRequested(c.ctx) {
 					continue
 				}
@@ -702,13 +736,18 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 				// handle RPC errors (wait and retry)
 				switch e := err.(type) {
 				case rpc.RPCError:
-					log.Warnf("RPC: %s", e.Error())
+					log.Warnf("crawler: RPC: %s", e.Error())
 					c.setState(STATE_WAITING)
 				default:
 					c.setState(STATE_CONNECTING)
-					log.Warnf("RPC connection error: %v", err)
+					log.Warnf("crawler: RPC connection error: %s", err)
 				}
-				time.Sleep(5 * time.Second)
+				// wait 5 sec (also stop on shutdown)
+				select {
+				case <-c.quit:
+				case <-c.ctx.Done():
+				case <-time.After(5 * time.Second):
+				}
 				// on error, retry with current hash
 				select {
 				case next <- nextHash:
@@ -723,7 +762,7 @@ func (c *Crawler) ingest(ctx context.Context) {
 	// internal next block signal to prefetch blocks; may hold an empty
 	// hash (initially, after errors, and on ticks) or a block hash
 	// when received via monitoring (monitor may break, so we don't rely on it)
-	next := make(chan tezos.BlockHash, cap(c.queue))
+	next := make(chan tezos.BlockHash, cap(c.finalized))
 
 	if c.enableMonitor {
 		// run monitor loop in go-routine
@@ -737,7 +776,7 @@ func (c *Crawler) ingest(ctx context.Context) {
 	next <- tezos.BlockHash{}
 }
 
-func drain(c chan *Bundle) {
+func drain(c chan *rpc.Bundle) {
 	if len(c) == 0 {
 		return
 	}
@@ -773,21 +812,22 @@ func (c *Crawler) syncBlockchain() {
 
 	// run ingest goroutine
 	c.ingest(ctx)
-	defer drain(c.queue)
+	defer drain(c.finalized)
 
 	var (
-		tzblock    *Bundle
+		tzblock    *rpc.Bundle
 		ctxNonStop = context.Background()
 	)
 
 	log.Infof("Starting blockchain sync from height %d.", tip.BestHeight+1)
+	c.setState(STATE_SYNCHRONIZING)
 
 	// recover from panic
 	defer func() {
 		if e := recover(); e != nil {
 			// e might not be error type, e.g. when panic is thrown by Go Std Library
 			// (e.g. from reflect package)
-			log.Errorf("Unrecoverable error: %v", e)
+			log.Errorf("Unrecoverable error: %s", e)
 			// generate stack trace as json
 			trace := debug.Stack()
 			// log.Debugf("%s", string(trace))
@@ -803,8 +843,7 @@ func (c *Crawler) syncBlockchain() {
 			}{
 				Stack: lines,
 			}
-			buf, _ := json.Marshal(js)
-			log.Error(string(buf))
+			log.Error(util.JsonString(js))
 			log.Infof("Stopping blockchain sync at height %d.", tip.BestHeight)
 			c.setState(STATE_FAILED)
 		}
@@ -812,7 +851,7 @@ func (c *Crawler) syncBlockchain() {
 		// flush indexer journals on failure (may take some time)
 		if c.state == STATE_FAILED {
 			if err := c.indexer.FlushJournals(ctx); err != nil {
-				log.Errorf("flushing tables: %v", err)
+				log.Errorf("flushing tables: %s", err)
 			}
 		}
 
@@ -821,7 +860,7 @@ func (c *Crawler) syncBlockchain() {
 			return dbStoreChainTip(dbTx, tip)
 		})
 		if err != nil {
-			log.Errorf("Updating database for block %d: %v", tip.BestHeight, err)
+			log.Errorf("Updating database for block %d: %s", tip.BestHeight, err)
 		}
 		c.cancel()
 	}()
@@ -837,19 +876,22 @@ func (c *Crawler) syncBlockchain() {
 			c.setState(STATE_STOPPING)
 			log.Infof("Context aborted. Stopping blockchain sync at height %d.", tip.BestHeight)
 			return
-		case tzblock = <-c.queue:
+		case tzblock = <-c.finalized:
+			// process finalized blocks, all blocks arriving from this queue
+			// are expected to be in order, gap-free and reorg-free; we may
+			// drop all reorg handling code here and in builder/indexers
+			// when Tenderbake goes live and we set a sufficient margin
 			if tzblock == nil {
 				log.Infof("Stopping blockchain sync at height %d.", tip.BestHeight)
 				return
 			}
-			c.setState(STATE_SYNCHRONIZING)
 			log.Tracef("Processing block %d %s", tzblock.Height(), tzblock.Hash())
 		}
 
 		// under very rare conditions (tick and monitor triggered the same block download,
 		// one via height, the other via hash) we may see a duplicate block in the
 		// ingest queue; check and discard
-		if tip.BestHeight > 1 && tip.BestHash.String() == tzblock.Hash().String() {
+		if tip.BestHeight > 1 && tip.BestHash.Equal(tzblock.Hash()) {
 			continue
 		}
 
@@ -857,21 +899,21 @@ func (c *Crawler) syncBlockchain() {
 		blockstart := time.Now()
 
 		// detect and process reorg (skip for genesis block)
-		if tip.BestHeight > 0 && tip.BestHash.String() != tzblock.Parent().String() {
+		if tip.BestHeight > 0 && !tip.BestHash.Equal(tzblock.ParentHash()) {
 			log.Infof("Reorg at height %d: parent %s is not on our main chain, have %s",
 				tzblock.Block.Header.Level, tzblock.Block.Header.Predecessor, tip.BestHash)
 
 			// those are the two blocks between the reorg will switch
 			tipblock := c.builder.parent
-			bestblock, err := NewBlock(tzblock, nil)
+			bestblock, err := model.NewBlock(tzblock, nil)
 			if err != nil {
-				log.Errorf("Reorg failed: %v", err)
+				log.Errorf("Reorg failed: %s", err)
 				break
 			}
 
 			// run reorg
 			if err = c.reorganize(ctx, tipblock, bestblock, false, false); err != nil {
-				log.Errorf("Reorg failed: %v", err)
+				log.Errorf("Reorg failed: %s", err)
 				break
 			}
 
@@ -894,9 +936,9 @@ func (c *Crawler) syncBlockchain() {
 		block, err := c.builder.Build(ctx, tzblock)
 		if err != nil {
 			// rollback inserted accounts, ops and flows here
-			log.Errorf("Processing block %d %s: %v", tzblock.Height(), tzblock.Hash(), err)
+			log.Errorf("Processing block %d %s: %s", tzblock.Height(), tzblock.Hash(), err)
 			if err = c.indexer.DeleteBlock(ctx, tzblock); err != nil {
-				log.Errorf("Rollback of data for failed block %d: %v", tzblock.Height(), err)
+				log.Errorf("Rollback of data for failed block %d: %s", tzblock.Height(), err)
 			}
 			break
 		}
@@ -907,30 +949,25 @@ func (c *Crawler) syncBlockchain() {
 
 		// update indexes
 		if err = c.indexer.ConnectBlock(ctxNonStop, block, c.builder); err != nil {
-			log.Errorf("Connecting block %d: %v", block.Height, err)
+			log.Errorf("Connecting block %d: %s", block.Height, err)
 			break
 		}
 
 		// update chain tip
-		newTip := &ChainTip{
-			Name:          tip.Name,
-			Symbol:        tip.Symbol,
-			ChainId:       tip.ChainId,
-			BestHash:      block.Hash,
-			BestId:        block.RowId,
-			BestHeight:    block.Height,
-			BestTime:      block.Timestamp,
-			GenesisTime:   tip.GenesisTime,
-			NYEveBlocks:   tip.NYEveBlocks,
-			QuarterBlocks: tip.QuarterBlocks,
-			Deployments:   tip.Deployments,
+		newTip := &model.ChainTip{
+			Name:        tip.Name,
+			Symbol:      tip.Symbol,
+			ChainId:     tip.ChainId,
+			BestHash:    block.Hash,
+			BestId:      block.RowId,
+			BestHeight:  block.Height,
+			BestTime:    block.Timestamp,
+			GenesisTime: tip.GenesisTime,
+			NYEveBlocks: tip.NYEveBlocks,
+			Deployments: tip.Deployments,
 		}
 
 		// update blockchain years
-		if newTip.GenesisTime.AddDate(0, 3*(len(newTip.QuarterBlocks)+1), 0).Before(block.Timestamp) {
-			newTip.QuarterBlocks = append(newTip.QuarterBlocks, block.Height)
-			log.Infof("Happy New Blockchain Quarter %d at block %d!", len(newTip.QuarterBlocks)+1, block.Height)
-		}
 		if newTip.GenesisTime.AddDate(len(newTip.NYEveBlocks)+1, 0, 0).Before(block.Timestamp) {
 			newTip.NYEveBlocks = append(newTip.NYEveBlocks, block.Height)
 			log.Infof("Happy New Blockchain Year %d at block %d!", len(newTip.NYEveBlocks)+1, block.Height)
@@ -954,25 +991,25 @@ func (c *Crawler) syncBlockchain() {
 		}
 
 		// current block may be ahead of bcinfo by one
-		if c.bchead != nil && block.Height >= c.bchead.Level {
+		if c.bchead != nil && block.Height+c.delay >= c.bchead.Level {
 			c.setState(STATE_SYNCHRONIZED)
 		}
 		state := c.state
 
-		// flush journals every block when synchronized
 		if state == STATE_SYNCHRONIZED {
+			// flush journals every block when synchronized
 			if err := c.indexer.FlushJournals(ctx); err != nil {
-				log.Errorf("flushing tables: %v", err)
+				log.Errorf("flushing tables: %s", err)
 			}
 
-			// update rights cache at cycle start (or later when we we're not in sync then)
-			if err := c.indexer.updateRights(ctx, block.Height); err != nil {
-				log.Errorf("updating rights cache: %s", err)
+			// tell indexers to finalize (i.e. build table indexes)
+			if err := c.indexer.Finalize(ctx); err != nil {
+				log.Errorf("finalizing tables: %v", err)
 			}
 		}
 
 		// log progress once every 10sec
-		c.plog.LogBlockHeight(block, len(c.queue), state, time.Since(blockstart))
+		c.plog.LogBlockHeight(block, len(c.finalized), state, time.Since(blockstart))
 
 		// update state every 256 blocks or every block when synchronized
 		if state == STATE_SYNCHRONIZED || block.Height&0xff == 0 {
@@ -980,14 +1017,14 @@ func (c *Crawler) syncBlockchain() {
 				return dbStoreChainTip(dbTx, tip)
 			})
 			if err != nil {
-				log.Errorf("Updating state database for block %d: %v", tip.BestHeight, err)
+				log.Errorf("Updating state database for block %d: %s", tip.BestHeight, err)
 				break
 			}
 		}
 
 		// database snapshots
 		if err := c.MaybeSnapshot(ctx); err != nil {
-			log.Errorf("Snapshot failed at block %d: %v", tip.BestHeight, err)
+			log.Errorf("Snapshot failed at block %d: %s", tip.BestHeight, err)
 		}
 
 		if c.stopHeight > 0 && tip.BestHeight >= c.stopHeight {
@@ -995,7 +1032,7 @@ func (c *Crawler) syncBlockchain() {
 			return
 		}
 
-		// remove build state
+		// clean builder state
 		c.builder.Clean()
 	}
 
@@ -1007,7 +1044,7 @@ func (c *Crawler) syncBlockchain() {
 
 func (c *Crawler) fetchParamsForBlock(ctx context.Context, block *rpc.Block) (*tezos.Params, error) {
 	height := block.Header.Level
-	params, _ := c.indexer.reg.GetParams(block.Protocol)
+	params, _ := c.indexer.reg.GetParams(block.Metadata.Protocol)
 	needUpdate := params == nil || params.IsCycleStart(height)
 	if needUpdate {
 		// save deployment start height
@@ -1017,7 +1054,7 @@ func (c *Crawler) fetchParamsForBlock(ctx context.Context, block *rpc.Block) (*t
 		}
 		// fetch params from chain
 		if height > 0 {
-			cons, err := c.rpc.GetConstantsHeight(ctx, height)
+			cons, err := c.rpc.GetConstants(ctx, rpc.BlockLevel(height))
 			if err != nil {
 				return nil, fmt.Errorf("block init: %v", err)
 			}
@@ -1026,7 +1063,7 @@ func (c *Crawler) fetchParamsForBlock(ctx context.Context, block *rpc.Block) (*t
 			params = tezos.NewParams()
 		}
 		// changes will be updated during build
-		params = params.ForNetwork(block.ChainId).ForProtocol(block.Protocol)
+		params = params.ForNetwork(block.ChainId).ForProtocol(block.Metadata.Protocol)
 		params.Deployment = block.Header.Proto
 		params.StartHeight = start
 		// adjust deployment number for genesis & bootstrap blocks
@@ -1037,8 +1074,8 @@ func (c *Crawler) fetchParamsForBlock(ctx context.Context, block *rpc.Block) (*t
 	return params, nil
 }
 
-func (c *Crawler) fetchBlockByHash(ctx context.Context, blockID tezos.BlockHash) (*Bundle, error) {
-	b := &Bundle{}
+func (c *Crawler) fetchBlockByHash(ctx context.Context, blockID tezos.BlockHash) (*rpc.Bundle, error) {
+	b := &rpc.Bundle{}
 	var err error
 	if b.Block, err = c.rpc.GetBlock(ctx, blockID); err != nil {
 		return nil, err
@@ -1047,6 +1084,9 @@ func (c *Crawler) fetchBlockByHash(ctx context.Context, blockID tezos.BlockHash)
 		return nil, fmt.Errorf("block init: invalid chain %s (expected %s)",
 			b.Block.ChainId, c.chainId)
 	}
+	if !b.Block.Metadata.Protocol.IsValid() {
+		return nil, fmt.Errorf("block init: empty metadata in RPC response (maybe you are not using an archive node)")
+	}
 	b.Params, err = c.fetchParamsForBlock(ctx, b.Block)
 	if err != nil {
 		return nil, err
@@ -1054,109 +1094,28 @@ func (c *Crawler) fetchBlockByHash(ctx context.Context, blockID tezos.BlockHash)
 
 	height := b.Block.Header.Level
 	b.Cycle = b.Params.CycleFromHeight(height)
-
-	if !c.indexer.lightMode {
-		// in monitor mode we are live, so we don't have to check for early cycles
-		// still max look-ahead is 5 (e.g. PreservedCycles)
-		if b.Params.IsCycleStart(height) {
-			// snapshot index and rights for future cycle N; the snapshot index
-			// refers to a snapshot block taken in cycle N-7 and randomness
-			// collected from seed_nonce_revelations during cycle N-6; N is the
-			// farthest future cycle that exists.
-			//
-			// Note that for consistency and due to an off-by-one error in Tezos RPC
-			// nodes we fetch snapshot index and rights at the start of cycle N-5 even
-			// though they are created at the end of N-6!
-			cycle := b.Cycle + b.Params.PreservedCycles
-			br, er, snap, err := c.fetchRightsByCycle(ctx, height, cycle)
-			if err != nil {
-				return nil, fmt.Errorf("fetching rights for cycle %d: %v", cycle, err)
-			}
-			b.Baking = br
-			b.Endorsing = er
-			b.Snapshot = snap
-		}
-	}
 	return b, nil
 }
 
-func (c *Crawler) fetchBlockByHeight(ctx context.Context, height int64) (*Bundle, error) {
-	b := &Bundle{}
+func (c *Crawler) fetchBlockByHeight(ctx context.Context, height int64) (*rpc.Bundle, error) {
+	b := &rpc.Bundle{}
 	var err error
-	if b.Block, err = c.rpc.GetBlockHeight(ctx, height); err != nil {
+	if b.Block, err = c.rpc.GetBlock(ctx, rpc.BlockLevel(height)); err != nil {
 		return nil, err
 	}
 	if c.chainId.IsValid() && !c.chainId.Equal(b.Block.ChainId) {
 		return nil, fmt.Errorf("block init: invalid chain %s (expected %s)",
 			b.Block.ChainId, c.chainId)
 	}
+	if !b.Block.Metadata.Protocol.IsValid() {
+		return nil, fmt.Errorf("block init: empty metadata in RPC response (maybe you are not using an archive node)")
+	}
 	b.Params, err = c.fetchParamsForBlock(ctx, b.Block)
 	if err != nil {
 		return nil, err
 	}
 	b.Cycle = b.Params.CycleFromHeight(height)
-
-	if !c.indexer.lightMode {
-		// on first block after genesis, fetch rights for first 6 cycles [0..5]
-		// cycle 6 bootstrap rights are then processed at start of cycle 1
-		// cycle 7+ rights from snapshots are then processed at start of cycle 2
-		if height == 1 {
-			log.Infof("Fetching bootstrap rights for %d(+1) preserved cycles", b.Params.PreservedCycles)
-			for cycle := int64(0); cycle < b.Params.PreservedCycles+1; cycle++ {
-				// fetch using current height (context stores from [n-5, n+5])
-				br, er, _, err := c.fetchRightsByCycle(ctx, height, cycle)
-				if err != nil {
-					return nil, fmt.Errorf("fetching rights for cycle %d: %v", cycle, err)
-				}
-				b.Baking = append(b.Baking, br...)
-				b.Endorsing = append(b.Endorsing, er...)
-			}
-			return b, nil
-		}
-
-		// start fetching more rights after bootstrap (max look-ahead is 5 on mainnet)
-		if b.Cycle > 0 && b.Params.IsCycleStart(height) {
-			// snapshot index and rights for future cycle N; the snapshot index
-			// refers to a snapshot block taken in cycle N-7 and randomness
-			// collected from seed_nonce_revelations during cycle N-6; N is the
-			// farthest future cycle that we can fetch data for.
-			//
-			// Note that for consistency and due to an off-by-one error in Tezos RPC
-			// we fetch snapshot index and rights at the START of cycle N-5 even
-			// though they are created at the end of N-6!
-			cycle := b.Cycle + b.Params.PreservedCycles
-			br, er, snap, err := c.fetchRightsByCycle(ctx, height, cycle)
-			if err != nil {
-				return nil, fmt.Errorf("fetching rights for cycle %d: %v", cycle, err)
-			}
-			b.Baking = br
-			b.Endorsing = er
-			b.Snapshot = snap
-		}
-	}
 	return b, nil
-}
-
-func (c *Crawler) fetchRightsByCycle(ctx context.Context, height, cycle int64) ([]rpc.BakingRight, []rpc.EndorsingRight, *rpc.SnapshotIndex, error) {
-	br, err := c.rpc.GetBakingRightsCycle(ctx, height, cycle)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if len(br) == 0 {
-		return nil, nil, nil, fmt.Errorf("empty baking rights, make sure your Tezos node runs in archive mode")
-	}
-	er, err := c.rpc.GetEndorsingRightsCycle(ctx, height, cycle)
-	if err != nil {
-		return br, nil, nil, err
-	}
-	if len(er) == 0 {
-		return nil, nil, nil, fmt.Errorf("empty endorsing rights, make sure your Tezos node runs in archive mode")
-	}
-	snap, err := c.rpc.GetSnapshotIndexCycle(ctx, height, cycle)
-	if err != nil {
-		return br, er, nil, err
-	}
-	return br, er, snap, nil
 }
 
 func (c *Crawler) fetchBlockchainInfo(ctx context.Context) error {

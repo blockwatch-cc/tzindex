@@ -1,6 +1,6 @@
 # Blockwatch Tezos Indexer
 
-© 2020-2021 Blockwatch Data Inc., All rights reserved.
+© 2020-2022 Blockwatch Data Inc., All rights reserved.
 
 All-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resource friendly way to gain tactical insights and build dapps on top of Tezos. Supported by [Blockwatch Data](https://blockwatch.cc), Pro version available on request.
 
@@ -10,7 +10,7 @@ For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](h
 
 - indexes and cross-checks full on-chain state
 - feature-rich [REST API](https://tzstats.com/docs/api/index.html) with objects, bulk tables and time-series
-- supports protocols up to Hangzhou (v011)
+- supports protocols up to Ithaca (v012)
 - auto-detects and locks Tezos network (never mixes data from different networks)
 - indexes all accounts and smart-contracts (including genesis data)
 - follows chain reorgs as they are resolved
@@ -21,48 +21,36 @@ For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](h
 - flexible in-memory caching for fast queries
 - automatic database backups/snapshots
 - configurable HTTP request rate-limiter
-- light mode for dapps with low storage requirements
-- pruning of unused historic rights and snapshots
 - flexible metadata support
 
 **Supported indexes and data tables**
 
 - **blocks**: all blocks including orphans, indexed by hash and height
-- **operations**: all on-chain operations including contract call data, indexed by hash
+- **operations**: all on-chain operations including contract call data, indexed by hash (no more endorsements in v12+)
 - **accounts**: running account details like most recent balances, indexed by address
+- **balances**: end-of-block balance history for all addresses
 - **contracts**: running smart contract details, code and initial storage
-- **flows**: complete list of balance, freezer and delegation balance updates
 - **chain**: running blockchain totals
 - **supply**: running supply totals
-- **rights**: full list of all baking and endorsing rights
-- **elections**, **votes**, **proposals** and **ballots** capturing all on-chain governance activities
-- **snapshots**: balances of active delegates & delegators at all snapshot blocks
-- baker **income**: per-cycle statistics on baker income, efficiency, etc
 - **bigmap**: bigmap smart contract storage index
 - **metadata**: standardized and custom account/token metadata
 - **constants**: global constants (e.g. smart contract code/type macros to lower contract size and reuse common features)
 
+Starting v12 we are no longer supporting baker `rights`, `snapshots`, `income` and `governance` data as well as `flows` (use balances instead).
+
 **Operation modes**
 
-- **Full** regular operation mode that builds all indexes (CLI: `--full`)
-- **Light** (default) light-weight mode without consensus and governance indexes (CLI: `--light`)
+- **Light** (default) light-weight mode without consensus and governance data (CLI: `--light`)
 - **Validate** state validation mode for checking accounts and balances each block/cycle (CLI: `--validate`)
 
-**Light mode** is best suited for dapps where access to baking-related data is not necessary. In light mode we don't generate the following list of indexes: rights, elections, votes, proposals, ballots, snapshots and income. Therefore its not possible to switch between full and light mode.
-
-Light mode saves roughly \~50% storage costs and \~50% indexing time. Keep in mind that some endpoints and data fields will not be available:
-
-- `/tables` and `/explorer` API endpoints for missing tables will return 409 errors
-- `/explorer/block/..` will not contain the block endorser list and snapshot flag
-- `/explorer/account/..` will not contain upcoming bake/endorse info
-- `/explorer/cycle/..` will not contain snapshot block info
+**Light mode** dramatically reduces our maintainance costs for TzIndex and is best suited for dapps where access to baking-related data is not necessary. Light mode saves roughly \~50% storage costs and \~50% indexing time while still keeping all data required for Dapps.
 
 **Validate mode** works in combination with full and light mode. At each block it checks balances and states of all touched accounts against a Tezos archive node before any change is written to the database. At the end of each cycle, all known accounts in the indexer database are checked as well. This ensures 100% consistency although at the cost of a reduction in indexing speed.
 
 
 ### Requirements
 
-- Storage: 22GB (full Mainnet index, Nov 2021), 17G (light mode)
+- Storage: 22GB (Mainnet index in new light/default mode, Mar 2022)
 - RAM:  4-24GB (configurable, use more memory for better query latency)
 - CPU:  2+ cores (configurable, use more for better query parallelism)
 - Tezos node in archive mode
@@ -73,13 +61,11 @@ Requires access to the following Tezos RPC calls
 
 ```
 /chains/main/blocks/{blockid}
-/chains/main/blocks/{blockid}/helpers/baking_rights (full mode only)
-/chains/main/blocks/{blockid}/helpers/endorsing_rights (full mode only)
-/chains/main/blocks/{blockid}/context/raw/json/cycle/{cycle} (full mode only)
 /chains/main/blocks/{blockid}/context/constants
 /chains/main/blocks/head/header
 /monitor/heads/main (optional)
 /chains/main/blocks/{blockid}/context/contract/{address} (validate mode only)
+/chains/main/blocks/{blockid}/context/delegates/{address} (validate mode only)
 ```
 
 ### How to build
@@ -154,11 +140,9 @@ Flags:
   -c, --config string          config file
       --cpus int               max number of logical CPU cores to use (default: all) (default -1)
   -p, --dbpath path            database path
-      --full                   full mode (index all data)
       --gogc int               trigger GC when used mem grows by N percent (default 20)
   -h, --help                   help for tzindex
       --insecure               disable RPC TLS certificate checks (not recommended)
-      --light                  light mode (use to skip baker and gov data)
       --norpc                  disable RPC client
       --notls                  disable RPC TLS support (use http)
       --profile-block string   write blocking events to file
@@ -194,10 +178,8 @@ Global Flags:
   -c, --config string          config file
       --cpus int               max number of logical CPU cores to use (default: all) (default -1)
   -p, --dbpath path            database path
-      --full                   full mode (index all data)
       --gogc int               trigger GC when used mem grows by N percent (default 20)
       --insecure               disable RPC TLS certificate checks (not recommended)
-      --light                  light mode (use to skip baker and gov data)
       --norpc                  disable RPC client
       --notls                  disable RPC TLS support (use http)
       --profile-block string   write blocking events to file
@@ -227,6 +209,7 @@ The following table may help you pick the right license for your intended use-ca
 | Costs | Free | Subscription |
 | Type | Perpetual | Perpetual |
 | Use | Any | Commercial Use |
+| Mode | Light-only | Light/Full |
 | Limitations | - | See Agreement |
 | Support | Best effort | Commercial Support Available |
 | Protocol Upgrade Availability | Best-effort | Early |

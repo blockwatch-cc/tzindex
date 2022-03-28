@@ -113,15 +113,14 @@ func (c *BlockCache) Build(ctx context.Context, table *pack.Table) error {
 	c.times = c.times[:0]
 	c.hashes = c.hashes[:0]
 	type XBlock struct {
-		Timestamp time.Time       `pack:"T"`
-		Hash      tezos.BlockHash `pack:"H"`
+		Timestamp time.Time `pack:"T"`
+		Hash      []byte    `pack:"H"`
 	}
 	c.stats.CountUpdates(1)
 	b := XBlock{}
 	return pack.NewQuery("init_cache", table).
 		WithoutCache().
 		WithFields("time", "hash").
-		AndEqual("is_orphan", false).
 		Stream(ctx, func(r pack.Row) error {
 			if err := r.Decode(&b); err != nil {
 				return err
@@ -134,7 +133,7 @@ func (c *BlockCache) Build(ctx context.Context, table *pack.Table) error {
 				tsdiff := b.Timestamp.Unix() - int64(c.times[0])
 				c.times = append(c.times, uint32(tsdiff))
 			}
-			c.hashes = append(c.hashes, b.Hash.Hash.Hash...)
+			c.hashes = append(c.hashes, b.Hash...)
 			return nil
 		})
 }

@@ -136,7 +136,7 @@ func initConfig() {
 	}
 	runtime.GOMAXPROCS(maxcpu)
 	log.Infof("%s %s %s %s", orgName, appName, version, commit)
-	log.Infof("(c) Copyright 2018-2021 %s", company)
+	log.Infof("(c) Copyright 2018-2022 %s", company)
 	log.Infof("Starting %s on %d cores", UserAgent(), maxcpu)
 	log.Infof("Go version %s", runtime.Version())
 	runtime.SetBlockProfileRate(profrate)

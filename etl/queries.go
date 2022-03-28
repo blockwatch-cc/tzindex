@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +14,7 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/packdb/vec"
+	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
@@ -23,7 +23,7 @@ import (
 type ListRequest struct {
 	Account     *model.Account
 	Mode        pack.FilterMode
-	Typs        []tezos.OpType
+	Typs        model.OpTypeList
 	Since       int64
 	Until       int64
 	Offset      uint
@@ -36,19 +36,20 @@ type ListRequest struct {
 	Period      int64
 	BigmapId    int64
 	BigmapKey   tezos.ExprHash
+	OpId        model.OpID
 }
 
 func (r ListRequest) WithDelegation() bool {
 	if r.Mode == pack.FilterModeEqual || r.Mode == pack.FilterModeIn {
 		for _, t := range r.Typs {
-			if t == tezos.OpTypeDelegation {
+			if t == model.OpTypeDelegation {
 				return true
 			}
 		}
 		return false
 	} else {
 		for _, t := range r.Typs {
-			if t == tezos.OpTypeDelegation {
+			if t == model.OpTypeDelegation {
 				return false
 			}
 		}
@@ -120,12 +121,10 @@ func (m *Indexer) SupplyByTime(ctx context.Context, t time.Time) (*model.Supply,
 }
 
 type Growth struct {
-	NewAccounts         int64
-	NewImplicitAccounts int64
-	NewManagedAccounts  int64
-	NewContracts        int64
-	ClearedAccounts     int64
-	FundedAccounts      int64
+	NewAccounts     int64
+	NewContracts    int64
+	ClearedAccounts int64
+	FundedAccounts  int64
 }
 
 func (m *Indexer) GrowthByDuration(ctx context.Context, to time.Time, d time.Duration) (*Growth, error) {
@@ -134,26 +133,22 @@ func (m *Indexer) GrowthByDuration(ctx context.Context, to time.Time, d time.Dur
 		return nil, err
 	}
 	type XBlock struct {
-		NewAccounts         int64 `pack:"A"`
-		NewImplicitAccounts int64 `pack:"i"`
-		NewManagedAccounts  int64 `pack:"m"`
-		NewContracts        int64 `pack:"C"`
-		ClearedAccounts     int64 `pack:"E"`
-		FundedAccounts      int64 `pack:"J"`
+		NewAccounts     int64 `pack:"A"`
+		NewContracts    int64 `pack:"C"`
+		ClearedAccounts int64 `pack:"E"`
+		FundedAccounts  int64 `pack:"J"`
 	}
 	from := to.Add(-d)
 	x := &XBlock{}
 	g := &Growth{}
 	err = pack.NewQuery("aggregate_growth", table).
-		WithFields("A", "i", "m", "C", "E", "J").
+		WithFields("A", "C", "E", "J").
 		AndRange("time", from, to). // search for timestamp
 		Stream(ctx, func(r pack.Row) error {
 			if err := r.Decode(x); err != nil {
 				return err
 			}
 			g.NewAccounts += x.NewAccounts
-			g.NewImplicitAccounts += x.NewImplicitAccounts
-			g.NewManagedAccounts += x.NewManagedAccounts
 			g.NewContracts += x.NewContracts
 			g.ClearedAccounts += x.ClearedAccounts
 			g.FundedAccounts += x.FundedAccounts
@@ -196,7 +191,6 @@ func (m *Indexer) BlockByParentId(ctx context.Context, id uint64) (*model.Block,
 	b := &model.Block{}
 	err = pack.NewQuery("block_by_parent_id", blocks).
 		AndEqual("parent_id", id).
-		AndEqual("is_orphan", false).
 		WithLimit(1).
 		Execute(ctx, b)
 	if err != nil {
@@ -220,7 +214,6 @@ func (m *Indexer) BlockHashByHeight(ctx context.Context, height int64) (tezos.Bl
 	}
 	err = pack.NewQuery("block_hash_by_height", blocks).
 		AndEqual("height", height).
-		AndEqual("is_orphan", false).
 		WithLimit(1).
 		Execute(ctx, b)
 	if err != nil {
@@ -262,7 +255,6 @@ func (m *Indexer) BlockByHeight(ctx context.Context, height int64) (*model.Block
 	b := &model.Block{}
 	err = pack.NewQuery("block_by_height", blocks).
 		AndEqual("height", height).
-		AndEqual("is_orphan", false).
 		Execute(ctx, b)
 	if err != nil {
 		return nil, err
@@ -282,7 +274,7 @@ func (m *Indexer) BlockByHash(ctx context.Context, h tezos.BlockHash, from, to i
 	if err != nil {
 		return nil, err
 	}
-	q := pack.NewQuery("block_hash_by_hash", blocks).WithLimit(1).WithDesc()
+	q := pack.NewQuery("block_by_hash", blocks).WithLimit(1).WithDesc()
 	if from > 0 {
 		q = q.AndGte("height", from)
 	}
@@ -300,6 +292,35 @@ func (m *Indexer) BlockByHash(ctx context.Context, h tezos.BlockHash, from, to i
 	}
 	b.Params, _ = m.reg.GetParamsByDeployment(b.Version)
 	return b, nil
+}
+
+func (m *Indexer) LookupBlockId(ctx context.Context, blockIdent string) (tezos.BlockHash, int64, error) {
+	switch true {
+	case blockIdent == "head":
+		b, err := m.BlockByHeight(ctx, m.tips[index.BlockTableKey].Height)
+		if err != nil {
+			return tezos.BlockHash{}, 0, err
+		}
+		return b.Hash, b.Height, nil
+	case len(blockIdent) == tezos.HashTypeBlock.Base58Len() || tezos.HashTypeBlock.MatchPrefix(blockIdent):
+		// assume it's a hash
+		var blockHash tezos.BlockHash
+		blockHash, err := tezos.ParseBlockHash(blockIdent)
+		if err != nil {
+			return tezos.BlockHash{}, 0, index.ErrInvalidBlockHash
+		}
+		b, err := m.BlockByHash(ctx, blockHash, 0, 0)
+		return b.Hash, b.Height, nil
+	default:
+		// try parsing as height
+		var blockHeight int64
+		blockHeight, err := strconv.ParseInt(blockIdent, 10, 64)
+		if err != nil {
+			return tezos.BlockHash{}, 0, index.ErrInvalidBlockHeight
+		}
+		// from cache
+		return m.LookupBlockHash(ctx, blockHeight), blockHeight, nil
+	}
 }
 
 func (m *Indexer) LookupBlock(ctx context.Context, blockIdent string) (*model.Block, error) {
@@ -333,8 +354,8 @@ func (m *Indexer) LookupBlock(ctx context.Context, blockIdent string) (*model.Bl
 	return b, nil
 }
 
-func (m *Indexer) LookupLastBakedBlock(ctx context.Context, a *model.Account) (*model.Block, error) {
-	if a.BlocksBaked == 0 {
+func (m *Indexer) LookupLastBakedBlock(ctx context.Context, bkr *model.Baker) (*model.Block, error) {
+	if bkr.BlocksBaked == 0 {
 		return nil, index.ErrNoBlockEntry
 	}
 	blocks, err := m.Table(index.BlockTableKey)
@@ -345,8 +366,8 @@ func (m *Indexer) LookupLastBakedBlock(ctx context.Context, a *model.Account) (*
 	err = pack.NewQuery("last_baked_block", blocks).
 		WithLimit(1).
 		WithDesc().
-		AndRange("height", a.FirstSeen, a.LastSeen).
-		AndEqual("baker_id", a.RowId).
+		AndRange("height", bkr.Account.FirstSeen, bkr.Account.LastSeen).
+		AndEqual("proposer_id", bkr.AccountId).
 		Execute(ctx, b)
 	if err != nil {
 		return nil, err
@@ -355,54 +376,6 @@ func (m *Indexer) LookupLastBakedBlock(ctx context.Context, a *model.Account) (*
 		return nil, index.ErrNoBlockEntry
 	}
 	return b, nil
-}
-
-func (m *Indexer) LookupLastEndorsedBlock(ctx context.Context, a *model.Account) (*model.Block, error) {
-	if a.BlocksEndorsed == 0 {
-		return nil, index.ErrNoBlockEntry
-	}
-	ops, err := m.Table(index.OpTableKey)
-	if err != nil {
-		return nil, err
-	}
-	var op model.Op
-	err = pack.NewQuery("last_endorse_op", ops).
-		WithFields("h").
-		WithLimit(1).
-		WithDesc().
-		AndRange("height", a.FirstSeen, a.LastSeen).
-		AndEqual("sender_id", a.RowId).
-		AndEqual("type", tezos.OpTypeEndorsement).
-		Execute(ctx, &op)
-	if err != nil {
-		return nil, err
-	}
-	if op.Height == 0 {
-		return nil, index.ErrNoBlockEntry
-	}
-	return m.BlockByHeight(ctx, op.Height)
-}
-
-func (m *Indexer) ListBlockRights(ctx context.Context, height int64, typ tezos.RightType) ([]model.Right, error) {
-	rights, err := m.Table(index.RightsTableKey)
-	if err != nil {
-		return nil, err
-	}
-	q := pack.NewQuery("list_rights", rights).
-		AndEqual("height", height)
-	if typ.IsValid() {
-		q = q.AndEqual("type", typ)
-	}
-	resp := make([]model.Right, 0)
-	err = q.Stream(ctx, func(r pack.Row) error {
-		right := model.Right{}
-		if err := r.Decode(&right); err != nil {
-			return err
-		}
-		resp = append(resp, right)
-		return nil
-	})
-	return resp, nil
 }
 
 func (m *Indexer) LookupAccount(ctx context.Context, addr tezos.Address) (*model.Account, error) {
@@ -424,6 +397,32 @@ func (m *Indexer) LookupAccount(ctx context.Context, addr tezos.Address) (*model
 		return nil, err
 	}
 	return acc, nil
+}
+
+func (m *Indexer) LookupBaker(ctx context.Context, addr tezos.Address) (*model.Baker, error) {
+	if !addr.IsValid() {
+		return nil, ErrInvalidHash
+	}
+	table, err := m.Table(index.BakerTableKey)
+	if err != nil {
+		return nil, err
+	}
+	bkr := &model.Baker{}
+	err = pack.NewQuery("baker_by_hash", table).
+		AndEqual("address", addr.Bytes22()).
+		Execute(ctx, bkr)
+	if bkr.RowId == 0 {
+		err = index.ErrNoBakerEntry
+	}
+	if err != nil {
+		return nil, err
+	}
+	acc, err := m.LookupAccountId(ctx, bkr.AccountId)
+	if err != nil {
+		return nil, err
+	}
+	bkr.Account = acc
+	return bkr, nil
 }
 
 func (m *Indexer) LookupContract(ctx context.Context, addr tezos.Address) (*model.Contract, error) {
@@ -465,6 +464,18 @@ func (m *Indexer) LookupContractId(ctx context.Context, id model.AccountID) (*mo
 	return cc, nil
 }
 
+func (m *Indexer) LookupContractType(ctx context.Context, id model.AccountID) (micheline.Type, micheline.Type, error) {
+	elem, ok := m.contract_types.Get(id)
+	if !ok {
+		cc, err := m.LookupContractId(ctx, id)
+		if err != nil {
+			return micheline.Type{}, micheline.Type{}, err
+		}
+		elem = m.contract_types.Add(cc)
+	}
+	return elem.ParamType, elem.StorageType, nil
+}
+
 func (m *Indexer) LookupAccountId(ctx context.Context, id model.AccountID) (*model.Account, error) {
 	table, err := m.Table(index.AccountTableKey)
 	if err != nil {
@@ -481,6 +492,29 @@ func (m *Indexer) LookupAccountId(ctx context.Context, id model.AccountID) (*mod
 		return nil, index.ErrNoAccountEntry
 	}
 	return acc, nil
+}
+
+func (m *Indexer) LookupBakerId(ctx context.Context, id model.AccountID) (*model.Baker, error) {
+	acc, err := m.LookupAccountId(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	table, err := m.Table(index.BakerTableKey)
+	if err != nil {
+		return nil, err
+	}
+	bkr := &model.Baker{}
+	err = pack.NewQuery("baker_by_id", table).
+		AndEqual("account_id", id).
+		Execute(ctx, bkr)
+	if bkr.RowId == 0 {
+		err = index.ErrNoAccountEntry
+	}
+	if err != nil {
+		return nil, err
+	}
+	bkr.Account = acc
+	return bkr, nil
 }
 
 func (m *Indexer) LookupAccountIds(ctx context.Context, ids []uint64) ([]*model.Account, error) {
@@ -515,49 +549,47 @@ func (m *Indexer) LookupAccountIds(ctx context.Context, ids []uint64) ([]*model.
 	return accs, nil
 }
 
-func (m *Indexer) ListAllDelegates(ctx context.Context) ([]*model.Account, error) {
-	table, err := m.Table(index.AccountTableKey)
+func (m *Indexer) ListBakers(ctx context.Context, activeOnly bool) ([]*model.Baker, error) {
+	bakers, err := m.Table(index.BakerTableKey)
 	if err != nil {
 		return nil, err
 	}
-	accs := make([]*model.Account, 0)
-	err = pack.NewQuery("list_bakers", table).
-		AndEqual("is_delegate", true).
-		Stream(ctx, func(r pack.Row) error {
-			acc := &model.Account{}
-			if err := r.Decode(acc); err != nil {
-				return err
-			}
-			accs = append(accs, acc)
-			return nil
-		})
+	bkrs := make([]*model.Baker, 0)
+	q := pack.NewQuery("list_bakers", bakers)
+	if activeOnly {
+		q = q.AndEqual("is_active", true)
+	}
+	err = q.Execute(ctx, &bkrs)
 	if err != nil {
 		return nil, err
 	}
-	return accs, nil
-}
-
-func (m *Indexer) ListActiveDelegates(ctx context.Context) ([]*model.Account, error) {
-	table, err := m.Table(index.AccountTableKey)
+	bkrMap := make(map[model.AccountID]*model.Baker)
+	accIds := make([]uint64, 0)
+	for _, v := range bkrs {
+		bkrMap[v.AccountId] = v
+		accIds = append(accIds, v.AccountId.Value())
+	}
+	accounts, err := m.Table(index.AccountTableKey)
 	if err != nil {
 		return nil, err
 	}
-	accs := make([]*model.Account, 0)
-	err = pack.NewQuery("list_active_bakers", table).
-		AndEqual("is_delegate", true).
-		AndEqual("is_active_delegate", true).
-		Stream(ctx, func(r pack.Row) error {
-			acc := &model.Account{}
-			if err := r.Decode(acc); err != nil {
-				return err
-			}
-			accs = append(accs, acc)
-			return nil
-		})
+	res, err := accounts.Lookup(ctx, accIds)
 	if err != nil {
 		return nil, err
 	}
-	return accs, nil
+	defer res.Close()
+	err = res.Walk(func(r pack.Row) error {
+		acc := &model.Account{}
+		if err := r.Decode(acc); err != nil {
+			return err
+		}
+		bkr, ok := bkrMap[acc.RowId]
+		if ok {
+			bkr.Account = acc
+		}
+		return nil
+	})
+	return bkrs, err
 }
 
 func (m *Indexer) ListManaged(ctx context.Context, id model.AccountID, offset, limit uint, cursor uint64, order pack.OrderType) ([]*model.Account, error) {
@@ -616,12 +648,12 @@ func (m *Indexer) LookupOp(ctx context.Context, opIdent string) ([]*model.Op, er
 		}
 		q = q.AndEqual("hash", oh.Hash.Hash[:])
 	default:
-		// try parsing as row_id
-		rowId, err := strconv.ParseUint(opIdent, 10, 64)
+		// try parsing as event id
+		eventId, err := strconv.ParseUint(opIdent, 10, 64)
 		if err != nil {
 			return nil, index.ErrInvalidOpID
 		}
-		q = q.AndEqual("I", rowId)
+		q = q.AndEqual("height", int64(eventId>>16)).AndEqual("op_n", int64(eventId&0xFFFF))
 	}
 	ops := make([]*model.Op, 0)
 	err = table.Stream(ctx, q, func(r pack.Row) error {
@@ -641,6 +673,22 @@ func (m *Indexer) LookupOp(ctx context.Context, opIdent string) ([]*model.Op, er
 	return ops, nil
 }
 
+func (m *Indexer) LookupOpHash(ctx context.Context, opid model.OpID) tezos.OpHash {
+	table, err := m.Table(index.OpTableKey)
+	if err != nil {
+		return tezos.OpHash{}
+	}
+	type XOp struct {
+		Hash tezos.OpHash `pack:"H"`
+	}
+	o := &XOp{}
+	err = pack.NewQuery("find_tx", table).AndEqual("I", opid).Execute(ctx, o)
+	if err != nil {
+		return tezos.OpHash{}
+	}
+	return o.Hash
+}
+
 func (m *Indexer) FindActivatedAccount(ctx context.Context, addr tezos.Address) (*model.Account, error) {
 	table, err := m.Table(index.OpTableKey)
 	if err != nil {
@@ -655,7 +703,7 @@ func (m *Indexer) FindActivatedAccount(ctx context.Context, addr tezos.Address) 
 	err = pack.NewQuery("find_activation", table).
 		WithFields("sender_id", "creator_id", "data").
 		WithoutCache().
-		AndEqual("type", tezos.OpTypeActivateAccount).
+		AndEqual("type", model.OpTypeActivation).
 		Stream(ctx, func(r pack.Row) error {
 			if err := r.Decode(&o); err != nil {
 				return err
@@ -699,9 +747,9 @@ func (m *Indexer) FindLatestDelegation(ctx context.Context, id model.AccountID) 
 		WithoutCache().
 		WithDesc().
 		WithLimit(1).
-		AndEqual("type", tezos.OpTypeDelegation). // type
+		AndEqual("type", model.OpTypeDelegation). // type
 		AndEqual("sender_id", id).                // search for sender account id
-		AndNotEqual("delegate_id", 0).            // delegate id
+		AndNotEqual("baker_id", 0).               // delegate id
 		Execute(ctx, o)
 	if err != nil {
 		return nil, err
@@ -723,7 +771,7 @@ func (m *Indexer) FindOrigination(ctx context.Context, id model.AccountID, heigh
 		WithDesc().
 		WithLimit(1).
 		AndGte("height", height).                  // first seen height
-		AndEqual("type", tezos.OpTypeOrigination). // type
+		AndEqual("type", model.OpTypeOrigination). // type
 		AndEqual("receiver_id", id).               // search for receiver account id
 		Execute(ctx, o)
 	if err != nil {
@@ -791,10 +839,11 @@ func (m *Indexer) ListBlockOps(ctx context.Context, r ListRequest) ([]*model.Op,
 	}
 
 	if r.Cursor > 0 {
+		opn := int64(r.Cursor & 0xFFFF)
 		if r.Order == pack.OrderDesc {
-			q = q.AndLt("I", r.Cursor)
+			q = q.AndLt("op_n", opn)
 		} else {
-			q = q.AndGt("I", r.Cursor)
+			q = q.AndGt("op_n", opn)
 		}
 	}
 	if len(r.Typs) > 0 && r.Mode.IsValid() {
@@ -806,88 +855,6 @@ func (m *Indexer) ListBlockOps(ctx context.Context, r ListRequest) ([]*model.Op,
 	}
 	ops := make([]*model.Op, 0, r.Limit)
 	if err = q.Execute(ctx, &ops); err != nil {
-		return nil, err
-	}
-	return ops, nil
-}
-
-// Note: offset and limit count in full batches of transactions
-func (m *Indexer) ListBlockOpsCollapsed(ctx context.Context, r ListRequest) ([]*model.Op, error) {
-	table, err := m.Table(index.OpTableKey)
-	if err != nil {
-		return nil, err
-	}
-	q := pack.NewQuery("list_block_ops", table).
-		WithOrder(r.Order).
-		AndEqual("height", r.Since)
-
-	if r.SenderId > 0 {
-		q = q.AndEqual("sender_id", r.SenderId)
-	}
-	if r.ReceiverId > 0 {
-		q = q.AndEqual("receiver_id", r.ReceiverId)
-	}
-
-	// cursor and offset are mutually exclusive
-	if r.Cursor > 0 {
-		if r.Order == pack.OrderDesc {
-			q = q.AndLt("I", r.Cursor)
-		} else {
-			q = q.AndGt("I", r.Cursor)
-		}
-		r.Offset = 0
-	}
-	if len(r.Typs) > 0 && r.Mode.IsValid() {
-		if r.Mode.IsScalar() {
-			q = q.AndCondition("type", r.Mode, r.Typs[0])
-		} else {
-			q = q.AndCondition("type", r.Mode, r.Typs)
-		}
-	}
-
-	var (
-		lastN int = -1
-		count int
-	)
-	ops := make([]*model.Op, 0)
-	err = q.Stream(ctx, func(rx pack.Row) error {
-		op := &model.Op{}
-		if err := rx.Decode(op); err != nil {
-			return err
-		}
-
-		// detect next op group (works in both directions)
-		isFirst := lastN < 0
-		isNext := op.OpN != lastN
-		lastN = op.OpN
-
-		// skip offset groups
-		if r.Offset > 0 {
-			if isNext && !isFirst {
-				r.Offset--
-			} else {
-				return nil
-			}
-			if r.Offset > 0 {
-				return nil
-			}
-		}
-
-		// stop at first result after group end
-		if isNext && r.Limit > 0 && count == int(r.Limit) {
-			return io.EOF
-		}
-
-		ops = append(ops, op)
-
-		// count op groups
-		if isNext {
-			count++
-		}
-
-		return nil
-	})
-	if err != nil && err != io.EOF {
 		return nil, err
 	}
 	return ops, nil
@@ -925,7 +892,7 @@ func (m *Indexer) ListAccountOps(ctx context.Context, r ListRequest) ([]*model.O
 		WithOffset(int(r.Offset))
 
 	switch {
-	case r.SenderId > 0:
+	case r.SenderId > 0: // anything received by us from this sender
 		if onlyDelegation {
 			q = q.Or(
 				// regular delegation is del + delegate set
@@ -933,13 +900,13 @@ func (m *Indexer) ListAccountOps(ctx context.Context, r ListRequest) ([]*model.O
 				// regular origination + delegation is orig + delegate set
 				// internal origination + delegation is orig + delegate set
 				pack.And(
-					pack.In("type", []tezos.OpType{tezos.OpTypeDelegation, tezos.OpTypeOrigination}),
-					pack.Equal("delegate_id", r.Account.RowId),
+					pack.In("type", []model.OpType{model.OpTypeDelegation, model.OpTypeOrigination}),
+					pack.Equal("baker_id", r.Account.RowId),
 				),
 				// regular un/re-delegation is del + receiver set
 				// internal un/re-delegation is del + receiver set
 				pack.And(
-					pack.Equal("type", tezos.OpTypeDelegation),
+					pack.Equal("type", model.OpTypeDelegation),
 					pack.Equal("receiver_id", r.Account.RowId),
 				),
 			)
@@ -947,13 +914,13 @@ func (m *Indexer) ListAccountOps(ctx context.Context, r ListRequest) ([]*model.O
 		} else if withDelegation {
 			q = q.Or(
 				pack.Equal("receiver_id", r.Account.RowId),
-				pack.Equal("delegate_id", r.Account.RowId),
+				pack.Equal("baker_id", r.Account.RowId),
 			)
 		} else {
 			q = q.AndEqual("receiver_id", r.Account.RowId)
 		}
 		q = q.AndEqual("sender_id", r.SenderId)
-	case r.ReceiverId > 0:
+	case r.ReceiverId > 0: // anything sent by us to this receiver
 		if onlyDelegation {
 			q = q.Or(
 				// regular delegation is del + delegate set
@@ -961,13 +928,13 @@ func (m *Indexer) ListAccountOps(ctx context.Context, r ListRequest) ([]*model.O
 				// regular origination + delegation is orig + delegate set
 				// internal origination + delegation is orig + delegate set
 				pack.And(
-					pack.In("type", []tezos.OpType{tezos.OpTypeDelegation, tezos.OpTypeOrigination}),
-					pack.Equal("delegate_id", r.ReceiverId),
+					pack.In("type", []model.OpType{model.OpTypeDelegation, model.OpTypeOrigination}),
+					pack.Equal("baker_id", r.ReceiverId),
 				),
 				// regular un/re-delegation is del + receiver set
 				// internal un/re-delegation is del + receiver set
 				pack.And(
-					pack.Equal("type", tezos.OpTypeDelegation),
+					pack.Equal("type", model.OpTypeDelegation),
 					pack.Equal("receiver_id", r.ReceiverId),
 				),
 			)
@@ -975,18 +942,18 @@ func (m *Indexer) ListAccountOps(ctx context.Context, r ListRequest) ([]*model.O
 		} else if withDelegation {
 			q = q.Or(
 				pack.Equal("receiver_id", r.ReceiverId),
-				pack.Equal("delegate_id", r.ReceiverId),
+				pack.Equal("baker_id", r.ReceiverId),
 			)
 		} else {
 			q = q.AndEqual("receiver_id", r.ReceiverId)
 		}
 		q = q.AndEqual("sender_id", r.Account.RowId)
-	default:
+	default: // anything sent or received by us
 		if withDelegation {
 			q = q.Or(
 				pack.Equal("sender_id", r.Account.RowId),
 				pack.Equal("receiver_id", r.Account.RowId),
-				pack.Equal("delegate_id", r.Account.RowId),
+				pack.Equal("baker_id", r.Account.RowId),
 			)
 		} else {
 			q = q.Or(
@@ -997,12 +964,27 @@ func (m *Indexer) ListAccountOps(ctx context.Context, r ListRequest) ([]*model.O
 	}
 
 	if r.Cursor > 0 {
+		height := int64(r.Cursor >> 16)
+		opn := int64(r.Cursor & 0xFFFF)
 		if r.Order == pack.OrderDesc {
-			q = q.AndLt("I", r.Cursor)
+			q = q.Or(
+				pack.Lt("height", height),
+				pack.And(
+					pack.Equal("height", height),
+					pack.Lt("op_n", opn),
+				),
+			)
 		} else {
-			q = q.AndGt("I", r.Cursor)
+			q = q.Or(
+				pack.Gt("height", height),
+				pack.And(
+					pack.Equal("height", height),
+					pack.Gt("op_n", opn),
+				),
+			)
 		}
 	}
+
 	if r.Since > 0 || r.Account.FirstSeen > 0 {
 		q = q.AndGt("height", util.Max64(r.Since, r.Account.FirstSeen-1))
 	}
@@ -1062,13 +1044,13 @@ func (m *Indexer) ListAccountOpsCollapsed(ctx context.Context, r ListRequest) ([
 				// regular origination + delegation is orig + delegate set
 				// internal origination + delegation is orig + delegate set
 				pack.And(
-					pack.In("type", []tezos.OpType{tezos.OpTypeDelegation, tezos.OpTypeOrigination}),
-					pack.Equal("delegate_id", r.Account.RowId),
+					pack.In("type", []model.OpType{model.OpTypeDelegation, model.OpTypeOrigination}),
+					pack.Equal("baker_id", r.Account.RowId),
 				),
 				// regular un/re-delegation is del + receiver set
 				// internal un/re-delegation is del + receiver set
 				pack.And(
-					pack.Equal("type", tezos.OpTypeDelegation),
+					pack.Equal("type", model.OpTypeDelegation),
 					pack.Equal("receiver_id", r.Account.RowId),
 				),
 			)
@@ -1076,7 +1058,7 @@ func (m *Indexer) ListAccountOpsCollapsed(ctx context.Context, r ListRequest) ([
 		} else if withDelegation {
 			q = q.Or(
 				pack.Equal("receiver_id", r.Account.RowId),
-				pack.Equal("delegate_id", r.Account.RowId),
+				pack.Equal("baker_id", r.Account.RowId),
 			)
 		} else {
 			q = q.AndEqual("receiver_id", r.Account.RowId)
@@ -1091,13 +1073,13 @@ func (m *Indexer) ListAccountOpsCollapsed(ctx context.Context, r ListRequest) ([
 				// regular origination + delegation is orig + delegate set
 				// internal origination + delegation is orig + delegate set
 				pack.And(
-					pack.In("type", []tezos.OpType{tezos.OpTypeDelegation, tezos.OpTypeOrigination}),
-					pack.Equal("delegate_id", r.ReceiverId),
+					pack.In("type", []model.OpType{model.OpTypeDelegation, model.OpTypeOrigination}),
+					pack.Equal("baker_id", r.ReceiverId),
 				),
 				// regular un/re-delegation is del + receiver set
 				// internal un/re-delegation is del + receiver set
 				pack.And(
-					pack.Equal("type", tezos.OpTypeDelegation),
+					pack.Equal("type", model.OpTypeDelegation),
 					pack.Equal("receiver_id", r.ReceiverId),
 				),
 			)
@@ -1105,19 +1087,18 @@ func (m *Indexer) ListAccountOpsCollapsed(ctx context.Context, r ListRequest) ([
 		} else if withDelegation {
 			q = q.Or(
 				pack.Equal("receiver_id", r.ReceiverId),
-				pack.Equal("delegate_id", r.ReceiverId),
+				pack.Equal("baker_id", r.ReceiverId),
 			)
 		} else {
 			q = q.AndEqual("receiver_id", r.ReceiverId)
 		}
 		q = q.AndEqual("sender_id", r.Account.RowId)
-
 	default:
 		if withDelegation {
 			q = q.Or(
 				pack.Equal("sender_id", r.Account.RowId),
 				pack.Equal("receiver_id", r.Account.RowId),
-				pack.Equal("delegate_id", r.Account.RowId),
+				pack.Equal("baker_id", r.Account.RowId),
 			)
 		} else {
 			q = q.Or(
@@ -1132,13 +1113,27 @@ func (m *Indexer) ListAccountOpsCollapsed(ctx context.Context, r ListRequest) ([
 	ops := make([]*model.Op, 0)
 
 	if r.Cursor > 0 {
+		height := int64(r.Cursor >> 16)
+		opn := int64(r.Cursor & 0xFFFF)
 		if r.Order == pack.OrderDesc {
-			q = q.AndLt("I", r.Cursor)
+			q = q.Or(
+				pack.Lt("height", height),
+				pack.And(
+					pack.Equal("height", height),
+					pack.Lt("op_n", opn),
+				),
+			)
 		} else {
-			q = q.AndGt("I", r.Cursor)
+			q = q.Or(
+				pack.Gt("height", height),
+				pack.And(
+					pack.Equal("height", height),
+					pack.Gt("op_n", opn),
+				),
+			)
 		}
-		r.Offset = 0
 	}
+
 	if r.Since > 0 || r.Account.FirstSeen > 0 {
 		q = q.AndGt("height", util.Max64(r.Since, r.Account.FirstSeen-1))
 	}
@@ -1153,7 +1148,7 @@ func (m *Indexer) ListAccountOpsCollapsed(ctx context.Context, r ListRequest) ([
 		}
 	}
 	var (
-		lastN      int = -1
+		lastP      int = -1
 		lastHeight int64
 		count      int
 	)
@@ -1163,9 +1158,9 @@ func (m *Indexer) ListAccountOpsCollapsed(ctx context.Context, r ListRequest) ([
 			return err
 		}
 		// detect next op group (works in both directions)
-		isFirst := lastN < 0
-		isNext := op.OpN != lastN || op.Height != lastHeight
-		lastN, lastHeight = op.OpN, op.Height
+		isFirst := lastP < 0
+		isNext := op.OpP != lastP || op.Height != lastHeight
+		lastP, lastHeight = op.OpP, op.Height
 
 		// skip offset groups
 		if r.Offset > 0 {
@@ -1212,12 +1207,14 @@ func (m *Indexer) ListContractCalls(ctx context.Context, r ListRequest) ([]*mode
 	r.Since = util.Max64(r.Since, r.Account.FirstSeen-1)
 	r.Until = util.NonZeroMin64(r.Until, r.Account.LastSeen)
 
-	// list all tx (calls) received by this contract
+	// list all successful tx (calls) received by this contract
 	q := pack.NewQuery("list_calls_recv", table).
 		WithOrder(r.Order).
 		WithLimit(int(r.Limit)).
 		WithOffset(int(r.Offset)).
-		AndEqual("receiver_id", r.Account.RowId)
+		AndEqual("receiver_id", r.Account.RowId).
+		AndEqual("type", model.OpTypeTransaction).
+		AndEqual("is_success", true)
 
 	if r.SenderId > 0 {
 		q = q.AndEqual("sender_id", r.SenderId)
@@ -1227,30 +1224,36 @@ func (m *Indexer) ListContractCalls(ctx context.Context, r ListRequest) ([]*mode
 	switch len(r.Entrypoints) {
 	case 0:
 		// none, search op type
-		q = q.AndIn("type", []uint8{
-			uint8(tezos.OpTypeTransaction),
-			uint8(tezos.OpTypeOrigination),
-		})
 	case 1:
 		// any single
-		q = q.
-			AndEqual("type", tezos.OpTypeTransaction).              // search op type
-			AndEqual("is_success", true).                           // successful ops only
-			AndCondition("entrypoint_id", r.Mode, r.Entrypoints[0]) // entrypoint_id
+		q = q.AndCondition("entrypoint_id", r.Mode, r.Entrypoints[0]) // entrypoint_id
 	default:
 		// in/nin
-		q = q.
-			AndEqual("type", tezos.OpTypeTransaction).           // search op type
-			AndEqual("is_success", true).                        // successful ops only
-			AndCondition("entrypoint_id", r.Mode, r.Entrypoints) // entrypoint_ids
+		q = q.AndCondition("entrypoint_id", r.Mode, r.Entrypoints) // entrypoint_ids
 	}
+
 	if r.Cursor > 0 {
+		height := int64(r.Cursor >> 16)
+		opn := int64(r.Cursor & 0xFFFF)
 		if r.Order == pack.OrderDesc {
-			q = q.AndLt("I", r.Cursor)
+			q = q.Or(
+				pack.Lt("height", height),
+				pack.And(
+					pack.Equal("height", height),
+					pack.Lt("op_n", opn),
+				),
+			)
 		} else {
-			q = q.AndGt("I", r.Cursor)
+			q = q.Or(
+				pack.Gt("height", height),
+				pack.And(
+					pack.Equal("height", height),
+					pack.Gt("op_n", opn),
+				),
+			)
 		}
 	}
+
 	if r.Since > 0 {
 		q = q.AndGt("height", r.Since)
 	}
@@ -1280,10 +1283,9 @@ func (m *Indexer) FindLastCall(ctx context.Context, acc model.AccountID, from, t
 	}
 	op := &model.Op{}
 	err = q.AndEqual("receiver_id", acc).
-		AndEqual("type", tezos.OpTypeTransaction).
+		AndEqual("type", model.OpTypeTransaction).
 		AndEqual("is_contract", true).
 		AndEqual("is_success", true).
-		AndEqual("has_data", true).
 		Execute(ctx, op)
 	if err != nil {
 		return nil, err
@@ -1292,313 +1294,6 @@ func (m *Indexer) FindLastCall(ctx context.Context, acc model.AccountID, from, t
 		return nil, index.ErrNoOpEntry
 	}
 	return op, nil
-}
-
-func (m *Indexer) ElectionByHeight(ctx context.Context, height int64) (*model.Election, error) {
-	table, err := m.Table(index.ElectionTableKey)
-	if err != nil {
-		return nil, err
-	}
-	// we are looking for the last election with start_height <= height
-	e := &model.Election{}
-	err = pack.NewQuery("election_height", table).
-		WithDesc().WithoutCache().WithLimit(1).
-		AndLte("start_height", height).
-		Execute(ctx, e)
-	if err != nil {
-		return nil, err
-	}
-	if e.RowId == 0 {
-		return nil, index.ErrNoElectionEntry
-	}
-	return e, nil
-}
-
-func (m *Indexer) ElectionById(ctx context.Context, id model.ElectionID) (*model.Election, error) {
-	table, err := m.Table(index.ElectionTableKey)
-	if err != nil {
-		return nil, err
-	}
-	e := &model.Election{}
-	err = pack.NewQuery("election_id", table).
-		WithoutCache().
-		WithLimit(1).
-		AndEqual("I", id).
-		Execute(ctx, e)
-	if err != nil {
-		return nil, err
-	}
-	if e.RowId == 0 {
-		return nil, index.ErrNoElectionEntry
-	}
-	return e, nil
-}
-
-func (m *Indexer) VotesByElection(ctx context.Context, id model.ElectionID) ([]*model.Vote, error) {
-	table, err := m.Table(index.VoteTableKey)
-	if err != nil {
-		return nil, err
-	}
-	votes := make([]*model.Vote, 0)
-	err = pack.NewQuery("list_votes", table).
-		WithoutCache().
-		AndEqual("election_id", id).
-		Execute(ctx, &votes)
-	if err != nil {
-		return nil, err
-	}
-	if len(votes) == 0 {
-		return nil, index.ErrNoVoteEntry
-	}
-	return votes, nil
-}
-
-// r.Since is the true vote start block
-func (m *Indexer) ListVoters(ctx context.Context, r ListRequest) ([]*model.Voter, error) {
-	// cursor and offset are mutually exclusive
-	if r.Cursor > 0 {
-		r.Offset = 0
-	}
-
-	// Step 1
-	// collect voters from governance roll snapshot
-	rollsTable, err := m.Table(index.RollsTableKey)
-	if err != nil {
-		return nil, err
-	}
-	q := pack.NewQuery("list_voters", rollsTable).
-		WithLimit(int(r.Limit)).
-		WithOffset(int(r.Offset)).
-		AndEqual("height", r.Since-1) // snapshots are made at end of previous vote
-
-	if r.Cursor > 0 {
-		if r.Order == pack.OrderDesc {
-			q = q.AndLt("I", r.Cursor)
-		} else {
-			q = q.AndGt("I", r.Cursor)
-		}
-	}
-	voters := make(map[model.AccountID]*model.Voter)
-	snap := &model.RollSnapshot{}
-	err = q.Stream(ctx, func(r pack.Row) error {
-		if err := r.Decode(snap); err != nil {
-			return err
-		}
-		voters[snap.AccountId] = &model.Voter{
-			RowId: snap.AccountId,
-			Rolls: snap.Rolls,
-			Stake: snap.Stake,
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	// Step 2: list ballots
-	ballotTable, err := m.Table(index.BallotTableKey)
-	if err != nil {
-		return nil, err
-	}
-	ballot := &model.Ballot{}
-	err = pack.NewQuery("list_voters", ballotTable).
-		AndEqual("voting_period", r.Period).
-		Stream(ctx, func(r pack.Row) error {
-			if err := r.Decode(ballot); err != nil {
-				return err
-			}
-			if voter, ok := voters[ballot.SourceId]; ok {
-				voter.Ballot = ballot.Ballot
-				voter.Time = ballot.Time
-				voter.HasVoted = true
-				found := false
-				for _, v := range voter.Proposals {
-					if v != ballot.ProposalId {
-						continue
-					}
-					found = true
-					break
-				}
-				if !found {
-					voter.Proposals = append(voter.Proposals, ballot.ProposalId)
-				}
-			}
-			return nil
-		})
-	if err != nil {
-		return nil, err
-	}
-
-	out := make([]*model.Voter, 0, len(voters))
-	for _, v := range voters {
-		out = append(out, v)
-	}
-	if r.Order == pack.OrderAsc {
-		sort.Slice(out, func(i, j int) bool { return out[i].RowId < out[j].RowId })
-	} else {
-		sort.Slice(out, func(i, j int) bool { return out[i].RowId > out[j].RowId })
-	}
-	return out, nil
-}
-
-func (m *Indexer) ProposalsByElection(ctx context.Context, id model.ElectionID) ([]*model.Proposal, error) {
-	table, err := m.Table(index.ProposalTableKey)
-	if err != nil {
-		return nil, err
-	}
-	proposals := make([]*model.Proposal, 0)
-	err = pack.NewQuery("list_proposals", table).
-		WithoutCache().
-		AndEqual("election_id", id).
-		Execute(ctx, &proposals)
-	if err != nil {
-		return nil, err
-	}
-	return proposals, nil
-}
-
-func (m *Indexer) LookupProposal(ctx context.Context, proto tezos.ProtocolHash) (*model.Proposal, error) {
-	if !proto.IsValid() {
-		return nil, ErrInvalidHash
-	}
-
-	table, err := m.Table(index.ProposalTableKey)
-	if err != nil {
-		return nil, err
-	}
-
-	// use hash and type to protect against duplicates
-	prop := &model.Proposal{}
-	err = pack.NewQuery("proposal_by_hash", table).
-		AndEqual("hash", proto.Hash.Hash).
-		Execute(ctx, prop)
-	if err != nil {
-		return nil, err
-	}
-	if prop.RowId == 0 {
-		return nil, index.ErrNoProposalEntry
-	}
-	return prop, nil
-}
-
-func (m *Indexer) LookupProposalIds(ctx context.Context, ids []uint64) ([]*model.Proposal, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	table, err := m.Table(index.ProposalTableKey)
-	if err != nil {
-		return nil, err
-	}
-	props := make([]*model.Proposal, len(ids))
-	var count int
-	err = table.StreamLookup(ctx, ids, func(r pack.Row) error {
-		if count >= len(props) {
-			return io.EOF
-		}
-		p := &model.Proposal{}
-		if err := r.Decode(p); err != nil {
-			return err
-		}
-		props[count] = p
-		count++
-		return nil
-	})
-	if err != nil && err != io.EOF {
-		return nil, err
-	}
-	if count == 0 {
-		return nil, index.ErrNoProposalEntry
-	}
-	props = props[:count]
-	return props, nil
-}
-
-func (m *Indexer) ListAccountBallots(ctx context.Context, r ListRequest) ([]*model.Ballot, error) {
-	table, err := m.Table(index.BallotTableKey)
-	if err != nil {
-		return nil, err
-	}
-	// cursor and offset are mutually exclusive
-	if r.Cursor > 0 {
-		r.Offset = 0
-	}
-	// clamp time range to account lifetime
-	r.Since = util.Max64(r.Since, r.Account.FirstSeen-1)
-	r.Until = util.NonZeroMin64(r.Until, r.Account.LastSeen)
-
-	q := pack.NewQuery("list_account_ballots", table).
-		WithOrder(r.Order).
-		WithLimit(int(r.Limit)).
-		WithOffset(int(r.Offset)).
-		AndEqual("source_id", r.Account.RowId)
-	if r.Cursor > 0 {
-		if r.Order == pack.OrderDesc {
-			q = q.AndLt("I", r.Cursor)
-		} else {
-			q = q.AndGt("I", r.Cursor)
-		}
-	}
-	if r.Since > 0 {
-		q = q.AndGt("height", r.Since)
-	}
-	if r.Until > 0 {
-		q = q.AndLte("height", r.Until)
-	}
-	ballots := make([]*model.Ballot, 0)
-	if err := q.Execute(ctx, &ballots); err != nil {
-		return nil, err
-	}
-	return ballots, nil
-}
-
-func (m *Indexer) ListBallots(ctx context.Context, r ListRequest) ([]*model.Ballot, error) {
-	table, err := m.Table(index.BallotTableKey)
-	if err != nil {
-		return nil, err
-	}
-	// cursor and offset are mutually exclusive
-	if r.Cursor > 0 {
-		r.Offset = 0
-	}
-	q := pack.NewQuery("list_ballots", table).
-		WithoutCache().
-		WithOrder(r.Order).
-		WithOffset(int(r.Offset)).
-		WithLimit(int(r.Limit)).
-		AndEqual("voting_period", r.Period)
-	if r.Cursor > 0 {
-		if r.Order == pack.OrderDesc {
-			q = q.AndLt("I", r.Cursor)
-		} else {
-			q = q.AndGt("I", r.Cursor)
-		}
-	}
-	ballots := make([]*model.Ballot, 0)
-	if err := q.Execute(ctx, &ballots); err != nil {
-		return nil, err
-	}
-	return ballots, nil
-}
-
-func (m *Indexer) LookupSnapshot(ctx context.Context, accId model.AccountID, cycle, idx int64) (*model.Snapshot, error) {
-	table, err := m.Table(index.SnapshotTableKey)
-	if err != nil {
-		return nil, err
-	}
-	snap := &model.Snapshot{}
-	err = pack.NewQuery("search_snapshot", table).
-		WithLimit(1).
-		AndEqual("cycle", cycle).
-		AndEqual("index", idx).
-		AndEqual("account_id", accId).
-		Execute(ctx, snap)
-	if err != nil {
-		return nil, err
-	}
-	if snap.RowId == 0 {
-		return nil, index.ErrNoSnapshotEntry
-	}
-	return snap, nil
 }
 
 func (m *Indexer) ListContractBigmapIds(ctx context.Context, acc model.AccountID) ([]int64, error) {
@@ -1641,8 +1336,32 @@ func (m *Indexer) LookupBigmapAlloc(ctx context.Context, id int64) (*model.Bigma
 	return alloc, nil
 }
 
+// only type info is relevant
+func (m *Indexer) LookupBigmapType(ctx context.Context, id int64) (*model.BigmapAlloc, error) {
+	alloc, ok := m.bigmap_types.GetType(id)
+	if ok {
+		return alloc, nil
+	}
+	table, err := m.Table(index.BigmapAllocTableKey)
+	if err != nil {
+		return nil, err
+	}
+	alloc = &model.BigmapAlloc{}
+	err = pack.NewQuery("search_bigmap", table).
+		AndEqual("bigmap_id", id).
+		Execute(ctx, alloc)
+	if err != nil {
+		return nil, err
+	}
+	if alloc.RowId == 0 {
+		return nil, index.ErrNoBigmapAlloc
+	}
+	m.bigmap_types.Add(alloc)
+	return alloc, nil
+}
+
 func (m *Indexer) ListHistoricBigmapKeys(ctx context.Context, r ListRequest) ([]*model.BigmapKV, error) {
-	hist, ok := m.bigmaps.Get(r.BigmapId, r.Since)
+	hist, ok := m.bigmap_values.Get(r.BigmapId, r.Since)
 	if !ok {
 		start := time.Now()
 		table, err := m.Table(index.BigmapUpdateTableKey)
@@ -1650,11 +1369,11 @@ func (m *Indexer) ListHistoricBigmapKeys(ctx context.Context, r ListRequest) ([]
 			return nil, err
 		}
 
-		// check of we have any previous bigmap state cached
-		prev, ok := m.bigmaps.GetBest(r.BigmapId, r.Since)
+		// check if we have any previous bigmap state cached
+		prev, ok := m.bigmap_values.GetBest(r.BigmapId, r.Since)
 		if ok {
 			// update from existing cache
-			hist, err = m.bigmaps.Update(ctx, prev, table, r.Since)
+			hist, err = m.bigmap_values.Update(ctx, prev, table, r.Since)
 			if err != nil {
 				return nil, err
 			}
@@ -1663,7 +1382,7 @@ func (m *Indexer) ListHistoricBigmapKeys(ctx context.Context, r ListRequest) ([]
 
 		} else {
 			// build a new cache
-			hist, err = m.bigmaps.Build(ctx, table, r.BigmapId, r.Since)
+			hist, err = m.bigmap_values.Build(ctx, table, r.BigmapId, r.Since)
 			if err != nil {
 				return nil, err
 			}
@@ -1761,9 +1480,13 @@ func (m *Indexer) ListBigmapUpdates(ctx context.Context, r ListRequest) ([]*mode
 	if err != nil {
 		return nil, err
 	}
-	q := pack.NewQuery("list_bigmap", table).
-		WithOrder(r.Order).
-		AndEqual("bigmap_id", r.BigmapId)
+	q := pack.NewQuery("list_bigmap", table).WithOrder(r.Order)
+	if r.BigmapId > 0 {
+		q = q.AndEqual("bigmap_id", r.BigmapId)
+	}
+	if r.OpId > 0 {
+		q = q.AndEqual("op_id", r.OpId)
+	}
 	if r.Cursor > 0 {
 		r.Offset = 0
 		if r.Order == pack.OrderDesc {
@@ -1805,40 +1528,6 @@ func (m *Indexer) ListBigmapUpdates(ctx context.Context, r ListRequest) ([]*mode
 		return nil, err
 	}
 	return items, nil
-}
-
-// luck, performance, contribution (reliability)
-func (m *Indexer) BakerPerformance(ctx context.Context, id model.AccountID, fromCycle, toCycle int64) ([3]int64, error) {
-	perf := [3]int64{}
-	table, err := m.Table(index.IncomeTableKey)
-	if err != nil {
-		return perf, err
-	}
-	q := pack.NewQuery("baker_income", table).
-		WithoutCache().
-		AndEqual("account_id", id).
-		AndRange("cycle", fromCycle, toCycle)
-	var count int64
-	income := &model.Income{}
-	err = q.Stream(ctx, func(r pack.Row) error {
-		if err := r.Decode(income); err != nil {
-			return err
-		}
-		perf[0] += income.LuckPct
-		perf[1] += income.PerformancePct
-		perf[2] += income.ContributionPct
-		count++
-		return nil
-	})
-	if err != nil {
-		return perf, err
-	}
-	if count > 0 {
-		perf[0] /= count
-		perf[1] /= count
-		perf[2] /= count
-	}
-	return perf, nil
 }
 
 func (m *Indexer) UpdateMetadata(ctx context.Context, md *model.Metadata) error {

@@ -1,89 +1,233 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
 
 import (
-	"fmt"
-
 	"blockwatch.cc/tzgo/micheline"
-	"blockwatch.cc/tzgo/rpc"
 	"blockwatch.cc/tzgo/tezos"
-	. "blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 )
 
+// pre-Ithaca
 // - baker pays deposit and receives block rewards+fees
-// - on last block in cycle, deposits, rewards and fees are unfrozen
-func (b *Builder) NewImplicitFlows() ([]*Flow, error) {
+// - on last block in cycle, deposits, rewards and fees from cycle-N are unfrozen
+//
+// post-Ithaca
+// - baker reward is paid directly (to proposer and bonus to baker)
+// - baker fee is paid directly via accumulator
+// - all bakers pay deposit at migration and at end of cycle
+// - endorsing reward is minted and paid at end of cycle or burned for low participation
+func (b *Builder) NewImplicitFlows() []*model.Flow {
 	// Note: during chain bootstrap there used to be blocks without rewards
 	// and no balance updates were issued to bakers
-	flows := make([]*Flow, 0)
-	opl := OPL_BLOCK_HEADER
+	flows := make([]*model.Flow, 0)
+	id := model.OpRef{
+		L: model.OPL_BLOCK_HEADER,
+		N: -1,
+		P: -1,
+	}
 	var (
-		opn  int = -1
-		last tezos.Address
+		fees     int64 // block fees, deduct from baker reward flow
+		last     tezos.Address
+		nextType model.FlowType = model.FlowTypeInvalid
 	)
-	for _, upd := range b.block.TZ.Block.Metadata.BalanceUpdates {
-		// count individual delegate updates as separate batch operations
-		if addr := upd.Address(); !last.Equal(addr) {
+	// ignore buggy mainnet receipts at block 1409024
+	bu := b.block.TZ.Block.Metadata.BalanceUpdates
+	if b.block.Params.IsMainnet() && b.block.Height == 1409024 {
+		bu = bu[:len(bu)-2]
+	}
+	for i, u := range bu {
+		// some balance updates (mints) have no address (!)
+		// count individual baker updates as separate batch operations, when we later
+		// assign flows to implicit ops/events we use OpN to assign multiple flows
+		// to the same operation
+		addr := u.Address()
+		if addr.IsValid() && !last.Equal(addr) {
 			last = addr
-			opn++
+			id.N++
+			id.P++
 		}
-		switch upd.BalanceUpdateKind() {
-		case "contract":
-			u := upd.(*rpc.ContractBalanceUpdate)
-			acc, ok := b.AccountByAddress(u.Address())
+		switch u.Kind {
+		case "minted":
+			// Ithaca+
+			// on observing mints we identify their category fill the following
+			// credit event
+			switch u.Category {
+			case "endorsing rewards":
+				nextType = model.FlowTypeReward
+			case "baking rewards":
+				nextType = model.FlowTypeBaking
+			case "baking bonuses":
+				nextType = model.FlowTypeBonus
+			}
+		case "burned":
+			// Ithaca+
+			// only endorsing rewards can be burned here
+			acc, ok := b.AccountByAddress(addr)
 			if !ok {
-				return nil, fmt.Errorf("missing account %s", u.Address())
+				log.Errorf("block balance update %d:%d missing account %s", b.block.Height, i, addr)
+				continue
+			}
+			// treat participation burn with higher priority than seed slash
+			if u.IsRevelationBurn && !u.IsParticipationBurn {
+				// Ithaca+ seed slash (minted reward is burned right away)
+				f := model.NewFlow(b.block, acc, nil, id)
+				f.Category = model.FlowCategoryBalance
+				f.Operation = model.FlowTypeNonceRevelation
+				f.AmountIn = u.Change  // event is balance neutral
+				f.AmountOut = u.Change // event is balance neutral
+				f.IsBurned = true
+				flows = append(flows, f)
+			} else {
+				// Ithaca+ endorsement slash (minted reward is burned right away)
+				f := model.NewFlow(b.block, acc, nil, id)
+				f.Category = model.FlowCategoryBalance
+				f.Operation = model.FlowTypeReward
+				f.AmountIn = u.Change  // event is balance neutral
+				f.AmountOut = u.Change // event is balance neutral
+				f.IsBurned = true
+				flows = append(flows, f)
+			}
+		case "accumulator":
+			if u.Category == "block fees" {
+				fees = -u.Change
+			}
+		case "contract":
+			acc, ok := b.AccountByAddress(addr)
+			if !ok {
+				log.Errorf("block balance update %d:%d missing account %s", b.block.Height, i, addr)
+				continue
 			}
 			switch u.Origin {
 			case "", "block":
 				if u.Change < 0 {
-					// baking: deposits paid from balance
-					f := NewFlow(b.block, acc, nil, opn, opl, opn, 0, 0)
-					f.Category = FlowCategoryBalance
-					f.Operation = FlowTypeBaking
-					f.AmountOut = -u.Change // note the negation!
-					flows = append(flows, f)
+					// baking: deposit paid from balance
+					if b.block.Params.Version < 12 {
+						// pre-Ithaca deposits go to baking op
+						f := model.NewFlow(b.block, acc, nil, id)
+						f.Category = model.FlowCategoryBalance
+						f.Operation = model.FlowTypeBaking
+						f.AmountOut = -u.Change // note the negation!
+						flows = append(flows, f)
+					} else {
+						// post-Ithaca deposits are explicit and go to deposit op
+						f := model.NewFlow(b.block, acc, nil, id)
+						f.Category = model.FlowCategoryBalance
+						f.Operation = model.FlowTypeDeposit
+						f.AmountOut = -u.Change // note the negation!
+						flows = append(flows, f)
+					}
 				} else {
-					// payout: credit unfrozen deposits, rewards and fees
-					f := NewFlow(b.block, acc, nil, opn, opl, opn, 0, 0)
-					f.Category = FlowCategoryBalance
-					f.Operation = FlowTypeInternal
-					f.AmountIn = u.Change
-					f.IsUnfrozen = true
-					f.TokenGenMin = 1
-					flows = append(flows, f)
+					if b.block.Params.Version < 12 {
+						// pre-Ithaca payout: credit unfrozen deposits, rewards and fees
+						f := model.NewFlow(b.block, acc, nil, id)
+						f.Category = model.FlowCategoryBalance
+						f.Operation = model.FlowTypeInternal
+						f.AmountIn = u.Change
+						f.TokenGenMin = 1
+						flows = append(flows, f)
+					} else {
+						if nextType.IsValid() {
+							// post-Ithaca payout: credit minted rewards directly to balance
+							// deduct block fee from baker reward since we handle fee payments
+							// explicitly across all ops. The Op indexer will later add
+							// all earned block fees to the first bake operation (which pays the
+							// proposer reward).
+							f := model.NewFlow(b.block, acc, nil, id)
+							f.Category = model.FlowCategoryBalance
+							f.Operation = nextType
+							f.AmountIn = u.Change - fees
+							f.TokenGenMin = 1
+							flows = append(flows, f)
+							// add fee flow
+							if fees > 0 {
+								f = model.NewFlow(b.block, acc, nil, id)
+								f.Category = model.FlowCategoryBalance
+								f.Operation = nextType
+								f.AmountIn = fees
+								f.IsFee = true
+								f.TokenGenMin = 1
+								flows = append(flows, f)
+								fees = 0
+							}
+							// reset next type
+							nextType = model.FlowTypeInvalid
+						} else {
+							// post-Ithaca: credit refunded deposit to balance
+							// Not: operation is not `deposit` because freezer
+							// flow already creates an unfreeze event
+							f := model.NewFlow(b.block, acc, nil, id)
+							f.Category = model.FlowCategoryBalance
+							f.Operation = model.FlowTypeInternal
+							f.AmountIn = u.Change
+							flows = append(flows, f)
+						}
+					}
 				}
 			case "migration":
-				// Florence v009+
-				f := NewFlow(b.block, acc, nil, opn, opl, opn, 0, 0)
-				f.Category = FlowCategoryBalance
-				f.Operation = FlowTypeInvoice
-				f.AmountIn = u.Change
-				f.TokenGenMin = 1
-				flows = append(flows, f)
+				if b.block.Params.Version < 12 {
+					// Florence v009+
+					f := model.NewFlow(b.block, acc, nil, id)
+					f.Category = model.FlowCategoryBalance
+					f.Operation = model.FlowTypeInvoice
+					f.AmountIn = u.Change
+					f.TokenGenMin = 1
+					flows = append(flows, f)
+				} else {
+					// Ithanca v012 migration extra deposit freeze or refund
+					// keep op=internal to not create operation
+					if u.Change < 0 {
+						// extra deposit paid
+						f := model.NewFlow(b.block, acc, nil, id)
+						f.Category = model.FlowCategoryBalance
+						f.Operation = model.FlowTypeInternal
+						f.AmountOut = -u.Change // note the negation!
+						flows = append(flows, f)
+					} else {
+						// legacy deposit refunded, use op internal
+						// to not create a deposit operation
+						f := model.NewFlow(b.block, acc, nil, id)
+						f.Category = model.FlowCategoryBalance
+						f.Operation = model.FlowTypeInternal
+						f.AmountIn = u.Change
+						flows = append(flows, f)
+					}
+				}
 			}
 		case "freezer":
-			u := upd.(*rpc.FreezerBalanceUpdate)
-			acc, ok := b.AccountByAddress(u.Address())
+			acc, ok := b.AccountByAddress(addr)
 			if !ok {
-				return nil, fmt.Errorf("missing account %s", u.Address())
+				log.Errorf("block balance update %d:%d missing account %s", b.block.Height, i, addr)
+				continue
 			}
+			// pre/post-Ithaca
 			if u.Change > 0 {
 				// baking: frozen deposits and rewards
 				switch u.Category {
 				case "deposits":
-					f := NewFlow(b.block, acc, nil, opn, opl, opn, 0, 0)
-					f.Category = FlowCategoryDeposits
-					f.Operation = FlowTypeBaking
-					f.AmountIn = u.Change
-					f.IsFrozen = true
-					flows = append(flows, f)
+					if b.block.Params.Version < 12 {
+						// pre-Ithaca deposits are added to baking op type
+						f := model.NewFlow(b.block, acc, nil, id)
+						f.Category = model.FlowCategoryDeposits
+						f.Operation = model.FlowTypeBaking
+						f.AmountIn = u.Change
+						f.IsFrozen = true
+						flows = append(flows, f)
+					} else {
+						// post-Ithaca deposits are explicit and go to deposit op type
+						f := model.NewFlow(b.block, acc, nil, id)
+						f.Category = model.FlowCategoryDeposits
+						f.Operation = model.FlowTypeDeposit
+						f.AmountIn = u.Change
+						f.IsFrozen = true
+						flows = append(flows, f)
+					}
 				case "rewards":
-					f := NewFlow(b.block, acc, nil, opn, opl, opn, 0, 0)
-					f.Category = FlowCategoryRewards
-					f.Operation = FlowTypeBaking
+					f := model.NewFlow(b.block, acc, nil, id)
+					f.Category = model.FlowCategoryRewards
+					f.Operation = model.FlowTypeBaking
 					f.AmountIn = u.Change
 					f.IsFrozen = true
 					flows = append(flows, f)
@@ -93,43 +237,43 @@ func (b *Builder) NewImplicitFlows() ([]*Flow, error) {
 				// when cycle is set and > N-5 then this is a seed nonce slashing
 				// because the baker did not publish nonces
 				cycle := u.Cycle()
-				isSeedNonceSlashing := cycle > 0 && cycle > b.block.Cycle-b.block.Params.PreservedCycles
+				isSeedNonceSlashing := cycle > 0 && cycle > b.block.Cycle-b.block.Params.PreservedCycles && u.Origin != "migration"
 				switch u.Category {
-				case "deposits":
-					f := NewFlow(b.block, acc, nil, opn, opl, opn, 0, 0)
-					f.Category = FlowCategoryDeposits
-					f.Operation = FlowTypeInternal
+				case "deposits", "legacy_deposits":
+					f := model.NewFlow(b.block, acc, nil, id)
+					f.Category = model.FlowCategoryDeposits
+					f.Operation = model.FlowTypeInternal
 					f.AmountOut = -u.Change
 					f.IsUnfrozen = true
 					flows = append(flows, f)
-				case "rewards":
+				case "rewards", "legacy_rewards":
 					if isSeedNonceSlashing {
-						f := NewFlow(b.block, acc, nil, opn, opl, opn, 0, 0)
-						f.Category = FlowCategoryRewards
-						f.Operation = FlowTypeNonceRevelation
+						f := model.NewFlow(b.block, acc, nil, id)
+						f.Category = model.FlowCategoryRewards
+						f.Operation = model.FlowTypeNonceRevelation
 						f.AmountOut = -u.Change
 						f.IsBurned = true
 						flows = append(flows, f)
 					} else {
-						f := NewFlow(b.block, acc, nil, opn, opl, opn, 0, 0)
-						f.Category = FlowCategoryRewards
-						f.Operation = FlowTypeInternal
+						f := model.NewFlow(b.block, acc, nil, id)
+						f.Category = model.FlowCategoryRewards
+						f.Operation = model.FlowTypeInternal
 						f.AmountOut = -u.Change
 						f.IsUnfrozen = true
 						flows = append(flows, f)
 					}
-				case "fees":
+				case "fees", "legacy_fees":
 					if isSeedNonceSlashing {
-						f := NewFlow(b.block, acc, nil, opn, opl, opn, 0, 0)
-						f.Category = FlowCategoryFees
-						f.Operation = FlowTypeNonceRevelation
+						f := model.NewFlow(b.block, acc, nil, id)
+						f.Category = model.FlowCategoryFees
+						f.Operation = model.FlowTypeNonceRevelation
 						f.AmountOut = -u.Change
 						f.IsBurned = true
 						flows = append(flows, f)
 					} else {
-						f := NewFlow(b.block, acc, nil, opn, opl, opn, 0, 0)
-						f.Category = FlowCategoryFees
-						f.Operation = FlowTypeInternal
+						f := model.NewFlow(b.block, acc, nil, id)
+						f.Category = model.FlowCategoryFees
+						f.Operation = model.FlowTypeInternal
 						f.AmountOut = -u.Change
 						f.IsUnfrozen = true
 						flows = append(flows, f)
@@ -138,61 +282,81 @@ func (b *Builder) NewImplicitFlows() ([]*Flow, error) {
 			}
 		}
 	}
-	return flows, nil
+	return flows
 }
 
-func (b *Builder) NewSubsidyFlow(acc *Account, amount int64, n, p int) *Flow {
-	f := NewFlow(b.block, acc, nil, n, OPL_BLOCK_HEADER, p, 0, 0)
-	f.Category = FlowCategoryBalance
-	f.Operation = FlowTypeSubsidy
+func (b *Builder) NewSubsidyFlow(acc *model.Account, amount int64, id model.OpRef) *model.Flow {
+	f := model.NewFlow(b.block, acc, nil, id)
+	f.Category = model.FlowCategoryBalance
+	f.Operation = model.FlowTypeSubsidy
 	f.AmountIn = amount
 	return f
 }
 
-func (b *Builder) NewInvoiceFlow(acc *Account, amount int64, n, p int) *Flow {
-	f := NewFlow(b.block, acc, nil, n, OPL_PROTOCOL_UPGRADE, p, 0, 0)
-	f.Category = FlowCategoryBalance
-	f.Operation = FlowTypeInvoice
+func (b *Builder) NewInvoiceFlow(acc *model.Account, amount int64, id model.OpRef) *model.Flow {
+	f := model.NewFlow(b.block, acc, nil, id)
+	f.Category = model.FlowCategoryBalance
+	f.Operation = model.FlowTypeInvoice
 	f.AmountIn = amount
 	return f
 }
 
-func (b *Builder) NewAirdropFlow(acc *Account, amount int64, n, p int) *Flow {
-	f := NewFlow(b.block, acc, nil, n, OPL_PROTOCOL_UPGRADE, p, 0, 0)
-	f.Category = FlowCategoryBalance
-	f.Operation = FlowTypeAirdrop
+func (b *Builder) NewAirdropFlow(acc *model.Account, amount int64, id model.OpRef) *model.Flow {
+	f := model.NewFlow(b.block, acc, nil, id)
+	f.Category = model.FlowCategoryBalance
+	f.Operation = model.FlowTypeAirdrop
 	f.AmountIn = amount
 	return f
 }
 
-func (b *Builder) NewEndorserFlows(acc *Account, upd rpc.BalanceUpdates, n, l, p int) ([]*Flow, error) {
-	// Note: during chain bootstrap there used to be blocks without rewards
-	// and no balance updates were issued to endorsers
-	flows := make([]*Flow, 0)
-	for _, v := range upd {
-		switch v.BalanceUpdateKind() {
+func (b *Builder) NewActivationFlow(acc *model.Account, aop *rpc.Activation, id model.OpRef) []*model.Flow {
+	bal := aop.Fees()
+	if len(bal) < 1 {
+		log.Warnf("Empty balance update for activation op at height %d", b.block.Height)
+	}
+	f := model.NewFlow(b.block, acc, nil, id)
+	f.Category = model.FlowCategoryBalance
+	f.Operation = model.FlowTypeActivation
+	for _, u := range bal {
+		switch u.Kind {
+		case "contract":
+			f.AmountIn = u.Amount()
+		}
+	}
+	f.TokenGenMin = 1
+	f.TokenGenMax = 1
+	b.block.Flows = append(b.block.Flows, f)
+	return []*model.Flow{f}
+}
+
+// Note: during chain bootstrap there used to be blocks without rewards
+//       and no balance updates were issued to endorsers
+// Note: on Ithaca balance updates are empty since deposit/reward is paid
+//       before cycle start (technically at cycle end)
+func (b *Builder) NewEndorserFlows(acc *model.Account, bal rpc.BalanceUpdates, id model.OpRef) []*model.Flow {
+	flows := make([]*model.Flow, 0)
+	for _, u := range bal {
+		switch u.Kind {
 		case "contract":
 			// deposits paid from balance
-			u := v.(*rpc.ContractBalanceUpdate)
-			f := NewFlow(b.block, acc, nil, n, l, p, 0, 0)
-			f.Category = FlowCategoryBalance
-			f.Operation = FlowTypeEndorsement
+			f := model.NewFlow(b.block, acc, nil, id)
+			f.Category = model.FlowCategoryBalance
+			f.Operation = model.FlowTypeEndorsement
 			f.AmountOut = -u.Change // note the negation!
 			flows = append(flows, f)
 		case "freezer":
-			u := v.(*rpc.FreezerBalanceUpdate)
 			switch u.Category {
 			case "deposits":
-				f := NewFlow(b.block, acc, nil, n, l, p, 0, 0)
-				f.Category = FlowCategoryDeposits
-				f.Operation = FlowTypeEndorsement
+				f := model.NewFlow(b.block, acc, nil, id)
+				f.Category = model.FlowCategoryDeposits
+				f.Operation = model.FlowTypeEndorsement
 				f.AmountIn = u.Change
 				f.IsFrozen = true
 				flows = append(flows, f)
 			case "rewards":
-				f := NewFlow(b.block, acc, nil, n, l, p, 0, 0)
-				f.Category = FlowCategoryRewards
-				f.Operation = FlowTypeEndorsement
+				f := model.NewFlow(b.block, acc, nil, id)
+				f.Category = model.FlowCategoryRewards
+				f.Operation = model.FlowTypeEndorsement
 				f.AmountIn = u.Change
 				f.IsFrozen = true
 				flows = append(flows, f)
@@ -200,288 +364,229 @@ func (b *Builder) NewEndorserFlows(acc *Account, upd rpc.BalanceUpdates, n, l, p
 		}
 	}
 	b.block.Flows = append(b.block.Flows, flows...)
-	return flows, nil
+	return flows
 }
 
-func (b *Builder) NewActivationFlow(acc *Account, aop *rpc.AccountActivationOp, n, l, p, c int) ([]*Flow, error) {
-	if l := len(aop.Metadata.BalanceUpdates); l != 1 {
-		log.Warnf("Unexpected %d balance updates for activation op at height %d", l, b.block.Height)
-	}
-	f := NewFlow(b.block, acc, nil, n, l, p, c, 0)
-	f.Category = FlowCategoryBalance
-	f.Operation = FlowTypeActivation
-	f.AmountIn = aop.Metadata.BalanceUpdates[0].(*rpc.ContractBalanceUpdate).Change
-	f.TokenGenMin = 1
-	f.TokenGenMax = 1
-	b.block.Flows = append(b.block.Flows, f)
-	return []*Flow{f}, nil
-}
-
-// used for internal an non-internal delegations
-func (b *Builder) NewDelegationFlows(src, ndlg, odlg *Account, upd rpc.BalanceUpdates, n, p, l, c, i int) ([]*Flow, error) {
-	flows := make([]*Flow, 0)
-	var feespaid int64
-	for _, v := range upd {
-		switch v.BalanceUpdateKind() {
+// injected by the baker only
+func (b *Builder) NewSeedNonceFlows(bal rpc.BalanceUpdates, id model.OpRef) []*model.Flow {
+	flows := make([]*model.Flow, 0)
+	for _, u := range bal {
+		switch u.Kind {
+		case "freezer":
+			// before Ithaca
+			f := model.NewFlow(b.block, b.block.Baker.Account, nil, id)
+			f.Category = model.FlowCategoryRewards
+			f.Operation = model.FlowTypeNonceRevelation
+			f.AmountIn = u.Change
+			f.IsFrozen = true
+			flows = append(flows, f)
 		case "contract":
-			// fees paid by src
-			u := v.(*rpc.ContractBalanceUpdate)
-			f := NewFlow(b.block, src, b.block.Baker, n, l, p, c, i)
-			f.Category = FlowCategoryBalance
-			f.Operation = FlowTypeDelegation
+			// after Ithaca (not frozen, goes to block proposer)
+			f := model.NewFlow(b.block, b.block.Proposer.Account, nil, id)
+			f.Category = model.FlowCategoryBalance
+			f.Operation = model.FlowTypeNonceRevelation
+			f.AmountIn = u.Change
+			flows = append(flows, f)
+		}
+	}
+	b.block.Flows = append(b.block.Flows, flows...)
+	return flows
+}
+
+// works for double-bake, double-endorse, double-preendorse
+func (b *Builder) NewDenunciationFlows(accuser, offender *model.Baker, bal rpc.BalanceUpdates, id model.OpRef) []*model.Flow {
+	flows := make([]*model.Flow, 0)
+	for _, u := range bal {
+		// penalties
+		// pre-Ithaca: kind=freezer & amount < 0 (up to 3 categories)
+		// post-Ithaca: kind=freezer & amount < 0
+		// rewards
+		// pre-Ithaca: kind=freezer & amount > 0
+		// post-Ithaca: kind=contract
+		switch u.Kind {
+		case "freezer":
+			switch u.Category {
+			case "rewards":
+				if u.Change > 0 {
+					// pre-Ithaca accuser reward
+					f := model.NewFlow(b.block, accuser.Account, offender.Account, id)
+					f.Operation = model.FlowTypePenalty
+					f.Category = model.FlowCategoryRewards
+					f.AmountIn = u.Change
+					f.IsFrozen = true
+					flows = append(flows, f)
+				} else {
+					// offender penalty
+					f := model.NewFlow(b.block, offender.Account, accuser.Account, id)
+					f.Operation = model.FlowTypePenalty
+					f.Category = model.FlowCategoryRewards
+					f.AmountOut = -u.Change
+					f.IsFrozen = true
+					f.IsBurned = true
+					flows = append(flows, f)
+				}
+			case "deposits":
+				// pre&post-Ithaca offender penalty
+				f := model.NewFlow(b.block, offender.Account, accuser.Account, id)
+				f.Operation = model.FlowTypePenalty
+				f.Category = model.FlowCategoryDeposits
+				f.AmountOut = -u.Change
+				f.IsFrozen = true
+				f.IsBurned = true
+				flows = append(flows, f)
+			case "fees":
+				// pre-Ithaca offender penalty
+				f := model.NewFlow(b.block, offender.Account, accuser.Account, id)
+				f.Operation = model.FlowTypePenalty
+				f.Category = model.FlowCategoryFees
+				f.AmountOut = -u.Change
+				f.IsFrozen = true
+				f.IsBurned = true
+				flows = append(flows, f)
+			}
+
+		case "contract":
+			// post-Ithaca reward
+			f := model.NewFlow(b.block, accuser.Account, offender.Account, id)
+			f.Operation = model.FlowTypePenalty
+			f.Category = model.FlowCategoryBalance // not frozen (!)
+			f.AmountIn = u.Change
+			flows = append(flows, f)
+		}
+	}
+	b.block.Flows = append(b.block.Flows, flows...)
+	return flows
+}
+
+// Fees for manager operations (optional, i.e. sender may set to zero,
+// for batch ops fees may also be paid by first op in batch)
+func (b *Builder) NewFeeFlows(src *model.Account, fees rpc.BalanceUpdates, id model.OpRef) ([]*model.Flow, int64) {
+	var sum int64
+	flows := make([]*model.Flow, 0)
+	typ := model.MapFlowType(id.Kind)
+	for _, u := range fees {
+		if u.Change == 0 {
+			continue
+		}
+		switch u.Kind {
+		case "contract":
+			// pre/post-Ithaca fees paid by src
+			f := model.NewFlow(b.block, src, b.block.Proposer.Account, id)
+			f.Category = model.FlowCategoryBalance
+			f.Operation = typ
 			f.AmountOut = -u.Change // note the negation!
 			f.IsFee = true
-			feespaid -= u.Change
+			sum += -u.Change
 			flows = append(flows, f)
 		case "freezer":
-			// fees received by baker
-			u := v.(*rpc.FreezerBalanceUpdate)
+			// pre-Ithaca: fees paid to baker
 			switch u.Category {
 			case "fees":
-				f := NewFlow(b.block, b.block.Baker, src, n, l, p, c, i)
-				f.Category = FlowCategoryFees
-				f.Operation = FlowTypeDelegation
+				f := model.NewFlow(b.block, b.block.Proposer.Account, src, id)
+				f.Category = model.FlowCategoryFees
+				f.Operation = typ
 				f.AmountIn = u.Change
 				f.IsFrozen = true
 				flows = append(flows, f)
 			}
+			// case "accumulator":
+			// post-Ithaca: unused
 		}
 	}
 
-	balance := src.Balance()
+	// delegation change is handled outside
+	return flows, sum
+}
+
+func (b *Builder) NewRevealFlows(src *model.Account, bkr *model.Baker, fees rpc.BalanceUpdates, id model.OpRef) []*model.Flow {
+	flows, feespaid := b.NewFeeFlows(src, fees, id)
+
+	// if src is delegated (and not baker, subtract paid fees from delegated balance
+	if feespaid > 0 && bkr != nil && !src.IsBaker {
+		f := model.NewFlow(b.block, bkr.Account, src, id)
+		f.Category = model.FlowCategoryDelegation
+		f.Operation = model.FlowTypeReveal
+		f.AmountOut = feespaid
+		flows = append(flows, f)
+	}
+
+	b.block.Flows = append(b.block.Flows, flows...)
+	return flows
+}
+
+// used for internal an non-internal delegations
+func (b *Builder) NewDelegationFlows(src *model.Account, newbkr, oldbkr *model.Baker, fees rpc.BalanceUpdates, id model.OpRef) []*model.Flow {
+	// apply fees first
+	flows, feespaid := b.NewFeeFlows(src, fees, id)
 	var pending int64
+	balance := src.Balance()
 
 	// if delegation is renewed/duplicate, handle fee out-flow only
-	if ndlg != nil && odlg != nil && ndlg.RowId == odlg.RowId {
+	if newbkr != nil && oldbkr != nil && newbkr.AccountId == oldbkr.AccountId {
 		// create flow only if fees are paid
-		if feespaid > 0 && odlg.RowId != src.RowId {
-			f := NewFlow(b.block, odlg, src, n, l, p, c, i)
-			f.Category = FlowCategoryDelegation
-			f.Operation = FlowTypeDelegation
+		if feespaid > 0 && !src.IsBaker {
+			f := model.NewFlow(b.block, oldbkr.Account, src, id)
+			f.Category = model.FlowCategoryDelegation
+			f.Operation = model.FlowTypeDelegation
 			f.AmountOut = feespaid // deduct this operation's fees only
 			flows = append(flows, f)
 		}
 	} else {
-		// handle any change in delegate
+		// handle any change in baker
 
 		// source account may have run multiple ops in the same block, so the
 		// (re-)delegated balance must be adjusted by all pending updates
 		// because they have already created delegation out-flows
 		for _, f := range b.block.Flows {
-			if f.AccountId == src.RowId && f.Category == FlowCategoryBalance {
+			if f.AccountId == src.RowId && f.Category == model.FlowCategoryBalance {
 				pending += f.AmountOut - f.AmountIn
 			}
 		}
 
-		// if src is already delegated, create an (un)delegation flow for the old delegate
-		// unless its self-delegation
-		if odlg != nil && odlg.RowId != src.RowId {
-			f := NewFlow(b.block, odlg, src, n, l, p, c, i)
-			f.Category = FlowCategoryDelegation
-			f.Operation = FlowTypeDelegation
-			f.AmountOut = balance - pending // deduct difference without fees
+		// if src is already delegated, create an (un)delegation flow from old baker
+		// also cover the case where src registers as baker
+		if oldbkr != nil {
+			f := model.NewFlow(b.block, oldbkr.Account, src, id)
+			f.Category = model.FlowCategoryDelegation
+			f.Operation = model.FlowTypeDelegation
+			f.AmountOut = balance - pending // deduct difference including fees
 			flows = append(flows, f)
 		}
 
-		// create delegation to new delegate using balance minus delegation fees from above
+		// create delegation to new baker using balance minus delegation fees from above
 		// and minus pending balance updates, unless its a self-delegation
-		// (i.e. delegate registration)
-		if ndlg != nil && ndlg.RowId != src.RowId && balance-pending-feespaid > 0 {
-			f := NewFlow(b.block, ndlg, src, n, l, p, c, i)
-			f.Category = FlowCategoryDelegation
-			f.Operation = FlowTypeDelegation
-			f.AmountIn = balance - feespaid - pending
+		// (i.e. baker registration)
+		if newbkr != nil && !src.IsBaker && balance-pending-feespaid > 0 {
+			f := model.NewFlow(b.block, newbkr.Account, src, id)
+			f.Category = model.FlowCategoryDelegation
+			f.Operation = model.FlowTypeDelegation
+			f.AmountIn = balance - feespaid - pending // add difference without fees
 			flows = append(flows, f)
 		}
 	}
-	b.block.Flows = append(b.block.Flows, flows...)
-	return flows, nil
-}
 
-func (b *Builder) NewRevealFlows(src, dlg *Account, upd rpc.BalanceUpdates, n, l, p, c int) ([]*Flow, error) {
-	flows := make([]*Flow, 0)
-	// fees are optional
-	var feespaid int64
-	for _, v := range upd {
-		switch v.BalanceUpdateKind() {
-		case "contract":
-			// fees paid by src
-			u := v.(*rpc.ContractBalanceUpdate)
-			f := NewFlow(b.block, src, b.block.Baker, n, l, p, c, 0)
-			f.Category = FlowCategoryBalance
-			f.Operation = FlowTypeReveal
-			f.AmountOut = -u.Change // note the negation!
-			f.IsFee = true
-			feespaid -= u.Change
-			flows = append(flows, f)
-		case "freezer":
-			// fees received by baker
-			u := v.(*rpc.FreezerBalanceUpdate)
-			switch u.Category {
-			case "fees":
-				f := NewFlow(b.block, b.block.Baker, src, n, l, p, c, 0)
-				f.Category = FlowCategoryFees
-				f.Operation = FlowTypeReveal
-				f.AmountIn = u.Change
-				f.IsFrozen = true
-				flows = append(flows, f)
-			}
-		}
-	}
-
-	// if src is delegated subtract paid fees from delegated balance if not self delegate
-	if feespaid > 0 && dlg != nil && dlg.RowId != src.RowId {
-		f := NewFlow(b.block, dlg, src, n, l, p, c, 0)
-		f.Category = FlowCategoryDelegation
-		f.Operation = FlowTypeReveal
-		f.AmountOut = feespaid // deduct fees
-		flows = append(flows, f)
-	}
 	b.block.Flows = append(b.block.Flows, flows...)
-	return flows, nil
-}
-
-// injected by the baker only
-func (b *Builder) NewSeedNonceFlows(upd rpc.BalanceUpdates, n, l, p int) ([]*Flow, error) {
-	flows := make([]*Flow, 0)
-	for _, v := range upd {
-		switch v.BalanceUpdateKind() {
-		case "freezer":
-			u := v.(*rpc.FreezerBalanceUpdate)
-			switch u.Category {
-			case "rewards":
-				f := NewFlow(b.block, b.block.Baker, nil, n, l, p, 0, 0)
-				f.Category = FlowCategoryRewards
-				f.Operation = FlowTypeNonceRevelation
-				f.AmountIn = u.Change
-				f.IsFrozen = true
-				flows = append(flows, f)
-			}
-		}
-	}
-	b.block.Flows = append(b.block.Flows, flows...)
-	return flows, nil
-}
-
-// FIXME: mark burned amount (difficult because Tezos not always burns 50% exact)
-func (b *Builder) NewDoubleBakingFlows(accuser, offender *Account, upd rpc.BalanceUpdates, n, l, p int) ([]*Flow, error) {
-	flows := make([]*Flow, 0)
-	for i, v := range upd {
-		// freezer updates only
-		u := v.(*rpc.FreezerBalanceUpdate)
-		if i == len(upd)-1 {
-			// accuser reward
-			switch u.Category {
-			case "rewards":
-				f := NewFlow(b.block, accuser, offender, n, l, p, 0, 0)
-				f.Operation = FlowTypeDenunciation
-				f.Category = FlowCategoryRewards
-				f.AmountIn = u.Change
-				f.IsFrozen = true
-				flows = append(flows, f)
-			}
-		} else {
-			// offender penalty
-			f := NewFlow(b.block, offender, accuser, n, l, p, 0, 0)
-			f.Operation = FlowTypeDenunciation
-			f.AmountOut = -u.Change
-			f.IsFrozen = true
-			switch u.Category {
-			case "deposits":
-				f.Category = FlowCategoryDeposits
-			case "rewards":
-				f.Category = FlowCategoryRewards
-			case "fees":
-				f.Category = FlowCategoryFees
-			}
-			flows = append(flows, f)
-		}
-	}
-	b.block.Flows = append(b.block.Flows, flows...)
-	return flows, nil
-}
-
-// FIXME: mark burned amount (difficult because Tezos not always burns 50% exact)
-func (b *Builder) NewDoubleEndorsingFlows(accuser, offender *Account, upd rpc.BalanceUpdates, n, l, p int) ([]*Flow, error) {
-	flows := make([]*Flow, 0)
-	for i, v := range upd {
-		// freezer updates only
-		u := v.(*rpc.FreezerBalanceUpdate)
-		if i == len(upd)-1 {
-			// accuser reward
-			switch u.Category {
-			case "rewards":
-				f := NewFlow(b.block, accuser, offender, n, l, p, 0, 0)
-				f.Operation = FlowTypeDenunciation
-				f.Category = FlowCategoryRewards
-				f.AmountIn = u.Change
-				f.IsFrozen = true
-				flows = append(flows, f)
-			}
-		} else {
-			// offender penalty
-			f := NewFlow(b.block, offender, accuser, n, l, p, 0, 0)
-			f.Operation = FlowTypeDenunciation
-			f.AmountOut = -u.Change
-			f.IsFrozen = true
-			switch u.Category {
-			case "deposits":
-				f.Category = FlowCategoryDeposits
-			case "rewards":
-				f.Category = FlowCategoryRewards
-			case "fees":
-				f.Category = FlowCategoryFees
-			}
-			flows = append(flows, f)
-		}
-	}
-	b.block.Flows = append(b.block.Flows, flows...)
-	return flows, nil
+	return flows
 }
 
 func (b *Builder) NewTransactionFlows(
-	src, dst, srcdlg, dstdlg *Account,
-	srccon, dstcon *Contract,
-	feeupd, txupd rpc.BalanceUpdates,
-	block *Block,
-	n, l, p, c int) ([]*Flow, error) {
-	flows := make([]*Flow, 0)
-	// fees are optional
-	var fees int64
-	for _, v := range feeupd {
-		switch v.BalanceUpdateKind() {
-		case "contract":
-			// fees paid by src
-			u := v.(*rpc.ContractBalanceUpdate)
-			f := NewFlow(b.block, src, b.block.Baker, n, l, p, c, 0)
-			f.Category = FlowCategoryBalance
-			f.Operation = FlowTypeTransaction
-			f.AmountOut = -u.Change // note the negation!
-			f.IsFee = true
-			fees += -u.Change
-			flows = append(flows, f)
-		case "freezer":
-			// fees received by baker
-			u := v.(*rpc.FreezerBalanceUpdate)
-			switch u.Category {
-			case "fees":
-				f := NewFlow(b.block, b.block.Baker, src, n, l, p, c, 0)
-				f.Category = FlowCategoryFees
-				f.Operation = FlowTypeTransaction
-				f.AmountIn = u.Change
-				f.IsFrozen = true
-				f.IsFee = true
-				flows = append(flows, f)
-			}
-		}
-	}
+	src, dst *model.Account,
+	sbkr, dbkr *model.Baker,
+	srccon, dstcon *model.Contract,
+	fees, bal rpc.BalanceUpdates,
+	block *model.Block,
+	id model.OpRef) []*model.Flow {
 
-	// transaction may burn, transfer and vest funds
+	// apply fees
+	flows, feespaid := b.NewFeeFlows(src, fees, id)
+
+	// transaction may burn and transfer
 	var moved, burnedAndMoved int64
-	for _, v := range txupd {
-		switch v.BalanceUpdateKind() {
+	for _, u := range bal {
+		switch u.Kind {
+		// we only consider contract in/out flows and calculate
+		// the burn even though Ithaca makes this explict
 		case "contract":
-			u := v.(*rpc.ContractBalanceUpdate)
 			if u.Change < 0 {
 				burnedAndMoved += -u.Change
 			} else {
@@ -492,20 +597,20 @@ func (b *Builder) NewTransactionFlows(
 
 	// create move and burn flows when necessary
 	if moved > 0 && dst != nil {
-		// deducted from source
-		f := NewFlow(b.block, src, dst, n, l, p, c, 0)
-		f.Category = FlowCategoryBalance
-		f.Operation = FlowTypeTransaction
+		// debit from source
+		f := model.NewFlow(b.block, src, dst, id)
+		f.Category = model.FlowCategoryBalance
+		f.Operation = model.FlowTypeTransaction
 		f.AmountOut = moved
 		f.TokenGenMin = src.TokenGenMin
 		f.TokenGenMax = src.TokenGenMax
 		f.TokenAge = block.Age(src.LastIn)
 		f.IsUnshielded = srccon != nil && srccon.Features.Contains(micheline.FeatureSapling)
 		flows = append(flows, f)
-		// credited to dest
-		f = NewFlow(b.block, dst, src, n, l, p, c, 0)
-		f.Category = FlowCategoryBalance
-		f.Operation = FlowTypeTransaction
+		// credit to dest
+		f = model.NewFlow(b.block, dst, src, id)
+		f.Category = model.FlowCategoryBalance
+		f.Operation = model.FlowTypeTransaction
 		f.AmountIn = moved
 		f.TokenGenMin = src.TokenGenMin
 		f.TokenGenMax = src.TokenGenMax
@@ -515,57 +620,56 @@ func (b *Builder) NewTransactionFlows(
 	}
 
 	if burnedAndMoved-moved > 0 {
-		// deducted from source as burn
-		f := NewFlow(b.block, src, nil, n, l, p, c, 0)
-		f.Category = FlowCategoryBalance
-		f.Operation = FlowTypeTransaction
+		// debit burn from source
+		f := model.NewFlow(b.block, src, nil, id)
+		f.Category = model.FlowCategoryBalance
+		f.Operation = model.FlowTypeTransaction
 		f.AmountOut = burnedAndMoved - moved
 		f.IsBurned = true
 		flows = append(flows, f)
 	}
 
-	// deduct from source delegation if not self delegate
-	if srcdlg != nil && srcdlg.RowId != src.RowId && fees+burnedAndMoved > 0 {
-		f := NewFlow(b.block, srcdlg, src, n, l, p, c, 0)
-		f.Category = FlowCategoryDelegation
-		f.Operation = FlowTypeTransaction
-		f.AmountOut = fees + burnedAndMoved // deduct fees and burned+moved amount
+	// debit from source delegation unless source is a baker
+	if sbkr != nil && !src.IsBaker && feespaid+burnedAndMoved > 0 {
+		f := model.NewFlow(b.block, sbkr.Account, src, id)
+		f.Category = model.FlowCategoryDelegation
+		f.Operation = model.FlowTypeTransaction
+		f.AmountOut = feespaid + burnedAndMoved // fees and amount moved
 		flows = append(flows, f)
 	}
 
-	// delegate to dest delegate unless its a self-delegate
-	if dstdlg != nil && dstdlg.RowId != dst.RowId && moved > 0 {
-		f := NewFlow(b.block, dstdlg, src, n, l, p, c, 0)
-		f.Category = FlowCategoryDelegation
-		f.Operation = FlowTypeTransaction
+	// credit to destination baker unless dest is a baker
+	if dbkr != nil && !dst.IsBaker && moved > 0 {
+		f := model.NewFlow(b.block, dbkr.Account, src, id)
+		f.Category = model.FlowCategoryDelegation
+		f.Operation = model.FlowTypeTransaction
 		f.AmountIn = moved
 		flows = append(flows, f)
 	}
 
 	b.block.Flows = append(b.block.Flows, flows...)
-	return flows, nil
+	return flows
 }
 
-// fees are paid by outer tx
+// fees are already paid by outer tx
 // burn is attributed to outer source
-// vesting contracts generate vesting flows
 func (b *Builder) NewInternalTransactionFlows(
-	origsrc, src, dst,
-	origdlg, srcdlg, dstdlg *Account,
-	srccon, dstcon *Contract,
-	txupd rpc.BalanceUpdates,
-	storage *micheline.Prim,
-	block *Block,
-	n, l, p, c, i int,
-) ([]*Flow, error) {
-	flows := make([]*Flow, 0)
+	origsrc, src, dst *model.Account,
+	origbkr, srcbkr, dstbkr *model.Baker,
+	srccon, dstcon *model.Contract,
+	bal rpc.BalanceUpdates,
+	block *model.Block,
+	id model.OpRef,
+) []*model.Flow {
+	flows := make([]*model.Flow, 0)
 
-	// transaction may burn, transfer and vest funds
+	// transaction may burn and transfer
 	var moved, burnedAndMoved int64
-	for _, v := range txupd {
-		switch v.BalanceUpdateKind() {
+	for _, u := range bal {
+		switch u.Kind {
+		// we only consider contract in/out flows and calculate
+		// the burn even though Ithaca makes this explict
 		case "contract":
-			u := v.(*rpc.ContractBalanceUpdate)
 			if u.Change < 0 {
 				burnedAndMoved += -u.Change
 			} else {
@@ -577,9 +681,9 @@ func (b *Builder) NewInternalTransactionFlows(
 	// create move and burn flows when necessary
 	if moved > 0 && dst != nil {
 		// deducted from source
-		f := NewFlow(b.block, src, dst, n, l, p, c, i)
-		f.Category = FlowCategoryBalance
-		f.Operation = FlowTypeTransaction
+		f := model.NewFlow(b.block, src, dst, id)
+		f.Category = model.FlowCategoryBalance
+		f.Operation = model.FlowTypeTransaction
 		f.AmountOut = moved
 		f.TokenGenMin = src.TokenGenMin
 		f.TokenGenMax = src.TokenGenMax
@@ -587,9 +691,9 @@ func (b *Builder) NewInternalTransactionFlows(
 		f.IsUnshielded = srccon != nil && srccon.Features.Contains(micheline.FeatureSapling)
 		flows = append(flows, f)
 		// credit to dest
-		f = NewFlow(b.block, dst, src, n, l, p, c, i)
-		f.Category = FlowCategoryBalance
-		f.Operation = FlowTypeTransaction
+		f = model.NewFlow(b.block, dst, src, id)
+		f.Category = model.FlowCategoryBalance
+		f.Operation = model.FlowTypeTransaction
 		f.AmountIn = moved
 		f.TokenGenMin = src.TokenGenMin
 		f.TokenGenMax = src.TokenGenMax
@@ -600,81 +704,61 @@ func (b *Builder) NewInternalTransactionFlows(
 
 	if burnedAndMoved-moved > 0 {
 		// Note: use outer source to burn
-		f := NewFlow(b.block, origsrc, nil, n, l, p, c, i)
-		f.Category = FlowCategoryBalance
-		f.Operation = FlowTypeTransaction
+		f := model.NewFlow(b.block, origsrc, nil, id)
+		f.Category = model.FlowCategoryBalance
+		f.Operation = model.FlowTypeTransaction
 		f.AmountOut = burnedAndMoved - moved
 		f.IsBurned = true
 		flows = append(flows, f)
-		// adjust delegated balance if not self-delegated
-		if origdlg != nil && origdlg.RowId != origsrc.RowId {
-			f = NewFlow(b.block, origdlg, origsrc, n, l, p, c, i)
-			f.Category = FlowCategoryDelegation
-			f.Operation = FlowTypeTransaction
+		// adjust delegated balance if not a baker
+		if origbkr != nil && !origsrc.IsBaker {
+			f = model.NewFlow(b.block, origbkr.Account, origsrc, id)
+			f.Category = model.FlowCategoryDelegation
+			f.Operation = model.FlowTypeTransaction
 			f.AmountOut = burnedAndMoved - moved
 			flows = append(flows, f)
 		}
 	}
 
-	// deduct moved amount from source delegation if not self delegated
-	if srcdlg != nil && srcdlg.RowId != src.RowId && moved > 0 {
-		f := NewFlow(b.block, srcdlg, src, n, l, p, c, i)
-		f.Category = FlowCategoryDelegation
-		f.Operation = FlowTypeTransaction
+	// handle delegation updates
+
+	// debut moved amount from source delegation if not baker
+	if srcbkr != nil && !src.IsBaker && moved > 0 {
+		f := model.NewFlow(b.block, srcbkr.Account, src, id)
+		f.Category = model.FlowCategoryDelegation
+		f.Operation = model.FlowTypeTransaction
 		f.AmountOut = moved
 		flows = append(flows, f)
 	}
 
-	// delegate to dest delegate unless its a self-delegate
-	if dstdlg != nil && dstdlg.RowId != dst.RowId && moved > 0 {
-		f := NewFlow(b.block, dstdlg, src, n, l, p, c, i)
-		f.Category = FlowCategoryDelegation
-		f.Operation = FlowTypeTransaction
+	// credit to dest delegate unless its a baker
+	if dstbkr != nil && !dst.IsBaker && moved > 0 {
+		f := model.NewFlow(b.block, dstbkr.Account, src, id)
+		f.Category = model.FlowCategoryDelegation
+		f.Operation = model.FlowTypeTransaction
 		f.AmountIn = moved
 		flows = append(flows, f)
 	}
 
 	b.block.Flows = append(b.block.Flows, flows...)
-	return flows, nil
+	return flows
 }
 
-func (b *Builder) NewOriginationFlows(src, dst, srcdlg, newdlg *Account, feeupd, origupd rpc.BalanceUpdates, n, l, p, c int) ([]*Flow, error) {
-	flows := make([]*Flow, 0)
-	// fees are optional
-	var fees int64
-	for _, v := range feeupd {
-		switch v.BalanceUpdateKind() {
-		case "contract":
-			// fees paid by src
-			u := v.(*rpc.ContractBalanceUpdate)
-			f := NewFlow(b.block, src, b.block.Baker, n, l, p, c, 0)
-			f.Category = FlowCategoryBalance
-			f.Operation = FlowTypeOrigination
-			f.AmountOut = -u.Change // note the negation!
-			f.IsFee = true
-			fees += -u.Change
-			flows = append(flows, f)
-		case "freezer":
-			// fees received by baker
-			u := v.(*rpc.FreezerBalanceUpdate)
-			switch u.Category {
-			case "fees":
-				f := NewFlow(b.block, b.block.Baker, src, n, l, p, c, 0)
-				f.Category = FlowCategoryFees
-				f.Operation = FlowTypeOrigination
-				f.AmountIn = u.Change
-				f.IsFrozen = true
-				flows = append(flows, f)
-			}
-		}
-	}
+func (b *Builder) NewOriginationFlows(
+	src, dst *model.Account,
+	srcbkr, newbkr *model.Baker,
+	fees, bal rpc.BalanceUpdates,
+	id model.OpRef) []*model.Flow {
+
+	flows, feespaid := b.NewFeeFlows(src, fees, id)
 
 	// origination may burn and may transfer funds
 	var moved, burnedAndMoved int64
-	for _, v := range origupd {
-		switch v.BalanceUpdateKind() {
+	for _, u := range bal {
+		switch u.Kind {
+		// we only consider contract in/out flows and calculate
+		// the burn even though Ithaca makes this explict
 		case "contract":
-			u := v.(*rpc.ContractBalanceUpdate)
 			if u.Change < 0 {
 				burnedAndMoved += -u.Change
 			} else {
@@ -685,177 +769,169 @@ func (b *Builder) NewOriginationFlows(src, dst, srcdlg, newdlg *Account, feeupd,
 
 	// create move and burn flows when necessary
 	if moved > 0 && dst != nil {
-		// deducted from source
-		f := NewFlow(b.block, src, dst, n, l, p, c, 0)
-		f.Category = FlowCategoryBalance
-		f.Operation = FlowTypeOrigination
+		// debit from source
+		f := model.NewFlow(b.block, src, dst, id)
+		f.Category = model.FlowCategoryBalance
+		f.Operation = model.FlowTypeOrigination
 		f.AmountOut = moved
 		flows = append(flows, f)
-		// credited to dest
-		f = NewFlow(b.block, dst, src, n, l, p, c, 0)
-		f.Category = FlowCategoryBalance
-		f.Operation = FlowTypeOrigination
+		// credit to dest
+		f = model.NewFlow(b.block, dst, src, id)
+		f.Category = model.FlowCategoryBalance
+		f.Operation = model.FlowTypeOrigination
 		f.AmountIn = moved
 		flows = append(flows, f)
 	}
 	if burnedAndMoved-moved > 0 {
-		// deducted from source as burn
-		f := NewFlow(b.block, src, nil, n, l, p, c, 0)
-		f.Category = FlowCategoryBalance
-		f.Operation = FlowTypeOrigination
+		// debit from source as burn
+		f := model.NewFlow(b.block, src, nil, id)
+		f.Category = model.FlowCategoryBalance
+		f.Operation = model.FlowTypeOrigination
 		f.AmountOut = burnedAndMoved - moved
 		f.IsBurned = true
 		flows = append(flows, f)
 	}
 
-	// deduct from source delegation iff not self-delegated
-	if srcdlg != nil && srcdlg.RowId != src.RowId && fees+burnedAndMoved > 0 {
-		f := NewFlow(b.block, srcdlg, src, n, l, p, c, 0)
-		f.Category = FlowCategoryDelegation
-		f.Operation = FlowTypeOrigination
-		f.AmountOut = fees + burnedAndMoved // deduct fees and burned+moved amount
+	// handle delegation updates
+
+	// debit from source delegation if not baker
+	if srcbkr != nil && !src.IsBaker && feespaid+burnedAndMoved > 0 {
+		f := model.NewFlow(b.block, srcbkr.Account, src, id)
+		f.Category = model.FlowCategoryDelegation
+		f.Operation = model.FlowTypeOrigination
+		f.AmountOut = feespaid + burnedAndMoved // fees and value moved
 		flows = append(flows, f)
 	}
 
-	// delegate when a new delegate was set
-	if newdlg != nil && moved > 0 {
-		f := NewFlow(b.block, newdlg, src, n, l, p, c, 0)
-		f.Category = FlowCategoryDelegation
-		f.Operation = FlowTypeOrigination
+	// credit to new baker when set
+	if newbkr != nil && moved > 0 {
+		f := model.NewFlow(b.block, newbkr.Account, src, id)
+		f.Category = model.FlowCategoryDelegation
+		f.Operation = model.FlowTypeOrigination
 		f.AmountIn = moved
 		flows = append(flows, f)
 	}
 
 	b.block.Flows = append(b.block.Flows, flows...)
-	return flows, nil
+	return flows
 }
 
-func (b *Builder) NewInternalOriginationFlows(origsrc, src, dst, origdlg, srcdlg, newdlg *Account, upd rpc.BalanceUpdates, n, l, p, c, i int) ([]*Flow, error) {
-	flows := make([]*Flow, 0)
-	// fees are paid by outer transaction, here we only have burned coins
+func (b *Builder) NewInternalOriginationFlows(
+	origsrc, src, dst *model.Account,
+	origbkr, srcbkr, newbkr *model.Baker,
+	bal rpc.BalanceUpdates,
+	id model.OpRef) []*model.Flow {
+
+	// fees are paid by outer transaction, here we only handle burned coins
+	flows := make([]*model.Flow, 0)
 	var burned, moved int64
-	for _, v := range upd {
-		switch v.BalanceUpdateKind() {
+	for _, u := range bal {
+		switch u.Kind {
 		case "contract":
-			u := v.(*rpc.ContractBalanceUpdate)
+			addr := u.Address()
 			switch true {
-			case u.Contract.Equal(origsrc.Address):
+			case addr.Equal(origsrc.Address):
 				// burned from original source balance
-				f := NewFlow(b.block, origsrc, nil, n, l, p, c, i)
-				f.Category = FlowCategoryBalance
-				f.Operation = FlowTypeOrigination
+				f := model.NewFlow(b.block, origsrc, nil, id)
+				f.Category = model.FlowCategoryBalance
+				f.Operation = model.FlowTypeOrigination
 				f.AmountOut = -u.Change // note the negation!
 				f.IsBurned = true
 				flows = append(flows, f)
 				burned += -u.Change
-			case u.Contract.Equal(src.Address):
+			case addr.Equal(src.Address):
 				// transfers from src contract to dst contract
-				f := NewFlow(b.block, src, dst, n, l, p, c, i)
-				f.Category = FlowCategoryBalance
-				f.Operation = FlowTypeOrigination
+				f := model.NewFlow(b.block, src, dst, id)
+				f.Category = model.FlowCategoryBalance
+				f.Operation = model.FlowTypeOrigination
 				f.AmountOut = -u.Change // note the negation!
 				flows = append(flows, f)
 				moved += -u.Change
-			case u.Contract.Equal(dst.Address):
+			case addr.Equal(dst.Address):
 				// transfers from src contract to dst contract
-				f := NewFlow(b.block, dst, src, n, l, p, c, i)
-				f.Category = FlowCategoryBalance
-				f.Operation = FlowTypeOrigination
+				f := model.NewFlow(b.block, dst, src, id)
+				f.Category = model.FlowCategoryBalance
+				f.Operation = model.FlowTypeOrigination
 				f.AmountIn = u.Change
 				flows = append(flows, f)
 			}
 		}
 	}
 
-	// deduct burn from original source delegation iff not self-delegated
-	if origdlg != nil && origdlg.RowId != origsrc.RowId && burned > 0 {
-		f := NewFlow(b.block, origdlg, origsrc, n, l, p, c, i)
-		f.Category = FlowCategoryDelegation
-		f.Operation = FlowTypeOrigination
+	// handle delegation updates
+
+	// debit burn from original source delegation iff not baker
+	if origbkr != nil && !origsrc.IsBaker && burned > 0 {
+		f := model.NewFlow(b.block, origbkr.Account, origsrc, id)
+		f.Category = model.FlowCategoryDelegation
+		f.Operation = model.FlowTypeOrigination
 		f.AmountOut = burned // deduct burned amount
 		flows = append(flows, f)
 	}
 
-	// deduct move from source delegation iff not self-delegated
-	if srcdlg != nil && srcdlg.RowId != src.RowId && moved > 0 {
-		f := NewFlow(b.block, srcdlg, src, n, l, p, c, i)
-		f.Category = FlowCategoryDelegation
-		f.Operation = FlowTypeOrigination
+	// debit moved funds from source delegation if not baker
+	if srcbkr != nil && !src.IsBaker && moved > 0 {
+		f := model.NewFlow(b.block, srcbkr.Account, src, id)
+		f.Category = model.FlowCategoryDelegation
+		f.Operation = model.FlowTypeOrigination
 		f.AmountOut = moved // deduct moved amount
 		flows = append(flows, f)
 	}
 
-	// delegate when a new delegate was set
-	if newdlg != nil && moved > 0 {
-		f := NewFlow(b.block, newdlg, src, n, l, p, c, i)
-		f.Category = FlowCategoryDelegation
-		f.Operation = FlowTypeOrigination
+	// credit moved funds to target baker when set
+	if newbkr != nil && moved > 0 {
+		f := model.NewFlow(b.block, newbkr.Account, src, id)
+		f.Category = model.FlowCategoryDelegation
+		f.Operation = model.FlowTypeOrigination
 		f.AmountIn = moved
 		flows = append(flows, f)
 	}
 
 	b.block.Flows = append(b.block.Flows, flows...)
-	return flows, nil
+	return flows
 }
 
-func (b *Builder) NewConstantRegistrationFlows(src, srcdlg *Account, feeupd, upd rpc.BalanceUpdates, n, l, p, c int) ([]*Flow, error) {
-	flows := make([]*Flow, 0)
+func (b *Builder) NewConstantRegistrationFlows(
+	src *model.Account,
+	srcbkr *model.Baker,
+	fees, bal rpc.BalanceUpdates,
+	id model.OpRef) []*model.Flow {
 
-	// fees paid by sender
-	var paid int64
-	for _, v := range feeupd {
-		switch v.BalanceUpdateKind() {
-		case "contract":
-			// fees paid by src
-			u := v.(*rpc.ContractBalanceUpdate)
-			f := NewFlow(b.block, src, b.block.Baker, n, l, p, c, 0)
-			f.Category = FlowCategoryBalance
-			f.Operation = FlowTypeConstantRegistration
-			f.AmountOut = -u.Change // note the negation!
-			f.IsFee = true
-			paid += -u.Change
-			flows = append(flows, f)
-		case "freezer":
-			// fees received by baker
-			u := v.(*rpc.FreezerBalanceUpdate)
-			switch u.Category {
-			case "fees":
-				f := NewFlow(b.block, b.block.Baker, src, n, l, p, c, 0)
-				f.Category = FlowCategoryFees
-				f.Operation = FlowTypeConstantRegistration
-				f.AmountIn = u.Change
-				f.IsFrozen = true
-				f.IsFee = true
-				flows = append(flows, f)
-			}
-		}
-	}
+	flows, feespaid := b.NewFeeFlows(src, fees, id)
 
 	// rest is burned
-	for _, v := range upd {
-		switch v.BalanceUpdateKind() {
+	var burned int64
+	for _, u := range bal {
+		switch u.Kind {
 		case "contract":
-			u := v.(*rpc.ContractBalanceUpdate)
-			// deducted from source as burn
-			f := NewFlow(b.block, src, nil, n, l, p, c, 0)
-			f.Category = FlowCategoryBalance
-			f.Operation = FlowTypeConstantRegistration
+			// debit burn from source
+			f := model.NewFlow(b.block, src, nil, id)
+			f.Category = model.FlowCategoryBalance
+			f.Operation = model.FlowTypeRegisterConstant
 			f.AmountOut = -u.Change
-			paid += -u.Change
+			burned += -u.Change
 			f.IsBurned = true
 			flows = append(flows, f)
 		}
 	}
 
-	// deduct fee+burn from original source delegation iff not self-delegated
-	if srcdlg != nil && srcdlg.RowId != src.RowId {
-		f := NewFlow(b.block, srcdlg, src, n, l, p, c, 0)
-		f.Category = FlowCategoryDelegation
-		f.Operation = FlowTypeConstantRegistration
-		f.AmountOut = paid
+	// debit burn from source delegation if not baker
+	if srcbkr != nil && !src.IsBaker && feespaid+burned > 0 {
+		f := model.NewFlow(b.block, srcbkr.Account, src, id)
+		f.Category = model.FlowCategoryDelegation
+		f.Operation = model.FlowTypeRegisterConstant
+		f.AmountOut = feespaid + burned
 		flows = append(flows, f)
 	}
 
 	b.block.Flows = append(b.block.Flows, flows...)
-	return flows, nil
+	return flows
+}
+
+// sent by baker, so no delegation update required
+// post-Ithaca only op, so no pre-Ithaca fee handling
+func (b *Builder) NewSetDepositsLimitFlows(src *model.Account, fees rpc.BalanceUpdates, id model.OpRef) []*model.Flow {
+	flows, _ := b.NewFeeFlows(src, fees, id)
+	b.block.Flows = append(b.block.Flows, flows...)
+	return flows
 }

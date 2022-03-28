@@ -48,23 +48,26 @@ type BlockBuilder interface {
 	// resolves account from id, returns nil and false when not found
 	AccountById(AccountID) (*Account, bool)
 
+	// resolves baker from address, returns nil and false when not found
+	BakerByAddress(tezos.Address) (*Baker, bool)
+
+	// resolves baker from id, returns nil and false when not found
+	BakerById(AccountID) (*Baker, bool)
+
 	// resolves contract from account id, returns nil and false when not found
 	ContractById(AccountID) (*Contract, bool)
 
 	// returns a map of all accounts referenced in the current block
 	Accounts() map[AccountID]*Account
 
-	// returns a map of all delegates referenced in the current block
-	Delegates() map[AccountID]*Account
+	// returns a map of all bakers referenced in the current block
+	Bakers() map[AccountID]*Baker
 
 	// returns a map of all contracts referenced in the current block
 	Contracts() map[AccountID]*Contract
 
 	// returns a map of all constants referenced in the current block
 	Constants() micheline.ConstantDict
-
-	// returns block rights
-	Rights(tezos.RightType) []Right
 
 	// return params at specific height
 	Params(int64) *tezos.Params
@@ -109,6 +112,13 @@ type BlockIndexer interface {
 	// DeleteCycle is invoked when an index must delete all content from
 	// a particular cycle.
 	DeleteCycle(ctx context.Context, cycle int64) error
+
+	// FinalizeSync is invoked when an the initial sync has finished. It may
+	// be used to clean and defrag tables or (re)build indexes.
+	FinalizeSync(ctx context.Context) error
+
+	// Flush flushes all indexer databases.
+	Flush(ctx context.Context) error
 
 	// Close closes the indexer and frees all associated resources, if any.
 	Close() error

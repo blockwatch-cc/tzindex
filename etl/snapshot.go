@@ -53,7 +53,6 @@ func (c *Crawler) SnapshotRequest(ctx context.Context) error {
 		c.snapch = nil
 		return err
 	}
-	return nil
 }
 
 func (c *Crawler) MaybeSnapshot(ctx context.Context) error {

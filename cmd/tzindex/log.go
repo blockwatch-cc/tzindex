@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package main
@@ -11,9 +11,15 @@ import (
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/rpc"
 	"blockwatch.cc/tzindex/etl"
+	"blockwatch.cc/tzindex/etl/cache"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/metadata"
+	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/server"
+	"blockwatch.cc/tzindex/server/explorer"
+	"blockwatch.cc/tzindex/server/series"
+	"blockwatch.cc/tzindex/server/system"
+	"blockwatch.cc/tzindex/server/tables"
 	"github.com/echa/config"
 	logpkg "github.com/echa/log"
 )
@@ -31,20 +37,21 @@ var (
 func init() {
 	config.SetDefault("logging.backend", "stdout")
 	config.SetDefault("logging.flags", "date,time,micro,utc")
-	config.SetDefault("logging.level", "info")
-	config.SetDefault("logging.blockchain", "info")
-	config.SetDefault("logging.database", "info")
-	config.SetDefault("logging.rpc", "info")
-	config.SetDefault("logging.server", "info")
 
 	// assign default loggers
 	etl.UseLogger(blocLog)
+	cache.UseLogger(blocLog)
+	model.UseLogger(blocLog)
 	index.UseLogger(blocLog)
 	metadata.UseLogger(blocLog)
 	store.UseLogger(dataLog)
 	pack.UseLogger(dataLog)
 	rpc.UseLogger(jrpcLog)
 	server.UseLogger(srvrLog)
+	explorer.UseLogger(srvrLog)
+	tables.UseLogger(srvrLog)
+	series.UseLogger(srvrLog)
+	system.UseLogger(srvrLog)
 	micheline.UseLogger(michLog)
 }
 
@@ -86,12 +93,18 @@ func initLogging() {
 
 	// assign default loggers
 	etl.UseLogger(blocLog)
+	cache.UseLogger(blocLog)
+	model.UseLogger(blocLog)
 	index.UseLogger(blocLog)
 	metadata.UseLogger(blocLog)
 	store.UseLogger(dataLog)
 	pack.UseLogger(dataLog)
 	rpc.UseLogger(jrpcLog)
 	server.UseLogger(srvrLog)
+	explorer.UseLogger(srvrLog)
+	tables.UseLogger(srvrLog)
+	server.UseLogger(srvrLog)
+	system.UseLogger(srvrLog)
 	micheline.UseLogger(michLog)
 
 	// store loggers in map
@@ -105,7 +118,7 @@ func initLogging() {
 	}
 
 	// export to server for http control
-	server.LoggerMap = subsystemLoggers
+	system.LoggerMap = subsystemLoggers
 }
 
 // setLogLevel sets the logging level for provided subsystem.  Invalid

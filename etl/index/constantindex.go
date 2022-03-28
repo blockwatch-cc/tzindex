@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -10,10 +10,8 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzgo/rpc"
-	"blockwatch.cc/tzgo/tezos"
-
-	. "blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 )
 
 const (
@@ -40,7 +38,7 @@ type ConstantIndex struct {
 	table *pack.Table
 }
 
-var _ BlockIndexer = (*ConstantIndex)(nil)
+var _ model.BlockIndexer = (*ConstantIndex)(nil)
 
 func NewConstantIndex(opts, iopts pack.Options) *ConstantIndex {
 	return &ConstantIndex{opts: opts, iopts: iopts}
@@ -63,7 +61,7 @@ func (idx *ConstantIndex) Name() string {
 }
 
 func (idx *ConstantIndex) Create(path, label string, opts interface{}) error {
-	fields, err := pack.Fields(Constant{})
+	fields, err := pack.Fields(model.Constant{})
 	if err != nil {
 		return err
 	}
@@ -126,6 +124,10 @@ func (idx *ConstantIndex) Init(path, label string, opts interface{}) error {
 	return nil
 }
 
+func (idx *ConstantIndex) FinalizeSync(_ context.Context) error {
+	return nil
+}
+
 func (idx *ConstantIndex) Close() error {
 	if idx.table != nil {
 		if err := idx.table.Close(); err != nil {
@@ -142,24 +144,19 @@ func (idx *ConstantIndex) Close() error {
 	return nil
 }
 
-func (idx *ConstantIndex) ConnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
+func (idx *ConstantIndex) ConnectBlock(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
 	ins := make([]pack.Item, 0)
 	for _, op := range block.Ops {
 		// don't process failed or unrelated ops
-		if !op.IsSuccess || op.Type != tezos.OpTypeRegisterConstant {
+		if !op.IsSuccess || op.Type != model.OpTypeRegisterConstant {
 			continue
 		}
-
-		o, ok := block.GetRpcOp(op.OpL, op.OpP, op.OpC)
-		if !ok {
-			return fmt.Errorf("constant: missing %s op [%d:%d]", op.Type, op.OpL, op.OpP)
-		}
-		gop, ok := o.(*rpc.ConstantRegistrationOp)
+		gop, ok := op.Raw.(*rpc.ConstantRegistration)
 		if !ok {
 			return fmt.Errorf("constant: %s op [%d:%d]: unexpected type %T",
-				o.OpKind(), op.OpL, op.OpP, o)
+				op.Raw.Kind(), op.Type.ListId(), op.OpP, op.Raw)
 		}
-		ins = append(ins, NewConstant(gop, op))
+		ins = append(ins, model.NewConstant(gop, op))
 	}
 
 	if len(ins) > 0 {
@@ -172,7 +169,7 @@ func (idx *ConstantIndex) ConnectBlock(ctx context.Context, block *Block, builde
 	return nil
 }
 
-func (idx *ConstantIndex) DisconnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
+func (idx *ConstantIndex) DisconnectBlock(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
 	return idx.DeleteBlock(ctx, block.Height)
 }
 
@@ -185,5 +182,14 @@ func (idx *ConstantIndex) DeleteBlock(ctx context.Context, height int64) error {
 }
 
 func (idx *ConstantIndex) DeleteCycle(ctx context.Context, cycle int64) error {
+	return nil
+}
+
+func (idx *ConstantIndex) Flush(ctx context.Context) error {
+	for _, v := range idx.Tables() {
+		if err := v.Flush(ctx); err != nil {
+			return err
+		}
+	}
 	return nil
 }

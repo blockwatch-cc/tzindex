@@ -1,4 +1,4 @@
-// Copyright (c) 2018 - 2020 Blockwatch Data Inc.
+// Copyright (c) 2018-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -11,7 +11,7 @@ import (
 	"blockwatch.cc/packdb/store"
 	"blockwatch.cc/packdb/util"
 
-	. "blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/model"
 )
 
 func (c *Crawler) Rollback(ctx context.Context, height int64, ignoreErrors bool) error {
@@ -36,7 +36,7 @@ func (c *Crawler) Rollback(ctx context.Context, height int64, ignoreErrors bool)
 	return c.reorganize(ctx, c.builder.parent, target, ignoreErrors, true)
 }
 
-func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ignoreErrors, rollbackOnly bool) error {
+func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *model.Block, ignoreErrors, rollbackOnly bool) error {
 	// prepare a list of blocks to reorganize
 	forkBlock, detach, attach, err := c.getReorganizeBlocks(ctx, formerBest, newBest, rollbackOnly)
 	if err != nil {
@@ -51,7 +51,7 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 
 	// Ensure the provided blocks match the current best chain
 	if detach.Len() != 0 {
-		firstDetachBlock := detach.Front().Value.(*Block)
+		firstDetachBlock := detach.Front().Value.(*model.Block)
 		if firstDetachBlock.Hash.String() != formerBest.Hash.String() {
 			return fmt.Errorf("REORGANIZE blocks to detach are "+
 				"not for the current best chain -- first detach block %s, "+
@@ -61,10 +61,10 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 
 	// Ensure the provided blocks are for the same fork point.
 	if attach.Len() != 0 && detach.Len() != 0 {
-		firstAttachBlock := attach.Front().Value.(*Block)
-		lastDetachBlock := detach.Back().Value.(*Block)
-		firstParentHash := firstAttachBlock.TZ.Parent()
-		lastParentHash := lastDetachBlock.TZ.Parent()
+		firstAttachBlock := attach.Front().Value.(*model.Block)
+		lastDetachBlock := detach.Back().Value.(*model.Block)
+		firstParentHash := firstAttachBlock.TZ.ParentHash()
+		lastParentHash := lastDetachBlock.TZ.ParentHash()
 		if !firstParentHash.Equal(lastParentHash) {
 			return fmt.Errorf("REORGANIZE blocks do not have the "+
 				"same fork point -- first attach parent %s, last detach "+
@@ -74,7 +74,7 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 
 	// start reorg by flushing all tables
 	if err := c.indexer.Flush(ctx); err != nil {
-		return fmt.Errorf("flushing tables: %v", err)
+		return fmt.Errorf("flushing tables: %w", err)
 	}
 
 	// Disconnect all of the blocks back to the fork point.
@@ -87,7 +87,7 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 	if detach.Len() > 0 {
 		// guaranteed not to fail
 		e := detach.Front()
-		for block, parent := e.Value.(*Block), (*Block)(nil); block != nil; block = parent {
+		for block, parent := e.Value.(*model.Block), (*model.Block)(nil); block != nil; block = parent {
 			// stop after last block has been detached
 			if e == nil {
 				break
@@ -95,22 +95,21 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 
 			// peek next block to detach, use fork block when list is empty
 			if e = e.Next(); e != nil {
-				parent = e.Value.(*Block)
+				parent = e.Value.(*model.Block)
 			} else {
 				parent = forkBlock
 			}
 
-			log.Infof("REORGANIZE: detaching block %d %v", block.Height, block.Hash)
+			log.Infof("REORGANIZE: detaching block %d %s", block.Height, block.Hash)
 
 			// we need resolved accounts to rebuild the previous balance set state
 			// so we keep identity data and rpc bundle and rebuild the current block
 			tz, bid, pid := block.TZ, block.RowId, block.ParentId
-			block.Free()
 
 			// BuildReorg() uses previous parent or fork block as parent data!
 			block, err = c.builder.BuildReorg(ctx, tz, parent)
 			if err != nil {
-				log.Errorf("REORGANIZE: failed resolving account set for block %d %v",
+				log.Errorf("REORGANIZE: failed resolving account set for block %d %s",
 					tz.Height(), tz.Hash())
 				return err
 			}
@@ -124,7 +123,7 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 			// update indexes to rollback block
 
 			// disconnect block from indexes
-			log.Infof("REORGANIZE: dropping indexes for block %d %v", block.Height, block.Hash)
+			log.Infof("REORGANIZE: dropping indexes for block %d %s", block.Height, block.Hash)
 			if err = c.indexer.DisconnectBlock(ctx, block, c.builder, ignoreErrors); err != nil {
 				return err
 			}
@@ -132,11 +131,11 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 			// flush after each detached block to make all delete/update ops durable
 			log.Infof("REORGANIZE: flushing databases")
 			if err := c.indexer.Flush(ctx); err != nil {
-				return fmt.Errorf("REORGANIZE: flushing tables failed for %d: %v", block.Height, err)
+				return fmt.Errorf("REORGANIZE: flushing tables failed for %d: %w", block.Height, err)
 			}
 
 			// rollback chain state to parent block
-			newTip := &ChainTip{
+			newTip := &model.ChainTip{
 				Name:          tip.Name,
 				Symbol:        tip.Symbol,
 				ChainId:       tip.ChainId,
@@ -153,7 +152,7 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 			if err := c.db.Update(func(dbTx store.Tx) error {
 				return dbStoreChainTip(dbTx, newTip)
 			}); err != nil {
-				return fmt.Errorf("REORGANIZE: updating block database failed for %d: %v", block.Height, err)
+				return fmt.Errorf("REORGANIZE: updating block database failed for %d: %w", block.Height, err)
 			}
 
 			// update chain tip
@@ -163,7 +162,7 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 			// cleanup, do not touch parent because we need it during next iteration
 			c.builder.CleanReorg()
 		}
-		log.Infof("REORGANIZE: rollback to fork point %v (height %d) "+
+		log.Infof("REORGANIZE: rollback to fork point %s (height %d) "+
 			"completed successfully.", tip.BestHash, tip.BestHeight)
 	}
 
@@ -182,12 +181,11 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 		}
 
 		// build from RPC block on forward reorg
-		block := e.Value.(*Block)
-		log.Infof("REORGANIZE: attaching block %d %v", block.Height, block.Hash)
+		block := e.Value.(*model.Block)
+		log.Infof("REORGANIZE: attaching block %d %s", block.Height, block.Hash)
 
 		// reuse ids when a block existed before (as orphan side chain from previous reorg)
 		tz, bid, pid := block.TZ, block.RowId, block.ParentId
-		block.Free()
 
 		// perform regular build, will generate a clean block
 		block, err := c.builder.Build(ctx, tz)
@@ -198,7 +196,6 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 
 		// reuse ids to keep existing links
 		if bid > 0 {
-			block.IsOrphan = false
 			block.RowId = bid
 		}
 		if pid > 0 {
@@ -211,13 +208,13 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 
 		// update indexes; this will also generate a unique block id
 		// when the connected block is not yet known
-		log.Infof("REORGANIZE: indexing block %d %v", block.Height, block.Hash)
+		log.Infof("REORGANIZE: indexing block %d %s", block.Height, block.Hash)
 		if err = c.indexer.ConnectBlock(ctx, block, c.builder); err != nil {
 			return err
 		}
 
 		// foreward chain tip
-		newTip := &ChainTip{
+		newTip := &model.ChainTip{
 			Name:          tip.Name,
 			Symbol:        tip.Symbol,
 			ChainId:       tip.ChainId,
@@ -249,7 +246,7 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 			return dbStoreChainTip(dbTx, newTip)
 		})
 		if err != nil {
-			return fmt.Errorf("REORGANIZE: updating block database failed for %d: %v", block.Height, err)
+			return fmt.Errorf("REORGANIZE: updating block database failed for %d: %w", block.Height, err)
 		}
 
 		// update chainstate with new version
@@ -263,10 +260,10 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 	// flush again when done
 	log.Infof("REORGANIZE: flushing databases")
 	if err := c.indexer.Flush(ctx); err != nil {
-		return fmt.Errorf("flushing tables: %v", err)
+		return fmt.Errorf("flushing tables: %w", err)
 	}
 
-	log.Infof("REORGANIZE: completed successfully at %v (height %d).",
+	log.Infof("REORGANIZE: completed successfully at %s (height %d).",
 		tip.BestHash, tip.BestHeight)
 
 	return nil
@@ -289,7 +286,7 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *Block, ig
 //  fork point        to attach (Note: all but last may exist from previous reorg)
 //
 // This function MUST be called with the chain state lock held (for reads).
-func (c *Crawler) getReorganizeBlocks(ctx context.Context, tip *Block, best *Block, rollbackOnly bool) (*Block, *list.List, *list.List, error) {
+func (c *Crawler) getReorganizeBlocks(ctx context.Context, tip *model.Block, best *model.Block, rollbackOnly bool) (*model.Block, *list.List, *list.List, error) {
 	// Nothing to detach or attach if there is no node.
 	attachBlocks := list.New()
 	detachBlocks := list.New()
@@ -334,13 +331,13 @@ findfork:
 		forkDepthSide, forkDepthMain)
 
 	// walk side chain starting at tip and register blocks for detach
-	ancestor := tip
+	ancestor := tip.Clone()
 	for ; forkDepthSide > 0; forkDepthSide-- {
 		log.Infof("REORGANIZE: will detach %d, %s", ancestor.Height, ancestor.Hash)
 
 		// make sure rpc info exists
 		if err := ancestor.FetchRPC(ctx, c.rpc); err != nil {
-			log.Errorf("REORGANIZE refetch block %d: %v", ancestor.Height, err)
+			log.Errorf("REORGANIZE refetch block %d: %s", ancestor.Height, err)
 			return nil, nil, nil, err
 		}
 
@@ -350,7 +347,7 @@ findfork:
 		// load parent block from db
 		parent, err := c.indexer.BlockByID(ctx, ancestor.ParentId)
 		if err != nil {
-			log.Errorf("REORGANIZE loading sidechain parent id %d for block %d %s: %v",
+			log.Errorf("REORGANIZE loading sidechain parent id %d for block %d %s: %s",
 				ancestor.ParentId, ancestor.Height, ancestor.Hash, err)
 			return nil, nil, nil, err
 		}
@@ -369,42 +366,42 @@ findfork:
 
 	// make sure rpc info exists
 	if err := best.FetchRPC(ctx, c.rpc); err != nil {
-		log.Errorf("REORGANIZE refetch block %d: %v", best.Height, err)
+		log.Errorf("REORGANIZE refetch block %d: %s", best.Height, err)
 		return nil, nil, nil, err
 	}
 	for block := best; forkDepthMain > 0; forkDepthMain-- {
 		// try loading parent block from db, but don't fail if it does not exist
-		h := block.TZ.Parent()
-		// log.Debugf("REORGANIZE: looking for parent block %d %v", ancestor.Height-1, h)
+		h := block.TZ.ParentHash()
+		// log.Debugf("REORGANIZE: looking for parent block %d %s", ancestor.Height-1, h)
 		if parent, err := c.indexer.BlockByHash(ctx, h, 0, 0); err != nil {
 			// when block is missing from DB, resolve as new block via RPC
 			if tz, err := c.fetchBlockByHash(ctx, h); err != nil {
-				log.Errorf("REORGANIZE failed fetching main chain block %v: %v", h, err)
+				log.Errorf("REORGANIZE failed fetching main chain block %s: %s", h, err)
 				return nil, nil, nil, err
 			} else {
 				// parent may be unknown, so leave empty and handle this case later
-				if block, err = NewBlock(tz, nil); err != nil {
-					log.Errorf("REORGANIZE failed building main chain block from %s: %v", tz.Hash(), err)
+				if block, err = model.NewBlock(tz, nil); err != nil {
+					log.Errorf("REORGANIZE failed building main chain block from %s: %s", tz.Hash(), err)
 					return nil, nil, nil, err
 				}
 			}
 		} else {
 			// block is known, so we only need to resolve the RPC data
 			if err := parent.FetchRPC(ctx, c.rpc); err != nil {
-				log.Errorf("REORGANIZE failed fetching main chain parent block: %v", err)
+				log.Errorf("REORGANIZE failed fetching main chain parent block: %s", err)
 				return nil, nil, nil, err
 			}
 			block = parent
 		}
 
 		// keep for attachement in reverse order
-		log.Infof("REORGANIZE: will attach %d, %v", block.Height, block.Hash)
+		log.Infof("REORGANIZE: will attach %d, %s", block.Height, block.Hash)
 		attachBlocks.PushFront(block)
 	}
 
 	// make sure rpc info exists for fork block
 	if err := ancestor.FetchRPC(ctx, c.rpc); err != nil {
-		log.Errorf("REORGANIZE refetch block %d: %v", ancestor.Height, err)
+		log.Errorf("REORGANIZE refetch block %d: %s", ancestor.Height, err)
 		return nil, nil, nil, err
 	}
 

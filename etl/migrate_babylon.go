@@ -1,10 +1,11 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
 
 import (
 	"context"
+	"fmt"
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/vec"
@@ -13,7 +14,49 @@ import (
 
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 )
+
+func (b *Builder) MigrateBabylon(ctx context.Context, oldparams, nextparams *tezos.Params) error {
+	log.Infof("Migrate v%03d: inserting invoices", nextparams.Version)
+	var count int
+	for n, amount := range map[string]int64{
+		"KT1DUfaMfTRZZkvZAYQT5b3byXnvqoAykc43": 500 * 1000000,
+	} {
+		addr, err := tezos.ParseAddress(n)
+		if err != nil {
+			return fmt.Errorf("decoding invoice address %s: %w", n, err)
+		}
+		acc, ok := b.AccountByAddress(addr)
+		if !ok {
+			acc, err = b.idx.LookupAccount(ctx, addr)
+			if err != nil {
+				return fmt.Errorf("loading invoice address %s: %w", n, err)
+			}
+			// insert into cache
+			b.accMap[acc.RowId] = acc
+			b.accHashMap[b.accCache.AccountHashKey(acc)] = acc
+		}
+		if err := b.AppendInvoiceOp(ctx, acc, amount, count); err != nil {
+			return err
+		}
+		count++
+	}
+
+	// babylon airdrop and KT1 delegator contract migration
+	// airdrop 1 mutez to managers
+	n, err := b.RunBabylonAirdrop(ctx, nextparams)
+	if err != nil {
+		return err
+	}
+	// upgrade KT1 contracts without code
+	if err := b.RunBabylonUpgrade(ctx, nextparams, n); err != nil {
+		return err
+	}
+
+	log.Infof("Migrate v%03d: complete", nextparams.Version)
+	return nil
+}
 
 // v005 airdrops 1 mutez to unfunded manager accounts to avoid origination burn
 func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *tezos.Params) (int, error) {
@@ -26,7 +69,7 @@ func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *tezos.Params) (
 	// The rules are:
 	// - process all originated accounts (KT1)
 	// - if it has code and is spendable allocate the manager contract (implicit account)
-	// - if it has code and is delegatble allocate the manager contract (implicit account)
+	// - if it has code and is delegatable allocate the manager contract (implicit account)
 	// - if it has no code (delegation KT1) allocate the manager contract (implicit account)
 	// - (extra side condition) implicit account is not registered as delegate
 	//
@@ -37,20 +80,18 @@ func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *tezos.Params) (
 
 	// find eligible KT1 contracts where we need to check the manager
 	managers := make([]uint64, 0)
-	contract := &model.Account{}
+	acc := &model.Account{}
 	err = pack.NewQuery("etl.addr.babylon_airdrop_eligible", table).
 		AndEqual("address_type", tezos.AddressTypeContract).
 		Stream(ctx, func(r pack.Row) error {
-			if err := r.Decode(contract); err != nil {
+			if err := r.Decode(acc); err != nil {
 				return err
 			}
 			// skip all excluded contracts that do not match the rules above
-			if contract.IsContract {
-				if !contract.IsSpendable && !contract.IsDelegatable {
-					return nil
-				}
+			if acc.IsContract && !rpc.BabylonFlags(acc.UnclaimedBalance).CanUpgrade() {
+				return nil
 			}
-			if id := contract.CreatorId.Value(); id > 0 {
+			if id := acc.CreatorId.Value(); id > 0 {
 				managers = append(managers, id)
 			}
 			return nil
@@ -64,7 +105,7 @@ func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *tezos.Params) (
 	var count int
 	err = pack.NewQuery("etl.addr.babylon_airdrop", table).
 		AndEqual("is_funded", false).
-		AndEqual("is_delegate", false).
+		AndEqual("is_baker", false).
 		AndIn("I", vec.UniqueUint64Slice(managers)). // make list unique
 		Stream(ctx, func(r pack.Row) error {
 			acc := model.AllocAccount()
@@ -204,7 +245,7 @@ func (b *Builder) RunBabylonUpgrade(ctx context.Context, params *tezos.Params, n
 
 func NeedsBabylonUpgradeAccount(a *model.Account, p *tezos.Params) bool {
 	isEligible := a.Type == tezos.AddressTypeContract && !a.IsContract
-	isEligible = isEligible && (a.IsSpendable || (!a.IsSpendable && a.IsDelegatable))
+	isEligible = isEligible && rpc.BabylonFlags(a.UnclaimedBalance).CanUpgrade()
 	return isEligible && p.Version >= 5
 }
 
@@ -212,6 +253,7 @@ func UpgradeToBabylonAccount(a *model.Account, p *tezos.Params) {
 	if !NeedsBabylonUpgradeAccount(a, p) {
 		return
 	}
+	a.UnclaimedBalance = 0
 	a.IsContract = true
 	a.IsDirty = true
 }
@@ -224,7 +266,9 @@ func NeedsBabylonUpgradeContract(c *model.Contract, p *tezos.Params) bool {
 	// babylon activation
 	isEligible := p.IsPostBabylon() && p.IsPreBabylonHeight(c.FirstSeen)
 	// contract upgrade criteria
-	isEligible = isEligible && (c.IsSpendable || (!c.IsSpendable && c.IsDelegatable))
+	isSpendable := c.Features&micheline.FeatureSpendable > 0
+	isDelegatable := c.Features&micheline.FeatureDelegatable > 0
+	isEligible = isEligible && (isSpendable || (!isSpendable && isDelegatable))
 	return isEligible
 }
 
@@ -232,10 +276,12 @@ func UpgradeToBabylon(c *model.Contract, p *tezos.Params, a *model.Account) erro
 	if !NeedsBabylonUpgradeContract(c, p) {
 		return nil
 	}
+	isSpendable := c.Features&micheline.FeatureSpendable > 0
+	isDelegatable := c.Features&micheline.FeatureDelegatable > 0
 
 	// extend call stats array by moving existing stats
 	offs := 1
-	if !c.IsSpendable && c.IsDelegatable {
+	if !isSpendable && isDelegatable {
 		offs++
 	}
 	newcs := make([]byte, offs*4+len(c.CallStats))
@@ -254,16 +300,16 @@ func UpgradeToBabylon(c *model.Contract, p *tezos.Params, a *model.Account) erro
 
 	// migrate script
 	switch true {
-	case c.IsSpendable:
+	case isSpendable:
 		script.MigrateToBabylonAddDo(mgrHash)
 		c.InterfaceHash = script.InterfaceHash()
 		c.CodeHash = script.CodeHash()
-	case !c.IsSpendable && c.IsDelegatable:
+	case !isSpendable && isDelegatable:
 		script.MigrateToBabylonSetDelegate(mgrHash)
 		c.InterfaceHash = script.InterfaceHash()
 		c.CodeHash = script.CodeHash()
 	}
-	c.Features = script.Features()
+	c.Features |= script.Features()
 	c.Interfaces = script.Interfaces()
 
 	// marshal script

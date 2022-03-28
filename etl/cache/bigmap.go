@@ -15,7 +15,69 @@ import (
 	"blockwatch.cc/tzindex/etl/model"
 )
 
-var BigmapHistoryMaxCacheSize = 32 // entries
+var (
+	BigmapHistoryMaxCacheSize = 1024  // entries
+	BigmapMaxCacheSize        = 16384 // entries
+)
+
+type BigmapCache struct {
+	cache *lru.TwoQueueCache // key := bigmap_id
+	size  int64
+	stats Stats
+}
+
+func NewBigmapCache(sz int) *BigmapCache {
+	if sz <= 0 {
+		sz = BigmapMaxCacheSize
+	}
+	c := &BigmapCache{}
+	c.cache, _ = lru.New2QWithEvict(sz, func(_, v interface{}) {
+		buf := v.([]byte)
+		c.size -= int64(len(buf))
+		atomic.AddInt64(&c.stats.Evictions, 1)
+	})
+	return c
+}
+
+func (c *BigmapCache) Add(b *model.BigmapAlloc) {
+	updated, _ := c.cache.Add(b.BigmapId, b.Data)
+	if updated {
+		atomic.AddInt64(&c.stats.Updates, 1)
+	} else {
+		c.size += int64(len(b.Data))
+		atomic.AddInt64(&c.stats.Inserts, 1)
+	}
+}
+
+func (c *BigmapCache) Drop(b *model.BigmapAlloc) {
+	c.cache.Remove(b.BigmapId)
+}
+
+func (c *BigmapCache) Purge() {
+	c.cache.Purge()
+	c.size = 0
+}
+
+func (c *BigmapCache) GetType(id int64) (*model.BigmapAlloc, bool) {
+	val, ok := c.cache.Get(id)
+	if !ok {
+		atomic.AddInt64(&c.stats.Misses, 1)
+		return nil, false
+	}
+	b := &model.BigmapAlloc{
+		BigmapId: id,
+		Data:     val.([]byte),
+	}
+	atomic.AddInt64(&c.stats.Hits, 1)
+	return b, true
+}
+
+func (c BigmapCache) Stats() Stats {
+	s := c.stats.Get()
+	s.Size = c.cache.Len()
+	s.Bytes = c.size
+	return s
+}
 
 type BigmapHistory struct {
 	BigmapId     int64
@@ -93,9 +155,12 @@ type BigmapHistoryCache struct {
 	stats Stats
 }
 
-func NewBigmapHistoryCache() *BigmapHistoryCache {
+func NewBigmapHistoryCache(sz int) *BigmapHistoryCache {
+	if sz <= 0 {
+		sz = BigmapHistoryMaxCacheSize
+	}
 	c := &BigmapHistoryCache{}
-	c.cache, _ = lru.New2QWithEvict(BigmapHistoryMaxCacheSize, func(_, v interface{}) {
+	c.cache, _ = lru.New2QWithEvict(sz, func(_, v interface{}) {
 		atomic.AddInt64(&c.size, -v.(*BigmapHistory).Size())
 		atomic.AddInt64(&c.stats.Evictions, 1)
 	})

@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"blockwatch.cc/tzstats-go"
+	"blockwatch.cc/tzpro-go"
 )
 
 type kvpairs map[string]string
@@ -189,7 +189,7 @@ func setField(dst interface{}, name, value string) error {
 
 // we assume exactly two nesting levels and add all detected schemas
 // as schema descriptors to Extra
-func fillStruct(m map[string]string, alias *tzstats.Metadata) error {
+func fillStruct(m map[string]string, alias *tzpro.Metadata) error {
 	for k, v := range m {
 		keyParts := strings.Split(k, ".")
 		ns := keyParts[0]
@@ -197,7 +197,7 @@ func fillStruct(m map[string]string, alias *tzstats.Metadata) error {
 		switch ns {
 		case "alias":
 			if alias.Alias == nil {
-				alias.Alias = &tzstats.AliasMetadata{}
+				alias.Alias = &tzpro.AliasMetadata{}
 			}
 			if len(keyParts) > 1 {
 				err = setField(alias.Alias, keyParts[1], v)
@@ -206,7 +206,7 @@ func fillStruct(m map[string]string, alias *tzstats.Metadata) error {
 			}
 		case "baker":
 			if alias.Baker == nil {
-				alias.Baker = &tzstats.BakerMetadata{}
+				alias.Baker = &tzpro.BakerMetadata{}
 			}
 			if len(keyParts) > 1 {
 				err = setField(alias.Baker, keyParts[1], v)
@@ -215,7 +215,7 @@ func fillStruct(m map[string]string, alias *tzstats.Metadata) error {
 			}
 		case "payout":
 			if alias.Payout == nil {
-				alias.Payout = &tzstats.PayoutMetadata{}
+				alias.Payout = &tzpro.PayoutMetadata{}
 			}
 			if len(keyParts) > 1 {
 				err = setField(alias.Payout, keyParts[1], v)
@@ -224,7 +224,7 @@ func fillStruct(m map[string]string, alias *tzstats.Metadata) error {
 			}
 		case "asset":
 			if alias.Asset == nil {
-				alias.Asset = &tzstats.AssetMetadata{}
+				alias.Asset = &tzpro.AssetMetadata{}
 			}
 			if len(keyParts) > 1 {
 				err = setField(alias.Asset, keyParts[1], v)
@@ -233,7 +233,7 @@ func fillStruct(m map[string]string, alias *tzstats.Metadata) error {
 			}
 		case "location":
 			if alias.Location == nil {
-				alias.Location = &tzstats.LocationMetadata{}
+				alias.Location = &tzpro.LocationMetadata{}
 			}
 			if len(keyParts) > 1 {
 				err = setField(alias.Location, keyParts[1], v)
@@ -242,7 +242,7 @@ func fillStruct(m map[string]string, alias *tzstats.Metadata) error {
 			}
 		case "domain":
 			if alias.Domain == nil {
-				alias.Domain = &tzstats.DomainMetadata{}
+				alias.Domain = &tzpro.DomainMetadata{}
 			}
 			if len(keyParts) > 1 {
 				err = setField(alias.Domain, keyParts[1], v)
@@ -251,7 +251,7 @@ func fillStruct(m map[string]string, alias *tzstats.Metadata) error {
 			}
 		case "media":
 			if alias.Media == nil {
-				alias.Media = &tzstats.MediaMetadata{}
+				alias.Media = &tzpro.MediaMetadata{}
 			}
 			if len(keyParts) > 1 {
 				err = setField(alias.Media, keyParts[1], v)
@@ -260,7 +260,7 @@ func fillStruct(m map[string]string, alias *tzstats.Metadata) error {
 			}
 		case "rights":
 			if alias.Rights == nil {
-				alias.Rights = &tzstats.RightsMetadata{}
+				alias.Rights = &tzpro.RightsMetadata{}
 			}
 			if len(keyParts) > 1 {
 				err = setField(alias.Rights, keyParts[1], v)
@@ -269,7 +269,7 @@ func fillStruct(m map[string]string, alias *tzstats.Metadata) error {
 			}
 		case "social":
 			if alias.Social == nil {
-				alias.Social = &tzstats.SocialMetadata{}
+				alias.Social = &tzpro.SocialMetadata{}
 			}
 			if len(keyParts) > 1 {
 				err = setField(alias.Social, keyParts[1], v)
@@ -278,7 +278,7 @@ func fillStruct(m map[string]string, alias *tzstats.Metadata) error {
 			}
 		case "tz16":
 			if alias.Tz16 == nil {
-				alias.Tz16 = &tzstats.Tz16Metadata{}
+				alias.Tz16 = &tzpro.Tz16Metadata{}
 			}
 			if len(keyParts) > 1 {
 				err = setField(alias.Tz16, keyParts[1], v)
@@ -287,7 +287,7 @@ func fillStruct(m map[string]string, alias *tzstats.Metadata) error {
 			}
 		case "tz21":
 			if alias.Tz21 == nil {
-				alias.Tz21 = &tzstats.Tz21Metadata{}
+				alias.Tz21 = &tzpro.Tz21Metadata{}
 			}
 			if len(keyParts) > 1 {
 				err = setField(alias.Tz21, keyParts[1], v)
@@ -296,7 +296,7 @@ func fillStruct(m map[string]string, alias *tzstats.Metadata) error {
 			}
 		case "updated":
 			if alias.Updated == nil {
-				alias.Updated = &tzstats.UpdatedMetadata{}
+				alias.Updated = &tzpro.UpdatedMetadata{}
 			}
 			err = setField(alias.Updated, keyParts[1], v)
 		default:

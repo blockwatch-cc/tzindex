@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -11,16 +11,16 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 
-	. "blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/model"
 )
 
 const (
-	MetadataPackSizeLog2         = 12
-	MetadataJournalSizeLog2      = 12
+	MetadataPackSizeLog2         = 12 // 4096
+	MetadataJournalSizeLog2      = 12 // 4096
 	MetadataCacheSize            = 4
 	MetadataFillLevel            = 100
-	MetadataIndexPackSizeLog2    = 12
-	MetadataIndexJournalSizeLog2 = 12
+	MetadataIndexPackSizeLog2    = 12 // 4096
+	MetadataIndexJournalSizeLog2 = 12 // 4096
 	MetadataIndexCacheSize       = 4
 	MetadataIndexFillLevel       = 90
 	MetadataIndexKey             = "metadata"
@@ -38,7 +38,7 @@ type MetadataIndex struct {
 	table *pack.Table
 }
 
-var _ BlockIndexer = (*MetadataIndex)(nil)
+var _ model.BlockIndexer = (*MetadataIndex)(nil)
 
 func NewMetadataIndex(opts, iopts pack.Options) *MetadataIndex {
 	return &MetadataIndex{
@@ -64,13 +64,13 @@ func (idx *MetadataIndex) Name() string {
 }
 
 func (idx *MetadataIndex) Create(path, label string, opts interface{}) error {
-	fields, err := pack.Fields(Metadata{})
+	fields, err := pack.Fields(model.Metadata{})
 	if err != nil {
 		return err
 	}
 	db, err := pack.CreateDatabase(path, idx.Key(), label, opts)
 	if err != nil {
-		return fmt.Errorf("creating %s database: %v", idx.Key(), err)
+		return fmt.Errorf("creating %s database: %w", idx.Key(), err)
 	}
 	defer db.Close()
 
@@ -128,10 +128,14 @@ func (idx *MetadataIndex) Init(path, label string, opts interface{}) error {
 	return nil
 }
 
+func (idx *MetadataIndex) FinalizeSync(_ context.Context) error {
+	return nil
+}
+
 func (idx *MetadataIndex) Close() error {
 	if idx.table != nil {
 		if err := idx.table.Close(); err != nil {
-			log.Errorf("Closing %s: %v", idx.Name(), err)
+			log.Errorf("Closing %s: %s", idx.Name(), err)
 		}
 		idx.table = nil
 	}
@@ -144,12 +148,12 @@ func (idx *MetadataIndex) Close() error {
 	return nil
 }
 
-func (idx *MetadataIndex) ConnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
+func (idx *MetadataIndex) ConnectBlock(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
 	// noop
 	return nil
 }
 
-func (idx *MetadataIndex) DisconnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
+func (idx *MetadataIndex) DisconnectBlock(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
 	// noop
 	return nil
 }
@@ -161,5 +165,14 @@ func (idx *MetadataIndex) DeleteBlock(ctx context.Context, height int64) error {
 
 func (idx *MetadataIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 	// noop
+	return nil
+}
+
+func (idx *MetadataIndex) Flush(ctx context.Context) error {
+	for _, v := range idx.Tables() {
+		if err := v.Flush(ctx); err != nil {
+			return err
+		}
+	}
 	return nil
 }

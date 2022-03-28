@@ -1,5 +1,85 @@
 # Changelog
 
+### v12.0.0 (API v012-2022-03-25/light)
+
+Ithaca consensus upgrade with new operation types, new balance updates and new deposit/reward payment mechanics. We reorganized tables by removing unnecessary data and statistics to save on-disc storage and cache memory. As Ithaca changes many concepts, terminology and transaction types we took the opportunity to overhaul the entire API, adding new baker and balance tables. With Tezos growing beyond the staking/baking use case we also decided to drop several baker/consensus data tables that were expensive to maintain, but provided limit benefits to the larger Tezos dapp ecosystem.
+
+**Refactoring**
+
+- improved RPC performance, added embedded RPC lib which reads necessary data only
+- updated balance update management to Ithaca
+- new baker table with baker specific data, saves space in account table
+- partitioned operations table (endorsements are no longer stored to save space)
+- deprecated `rights`, `snapshots`, `flows`, `income` and `governance` data
+
+**Breaking changes**
+
+- removed some fields from operation, block and account models (see below)
+- renamed operation types (see below)
+- renamed `implicit` operations to `events` (i.e. protocol activity not explicitly available as under an op hash or not available in operation receipts at all)
+- all occurences of `delegate` and `delegate_id` have been renamed to `baker` and `baker_id` for consistency and to avoid confusion with `delegator` fields
+- operation `row_id` has been deprecated in favour of a more stable `id` value
+- operation `op_n` is a unique event counter within each block (before, batch and internal operations shared the same op_n)
+- penalty operations now use `accuser` and `offender` instead of `sender` and `receiver`
+- internal operations now use `source` instead of `creator` for the outer transaction signer
+- operations in lists (block, account) no longer contain storage updates, use `storage=1` to add
+ - operating lists default to `order=desc` (most recent transactions first), use `order=asc` for previous behaviour)
+- renamed `/explorer/baker` to `/explorer/bakers`
+
+**Complete list of changes**
+
+- API: op model
+    - `/explorer/block/{hash}/operations` and `/explorer/account/{address}/operations` no longer contain storage and bigmap diffs per default, use `?storage=1` query argument to add
+    - operating lists now default to `order=desc` (i.e. they show the most recent transactions first, use `order=asc` for previous behaviour)
+    - switched `sender` and `creator` accounts on internal operations such that an internal call always lists the original signer of the outer operation as sender
+    - refactored op list ids for protocol upgrade events (`-3`), block-level events like auto (un)freeze and rewards payments (`-2`) and block header implicit operations like liquidity baking (`-1`)
+    - dropped op model fields `has_data`, `branch_height`, `branch_hash`, `branch_depth`, `is_orphan`, `is_sapling`, `entrypoint_id`, `gas_price`, `storage_size`, `has_data`
+    - renamed fields
+      - `is_implicit` to `is_event`
+      - `block_hash` to `block`
+      - `delegate_id` and `delegate` to `baker_id` and `baker`
+    - renamed operation types
+      - `seed_nonce_revelation` to `nonce_revelation`
+      - `double_baking_evidence` to `double_baking`
+      - `double_endorsement_evidence` to `double_endorsement`
+    - added new Ithaca operations and event types for Tenderbake
+      - `preendorsement` for preendorsements (only visible when block round > 0)
+      - `double_preendorsement` for double signatures on preendorsements
+      - `deposits_limit` for explicit baker deposit limit ops
+      - `deposit` for explicit deposit freeze and unfreeze events
+      - `reward` for endorsement reward payments
+      - `bonus` for baker bonus payments (i.e. including more than threshold endorsements)
+      - `subsidy` for minting liquidity baking subsidy (was type `transaction` before)
+    - reordered table columns in table API output
+- API: block model
+  - we are no longer storing orphan blocks
+  - dropped fields `endorsed_slots`, `fitness`, `is_orphan`, `parent_id`, `slot_mask`, `gas_price` and most counters such as `n_ops_contract`, `n_tx`, `n_activation`, `n_seed_nonce_revelation`, `n_double_baking_evidence`, `n_double_endorsement_evidence`, `n_endorsement`, `n_delegation`, `n_reveal`, `n_origination`, `n_proposal`, `n_ballot`, `n_register_constant`
+  - added fields `proposer`, `proposer_id`, `minted_supply`
+  - renamed fields
+    - `priority` to `round`
+    - `storage_size` to `storage_paid`
+    - `n_ops` to `n_ops_applied`
+    - `n_ops_implicit` to `n_events`
+  - reordered table columns in table API output
+- API: chain table
+  - dropped field `total_paid_bytes` (duplicate of `total_storage_bytes`)
+  - added fields `total_set_limits` and `total_preendorsements`
+  - renamed fields `*_delegates` to `*_bakers`
+  - renamed `total_double_baking_evidences` to `total_double_bakings`
+  - renamed `total_double_endorsement_evidences` to `total_double_endorsements`
+  - renamed `total_seed_nonce_revelations` to `total_nonce_revelations`
+- API: moved field protocol `deployments` from `/explorer/tip` to separate endpoint `/explorer/protocols`
+- API: account model
+  - split account and baker data into two tables
+  - dropped fields `blocks_endorsed`, `blocks_missed`, `blocks_stolen`, `slots_missed`
+  - replaced `/explorer/account/{address}/managed` with `/explorer/account/{address}/contracts`
+  - moved `/explorer/account/{address}/ballots` to `/explorer/bakers/{address}/votes`
+- API: new baker model and `/explorer/bakers/{address}` endpoint for baker-specific data
+  - `/votes` to list baker votes (defaults to descending order, i.e. newest first)
+  - `/delegations` to list baker delegation events (defaults to descending order, i.e. newest first)
+- API: new `balance` model to store historic account balances at end of each block, available as table and time-series API
+
+
 ### v11.0.0 (v011-2021-11-20)
 
 Tezos Hangzhou protocol support.

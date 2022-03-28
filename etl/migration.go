@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -23,21 +23,21 @@ func (b *Builder) MigrateProtocol(ctx context.Context, prevparams, nextparams *t
 		// origination bugfix
 		return b.FixOriginationBug(ctx, nextparams)
 
-	case nextparams.Protocol.Equal(tezos.ProtoV005_2):
-		// babylon airdrop and KT1 delegator contract migration
-		// airdrop 1 mutez to managers
-		n, err := b.RunBabylonAirdrop(ctx, nextparams)
-		if err != nil {
-			return err
-		}
-		// upgrade KT1 contracts without code
-		return b.RunBabylonUpgrade(ctx, nextparams, n)
+	case nextparams.Protocol.Equal(tezos.ProtoV004):
+		// adds invoice
+		return b.MigrateAthens(ctx, prevparams, nextparams)
 
-	case nextparams.Protocol.Equal(tezos.ProtoV010):
-		// granada cycle length change
+	case nextparams.Protocol.Equal(tezos.ProtoV005_2):
+		// adds invoice
+		// runs manager airdrop
+		// migrates delegator contracts
+		return b.MigrateBabylon(ctx, prevparams, nextparams)
+
+	case nextparams.Protocol.Equal(tezos.ProtoV012_2):
+		// Ithaca changes all rights
 		// - remove and reload future rights
-		// - remove and build future income data
-		return b.MigrateGranada(ctx, prevparams, nextparams)
+		// - remove and rebuild future income data
+		return b.MigrateIthaca(ctx, prevparams, nextparams)
 	}
 
 	return nil
@@ -80,7 +80,7 @@ func (b *Builder) PatchBigmapDiff(ctx context.Context, diff micheline.BigmapDiff
 		// unpack script
 		script = micheline.NewScript()
 		if err := script.UnmarshalBinary(contract.Script); err != nil {
-			return nil, fmt.Errorf("unmarshal script: %v", err)
+			return nil, fmt.Errorf("unmarshal script: %w", err)
 		}
 	}
 

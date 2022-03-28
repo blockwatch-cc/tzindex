@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/tzgo/tezos"
 )
 
 var flowPool = &sync.Pool{
@@ -40,32 +39,29 @@ var flowPool = &sync.Pool{
 // flows for each freezer category, one out-flow and a second in-flow to the balance category.
 
 type Flow struct {
-	RowId          uint64            `pack:"I,pk,snappy"   json:"row_id"`          // internal: id, not height!
-	Height         int64             `pack:"h,snappy"      json:"height"`          // bc: block height (also for orphans)
-	Cycle          int64             `pack:"c,snappy"      json:"cycle"`           // bc: block cycle (tezos specific)
-	Timestamp      time.Time         `pack:"T,snappy"      json:"time"`            // bc: block creation time
-	OpId           OpID              `pack:"D,snappy"      json:"op_id"`           // unique row id from op table
-	OpN            int               `pack:"0,snappy"      json:"op_n"`            // bc: position in block (block.Operations.([][]*OperationHeader) list position), collapsing batch/internal at the same op_n
-	OpL            int               `pack:"L,snappy"      json:"op_l"`            // bc: operation list (i.e. 0 for endorsements, etc corresponding to validation pass)
-	OpP            int               `pack:"P,snappy"      json:"op_p"`            // bc: operation list position (use in combination with op_l to lookup op on RPC)
-	OpC            int               `pack:"1,snappy"      json:"op_c"`            // bc: position in OperationHeader.Contents.([]Operation) list
-	OpI            int               `pack:"2,snappy"      json:"op_i"`            // bc: position in internal operation result list
-	AccountId      AccountID         `pack:"A,snappy"      json:"account_id"`      // unique account id
-	AddressType    tezos.AddressType `pack:"t,snappy"      json:"address_type"`    // address type, usable as filter
-	CounterPartyId AccountID         `pack:"R,snappy"      json:"counterparty_id"` // counter account that initiated the flow
-	Category       FlowCategory      `pack:"C,snappy"      json:"category"`        // sub-account that received the update
-	Operation      FlowType          `pack:"O,snappy"      json:"operation"`       // op type that caused this update
-	AmountIn       int64             `pack:"i,snappy"      json:"amount_in"`       // sum flowing in to the account
-	AmountOut      int64             `pack:"o,snappy"      json:"amount_out"`      // sum flowing out of the account
-	IsFee          bool              `pack:"e,snappy"      json:"is_fee"`          // flag to indicate this out-flow paid a fee
-	IsBurned       bool              `pack:"b,snappy"      json:"is_burned"`       // flag to indicate this out-flow was burned
-	IsFrozen       bool              `pack:"f,snappy"      json:"is_frozen"`       // flag to indicate this in-flow is frozen
-	IsUnfrozen     bool              `pack:"u,snappy"      json:"is_unfrozen"`     // flag to indicate this flow (rewards -> balance) was unfrozen
-	IsShielded     bool              `pack:"y,snappy"      json:"is_shielded"`     // flag to indicate this flow has been sent into a shielded Sapling pool
-	IsUnshielded   bool              `pack:"Y,snappy"      json:"is_unshielded"`   // flag to indicate this flow has been sent out of a shielded Sapling pool
-	TokenGenMin    int64             `pack:"g,snappy"      json:"token_gen_min"`   // hops
-	TokenGenMax    int64             `pack:"G,snappy"      json:"token_gen_max"`   // hops
-	TokenAge       int64             `pack:"a,snappy"      json:"token_age"`       // time since last move in seconds
+	RowId          uint64       `pack:"I,pk,snappy"    json:"row_id"`
+	Height         int64        `pack:"h,snappy"       json:"height"`
+	Cycle          int64        `pack:"c,snappy"       json:"cycle"`
+	Timestamp      time.Time    `pack:"T,snappy"       json:"time"`
+	OpN            int          `pack:"1,snappy"       json:"op_n"`
+	OpC            int          `pack:"2,snappy"       json:"op_c"`
+	OpI            int          `pack:"3,snappy"       json:"op_i"`
+	AccountId      AccountID    `pack:"A,snappy,bloom" json:"account_id"`
+	CounterPartyId AccountID    `pack:"R,snappy"       json:"counterparty_id"` // account that initiated the flow
+	Category       FlowCategory `pack:"C,snappy"       json:"category"`        // sub-account that received the update
+	Operation      FlowType     `pack:"O,snappy"       json:"operation"`       // op type that caused this update
+	AmountIn       int64        `pack:"i,snappy"       json:"amount_in"`       // sum flowing in to the account
+	AmountOut      int64        `pack:"o,snappy"       json:"amount_out"`      // sum flowing out of the account
+	IsFee          bool         `pack:"e,snappy"       json:"is_fee"`          // flag: out-flow paid a fee
+	IsBurned       bool         `pack:"b,snappy"       json:"is_burned"`       // flag: out-flow was burned
+	IsFrozen       bool         `pack:"f,snappy"       json:"is_frozen"`       // flag: in-flow is frozen
+	IsUnfrozen     bool         `pack:"u,snappy"       json:"is_unfrozen"`     // flag: out-flow was unfrozen (rewards -> balance)
+	IsShielded     bool         `pack:"y,snappy"       json:"is_shielded"`     // flag: in-flow was shielded (Sapling)
+	IsUnshielded   bool         `pack:"Y,snappy"       json:"is_unshielded"`   // flag: out-flow was unshielded (Sapling)
+	TokenAge       int64        `pack:"a,snappy"       json:"token_age"`       // time since last transfer in seconds
+
+	TokenGenMin int64 `pack:"-"  json:"-"`
+	TokenGenMax int64 `pack:"-"  json:"-"`
 }
 
 // Ensure Flow implements the pack.Item interface.
@@ -84,18 +80,15 @@ func (f Flow) Time() time.Time {
 	return f.Timestamp
 }
 
-func NewFlow(b *Block, acc *Account, cntr *Account, n, l, p, c, i int) *Flow {
+func NewFlow(b *Block, acc *Account, cntr *Account, id OpRef) *Flow {
 	f := flowPool.Get().(*Flow)
 	f.Height = b.Height
 	f.Cycle = b.Cycle
 	f.Timestamp = b.Timestamp
 	f.AccountId = acc.RowId
-	f.AddressType = acc.Type
-	f.OpN = n
-	f.OpL = l
-	f.OpP = p
-	f.OpC = c
-	f.OpI = i
+	f.OpN = id.N
+	f.OpC = id.C
+	f.OpI = id.I
 	if cntr != nil {
 		f.CounterPartyId = cntr.RowId
 	}
@@ -112,14 +105,10 @@ func (f *Flow) Reset() {
 	f.Height = 0
 	f.Cycle = 0
 	f.Timestamp = time.Time{}
-	f.OpId = 0
 	f.OpN = 0
-	f.OpL = 0
-	f.OpP = 0
 	f.OpC = 0
 	f.OpI = 0
 	f.AccountId = 0
-	f.AddressType = 0
 	f.CounterPartyId = 0
 	f.Category = 0
 	f.Operation = 0
@@ -129,9 +118,9 @@ func (f *Flow) Reset() {
 	f.IsBurned = false
 	f.IsFrozen = false
 	f.IsUnfrozen = false
+	f.IsShielded = false
+	f.IsUnshielded = false
 	f.TokenGenMin = 0
 	f.TokenGenMax = 0
 	f.TokenAge = 0
-	f.IsShielded = false
-	f.IsUnshielded = false
 }

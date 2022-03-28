@@ -22,7 +22,9 @@
 		"cors_maxage": "86400",
 		"cors_credentials": "true",
 		"cache_enable": false,
-		"cache_control": "public"
+		"cache_control": "public",
+		"cache_expires": "30s",
+		"cache_max": "24h"
 	},
 	"crawler": {
 		"queue": 100,
@@ -61,19 +63,10 @@
 		"block_index":{
 			"cache_size": 64
 		},
-		"flow": {
-			"cache_size": 4
-		},
 		"supply": {
 			"cache_size": 2
 		},
 		"chain": {
-			"cache_size": 2
-		},
-		"right": {
-			"cache_size": 2
-		},
-		"income": {
 			"cache_size": 2
 		},
 		"bigmap": {

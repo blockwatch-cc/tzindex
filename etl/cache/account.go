@@ -64,8 +64,8 @@ func (c *AccountCache) hashKey(typ tezos.AddressType, h []byte) uint64 {
 }
 
 func (c *AccountCache) Add(a *model.Account) {
-	// skip delegates
-	if a.IsDelegate {
+	// skip bakers
+	if a.IsBaker {
 		return
 	}
 	key := c.AccountHashKey(a)

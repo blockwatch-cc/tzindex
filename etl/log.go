@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	. "blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/model"
 	logpkg "github.com/echa/log"
 )
 
@@ -73,7 +73,7 @@ func NewBlockProgressLogger(msg string) *BlockProgressLogger {
 // LogBlockHeight logs a new block height as an information message to show
 // progress to the user. In order to prevent spam, it limits logging to one
 // message every 10 seconds with duration and totals included.
-func (b *BlockProgressLogger) LogBlockHeight(block *Block, qlen int, state State, d time.Duration) {
+func (b *BlockProgressLogger) LogBlockHeight(block *model.Block, qlen int, state State, d time.Duration) {
 	b.Lock()
 	defer b.Unlock()
 	b.nBlocks++

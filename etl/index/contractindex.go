@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -10,20 +10,18 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzgo/rpc"
-	"blockwatch.cc/tzgo/tezos"
-
-	. "blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 )
 
 const (
 	ContractPackSizeLog2         = 15 // 32k packs
 	ContractJournalSizeLog2      = 16 // 64k
-	ContractCacheSize            = 2  // minimum
+	ContractCacheSize            = 8
 	ContractFillLevel            = 100
-	ContractIndexPackSizeLog2    = 15 // 16k packs (32k split size) ~256k
+	ContractIndexPackSizeLog2    = 15 // 16k packs (32k split size)
 	ContractIndexJournalSizeLog2 = 16 // 64k
-	ContractIndexCacheSize       = 2  // minimum
+	ContractIndexCacheSize       = 8
 	ContractIndexFillLevel       = 90
 	ContractIndexKey             = "contract"
 	ContractTableKey             = "contract"
@@ -34,13 +32,13 @@ var (
 )
 
 type ContractIndex struct {
-	db    *pack.DB
-	opts  pack.Options
-	iopts pack.Options
-	table *pack.Table
+	db        *pack.DB
+	opts      pack.Options
+	iopts     pack.Options
+	contracts *pack.Table
 }
 
-var _ BlockIndexer = (*ContractIndex)(nil)
+var _ model.BlockIndexer = (*ContractIndex)(nil)
 
 func NewContractIndex(opts, iopts pack.Options) *ContractIndex {
 	return &ContractIndex{opts: opts, iopts: iopts}
@@ -51,7 +49,7 @@ func (idx *ContractIndex) DB() *pack.DB {
 }
 
 func (idx *ContractIndex) Tables() []*pack.Table {
-	return []*pack.Table{idx.table}
+	return []*pack.Table{idx.contracts}
 }
 
 func (idx *ContractIndex) Key() string {
@@ -63,17 +61,17 @@ func (idx *ContractIndex) Name() string {
 }
 
 func (idx *ContractIndex) Create(path, label string, opts interface{}) error {
-	fields, err := pack.Fields(Contract{})
+	fields, err := pack.Fields(model.Contract{})
 	if err != nil {
 		return err
 	}
 	db, err := pack.CreateDatabase(path, idx.Key(), label, opts)
 	if err != nil {
-		return fmt.Errorf("creating database: %v", err)
+		return fmt.Errorf("creating database: %w", err)
 	}
 	defer db.Close()
 
-	table, err := db.CreateTableIfNotExists(
+	contracts, err := db.CreateTableIfNotExists(
 		ContractTableKey,
 		fields,
 		pack.Options{
@@ -86,9 +84,9 @@ func (idx *ContractIndex) Create(path, label string, opts interface{}) error {
 		return err
 	}
 
-	_, err = table.CreateIndexIfNotExists(
+	_, err = contracts.CreateIndexIfNotExists(
 		"hash",
-		fields.Find("H"),   // op hash field (20 byte address hashes)
+		fields.Find("H"),   // contract address field (20 byte address hashes)
 		pack.IndexTypeHash, // hash table, index stores hash(field) -> pk value
 		pack.Options{
 			PackSizeLog2:    util.NonZero(idx.iopts.PackSizeLog2, ContractIndexPackSizeLog2),
@@ -99,7 +97,6 @@ func (idx *ContractIndex) Create(path, label string, opts interface{}) error {
 	if err != nil {
 		return err
 	}
-
 	return nil
 }
 
@@ -109,7 +106,7 @@ func (idx *ContractIndex) Init(path, label string, opts interface{}) error {
 	if err != nil {
 		return err
 	}
-	idx.table, err = idx.db.Table(
+	idx.contracts, err = idx.db.Table(
 		ContractTableKey,
 		pack.Options{
 			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, ContractJournalSizeLog2),
@@ -126,23 +123,23 @@ func (idx *ContractIndex) Init(path, label string, opts interface{}) error {
 	return nil
 }
 
-func (idx *ContractIndex) Close() error {
-	if idx.table != nil {
-		if err := idx.table.Close(); err != nil {
-			log.Errorf("Closing %s: %v", idx.Name(), err)
-		}
-		idx.table = nil
-	}
-	if idx.db != nil {
-		if err := idx.db.Close(); err != nil {
-			return err
-		}
-		idx.db = nil
-	}
+func (idx *ContractIndex) FinalizeSync(_ context.Context) error {
 	return nil
 }
 
-func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
+func (idx *ContractIndex) Close() error {
+	for _, v := range idx.Tables() {
+		if v != nil {
+			if err := v.Close(); err != nil {
+				log.Errorf("Closing %s table: %s", v.Name(), err)
+			}
+		}
+	}
+	idx.contracts = nil
+	return nil
+}
+
+func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
 	ins := make([]pack.Item, 0, block.NewContracts)
 	upd := make([]pack.Item, 0)
 	for _, op := range block.Ops {
@@ -153,18 +150,18 @@ func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *Block, builde
 
 		// filter relevant op types
 		switch op.Type {
-		case tezos.OpTypeOrigination, tezos.OpTypeMigration, tezos.OpTypeTransaction:
+		case model.OpTypeOrigination, model.OpTypeMigration, model.OpTypeTransaction:
 		default:
 			continue
 		}
 
 		switch op.Type {
-		case tezos.OpTypeTransaction:
+		case model.OpTypeTransaction:
 			// when contract is updated, load from builder cache
 			contract, ok := builder.ContractById(op.ReceiverId)
 			if !ok {
 				return fmt.Errorf("contract: missing contract %d in %s op [%d:%d]",
-					op.ReceiverId, op.Type, op.OpL, op.OpP)
+					op.ReceiverId, op.Type, 3, op.OpP)
 			}
 			// skip contracts that have been originated in this block, they will
 			// be inserted below
@@ -178,41 +175,37 @@ func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *Block, builde
 				contract.IsDirty = false
 			}
 
-		case tezos.OpTypeOrigination:
+		case model.OpTypeOrigination:
 			// load corresponding account
 			acc, ok := builder.AccountById(op.ReceiverId)
 			if !ok {
 				return fmt.Errorf("contract: missing account %d in %s op", op.ReceiverId, op.Type)
 			}
-			if op.OpL >= 0 {
+			if op.Raw != nil {
 				// when contract is new, create model from rpc origination op
-				o, ok := block.GetRpcOp(op.OpL, op.OpP, op.OpC)
-				if !ok {
-					return fmt.Errorf("contract: missing %s op [%d:%d]", o.OpKind(), op.OpL, op.OpP)
-				}
 				if op.IsInternal {
 					// on internal originations, find corresponding internal op
-					top, ok := o.(*rpc.TransactionOp)
+					top, ok := op.Raw.(*rpc.Transaction)
 					if !ok {
 						return fmt.Errorf("contract: internal %s op [%d:%d]: unexpected type %T",
-							o.OpKind(), op.OpL, op.OpP, o)
+							op.Raw.Kind(), 3, op.OpP, op.Raw)
 					}
 					iop := top.Metadata.InternalResults[op.OpI]
-					ins = append(ins, NewInternalContract(acc, iop, op, builder.Constants()))
+					ins = append(ins, model.NewInternalContract(acc, iop, op, builder.Constants()))
 				} else {
-					oop, ok := o.(*rpc.OriginationOp)
+					oop, ok := op.Raw.(*rpc.Origination)
 					if !ok {
 						return fmt.Errorf("contract: %s op [%d:%d]: unexpected type %T",
-							o.OpKind(), op.OpL, op.OpP, o)
+							op.Raw.Kind(), 3, op.OpP, op.Raw)
 					}
-					ins = append(ins, NewContract(acc, oop, op, builder.Constants()))
+					ins = append(ins, model.NewContract(acc, oop, op, builder.Constants(), block.Params))
 				}
 			} else {
 				// implicit contracts from migration originations are in builder cache
 				contract, ok := builder.ContractById(op.ReceiverId)
 				if !ok {
 					return fmt.Errorf("contract: missing contract %d in %s op [%d:%d]",
-						op.ReceiverId, op.Type, op.OpL, op.OpP)
+						op.ReceiverId, op.Type, 3, op.OpP)
 				}
 				if contract.IsNew {
 					// insert new delegator contracts
@@ -223,12 +216,12 @@ func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *Block, builde
 				}
 			}
 
-		case tezos.OpTypeMigration:
+		case model.OpTypeMigration:
 			// when contract is migrated, load from builder cache
 			contract, ok := builder.ContractById(op.ReceiverId)
 			if !ok {
 				return fmt.Errorf("contract: missing contract %d in %s op [%d:%d]",
-					op.ReceiverId, op.Type, op.OpL, op.OpP)
+					op.ReceiverId, op.Type, 3, op.OpP)
 			}
 			if contract.IsNew {
 				// insert new delegator contracts
@@ -241,17 +234,17 @@ func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *Block, builde
 	}
 
 	// insert, will generate unique row ids
-	if err := idx.table.Insert(ctx, ins); err != nil {
-		return fmt.Errorf("contract: insert: %v", err)
+	if err := idx.contracts.Insert(ctx, ins); err != nil {
+		return fmt.Errorf("contract: insert: %w", err)
 	}
 
-	if err := idx.table.Update(ctx, upd); err != nil {
-		return fmt.Errorf("contract: update: %v", err)
+	if err := idx.contracts.Update(ctx, upd); err != nil {
+		return fmt.Errorf("contract: update: %w", err)
 	}
 	return nil
 }
 
-func (idx *ContractIndex) DisconnectBlock(ctx context.Context, block *Block, builder BlockBuilder) error {
+func (idx *ContractIndex) DisconnectBlock(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
 	upd := make([]pack.Item, 0)
 	// update all dirty contracts, skip originated contracts (will be removed)
 	for _, v := range builder.Contracts() {
@@ -260,8 +253,8 @@ func (idx *ContractIndex) DisconnectBlock(ctx context.Context, block *Block, bui
 		}
 		upd = append(upd, v)
 	}
-	if err := idx.table.Update(ctx, upd); err != nil {
-		return fmt.Errorf("contract: update: %v", err)
+	if err := idx.contracts.Update(ctx, upd); err != nil {
+		return fmt.Errorf("contract: update: %w", err)
 	}
 
 	// last, delete originated contracts
@@ -270,7 +263,7 @@ func (idx *ContractIndex) DisconnectBlock(ctx context.Context, block *Block, bui
 
 func (idx *ContractIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting contracts at height %d", height)
-	_, err := pack.NewQuery("etl.contract.delete", idx.table).
+	_, err := pack.NewQuery("etl.contract.delete", idx.contracts).
 		AndEqual("first_seen", height).
 		Delete(ctx)
 	return err
@@ -278,4 +271,8 @@ func (idx *ContractIndex) DeleteBlock(ctx context.Context, height int64) error {
 
 func (idx *ContractIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 	return nil
+}
+
+func (idx *ContractIndex) Flush(ctx context.Context) error {
+	return idx.contracts.Flush(ctx)
 }

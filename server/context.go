@@ -25,10 +25,10 @@ import (
 
 	logpkg "github.com/echa/log"
 
-	"blockwatch.cc/tzgo/rpc"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 )
 
 const (
@@ -42,9 +42,9 @@ const (
 	headerTrailer   = "X-Streaming-Error, X-Streaming-Cursor, X-Streaming-Count, X-Streaming-Runtime"
 )
 
-type ApiCall func(*ApiContext) (interface{}, int)
+type ApiCall func(*Context) (interface{}, int)
 
-type ApiContext struct {
+type Context struct {
 	context.Context
 	// request data
 	Request        *http.Request
@@ -81,11 +81,13 @@ type ApiContext struct {
 	done       chan *Error
 }
 
-func NewContext(ctx context.Context, r *http.Request, w http.ResponseWriter, f ApiCall, srv *RestServer) *ApiContext {
+func NewContext(ctx context.Context, r *http.Request, w http.ResponseWriter, f ApiCall, srv *RestServer) *Context {
 	now := time.Now().UTC()
 
 	// extract name from func to use in fail method
 	name := getCallName(f)
+
+	// log.Infof("New API call %s %s (%s)", r.Method, r.URL.Path, name)
 
 	// get real IP behind Docker Interface X-Real-IP or X-Forwarded-For
 	host := r.Header.Get("X-Real-Ip")
@@ -100,7 +102,7 @@ func NewContext(ctx context.Context, r *http.Request, w http.ResponseWriter, f A
 		requestId = "BW-" + <-idStream
 	}
 
-	return &ApiContext{
+	return &Context{
 		Context:        ctx,
 		Now:            now,
 		RequestID:      requestId,
@@ -123,7 +125,7 @@ func NewContext(ctx context.Context, r *http.Request, w http.ResponseWriter, f A
 }
 
 // GET/POST/PATCH/PATCH load data or fail
-func (api *ApiContext) ParseRequestArgs(args interface{}) {
+func (api *Context) ParseRequestArgs(args interface{}) {
 	r := api.Request
 	if r.Method == http.MethodGet {
 		if err := schemaDecoder.Decode(args, r.URL.Query()); err != nil {
@@ -153,7 +155,7 @@ func (api *ApiContext) ParseRequestArgs(args interface{}) {
 }
 
 // this is executed in a goroutine per call, panics on error
-func (api *ApiContext) serve() {
+func (api *Context) serve() {
 	defer api.complete()
 	var status int
 	api.result, status = api.f(api)
@@ -162,7 +164,7 @@ func (api *ApiContext) serve() {
 	}
 }
 
-func (api *ApiContext) complete() {
+func (api *Context) complete() {
 	// only execute on panic
 	if e := recover(); e != nil {
 		if debugHttp {
@@ -188,7 +190,7 @@ func (api *ApiContext) complete() {
 	}
 }
 
-func (api *ApiContext) handleError(e error) {
+func (api *Context) handleError(e error) {
 	var re *Error
 	switch err := e.(type) {
 	case *Error:
@@ -227,7 +229,7 @@ func (api *ApiContext) handleError(e error) {
 				if b, _ := api.jsonStack(); len(b) > 0 {
 					api.Log.Error(string(b))
 				}
-				re = EInternal(EC_SERVER, reflect.TypeOf(e).String(), err).(*Error)
+				re = EInternal(EC_SERVER, err.Error(), nil).(*Error)
 			}
 		}
 	}
@@ -238,7 +240,7 @@ func (api *ApiContext) handleError(e error) {
 	api.status = re.Status
 }
 
-func (api *ApiContext) jsonStack() ([]byte, error) {
+func (api *Context) jsonStack() ([]byte, error) {
 	trace := debug.Stack()
 	// api.Log.Debugf("%s", string(trace))
 	lines := make([]string, 0, bytes.Count(trace, []byte("\n"))+1)
@@ -256,7 +258,7 @@ func (api *ApiContext) jsonStack() ([]byte, error) {
 	return json.Marshal(js)
 }
 
-func (api *ApiContext) sendResponse() {
+func (api *Context) sendResponse() {
 	// skip when handler was streaming it's response
 	if api.isStreamed {
 		// return error response when connection is still alive
@@ -304,7 +306,7 @@ func (api *ApiContext) sendResponse() {
 	}
 }
 
-func (api *ApiContext) RequestString() string {
+func (api *Context) RequestString() string {
 	return strings.Join([]string{
 		api.Request.Method,
 		api.Request.RequestURI,
@@ -312,7 +314,7 @@ func (api *ApiContext) RequestString() string {
 	}, " ")
 }
 
-func (api *ApiContext) StreamResponseHeaders(status int, contentType string) {
+func (api *Context) StreamResponseHeaders(status int, contentType string) {
 	api.isStreamed = true
 	api.status = status
 	api.writeResponseHeaders(contentType, headerTrailer)
@@ -323,7 +325,7 @@ func (api *ApiContext) StreamResponseHeaders(status int, contentType string) {
 	}
 }
 
-func (api *ApiContext) StreamTrailer(cursor string, count int, err error) {
+func (api *Context) StreamTrailer(cursor string, count int, err error) {
 	h := api.ResponseWriter.Header()
 	h.Set(trailerCursor, cursor)
 	h.Set(trailerCount, strconv.Itoa(count))
@@ -353,7 +355,7 @@ func (api *ApiContext) StreamTrailer(cursor string, count int, err error) {
 	api.Performance.WriteResponseTrailer(api.ResponseWriter)
 }
 
-func (api *ApiContext) writeResponseHeaders(contentType, trailers string) {
+func (api *Context) writeResponseHeaders(contentType, trailers string) {
 	// Note: rate limiting headers are inserted during call init
 	w := api.ResponseWriter
 	h := w.Header()
@@ -412,7 +414,7 @@ func (api *ApiContext) writeResponseHeaders(contentType, trailers string) {
 	}
 	if api.Cfg.Http.CacheEnable && cacheStatus && cacheMethod {
 		// cache streaming responses from tables and series for 30sec
-		expires := defaultCacheExpires
+		expires := api.Cfg.Http.CacheExpires
 		if api.result != nil {
 			// disable cache for all regular responses unless they implement Expires()
 			if res, ok := api.result.(Resource); ok {
@@ -446,7 +448,7 @@ func (api *ApiContext) writeResponseHeaders(contentType, trailers string) {
 	w.WriteHeader(api.status)
 }
 
-func (api *ApiContext) writeResponseBody() {
+func (api *Context) writeResponseBody() {
 	if api.result != nil {
 		switch t := api.result.(type) {
 		case string:

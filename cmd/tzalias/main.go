@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"blockwatch.cc/tzgo/tezos"
-	"blockwatch.cc/tzstats-go"
+	"blockwatch.cc/tzpro-go"
 	"github.com/echa/config"
 	"github.com/echa/log"
 )
@@ -104,13 +104,13 @@ func main() {
 		log.Warnf("Missing config file, using default values.")
 	}
 
-	tzstats.UseLogger(log.Log)
+	tzpro.UseLogger(log.Log)
 	if verbose {
 		log.SetLevel(log.LevelDebug)
 	}
 
 	if err := run(); err != nil {
-		if e, ok := tzstats.IsApiError(err); ok {
+		if e, ok := tzpro.IsApiError(err); ok {
 			log.Errorf("%s: %s", e.Errors[0].Message, e.Errors[0].Detail)
 		} else {
 			log.Error(err)
@@ -128,7 +128,7 @@ func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	client, err := tzstats.NewClient(apiurl, nil)
+	client, err := tzpro.NewClient(apiurl, nil)
 	if err != nil {
 		return err
 	}
@@ -175,7 +175,7 @@ func makeFilename() string {
 	return defaultFilePrefix + "-" + time.Now().UTC().Format("2006-01-02T15-04-05") + ".json"
 }
 
-func exportAliases(ctx context.Context, c *tzstats.Client) error {
+func exportAliases(ctx context.Context, c *tzpro.Client) error {
 	fname := makeFilename()
 	aliases, err := c.ListMetadata(ctx)
 	if err != nil {
@@ -189,7 +189,7 @@ func exportAliases(ctx context.Context, c *tzstats.Client) error {
 	defer f.Close()
 
 	// change format to map
-	mapped := make(map[string]tzstats.Metadata)
+	mapped := make(map[string]tzpro.Metadata)
 	for _, v := range SortedAliases(aliases) {
 		mapped[v.ID()] = v
 	}
@@ -226,7 +226,7 @@ func parseAddressAndAssetId(n string) (addr tezos.Address, id *int64, err error)
 	return
 }
 
-func importAliases(ctx context.Context, c *tzstats.Client) error {
+func importAliases(ctx context.Context, c *tzpro.Client) error {
 	if flags.NArg() < 2 {
 		return fmt.Errorf("missing filename")
 	}
@@ -236,7 +236,7 @@ func importAliases(ctx context.Context, c *tzstats.Client) error {
 		return fmt.Errorf("%s: %v", fname, err)
 	}
 
-	content := make(map[string]tzstats.Metadata)
+	content := make(map[string]tzpro.Metadata)
 	if err := json.Unmarshal(buf, &content); err != nil {
 		return fmt.Errorf("%s: %v", fname, err)
 	}
@@ -246,14 +246,14 @@ func importAliases(ctx context.Context, c *tzstats.Client) error {
 		return err
 	}
 
-	mapped := make(map[string]tzstats.Metadata)
+	mapped := make(map[string]tzpro.Metadata)
 	for _, v := range aliases {
 		mapped[v.ID()] = v
 	}
 
 	log.Infof("Importing %d aliases", len(content))
 	count := 0
-	ins := make([]tzstats.Metadata, 0)
+	ins := make([]tzpro.Metadata, 0)
 	for n, v := range content {
 		v.Address, v.AssetId, err = parseAddressAndAssetId(n)
 		if err != nil {
@@ -275,7 +275,7 @@ func importAliases(ctx context.Context, c *tzstats.Client) error {
 	return nil
 }
 
-func purgeAliases(ctx context.Context, c *tzstats.Client) error {
+func purgeAliases(ctx context.Context, c *tzpro.Client) error {
 	if !nobackup {
 		log.Debugf("Creating backup")
 		if err := exportAliases(ctx, c); err != nil {
@@ -289,12 +289,12 @@ func purgeAliases(ctx context.Context, c *tzstats.Client) error {
 	return nil
 }
 
-func inspectAlias(ctx context.Context, c *tzstats.Client) error {
+func inspectAlias(ctx context.Context, c *tzpro.Client) error {
 	addr, id, err := parseAddressAndAssetId(flags.Arg(1))
 	if err != nil {
 		return err
 	}
-	var alias tzstats.Metadata
+	var alias tzpro.Metadata
 	if id == nil {
 		alias, err = c.GetAccountMetadata(ctx, addr)
 	} else {
@@ -307,7 +307,7 @@ func inspectAlias(ctx context.Context, c *tzstats.Client) error {
 	return nil
 }
 
-func addAlias(ctx context.Context, c *tzstats.Client) error {
+func addAlias(ctx context.Context, c *tzpro.Client) error {
 	if flags.NArg() < 2 {
 		return fmt.Errorf("missing arguments")
 	}
@@ -322,7 +322,7 @@ func addAlias(ctx context.Context, c *tzstats.Client) error {
 	}
 
 	// load existing alias, ignore errors
-	var alias tzstats.Metadata
+	var alias tzpro.Metadata
 	if id == nil {
 		alias, _ = c.GetAccountMetadata(ctx, addr)
 	} else {
@@ -336,7 +336,7 @@ func addAlias(ctx context.Context, c *tzstats.Client) error {
 		return err
 	}
 	log.Debugf("Add %#v", alias)
-	_, err = c.CreateMetadata(ctx, []tzstats.Metadata{alias})
+	_, err = c.CreateMetadata(ctx, []tzpro.Metadata{alias})
 	if err != nil {
 		return err
 	}
@@ -345,7 +345,7 @@ func addAlias(ctx context.Context, c *tzstats.Client) error {
 	return nil
 }
 
-func updateAlias(ctx context.Context, c *tzstats.Client) error {
+func updateAlias(ctx context.Context, c *tzpro.Client) error {
 	if flags.NArg() < 2 {
 		return fmt.Errorf("missing arguments")
 	}
@@ -353,7 +353,7 @@ func updateAlias(ctx context.Context, c *tzstats.Client) error {
 	if err != nil {
 		return err
 	}
-	var alias tzstats.Metadata
+	var alias tzpro.Metadata
 	if id == nil {
 		alias, err = c.GetAccountMetadata(ctx, addr)
 	} else {
@@ -384,7 +384,7 @@ func updateAlias(ctx context.Context, c *tzstats.Client) error {
 	return nil
 }
 
-func removeAlias(ctx context.Context, c *tzstats.Client) error {
+func removeAlias(ctx context.Context, c *tzpro.Client) error {
 	if flags.NArg() < 2 {
 		return fmt.Errorf("missing arguments")
 	}
@@ -410,10 +410,10 @@ func removeAlias(ctx context.Context, c *tzstats.Client) error {
 	return nil
 }
 
-type SortedAliases []tzstats.Metadata
+type SortedAliases []tzpro.Metadata
 
 func (s SortedAliases) MarshalJSON() ([]byte, error) {
-	sorted := make([]tzstats.Metadata, 0, len(s))
+	sorted := make([]tzpro.Metadata, 0, len(s))
 	canSort := true
 	for _, v := range s {
 		sorted = append(sorted, v)

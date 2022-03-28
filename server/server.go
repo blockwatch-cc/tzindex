@@ -28,12 +28,10 @@ type RestServer struct {
 }
 
 var (
-	UserAgent           = "Blockwatch-TzIndex/1.0"
-	ApiVersion          string
-	debugHttp           bool
-	srv                 *RestServer
-	defaultCacheExpires = 30 * time.Second
-	maxCacheExpires     = 24 * time.Hour
+	UserAgent  = "Blockwatch-TzIndex/1.0"
+	ApiVersion string
+	debugHttp  bool
+	srv        *RestServer
 )
 
 func New(cfg *Config) (*RestServer, error) {
@@ -115,14 +113,14 @@ func (s *RestServer) Stop() {
 	}
 }
 
-func NotFound(ctx *ApiContext) (interface{}, int) {
+func NotFound(ctx *Context) (interface{}, int) {
 	r := ctx.Request
 	s := fmt.Sprintf("Unrecognized request URL (%s: %s).", r.Method, r.URL.Path)
 	panic(ENotFound(EC_NO_ROUTE, s, nil))
 }
 
 // Respond to requests with the OPTIONS Method.
-func StateOptions(ctx *ApiContext) (interface{}, int) {
+func StateOptions(ctx *Context) (interface{}, int) {
 	// returning an empty body here, the important part of this method
 	// (setting appropriate headers) is done by the HTTP handler wrapper
 	return nil, http.StatusOK

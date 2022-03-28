@@ -15,9 +15,9 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/store"
-	"blockwatch.cc/tzgo/rpc"
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/metadata"
+	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 	"github.com/echa/config"
 )
@@ -25,20 +25,20 @@ import (
 var (
 	noindex   bool
 	nomonitor bool
+	nopublish bool
 	unsafe    bool
 	norpc     bool
 	noapi     bool
 	cors      bool
 	stop      int64
-	validate  bool
+
+	validate bool
 )
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&rpcurl, "rpcurl", "http://127.0.0.1:8732", "RPC url")
 	rootCmd.PersistentFlags().StringVar(&rpcuser, "rpcuser", "", "RPC username")
 	rootCmd.PersistentFlags().StringVar(&rpcpass, "rpcpass", "", "RPC password")
-	rootCmd.PersistentFlags().BoolVar(&fullIndex, "full", false, "full mode (index all data)")
-	rootCmd.PersistentFlags().BoolVar(&lightIndex, "light", true, "light mode (use to skip baker and gov data)")
 	rootCmd.PersistentFlags().BoolVar(&norpc, "norpc", false, "disable RPC client")
 	rootCmd.PersistentFlags().BoolVar(&notls, "notls", false, "disable RPC TLS support (use http)")
 	rootCmd.PersistentFlags().BoolVar(&insecure, "insecure", false, "disable RPC TLS certificate checks (not recommended)")
@@ -69,10 +69,6 @@ func runServer(args []string) error {
 	server.UserAgent = UserAgent()
 	server.ApiVersion = apiVersion
 	pack.QueryLogMinDuration = config.GetDuration("database.log_slow_queries")
-
-	if fullIndex {
-		lightIndex = false
-	}
 
 	// load metadata extensions
 	if err := metadata.LoadExtensions(); err != nil {
@@ -130,7 +126,7 @@ func runServer(args []string) error {
 		DBOpts:    DBOpts(engine, false, unsafe),
 		StateDB:   statedb,
 		Indexes:   enabledIndexes(),
-		LightMode: lightIndex,
+		LightMode: true,
 	})
 	defer indexer.Close()
 
@@ -140,6 +136,7 @@ func runServer(args []string) error {
 		Client:        rpcclient,
 		CacheSizeLog2: config.GetInt("crawler.cache_size_log2"),
 		Queue:         config.GetInt("crawler.queue"),
+		Delay:         config.GetInt("crawler.delay"),
 		EnableMonitor: !nomonitor,
 		StopBlock:     stop,
 		Validate:      validate,
@@ -194,6 +191,8 @@ func runServer(args []string) error {
 				CorsCredentials:     config.GetString("server.cors_credentials"),
 				CacheEnable:         config.GetBool("server.cache_enable"),
 				CacheControl:        config.GetString("server.cache_control"),
+				CacheExpires:        config.GetDuration("server.cache_expires"),
+				CacheMaxExpires:     config.GetDuration("server.cache_max"),
 				MaxSeriesDuration:   config.GetDuration("server.max_series_duration"),
 			},
 		})
@@ -201,6 +200,7 @@ func runServer(args []string) error {
 			return err
 		}
 		srv.Start()
+		// drain connections, reject new connections
 		defer srv.Stop()
 	}
 

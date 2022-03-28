@@ -17,10 +17,10 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/store"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzgo/rpc"
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 	"github.com/echa/config"
 )
 
@@ -40,10 +40,6 @@ var (
 	rpcpass  string
 	notls    bool
 	insecure bool
-
-	// index options
-	lightIndex bool
-	fullIndex  bool
 )
 
 var (
@@ -90,7 +86,7 @@ func openReadOnlyBlockchain() (*etl.Crawler, error) {
 		DBOpts:    DBOpts(engine, true, false),
 		StateDB:   statedb,
 		Indexes:   enabledIndexes(),
-		LightMode: lightIndex,
+		LightMode: true,
 	})
 
 	bc := etl.NewCrawler(etl.CrawlerConfig{
@@ -123,7 +119,7 @@ func openReadWriteBlockchain() (*etl.Crawler, error) {
 		DBOpts:    DBOpts(engine, false, false),
 		StateDB:   statedb,
 		Indexes:   enabledIndexes(),
-		LightMode: lightIndex,
+		LightMode: true,
 	})
 
 	bc := etl.NewCrawler(etl.CrawlerConfig{
@@ -273,35 +269,16 @@ func parseRPCFlags() error {
 }
 
 func enabledIndexes() []model.BlockIndexer {
-	if lightIndex {
-		return []model.BlockIndexer{
-			index.NewAccountIndex(tableOptions("account"), indexOptions("account")),
-			index.NewContractIndex(tableOptions("contract"), indexOptions("contract")),
-			index.NewConstantIndex(tableOptions("constant"), indexOptions("constant")),
-			index.NewBlockIndex(tableOptions("block"), indexOptions("block")),
-			index.NewOpIndex(tableOptions("op"), indexOptions("op")),
-			index.NewFlowIndex(tableOptions("flow")),
-			index.NewChainIndex(tableOptions("chain")),
-			index.NewSupplyIndex(tableOptions("supply")),
-			index.NewBigmapIndex(tableOptions("bigmap"), indexOptions("bigmap")),
-			index.NewMetadataIndex(tableOptions("metadata"), indexOptions("metadata")),
-		}
-	} else {
-		return []model.BlockIndexer{
-			index.NewAccountIndex(tableOptions("account"), indexOptions("account")),
-			index.NewContractIndex(tableOptions("contract"), indexOptions("contract")),
-			index.NewConstantIndex(tableOptions("constant"), indexOptions("constant")),
-			index.NewBlockIndex(tableOptions("block"), indexOptions("block")),
-			index.NewOpIndex(tableOptions("op"), indexOptions("op")),
-			index.NewFlowIndex(tableOptions("flow")),
-			index.NewChainIndex(tableOptions("chain")),
-			index.NewSupplyIndex(tableOptions("supply")),
-			index.NewRightsIndex(tableOptions("right")),
-			index.NewSnapshotIndex(tableOptions("snapshot")),
-			index.NewIncomeIndex(tableOptions("income")),
-			index.NewGovIndex(tableOptions("gov")),
-			index.NewBigmapIndex(tableOptions("bigmap"), indexOptions("bigmap")),
-			index.NewMetadataIndex(tableOptions("metadata"), indexOptions("metadata")),
-		}
+	return []model.BlockIndexer{
+		index.NewAccountIndex(tableOptions("account"), indexOptions("account")),
+		index.NewBalanceIndex(tableOptions("balance")),
+		index.NewContractIndex(tableOptions("contract"), indexOptions("contract")),
+		index.NewConstantIndex(tableOptions("constant"), indexOptions("constant")),
+		index.NewBlockIndex(tableOptions("block"), indexOptions("block")),
+		index.NewOpIndex(tableOptions("op"), indexOptions("op")),
+		index.NewChainIndex(tableOptions("chain")),
+		index.NewSupplyIndex(tableOptions("supply")),
+		index.NewBigmapIndex(tableOptions("bigmap"), indexOptions("bigmap")),
+		index.NewMetadataIndex(tableOptions("metadata"), indexOptions("metadata")),
 	}
 }
