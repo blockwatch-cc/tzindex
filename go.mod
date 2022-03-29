@@ -3,7 +3,7 @@ module blockwatch.cc/tzindex
 go 1.16
 
 require (
-	blockwatch.cc/packdb v0.0.0-20220313152743-fcdc6ca5a311
+	blockwatch.cc/packdb v0.0.0-20220329125928-1a5db8122dd2
 	blockwatch.cc/tzgo v1.12.1-0.20220327181800-ee6e11872924
 	blockwatch.cc/tzpro-go v0.12.1
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d
