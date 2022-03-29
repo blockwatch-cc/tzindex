@@ -422,7 +422,8 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.Operation, id 
 	}
 
 	// read activated amount, required for potential re-routing
-	activated := aop.Fees()[0].Amount()
+	fees := aop.Fees()
+	activated := fees[len(fees)-1].Amount()
 
 	// build op
 	op := model.NewOp(b.block, id)
