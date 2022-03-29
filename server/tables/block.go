@@ -101,7 +101,7 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		NOpsApplied       int                    `json:"n_ops_applied"`
 		NOpsFailed        int                    `json:"n_ops_failed"`
 		NEvents           int                    `json:"n_events"`
-		NContractCalls    int                    `json:"n_contract_calls"`
+		NContractCalls    int                    `json:"n_calls"`
 		Volume            float64                `json:"volume"`
 		Fee               float64                `json:"fee"`
 		Reward            float64                `json:"reward"`
@@ -229,7 +229,7 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NOpsFailed)), 10)
 		case "n_events":
 			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NEvents)), 10)
-		case "n_contract_calls":
+		case "n_calls":
 			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NContractCalls)), 10)
 		case "volume":
 			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Volume), 'f', dec, 64)
@@ -338,9 +338,9 @@ func (b *Block) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NOpsApplied)), 10)
 		case "n_ops_failed":
 			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NOpsFailed)), 10)
-		case "n_ops_implict":
+		case "n_events":
 			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NEvents)), 10)
-		case "n_contract_calls":
+		case "n_calls":
 			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NContractCalls)), 10)
 		case "volume":
 			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Volume), 'f', dec, 64)

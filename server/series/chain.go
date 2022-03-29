@@ -121,11 +121,11 @@ func (c *ChainSeries) MarshalJSONVerbose() ([]byte, error) {
 		TotalContractOps     int64 `json:"total_contract_ops"`
 		TotalContractCalls   int64 `json:"total_contract_calls"`
 		TotalActivations     int64 `json:"total_activations"`
-		TotalSeedNonces      int64 `json:"total_seed_nonce_revelations"`
+		TotalSeedNonces      int64 `json:"total_nonce_revelations"`
 		TotalEndorsements    int64 `json:"total_endorsements"`
 		TotalPreendorsements int64 `json:"total_preendorsements"`
-		TotalDoubleBake      int64 `json:"total_double_baking_evidences"`
-		TotalDoubleEndorse   int64 `json:"total_double_endorsement_evidences"`
+		TotalDoubleBake      int64 `json:"total_double_bakings"`
+		TotalDoubleEndorse   int64 `json:"total_double_endorsements"`
 		TotalDelegations     int64 `json:"total_delegations"`
 		TotalReveals         int64 `json:"total_reveals"`
 		TotalOriginations    int64 `json:"total_originations"`
@@ -229,15 +229,15 @@ func (c *ChainSeries) MarshalJSONBrief() ([]byte, error) {
 				buf = strconv.AppendInt(buf, c.TotalContractCalls, 10)
 			case "total_activations":
 				buf = strconv.AppendInt(buf, c.TotalActivations, 10)
-			case "total_seed_nonce_revelations":
+			case "total_nonce_revelations":
 				buf = strconv.AppendInt(buf, c.TotalSeedNonces, 10)
 			case "total_endorsements":
 				buf = strconv.AppendInt(buf, c.TotalEndorsements, 10)
 			case "total_preendorsements":
 				buf = strconv.AppendInt(buf, c.TotalPreendorsements, 10)
-			case "total_double_baking_evidences":
+			case "total_double_bakings":
 				buf = strconv.AppendInt(buf, c.TotalDoubleBake, 10)
-			case "total_double_endorsement_evidences":
+			case "total_double_endorsements":
 				buf = strconv.AppendInt(buf, c.TotalDoubleEndorse, 10)
 			case "total_delegations":
 				buf = strconv.AppendInt(buf, c.TotalDelegations, 10)
@@ -333,15 +333,15 @@ func (c *ChainSeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(c.TotalContractCalls, 10)
 		case "total_activations":
 			res[i] = strconv.FormatInt(c.TotalActivations, 10)
-		case "total_seed_nonce_revelations":
+		case "total_nonce_revelations":
 			res[i] = strconv.FormatInt(c.TotalSeedNonces, 10)
 		case "total_endorsements":
 			res[i] = strconv.FormatInt(c.TotalEndorsements, 10)
 		case "total_preendorsements":
 			res[i] = strconv.FormatInt(c.TotalPreendorsements, 10)
-		case "total_double_baking_evidences":
+		case "total_double_bakings":
 			res[i] = strconv.FormatInt(c.TotalDoubleBake, 10)
-		case "total_double_endorsement_evidences":
+		case "total_double_endorsements":
 			res[i] = strconv.FormatInt(c.TotalDoubleEndorse, 10)
 		case "total_delegations":
 			res[i] = strconv.FormatInt(c.TotalDelegations, 10)
