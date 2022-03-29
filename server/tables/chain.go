@@ -208,19 +208,19 @@ func (c *Chain) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, c.ActiveDelegators, 10)
 		case "inactive_delegators":
 			buf = strconv.AppendInt(buf, c.InactiveDelegators, 10)
-		case "total_delegates":
+		case "total_bakers":
 			buf = strconv.AppendInt(buf, c.TotalBakers, 10)
-		case "active_delegates":
+		case "active_bakers":
 			buf = strconv.AppendInt(buf, c.ActiveBakers, 10)
-		case "inactive_delegates":
+		case "inactive_bakers":
 			buf = strconv.AppendInt(buf, c.InactiveBakers, 10)
-		case "zero_delegates":
+		case "zero_bakers":
 			buf = strconv.AppendInt(buf, c.ZeroBakers, 10)
-		case "self_delegates":
+		case "self_bakers":
 			buf = strconv.AppendInt(buf, c.SelfBakers, 10)
-		case "single_delegates":
+		case "single_bakers":
 			buf = strconv.AppendInt(buf, c.SingleBakers, 10)
-		case "multi_delegates":
+		case "multi_bakers":
 			buf = strconv.AppendInt(buf, c.MultiBakers, 10)
 		case "rolls":
 			buf = strconv.AppendInt(buf, c.Rolls, 10)
@@ -303,19 +303,19 @@ func (c *Chain) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(c.ActiveDelegators, 10)
 		case "inactive_delegators":
 			res[i] = strconv.FormatInt(c.InactiveDelegators, 10)
-		case "total_delegates":
+		case "total_bakers":
 			res[i] = strconv.FormatInt(c.TotalBakers, 10)
-		case "active_delegates":
+		case "active_bakers":
 			res[i] = strconv.FormatInt(c.ActiveBakers, 10)
-		case "inactive_delegates":
+		case "inactive_bakers":
 			res[i] = strconv.FormatInt(c.InactiveBakers, 10)
-		case "zero_delegates":
+		case "zero_bakers":
 			res[i] = strconv.FormatInt(c.ZeroBakers, 10)
-		case "self_delegates":
+		case "self_bakers":
 			res[i] = strconv.FormatInt(c.SelfBakers, 10)
-		case "single_delegates":
+		case "single_bakers":
 			res[i] = strconv.FormatInt(c.SingleBakers, 10)
-		case "multi_delegates":
+		case "multi_bakers":
 			res[i] = strconv.FormatInt(c.MultiBakers, 10)
 		case "rolls":
 			res[i] = strconv.FormatInt(c.Rolls, 10)

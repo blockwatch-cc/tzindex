@@ -37,7 +37,8 @@ func init() {
 	constantSourceNames = fields.NameMapReverse()
 	constantAllAliases = fields.Aliases()
 	constantSourceNames["creator"] = "C"
-	constantAllAliases = append(constantAllAliases, "creator")
+	constantSourceNames["time"] = "h"
+	constantAllAliases = append(constantAllAliases, "creator", "time")
 }
 
 // configurable marshalling helper
@@ -64,6 +65,7 @@ func (c *Constant) MarshalJSONVerbose() ([]byte, error) {
 		Creator     string `json:"creator"`
 		Value       string `json:"value"`
 		Height      int64  `json:"height"`
+		Time        int64  `json:"time"`
 		StorageSize int64  `json:"storage_size"`
 		Features    string `json:"features"`
 	}{
@@ -73,6 +75,7 @@ func (c *Constant) MarshalJSONVerbose() ([]byte, error) {
 		Creator:     c.ctx.Indexer.LookupAddress(c.ctx, c.CreatorId).String(),
 		Value:       hex.EncodeToString(c.Value),
 		Height:      c.Height,
+		Time:        c.ctx.Indexer.LookupBlockTimeMs(c.ctx.Context, c.Height),
 		StorageSize: c.StorageSize,
 		Features:    c.Features.String(),
 	}
@@ -100,6 +103,8 @@ func (c *Constant) MarshalJSONBrief() ([]byte, error) {
 			}
 		case "height":
 			buf = strconv.AppendInt(buf, c.Height, 10)
+		case "time":
+			buf = strconv.AppendInt(buf, c.ctx.Indexer.LookupBlockTimeMs(c.ctx.Context, c.Height), 10)
 		case "storage_size":
 			buf = strconv.AppendInt(buf, c.StorageSize, 10)
 		case "features":
@@ -131,6 +136,8 @@ func (c *Constant) MarshalCSV() ([]string, error) {
 			res[i] = strconv.Quote(hex.EncodeToString(c.Value))
 		case "height":
 			res[i] = strconv.FormatInt(c.Height, 10)
+		case "time":
+			res[i] = strconv.FormatInt(c.ctx.Indexer.LookupBlockTimeMs(c.ctx.Context, c.Height), 10)
 		case "storage_size":
 			res[i] = strconv.FormatInt(c.StorageSize, 10)
 		case "features":
