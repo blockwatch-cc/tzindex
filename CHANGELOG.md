@@ -1,5 +1,12 @@
 # Changelog
 
+### v12.0.1 (v012-2022-03-25/light)
+
+- API: Fix resource leak at desc query
+- ETL: Fix activation op balance
+- API: Fix block and chain table column names
+- ETL: Fix packdb journal delete state
+
 ### v12.0.0 (API v012-2022-03-25/light)
 
 Ithaca consensus upgrade with new operation types, new balance updates and new deposit/reward payment mechanics. We reorganized tables by removing unnecessary data and statistics to save on-disc storage and cache memory. As Ithaca changes many concepts, terminology and transaction types we took the opportunity to overhaul the entire API, adding new baker and balance tables. With Tezos growing beyond the staking/baking use case we also decided to drop several baker/consensus data tables that were expensive to maintain, but provided limit benefits to the larger Tezos dapp ecosystem.
