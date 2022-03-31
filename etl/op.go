@@ -121,12 +121,14 @@ func (b *Builder) AppendImplicitEvents(ctx context.Context) error {
 			}
 		case model.FlowTypeBonus:
 			// Ithaca+
-			// assuming only one flow per baker
 			if ops[f.OpN] == nil {
 				id.Kind = model.OpTypeBonus
 				ops[f.OpN] = model.NewEventOp(b.block, f.AccountId, id)
 				ops[f.OpN].SenderId = f.AccountId
 				ops[f.OpN].Reward = f.AmountIn
+			} else {
+				// add bonus to existing block proposer
+				ops[f.OpN].Reward += f.AmountIn
 			}
 		case model.FlowTypeReward:
 			// Ithaca+
