@@ -1,5 +1,14 @@
 # Changelog
 
+### v12.0.2 (v012-2022-03-25)
+
+- DB: fixed OR condition early return with empty args
+- API: Fix pre/post-Ithaca cycle selection
+- API: Fix contract table by code/iface/storage hash query
+- API: Add total contracts count to tip
+- ETL: Fix counting block bonus
+- ETL: Support preendorsement power
+
 ### v12.0.1 (v012-2022-03-25/light)
 
 - API: Fix resource leak at desc query
