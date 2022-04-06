@@ -53,13 +53,14 @@ type OperationMetadata struct {
 	InternalResults []InternalResult `json:"internal_operation_results,omitempty"`
 
 	// endorsement only
-	Delegate tezos.Address `json:"delegate"`
-	Slots    []int         `json:"slots,omitempty"`
-	Power    int           `json:"endorsement_power,omitempty"`
+	Delegate            tezos.Address `json:"delegate"`
+	Slots               []int         `json:"slots,omitempty"`
+	EndorsementPower    int           `json:"endorsement_power,omitempty"`    // v12+
+	PreendorsementPower int           `json:"preendorsement_power,omitempty"` // v12+
 }
 
-func (m OperationMetadata) EndorsementPower() int {
-	return m.Power + len(m.Slots)
+func (m OperationMetadata) Power() int {
+	return m.EndorsementPower + len(m.Slots)
 }
 
 // Address returns the delegate address for endorsements.

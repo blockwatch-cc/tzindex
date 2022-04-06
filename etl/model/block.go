@@ -391,7 +391,7 @@ func (b *Block) Update(accounts map[AccountID]*Account, bakers map[AccountID]*Ba
 
 		case OpTypeEndorsement:
 			// pre-Ithace endorsements pay deposit and mint frozen rewards
-			endorsedSlots += op.Raw.Meta().EndorsementPower()
+			endorsedSlots += op.Raw.Meta().Power()
 			b.MintedSupply += op.Reward
 
 		case OpTypeNonceRevelation:
