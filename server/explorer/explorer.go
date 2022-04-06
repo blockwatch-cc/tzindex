@@ -76,6 +76,7 @@ type BlockchainTip struct {
 	Protocol    tezos.ProtocolHash `json:"protocol"`
 
 	TotalAccounts  int64 `json:"total_accounts"`
+	TotalContracts int64 `json:"total_contracts"`
 	FundedAccounts int64 `json:"funded_accounts"`
 	DustAccounts   int64 `json:"dust_accounts"`
 	DustDelegators int64 `json:"dust_delegators"`
@@ -167,6 +168,7 @@ func buildBlockchainTip(ctx *server.Context, tip *model.ChainTip) *BlockchainTip
 		Cycle:          ch.Cycle,
 		TotalOps:       ch.TotalOps,
 		TotalAccounts:  ch.TotalAccounts,
+		TotalContracts: ch.TotalContracts,
 		FundedAccounts: ch.FundedAccounts,
 		DustAccounts:   ch.DustAccounts,
 		DustDelegators: ch.DustDelegators,
