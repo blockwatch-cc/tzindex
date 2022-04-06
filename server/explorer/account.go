@@ -66,8 +66,6 @@ type Account struct {
 	TokenGenMin        int64                `json:"token_gen_min"`
 	TokenGenMax        int64                `json:"token_gen_max"`
 	Metadata           map[string]*Metadata `json:"metadata,omitempty"`
-	LifetimeRewards    *float64             `json:"lifetime_rewards,omitempty"`
-	PendingRewards     *float64             `json:"pending_rewards,omitempty"`
 
 	// LEGACY
 	Ops OpList `json:"ops,omitempty"`
@@ -248,23 +246,6 @@ func ReadAccount(ctx *server.Context) (interface{}, int) {
 	args := &AccountRequest{}
 	ctx.ParseRequestArgs(args)
 	return NewAccount(ctx, loadAccount(ctx), args), http.StatusOK
-}
-
-type Payout struct {
-	LifetimeRewards float64 `json:"lifetime_rewards"`
-	PendingRewards  float64 `json:"pending_rewards"`
-
-	// caching
-	expires time.Time `json:"-"`
-	lastmod time.Time `json:"-"`
-}
-
-func (p Payout) LastModified() time.Time {
-	return p.lastmod
-}
-
-func (p Payout) Expires() time.Time {
-	return p.expires
 }
 
 func ReadManagedAccounts(ctx *server.Context) (interface{}, int) {
