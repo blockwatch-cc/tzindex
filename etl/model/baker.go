@@ -107,7 +107,7 @@ func (b Baker) StakingBalance() int64 {
 // v12+ locked deposits
 func (b Baker) ActiveStake(p *tezos.Params, netRolls int64) int64 {
     if p.Version < 12 {
-        return util.Min64(b.StakingBalance(), b.StakingCapacity(p, netRolls)+b.TotalBalance())
+        return util.Min64(b.StakingBalance(), b.StakingCapacity(p, netRolls))
     }
     deposit_cap := util.Min64(b.DepositsLimit, b.TotalBalance())
     if deposit_cap < 0 {
@@ -129,18 +129,17 @@ func (b Baker) StakingCapacity(p *tezos.Params, netRolls int64) int64 {
         netBond := blockDeposits * p.BlocksPerCycle * (p.PreservedCycles + 1)
         netStake := netRolls * p.TokensPerRoll
         // numeric overflow is likely
-        return int64(float64(b.TotalBalance())*float64(netStake)/float64(netBond)) - b.TotalBalance()
+        return int64(float64(b.TotalBalance()) * float64(netStake) / float64(netBond))
     }
 
     // 10% of staking balance must be locked
     // deposit = stake * frozen_deposits_percentage / 100
     // max_stake = total_balance / frozen_deposits_percentage * 100
-    // max_delegation = max_stake - total_balance
     deposit_cap := util.Min64(b.DepositsLimit, b.TotalBalance())
     if deposit_cap < 0 {
         deposit_cap = b.TotalBalance()
     }
-    return deposit_cap*100/int64(p.FrozenDepositsPercentage) - b.TotalBalance()
+    return deposit_cap * 100 / int64(p.FrozenDepositsPercentage)
 }
 
 func (b *Baker) SetVersion(nonce uint64) {
