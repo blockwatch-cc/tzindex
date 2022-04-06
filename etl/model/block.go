@@ -431,8 +431,8 @@ func (b *Block) Update(accounts map[AccountID]*Account, bakers map[AccountID]*Ba
 				} else {
 					b.Volume += op.Volume
 				}
-				// only count calls with params
-				if tx.Source.IsEOA() && tx.Destination.IsContract() && len(op.Parameters) > 0 {
+				// only count external calls with params
+				if !op.IsInternal && tx.Destination.IsContract() && len(op.Parameters) > 0 {
 					b.NContractCalls++
 				}
 			}
