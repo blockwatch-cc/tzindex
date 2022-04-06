@@ -355,7 +355,7 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 	// fetch and index genesis block
 	if firstRun {
 		log.Info("Fetching genesis block.")
-		tzblock, err := c.fetchBlockByHeight(ctx, 0)
+		tzblock, err := c.fetchBlock(ctx, rpc.Genesis)
 		if err != nil {
 			c.setState(STATE_FAILED)
 			return err
@@ -666,9 +666,9 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 				err     error
 			)
 			if nextHash.IsValid() {
-				tzblock, err = c.fetchBlockByHash(c.ctx, nextHash)
+				tzblock, err = c.fetchBlock(c.ctx, nextHash)
 			} else {
-				tzblock, err = c.fetchBlockByHeight(c.ctx, lastblock+1)
+				tzblock, err = c.fetchBlock(c.ctx, rpc.BlockLevel(lastblock+1))
 			}
 
 			// be resilient to network errors
@@ -1074,7 +1074,7 @@ func (c *Crawler) fetchParamsForBlock(ctx context.Context, block *rpc.Block) (*t
 	return params, nil
 }
 
-func (c *Crawler) fetchBlockByHash(ctx context.Context, blockID tezos.BlockHash) (*rpc.Bundle, error) {
+func (c *Crawler) fetchBlock(ctx context.Context, blockID rpc.BlockID) (*rpc.Bundle, error) {
 	b := &rpc.Bundle{}
 	var err error
 	if b.Block, err = c.rpc.GetBlock(ctx, blockID); err != nil {
@@ -1092,28 +1092,7 @@ func (c *Crawler) fetchBlockByHash(ctx context.Context, blockID tezos.BlockHash)
 		return nil, err
 	}
 
-	height := b.Block.Header.Level
-	b.Cycle = b.Params.CycleFromHeight(height)
-	return b, nil
-}
-
-func (c *Crawler) fetchBlockByHeight(ctx context.Context, height int64) (*rpc.Bundle, error) {
-	b := &rpc.Bundle{}
-	var err error
-	if b.Block, err = c.rpc.GetBlock(ctx, rpc.BlockLevel(height)); err != nil {
-		return nil, err
-	}
-	if c.chainId.IsValid() && !c.chainId.Equal(b.Block.ChainId) {
-		return nil, fmt.Errorf("block init: invalid chain %s (expected %s)",
-			b.Block.ChainId, c.chainId)
-	}
-	if !b.Block.Metadata.Protocol.IsValid() {
-		return nil, fmt.Errorf("block init: empty metadata in RPC response (maybe you are not using an archive node)")
-	}
-	b.Params, err = c.fetchParamsForBlock(ctx, b.Block)
-	if err != nil {
-		return nil, err
-	}
+	height := b.Block.GetLevel()
 	b.Cycle = b.Params.CycleFromHeight(height)
 	return b, nil
 }

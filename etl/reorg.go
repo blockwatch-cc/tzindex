@@ -375,7 +375,7 @@ findfork:
 		// log.Debugf("REORGANIZE: looking for parent block %d %s", ancestor.Height-1, h)
 		if parent, err := c.indexer.BlockByHash(ctx, h, 0, 0); err != nil {
 			// when block is missing from DB, resolve as new block via RPC
-			if tz, err := c.fetchBlockByHash(ctx, h); err != nil {
+			if tz, err := c.fetchBlock(ctx, h); err != nil {
 				log.Errorf("REORGANIZE failed fetching main chain block %s: %s", h, err)
 				return nil, nil, nil, err
 			} else {
