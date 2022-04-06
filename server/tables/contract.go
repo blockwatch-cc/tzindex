@@ -508,29 +508,28 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
-		case "iface_hash", "code_hash":
+		case "iface_hash", "code_hash", "storage_hash":
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
-				// single-address lookup and compile condition
 				buf, err := hex.DecodeString(val[0])
-				if err != nil {
+				if err != nil || len(buf) != 8 {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid hash '%s'", val[0]), err))
 				}
 				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find(field),
 					Mode:  mode,
-					Value: buf,
+					Value: binary.BigEndian.Uint64(buf[:8]),
 					Raw:   val[0], // debugging aid
 				})
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-hash lookup
-				hashes := make([][]byte, 0)
+				hashes := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
 					buf, err := hex.DecodeString(v)
-					if err != nil {
+					if err != nil || len(buf) != 8 {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid hash '%s'", v), err))
 					}
-					hashes = append(hashes, buf)
+					hashes = append(hashes, binary.BigEndian.Uint64(buf[:8]))
 				}
 				q.Conditions.AddAndCondition(&pack.Condition{
 					Field: table.Fields().Find(field),
