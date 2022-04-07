@@ -110,7 +110,7 @@ func (c Collapse) Truncate(t time.Time) time.Time {
 	switch c.Unit {
 	default:
 		// anything below a day is fine for go's time library
-		return t.Truncate(c.Duration() * time.Duration(c.Value))
+		return t.Truncate(c.Duration())
 	case 'w':
 		// truncate to midnight on first day of week (weekdays are zero-based)
 		if c.Value == 1 {
@@ -162,7 +162,7 @@ func (c Collapse) Next(t time.Time, n int) time.Time {
 	}
 }
 
-func (c Collapse) Steps(from, to time.Time) []time.Time {
+func (c Collapse) Steps(from, to time.Time, limit uint) []time.Time {
 	steps := make([]time.Time, 0)
 	if from.After(to) {
 		from, to = to, from
@@ -173,6 +173,9 @@ func (c Collapse) Steps(from, to time.Time) []time.Time {
 			break
 		}
 		steps = append(steps, from)
+		if len(steps) == int(limit) {
+			break
+		}
 	}
 	return steps
 }
@@ -701,7 +704,7 @@ func (args *SeriesRequest) StreamCSV(ctx *server.Context) error {
 }
 
 func (args *SeriesRequest) Fill(from, to time.Time, fillFunc func(SeriesBucket) error) error {
-	for _, ts := range args.Collapse.Steps(from, to) {
+	for _, ts := range args.Collapse.Steps(from, to, args.Limit) {
 		if args.Limit > 0 && args.count >= int(args.Limit) {
 			return io.EOF
 		}

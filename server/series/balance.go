@@ -128,7 +128,7 @@ func (s *BalanceSeries) MarshalJSONVerbose() ([]byte, error) {
 
 func (s *BalanceSeries) MarshalJSONBrief() ([]byte, error) {
     dec := s.params.Decimals
-    buf := make([]byte, 0, 2048)
+    buf := make([]byte, 0, 1028)
     buf = append(buf, '[')
     for i, v := range s.columns {
         if s.null {
@@ -167,15 +167,15 @@ func (s *BalanceSeries) MarshalCSV() ([]string, error) {
             default:
                 continue
             }
-
-        }
-        switch v {
-        case "time":
-            res[i] = strconv.Quote(s.Timestamp.Format(time.RFC3339))
-        case "balance":
-            res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Balance), 'f', dec, 64)
-        default:
-            continue
+        } else {
+            switch v {
+            case "time":
+                res[i] = strconv.Quote(s.Timestamp.Format(time.RFC3339))
+            case "balance":
+                res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Balance), 'f', dec, 64)
+            default:
+                continue
+            }
         }
     }
     return res, nil
