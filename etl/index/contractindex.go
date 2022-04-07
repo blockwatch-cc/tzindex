@@ -11,7 +11,6 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzindex/etl/model"
-	"blockwatch.cc/tzindex/rpc"
 )
 
 const (
@@ -148,23 +147,17 @@ func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 			continue
 		}
 
-		// filter relevant op types
 		switch op.Type {
-		case model.OpTypeOrigination, model.OpTypeMigration, model.OpTypeTransaction:
-		default:
-			continue
-		}
-
-		switch op.Type {
-		case model.OpTypeTransaction:
-			// when contract is updated, load from builder cache
+		case model.OpTypeTransaction, model.OpTypeSubsidy:
+			// load from builder cache
 			contract, ok := builder.ContractById(op.ReceiverId)
 			if !ok {
 				return fmt.Errorf("contract: missing contract %d in %s op [%d:%d]",
 					op.ReceiverId, op.Type, 3, op.OpP)
 			}
-			// skip contracts that have been originated in this block, they will
-			// be inserted below
+
+			// skip contracts that have been originated in this block, they have
+			// been added to the insertion list below
 			if contract.RowId == 0 {
 				continue
 			}
@@ -175,59 +168,18 @@ func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 				contract.IsDirty = false
 			}
 
-		case model.OpTypeOrigination:
-			// load corresponding account
-			acc, ok := builder.AccountById(op.ReceiverId)
-			if !ok {
-				return fmt.Errorf("contract: missing account %d in %s op", op.ReceiverId, op.Type)
-			}
-			if op.Raw != nil {
-				// when contract is new, create model from rpc origination op
-				if op.IsInternal {
-					// on internal originations, find corresponding internal op
-					top, ok := op.Raw.(*rpc.Transaction)
-					if !ok {
-						return fmt.Errorf("contract: internal %s op [%d:%d]: unexpected type %T",
-							op.Raw.Kind(), 3, op.OpP, op.Raw)
-					}
-					iop := top.Metadata.InternalResults[op.OpI]
-					ins = append(ins, model.NewInternalContract(acc, iop, op, builder.Constants()))
-				} else {
-					oop, ok := op.Raw.(*rpc.Origination)
-					if !ok {
-						return fmt.Errorf("contract: %s op [%d:%d]: unexpected type %T",
-							op.Raw.Kind(), 3, op.OpP, op.Raw)
-					}
-					ins = append(ins, model.NewContract(acc, oop, op, builder.Constants(), block.Params))
-				}
-			} else {
-				// implicit contracts from migration originations are in builder cache
-				contract, ok := builder.ContractById(op.ReceiverId)
-				if !ok {
-					return fmt.Errorf("contract: missing contract %d in %s op [%d:%d]",
-						op.ReceiverId, op.Type, 3, op.OpP)
-				}
-				if contract.IsNew {
-					// insert new delegator contracts
-					ins = append(ins, contract)
-				} else {
-					// update patched smart contracts (only once is guaranteed)
-					upd = append(upd, contract)
-				}
-			}
-
-		case model.OpTypeMigration:
-			// when contract is migrated, load from builder cache
+		case model.OpTypeOrigination, model.OpTypeMigration:
+			// load from builder cache
 			contract, ok := builder.ContractById(op.ReceiverId)
 			if !ok {
 				return fmt.Errorf("contract: missing contract %d in %s op [%d:%d]",
 					op.ReceiverId, op.Type, 3, op.OpP)
 			}
 			if contract.IsNew {
-				// insert new delegator contracts
+				// insert new contracts
 				ins = append(ins, contract)
 			} else {
-				// update patched smart contracts (only once is guaranteed)
+				// update patched smart contracts on migration (only once is guaranteed)
 				upd = append(upd, contract)
 			}
 		}

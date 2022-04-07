@@ -1675,11 +1675,8 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.Operation, id
 				newbkr.Account.IsDirty = true
 			}
 
-			// create and register a temporary contract for potential use by
-			// subsequent transactions in the same block (this happened once
-			// on Carthagenet block 346116); the actual contract table entry
-			// is later created & inserted separately in contract index and
-			// this temporary object is discarded
+			// create and register a new contract here; the contract index
+			// will pick this up later & inserted a database row
 			dstCon := model.NewContract(dst, oop, op, nil, b.block.Params)
 
 			// if oop.Script.Code.Storage.ContainsOpCode(micheline.T_BIG_MAP) {
@@ -1880,11 +1877,8 @@ func (b *Builder) AppendInternalOriginationOp(
 				newbkr.Account.IsDirty = true
 			}
 
-			// create and register temporary a contract for potential use by
-			// subsequent transactions in the same block (this happened once
-			// on Carthagenet block 346116); the actual contract table entry
-			// is later created & inserted separately in contract index and
-			// this temporary object is discarded
+			// create and register a new contract here; the contract index
+			// will pick this up later & inserted a database row
 			dstCon := model.NewInternalContract(dst, iop, op, nil)
 
 			// if iop.Script.Code.Storage.ContainsOpCode(micheline.T_BIG_MAP) {

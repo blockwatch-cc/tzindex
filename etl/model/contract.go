@@ -222,15 +222,15 @@ func (c *Contract) Reset() {
 
 // update storage size and size paid
 func (c *Contract) UpdateStorage(op *Op, storage micheline.Prim) {
-	if !storage.IsValid() {
-		return
+	if storage.IsValid() {
+		hash := storage.Hash64()
+		if hash != c.StorageHash {
+			c.Storage, _ = storage.MarshalBinary()
+			c.StorageHash = hash
+			c.StorageSize = int64(len(c.Storage))
+		}
 	}
-	hash := storage.Hash64()
-	if hash != c.StorageHash {
-		c.Storage, _ = storage.MarshalBinary()
-		c.StorageSize = int64(len(c.Storage))
-		c.StoragePaid += op.StoragePaid
-	}
+	c.StoragePaid += op.StoragePaid
 	c.LastSeen = op.Height
 	c.IncCallStats(op.Entrypoint)
 	c.IsDirty = true
