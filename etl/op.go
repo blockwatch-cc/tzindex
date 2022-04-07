@@ -577,6 +577,8 @@ func (b *Builder) AppendEndorsementOp(ctx context.Context, oh *rpc.Operation, id
 			bkr.InitGracePeriod(b.block.Cycle, b.block.Params)
 		}
 		bkr.IsDirty = true
+		bkr.Account.LastSeen = b.block.Height
+		bkr.Account.IsDirty = true
 	} else {
 		// don't update inactivity because we don't know its previous state
 		bkr.NBakerOps--
@@ -587,6 +589,8 @@ func (b *Builder) AppendEndorsementOp(ctx context.Context, oh *rpc.Operation, id
 			bkr.SlotsEndorsed -= int64(power)
 		}
 		bkr.IsDirty = true
+		bkr.Account.LastSeen = b.block.Height - 1 // approximation
+		bkr.Account.IsDirty = true
 	}
 	return nil
 }
