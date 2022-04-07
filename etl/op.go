@@ -538,8 +538,9 @@ func (b *Builder) AppendEndorsementOp(ctx context.Context, oh *rpc.Operation, id
 	op.IsSuccess = true
 	op.SenderId = bkr.AccountId
 
-	// store endorsed slots as data
-	power := meta.EndorsementPower + meta.PreendorsementPower
+	// pre-Ithaca: use slots
+	// post-Ithaca: use EndorsementPower and PreendorsementPower
+	power := meta.EndorsementPower + meta.PreendorsementPower + len(meta.Slots)
 	op.Data = strconv.Itoa(power)
 
 	// build flows; post-Ithaca this is empty
