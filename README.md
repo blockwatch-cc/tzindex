@@ -57,6 +57,8 @@ Starting v12 we are no longer supporting baker `rights`, `snapshots`, `income` a
 
 Runs against any Tezos Archive Node (also full nodes when cycle 0 history is not yet pruned). This can be a local node or one of the public Tezos RPC nodes on the Internet. Note that syncing from public nodes over the Internet works but may be slow.
 
+**IMPORTANT: WHEN USING OCTEZ V12+ YOU MUST RUN YOUR ARCHIVE NODE WITH `--metadata-size-limit unlimited`**
+
 Requires access to the following Tezos RPC calls
 
 ```

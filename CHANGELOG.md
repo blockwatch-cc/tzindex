@@ -1,5 +1,13 @@
 # Changelog
 
+### unreleased (v012-2022-03-25)
+
+- API: Fix time-series mem-leak
+- ETL: Fix contract table updates
+- ETL: Fix counting pre-Ithaca endorsement slots/power
+- ETL: Set last seen on endorsing ops
+- API: Revert subtracting baker own balance from staking capacity
+
 ### v12.0.2 (v012-2022-03-25)
 
 - DB: fixed OR condition early return with empty args
