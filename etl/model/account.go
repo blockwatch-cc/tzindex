@@ -261,7 +261,7 @@ func (a *Account) UpdateBalance(f *Flow) error {
 	}
 
 	// any flow contributes to `last seen`
-	a.IsFunded = a.SpendableBalance > 0
+	a.IsFunded = a.IsBaker || a.SpendableBalance > 0
 	a.LastSeen = util.Max64(a.LastSeen, f.Height)
 
 	// reset token generation
@@ -330,7 +330,7 @@ func (a *Account) RollbackBalance(f *Flow) error {
 
 	// skip activity updates (too complex to track previous in/out heights)
 	// and rely on subsequent block updates, we still set LastSeen to the current block
-	a.IsFunded = a.SpendableBalance > 0
+	a.IsFunded = a.IsBaker || a.SpendableBalance > 0
 	a.LastSeen = util.Min64(f.Height, util.Max64(a.LastIn, a.LastOut))
 	return nil
 }
