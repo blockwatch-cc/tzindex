@@ -514,6 +514,10 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 	// collect from ops
 	for _, oll := range b.block.TZ.Block.Operations {
 		for _, oh := range oll {
+			// check for pruned metadata
+			if len(oh.Metadata) > 0 {
+				return fmt.Errorf("metadata %s! Your archive node has pruned metadata and must be rebuilt. Always run Octez v12.x with --metadata-size-limit unlimited. Sorry for your trouble.", oh.Metadata)
+			}
 			// parse operations
 			for _, op := range oh.Contents {
 				switch kind := op.Kind(); kind {

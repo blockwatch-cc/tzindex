@@ -16,7 +16,8 @@ import (
 type Operation struct {
 	Hash     tezos.OpHash     `json:"hash"`
 	Contents OperationList    `json:"contents"`
-	Errors   []OperationError `json:"error,omitempty"` // mempool only
+	Errors   []OperationError `json:"error,omitempty"`    // mempool only
+	Metadata string           `json:"metadata,omitempty"` // contains `too large` when stripped, this is BAD!!
 }
 
 // TypedOperation must be implemented by all operations
