@@ -1,7 +1,10 @@
 # Changelog
 
-### unreleased (v012-2022-03-25)
+### v12.0.3 (v012-2022-03-25)
 
+- ETL: Detect pruned metadata and fail safely
+- ETL: Refactor crawler state handling for more robustness
+- ETL: Keep bakers always in funded state
 - API: Fix time-series mem-leak
 - ETL: Fix contract table updates
 - ETL: Fix counting pre-Ithaca endorsement slots/power
