@@ -343,8 +343,7 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 				continue
 			}
 			if md, ok := lookupMetadataById(ctx, v, 0, false); ok {
-				a := ctx.Indexer.LookupAddress(ctx, v)
-				meta[a.String()] = md
+				meta[md.Address.String()] = md
 			}
 		}
 		if len(meta) > 0 {
