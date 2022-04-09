@@ -39,6 +39,11 @@ const (
 	MODE_ROLLBACK Mode = "rollback"
 )
 
+const (
+	MONITOR_DISABLE = true
+	MONITOR_KEEP    = false
+)
+
 type State string
 
 const (
@@ -153,24 +158,49 @@ func (c *Crawler) IsDegraded() bool {
 	return c.state != STATE_SYNCHRONIZED
 }
 
-func (c *Crawler) setState(state State, args ...string) {
-	isMonActive := c.useMonitor
+func (c *Crawler) setState(state State, disableMonitor bool, args ...string) bool {
+	var logStr string
+	c.Lock()
+	isMonActive := c.useMonitor && !disableMonitor
 	if state == STATE_SYNCHRONIZED {
 		if c.enableMonitor {
-			if !isMonActive && !c.wasInSync {
-				logStr := "Fully synchronized. Switching to monitor mode."
+			// log only when we're coming out of unsync
+			if c.useMonitor && !c.wasInSync {
+				logStr = "Fully synchronized. Switching to monitor mode."
 				if len(args) > 0 {
 					logStr = args[0]
 				}
-				log.Info(logStr)
 				c.wasInSync = true
 			}
-			isMonActive = true
+			// reset new target state
+			isMonActive = !disableMonitor
+		} else {
+			isMonActive = false
 		}
 	}
-	c.Lock()
 	c.state = state
 	c.useMonitor = isMonActive
+	c.Unlock()
+	if logStr != "" {
+		log.Info(logStr)
+	}
+	return isMonActive
+}
+
+func (c *Crawler) getState() (State, bool) {
+	var (
+		s State
+		m bool
+	)
+	c.RLock()
+	s, m = c.state, c.useMonitor
+	c.RUnlock()
+	return s, m
+}
+
+func (c *Crawler) disableMonitor() {
+	c.Lock()
+	c.useMonitor = false
 	c.Unlock()
 }
 
@@ -326,26 +356,26 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 
 	// skip RPC init if not required
 	if c.rpc == nil || mode == MODE_INFO {
-		c.setState(STATE_STOPPED)
+		c.setState(STATE_STOPPED, MONITOR_DISABLE)
 		return nil
 	}
 
 	// wait for RPC to become ready
-	c.setState(STATE_CONNECTING)
+	c.setState(STATE_CONNECTING, MONITOR_KEEP)
 	log.Info("Connecting to RPC server.")
 	for {
 		if err := c.fetchBlockchainInfo(ctx); err != nil {
 			if err == context.Canceled {
-				c.setState(STATE_STOPPED)
+				c.setState(STATE_STOPPED, MONITOR_DISABLE)
 				return err
 			}
 			log.Errorf("Connection failed: %s", err)
 			select {
 			case <-ctx.Done():
-				c.setState(STATE_STOPPED)
+				c.setState(STATE_STOPPED, MONITOR_DISABLE)
 				return ctx.Err()
 			case <-time.After(5 * time.Second):
-				c.setState(STATE_CONNECTING)
+				c.setState(STATE_CONNECTING, MONITOR_KEEP)
 			}
 		} else {
 			break
@@ -357,14 +387,14 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 		log.Info("Fetching genesis block.")
 		tzblock, err := c.fetchBlock(ctx, rpc.Genesis)
 		if err != nil {
-			c.setState(STATE_FAILED)
+			c.setState(STATE_FAILED, MONITOR_DISABLE)
 			return err
 		}
 
 		// build a new genesis block from rpc.Block
 		genesis, err := c.builder.Build(ctx, tzblock)
 		if err != nil {
-			c.setState(STATE_FAILED)
+			c.setState(STATE_FAILED, MONITOR_DISABLE)
 			return err
 		}
 		log.Infof("Crawling %s %s.", genesis.Params.Name, genesis.Params.Network)
@@ -378,7 +408,7 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 
 			// add to all indexes
 			if err := c.indexer.ConnectBlock(ctx, genesis, c.builder); err != nil {
-				c.setState(STATE_FAILED)
+				c.setState(STATE_FAILED, MONITOR_DISABLE)
 				return err
 			}
 			// keep as best block
@@ -408,7 +438,7 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 		if mode == MODE_SYNC {
 			// retry database snapshot in case it failed last time
 			if err := c.MaybeSnapshot(ctx); err != nil {
-				c.setState(STATE_FAILED)
+				c.setState(STATE_FAILED, MONITOR_DISABLE)
 				return fmt.Errorf("Snapshot failed at block %d: %v", c.Height(), err)
 			}
 		}
@@ -469,7 +499,7 @@ func (c *Crawler) Stop(ctx context.Context) {
 	// wait for done channel to become readable or closed,
 	// meaning all goroutines have exited by now
 	<-done
-	c.setState(STATE_STOPPED)
+	c.setState(STATE_STOPPED, MONITOR_DISABLE)
 	log.Info("Stopped blockchain crawler.")
 }
 
@@ -479,7 +509,7 @@ func (c *Crawler) runMonitor(next chan<- tezos.BlockHash) {
 	defer c.wg.Done()
 	var mon *rpc.BlockHeaderMonitor
 	defer func() {
-		c.useMonitor = false
+		c.disableMonitor()
 		if mon != nil {
 			mon.Close()
 		}
@@ -504,7 +534,7 @@ func (c *Crawler) runMonitor(next chan<- tezos.BlockHash) {
 				if err != context.Canceled {
 					log.Errorf("monitor error: %s", err)
 				}
-				c.useMonitor = false
+				c.disableMonitor()
 				mon.Close()
 				mon = nil
 				// wait 5 sec, but also return on shutdown
@@ -533,12 +563,12 @@ func (c *Crawler) runMonitor(next chan<- tezos.BlockHash) {
 			mon.Close()
 			mon = nil
 			log.Debugf("Exiting monitor mode on error: %v", err)
-			c.useMonitor = false
+			c.disableMonitor()
 			continue
 		}
 
 		// skip messages until we have caught up with chain head
-		if !c.useMonitor {
+		if _, ok := c.getState(); !ok {
 			// log.Infof("Monitor skipping block %d %s (not synchronized)", head.Level, head.Hash)
 			continue
 		}
@@ -597,10 +627,7 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 			return
 		case <-tick.C:
 			// log.Debugf("Tick %s", c.useMonitor)
-			c.RLock()
-			useMon = c.useMonitor
-			state = c.state
-			c.RUnlock()
+			state, useMon = c.getState()
 			if !useMon {
 				// this helps survive a broken monitoring channel
 				if err := c.fetchBlockchainInfo(c.ctx); err != nil {
@@ -613,15 +640,12 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 			}
 			continue
 		case nextHash = <-next:
-			c.RLock()
-			useMon = c.useMonitor
-			state = c.state
-			c.RUnlock()
+			state, useMon = c.getState()
 			// on startup, check if we're already synchronized even
 			// without having processed a block
 			if !nextHash.IsValid() && state == STATE_CONNECTING {
 				if c.bchead != nil && c.Height()+c.delay == c.bchead.Level {
-					c.setState(STATE_SYNCHRONIZED, "Already synchronized. Starting in monitor mode.")
+					c.setState(STATE_SYNCHRONIZED, MONITOR_KEEP, "Already synchronized. Starting in monitor mode.")
 				}
 			}
 			// process next block
@@ -635,7 +659,7 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 			case <-c.quit:
 			case <-c.ctx.Done():
 			case <-time.After(5 * time.Second):
-				c.setState(STATE_CONNECTING)
+				c.setState(STATE_CONNECTING, MONITOR_KEEP)
 				if err := c.fetchBlockchainInfo(c.ctx); err == nil {
 					log.Info("crawler: RPC connection OK.")
 				}
@@ -659,43 +683,38 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 			if interruptRequested(c.ctx) {
 				continue
 			}
-			// log.Infof("Fetching next block %d %s", lastblock+1, nextHash)
 
 			var (
 				tzblock *rpc.Bundle
 				err     error
 			)
 			if nextHash.IsValid() {
+				log.Debugf("crawler: fetching next block %s", nextHash)
 				tzblock, err = c.fetchBlock(c.ctx, nextHash)
 			} else {
+				log.Debugf("crawler: fetching next block %d", lastblock+1)
 				tzblock, err = c.fetchBlock(c.ctx, rpc.BlockLevel(lastblock+1))
 			}
 
 			// be resilient to network errors
 			if tzblock != nil {
 				// push block through reorg/delay filter and into finalized queue; may block
-				// log.Debugf("crawler: queuing block %d %s q=%d", tzblock.Height(), tzblock.Hash(), len(c.finalized))
+				log.Debugf("crawler: queuing block %d %s q=%d", tzblock.Height(), tzblock.Hash(), len(c.finalized))
 				err := c.filter.Push(c.ctx, tzblock, c.quit)
 				if err != nil {
 					switch err {
 					case ErrGapDetected:
 						// leave monitor mode and fall back to crawling
 						log.Debugf("crawler: gap size %d detected. Falling back to crawl mode.", tzblock.Height()-lastblock-1)
-						c.setState(STATE_SYNCHRONIZING)
-						c.RLock()
-						c.useMonitor = false
-						c.RUnlock()
+						useMon = c.setState(STATE_SYNCHRONIZING, MONITOR_DISABLE)
 
 					case ErrReorgDetected:
 						// clear filter, leave monitor mode and fall back to crawling
 						log.Debugf("crawler: reorg detected at %d. Falling back to crawl mode.", tzblock.Height())
 						c.filter.Reset()
-						c.setState(STATE_SYNCHRONIZING)
-						c.RLock()
-						c.useMonitor = false
-						useMon = false
+						useMon = c.setState(STATE_SYNCHRONIZING, MONITOR_DISABLE)
 						lastblock -= c.delay
-						c.RUnlock()
+
 						// give the node/proxy some time to catch up
 						time.Sleep(time.Second)
 
@@ -737,9 +756,9 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 				switch e := err.(type) {
 				case rpc.RPCError:
 					log.Warnf("crawler: RPC: %s", e.Error())
-					c.setState(STATE_WAITING)
+					c.setState(STATE_WAITING, MONITOR_KEEP)
 				default:
-					c.setState(STATE_CONNECTING)
+					c.setState(STATE_CONNECTING, MONITOR_KEEP)
 					log.Warnf("crawler: RPC connection error: %s", err)
 				}
 				// wait 5 sec (also stop on shutdown)
@@ -820,7 +839,7 @@ func (c *Crawler) syncBlockchain() {
 	)
 
 	log.Infof("Starting blockchain sync from height %d.", tip.BestHeight+1)
-	c.setState(STATE_SYNCHRONIZING)
+	c.setState(STATE_SYNCHRONIZING, MONITOR_KEEP)
 
 	// recover from panic
 	defer func() {
@@ -845,11 +864,11 @@ func (c *Crawler) syncBlockchain() {
 			}
 			log.Error(util.JsonString(js))
 			log.Infof("Stopping blockchain sync at height %d.", tip.BestHeight)
-			c.setState(STATE_FAILED)
+			c.setState(STATE_FAILED, MONITOR_DISABLE)
 		}
 
 		// flush indexer journals on failure (may take some time)
-		if c.state == STATE_FAILED {
+		if state, _ := c.getState(); state == STATE_FAILED {
 			if err := c.indexer.FlushJournals(ctx); err != nil {
 				log.Errorf("flushing tables: %s", err)
 			}
@@ -869,11 +888,11 @@ func (c *Crawler) syncBlockchain() {
 	for {
 		select {
 		case <-c.quit:
-			c.setState(STATE_STOPPING)
+			c.setState(STATE_STOPPING, MONITOR_DISABLE)
 			log.Infof("Stopping blockchain sync at height %d.", tip.BestHeight)
 			return
 		case <-ctx.Done():
-			c.setState(STATE_STOPPING)
+			c.setState(STATE_STOPPING, MONITOR_DISABLE)
 			log.Infof("Context aborted. Stopping blockchain sync at height %d.", tip.BestHeight)
 			return
 		case tzblock = <-c.finalized:
@@ -992,9 +1011,9 @@ func (c *Crawler) syncBlockchain() {
 
 		// current block may be ahead of bcinfo by one
 		if c.bchead != nil && block.Height+c.delay >= c.bchead.Level {
-			c.setState(STATE_SYNCHRONIZED)
+			c.setState(STATE_SYNCHRONIZED, MONITOR_KEEP)
 		}
-		state := c.state
+		state, _ := c.getState()
 
 		if state == STATE_SYNCHRONIZED {
 			// flush journals every block when synchronized
@@ -1039,7 +1058,7 @@ func (c *Crawler) syncBlockchain() {
 	// handle failures
 	c.builder.Purge()
 	log.Infof("Stopping blockchain sync due to too many errors at %d.", tip.BestHeight)
-	c.setState(STATE_FAILED)
+	c.setState(STATE_FAILED, MONITOR_DISABLE)
 }
 
 func (c *Crawler) fetchParamsForBlock(ctx context.Context, block *rpc.Block) (*tezos.Params, error) {
