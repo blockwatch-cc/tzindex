@@ -152,7 +152,6 @@ type Op struct {
 	Status        string               `json:"status,omitempty"`
 	IsSuccess     bool                 `json:"is_success"`
 	IsContract    bool                 `json:"is_contract,omitempty"`
-	IsBatch       bool                 `json:"is_batch,omitempty"`
 	IsEvent       bool                 `json:"is_event,omitempty"`
 	IsInternal    bool                 `json:"is_internal,omitempty"`
 	GasLimit      int64                `json:"gas_limit,omitempty"`
@@ -181,7 +180,6 @@ type Op struct {
 	Power         int64                `json:"power,omitempty"`
 	Limit         *NullMoney           `json:"limit,omitempty"`
 	Confirmations int64                `json:"confirmations"`
-	BatchVolume   float64              `json:"batch_volume,omitempty"`
 	NOps          int                  `json:"n_ops,omitempty"`
 	Batch         []*Op                `json:"batch,omitempty"`
 	Internal      []*Op                `json:"internal,omitempty"`
