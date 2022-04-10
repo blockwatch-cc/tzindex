@@ -33,7 +33,7 @@ type ListRequest struct {
 
 type NullMoney int64
 
-func (m NullMoney) MarhsalJSON() ([]byte, error) {
+func (m NullMoney) MarshalJSON() ([]byte, error) {
     if m < 0 {
         return null, nil
     }
