@@ -45,6 +45,8 @@ const (
     OpTypeDeposit                            // 22 v012 implicit event (baker deposit)
     OpTypeBonus                              // 23 v012 implicit event (baker extra bonus)
     OpTypeReward                             // 24 v012 implicit event (endorsement reward pay/burn)
+    OpTypeRollupOrigination                  // 25 v013
+    OpTypeRollupTransaction                  // 26 v013
     OpTypeBatch                = 254         // API output only
     OpTypeInvalid              = 255
 )
@@ -77,6 +79,8 @@ var (
         OpTypeReward:               "reward",
         OpTypeBonus:                "bonus",
         OpTypeBatch:                "batch",
+        OpTypeRollupOrigination:    "rollup_origination",
+        OpTypeRollupTransaction:    "rollup_transaction",
         OpTypeInvalid:              "",
     }
     opTypeReverseStrings = make(map[string]OpType)
@@ -168,6 +172,17 @@ func MapOpType(typ tezos.OpType) OpType {
         return OpTypeRegisterConstant
     case tezos.OpTypeSetDepositsLimit:
         return OpTypeDepositsLimit
+    case tezos.OpTypeToruOrigination:
+        return OpTypeRollupOrigination
+    case tezos.OpTypeTransferTicket,
+        tezos.OpTypeToruSubmitBatch,
+        tezos.OpTypeToruCommit,
+        tezos.OpTypeToruReturnBond,
+        tezos.OpTypeToruFinalizeCommitment,
+        tezos.OpTypeToruRemoveCommitment,
+        tezos.OpTypeToruRejection,
+        tezos.OpTypeToruDispatchTickets:
+        return OpTypeRollupTransaction
     default:
         return OpTypeInvalid
     }
@@ -201,7 +216,9 @@ func (t OpType) ListId() int {
         OpTypeDelegation,
         OpTypeReveal,
         OpTypeRegisterConstant,
-        OpTypeDepositsLimit:
+        OpTypeDepositsLimit,
+        OpTypeRollupOrigination,
+        OpTypeRollupTransaction:
         return 3
     default:
         return -1

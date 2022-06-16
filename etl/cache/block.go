@@ -31,7 +31,7 @@ type BlockCache struct {
 	stats  Stats
 }
 
-const defaultBlockCacheSize = 1 << 21 // 2M blocks
+const defaultBlockCacheSize = 1 << 21 // 4M blocks = 150MB
 
 var (
 	blockHashLen = tezos.HashTypeBlock.Len()

@@ -102,6 +102,8 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		NOpsFailed        int                    `json:"n_ops_failed"`
 		NEvents           int                    `json:"n_events"`
 		NContractCalls    int                    `json:"n_calls"`
+		NRollupCalls      int                    `json:"n_rollup_calls"`
+		NTx               int                    `json:"n_tx"`
 		Volume            float64                `json:"volume"`
 		Fee               float64                `json:"fee"`
 		Reward            float64                `json:"reward"`
@@ -118,7 +120,7 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		GasUsed           int64                  `json:"gas_used"`
 		StoragePaid       int64                  `json:"storage_paid"`
 		PctAccountsReused float64                `json:"pct_account_reuse"`
-		LbEscapeVote      bool                   `json:"lb_esc_vote"`
+		LbEscapeVote      tezos.LbVote           `json:"lb_esc_vote"`
 		LbEscapeEma       int64                  `json:"lb_esc_ema"`
 		Protocol          tezos.ProtocolHash     `json:"protocol"`
 	}{
@@ -144,6 +146,8 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		NOpsFailed:       model.Int16Correct(b.NOpsFailed),
 		NEvents:          model.Int16Correct(b.NEvents),
 		NContractCalls:   model.Int16Correct(b.NContractCalls),
+		NRollupCalls:     model.Int16Correct(b.NRollupCalls),
+		NTx:              model.Int16Correct(b.NTx),
 		Volume:           b.params.ConvertValue(b.Volume),
 		Fee:              b.params.ConvertValue(b.Fee),
 		Reward:           b.params.ConvertValue(b.Reward),
@@ -227,10 +231,14 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NOpsApplied)), 10)
 		case "n_ops_failed":
 			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NOpsFailed)), 10)
-		case "n_events":
-			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NEvents)), 10)
 		case "n_calls":
 			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NContractCalls)), 10)
+		case "n_rollup_calls":
+			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NRollupCalls)), 10)
+		case "n_events":
+			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NEvents)), 10)
+		case "n_tx":
+			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NTx)), 10)
 		case "volume":
 			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Volume), 'f', dec, 64)
 		case "fee":
@@ -268,11 +276,7 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 			}
 			buf = strconv.AppendFloat(buf, reuse, 'f', 6, 64)
 		case "lb_esc_vote":
-			if b.LbEscapeVote {
-				buf = append(buf, '1')
-			} else {
-				buf = append(buf, '0')
-			}
+			buf = strconv.AppendQuote(buf, b.LbEscapeVote.String())
 		case "lb_esc_ema":
 			buf = strconv.AppendInt(buf, int64(b.LbEscapeEma), 10)
 		case "protocol":
@@ -338,10 +342,14 @@ func (b *Block) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NOpsApplied)), 10)
 		case "n_ops_failed":
 			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NOpsFailed)), 10)
-		case "n_events":
-			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NEvents)), 10)
 		case "n_calls":
 			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NContractCalls)), 10)
+		case "n_rollup_calls":
+			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NRollupCalls)), 10)
+		case "n_events":
+			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NEvents)), 10)
+		case "n_tx":
+			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NTx)), 10)
 		case "volume":
 			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Volume), 'f', dec, 64)
 		case "fee":
@@ -379,7 +387,7 @@ func (b *Block) MarshalCSV() ([]string, error) {
 			}
 			res[i] = strconv.FormatFloat(reuse, 'f', -1, 64)
 		case "lb_esc_vote":
-			res[i] = strconv.FormatBool(b.LbEscapeVote)
+			res[i] = strconv.Quote(b.LbEscapeVote.String())
 		case "lb_esc_ema":
 			res[i] = strconv.FormatInt(b.LbEscapeEma, 10)
 		case "protocol":
@@ -657,7 +665,7 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 		q.Conditions = pack.ConditionTreeNode{}
 		// log.Info(join.Dump())
 		// run join query, order is not yet supported
-		res, err = join.Query(ctx, pack.Query{Limit: q.Limit, Order: q.Order})
+		res, err = join.Query(ctx, pack.NewQuery("join", table).WithLimit(q.Limit).WithOrder(q.Order))
 		if err != nil {
 			panic(server.EInternal(server.EC_DATABASE, "block table join failed", err))
 		}

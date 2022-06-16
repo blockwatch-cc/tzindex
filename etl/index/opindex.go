@@ -15,34 +15,37 @@ import (
 )
 
 const (
-	OpPackSizeLog2         = 15 // 32k packs
-	OpJournalSizeLog2      = 16 // 64k
-	OpCacheSize            = 128
-	OpFillLevel            = 100
-	OpIndexPackSizeLog2    = 15 // 16k packs (32k split size)
-	OpIndexJournalSizeLog2 = 16 // 64k
-	OpIndexCacheSize       = 2  // minimum, not essential
-	OpIndexFillLevel       = 90
-	OpIndexKey             = "op"
-	OpTableKey             = "op"
+	OpPackSizeLog2    = 15 // 32k packs
+	OpJournalSizeLog2 = 16 // 64k
+	OpCacheSize       = 128
+	OpFillLevel       = 100
+	OpIndexKey        = "op"
+	OpTableKey        = "op"
+
+	EndorseOpPackSizeLog2    = 15 // 32k packs
+	EndorseOpJournalSizeLog2 = 16 // 64k
+	EndorseOpCacheSize       = 2  // minimum, not essential
+	EndorseOpFillLevel       = 100
+	EndorseOpTableKey        = "endorsement"
 )
 
 var (
-	ErrNoOpEntry   = errors.New("op not indexed")
-	ErrInvalidOpID = errors.New("invalid op id")
+	ErrNoOpEntry          = errors.New("op not indexed")
+	ErrNoEndorsemebtEntry = errors.New("endorsement not indexed")
+	ErrInvalidOpID        = errors.New("invalid op id")
 )
 
 type OpIndex struct {
-	db    *pack.DB
-	opts  pack.Options
-	iopts pack.Options
-	table *pack.Table
+	db      *pack.DB
+	opts    pack.Options
+	table   *pack.Table
+	endorse *pack.Table // separate table, must query explicitly
 }
 
 var _ model.BlockIndexer = (*OpIndex)(nil)
 
-func NewOpIndex(opts, iopts pack.Options) *OpIndex {
-	return &OpIndex{opts: opts, iopts: iopts}
+func NewOpIndex(opts pack.Options) *OpIndex {
+	return &OpIndex{opts: opts}
 }
 
 func (idx *OpIndex) DB() *pack.DB {
@@ -50,7 +53,7 @@ func (idx *OpIndex) DB() *pack.DB {
 }
 
 func (idx *OpIndex) Tables() []*pack.Table {
-	return []*pack.Table{idx.table}
+	return []*pack.Table{idx.table, idx.endorse}
 }
 
 func (idx *OpIndex) Key() string {
@@ -81,7 +84,28 @@ func (idx *OpIndex) Create(path, label string, opts interface{}) error {
 			CacheSize:       util.NonZero(idx.opts.CacheSize, OpCacheSize),
 			FillLevel:       util.NonZero(idx.opts.FillLevel, OpFillLevel),
 		})
-	return err
+	if err != nil {
+		return err
+	}
+
+	fields, err = pack.Fields(model.Endorsement{})
+	if err != nil {
+		return err
+	}
+	_, err = db.CreateTableIfNotExists(
+		EndorseOpTableKey,
+		fields,
+		pack.Options{
+			PackSizeLog2:    EndorseOpPackSizeLog2,
+			JournalSizeLog2: EndorseOpJournalSizeLog2,
+			CacheSize:       EndorseOpCacheSize,
+			FillLevel:       EndorseOpFillLevel,
+		})
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (idx *OpIndex) Init(path, label string, opts interface{}) error {
@@ -95,10 +119,16 @@ func (idx *OpIndex) Init(path, label string, opts interface{}) error {
 		pack.Options{
 			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, OpJournalSizeLog2),
 			CacheSize:       util.NonZero(idx.opts.CacheSize, OpCacheSize),
-		},
+		})
+	if err != nil {
+		idx.Close()
+		return err
+	}
+	idx.endorse, err = idx.db.Table(
+		EndorseOpTableKey,
 		pack.Options{
-			JournalSizeLog2: util.NonZero(idx.iopts.JournalSizeLog2, OpIndexJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.iopts.CacheSize, OpIndexCacheSize),
+			JournalSizeLog2: EndorseOpJournalSizeLog2,
+			CacheSize:       EndorseOpCacheSize,
 		})
 	if err != nil {
 		idx.Close()
@@ -108,44 +138,7 @@ func (idx *OpIndex) Init(path, label string, opts interface{}) error {
 }
 
 func (idx *OpIndex) FinalizeSync(ctx context.Context) error {
-	if idxs := idx.table.Indexes(); len(idxs) > 0 {
-		return nil
-	}
-	index, err := idx.table.CreateIndex(
-		"hash",
-		idx.table.Fields().Find("H"), // op hash field (32 byte op hashes)
-		pack.IndexTypeHash,           // hash table, index stores hash(field) -> pk value
-		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.iopts.PackSizeLog2, OpIndexPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.iopts.JournalSizeLog2, OpIndexJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.iopts.CacheSize, OpIndexCacheSize),
-			FillLevel:       util.NonZero(idx.iopts.FillLevel, OpIndexFillLevel),
-		})
-	if err != nil {
-		if err != pack.ErrIndexExists {
-			return err
-		}
-		return nil
-	}
-	log.Infof("Building %s index ... (this may take some time)", idx.table.Name())
-
-	progress := make(chan float64, 100)
-	defer close(progress)
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case f := <-progress:
-				log.Infof("%s index build progress %.2f%%", idx.table.Name(), f)
-				if f == 100 {
-					return
-				}
-			}
-		}
-	}()
-
-	return index.Reindex(ctx, 128, progress)
+	return nil
 }
 
 func (idx *OpIndex) Close() error {
@@ -157,6 +150,7 @@ func (idx *OpIndex) Close() error {
 		}
 	}
 	idx.table = nil
+	idx.endorse = nil
 	if idx.db != nil {
 		if err := idx.db.Close(); err != nil {
 			return err
@@ -168,11 +162,32 @@ func (idx *OpIndex) Close() error {
 
 func (idx *OpIndex) ConnectBlock(ctx context.Context, block *model.Block, b model.BlockBuilder) error {
 	ops := make([]pack.Item, 0)
+	endorse := make([]pack.Item, 0)
 	for _, op := range block.Ops {
+		// skip all consensus-related ops in light mode
+		if b.IsLightMode() {
+			switch op.Type {
+			case model.OpTypeBake,
+				model.OpTypeDoubleBaking,
+				model.OpTypeDoubleEndorsement,
+				model.OpTypeDoublePreendorsement,
+				model.OpTypeNonceRevelation,
+				model.OpTypeEndorsement,
+				model.OpTypePreendorsement,
+				model.OpTypeProposal,
+				model.OpTypeBallot,
+				model.OpTypeUnfreeze,
+				model.OpTypeSeedSlash,
+				model.OpTypeDeposit,
+				model.OpTypeBonus,
+				model.OpTypeReward,
+				model.OpTypeDepositsLimit:
+				continue
+			}
+		}
 		switch op.Type {
 		case model.OpTypeEndorsement, model.OpTypePreendorsement:
-			// skip endorsement ops
-			continue
+			endorse = append(endorse, op.ToEndorsement())
 		case model.OpTypeBake:
 			// assign block fees to the bake operation (pre-Ithaca)
 			if op.Fee == 0 {
@@ -181,6 +196,16 @@ func (idx *OpIndex) ConnectBlock(ctx context.Context, block *model.Block, b mode
 			ops = append(ops, op)
 		default:
 			ops = append(ops, op)
+		}
+	}
+	if len(endorse) > 0 {
+		if err := idx.endorse.Insert(ctx, endorse); err != nil {
+			return err
+		}
+		// assign op ids back to the original ops
+		for _, v := range endorse {
+			ed := v.(*model.Endorsement)
+			block.Ops[ed.OpN].RowId = ed.RowId
 		}
 	}
 	return idx.table.Insert(ctx, ops)
@@ -193,6 +218,12 @@ func (idx *OpIndex) DisconnectBlock(ctx context.Context, block *model.Block, _ m
 func (idx *OpIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting ops at height %d", height)
 	_, err := pack.NewQuery("etl.op.delete", idx.table).
+		AndEqual("height", height).
+		Delete(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = pack.NewQuery("etl.endorse.delete", idx.endorse).
 		AndEqual("height", height).
 		Delete(ctx)
 	return err
@@ -223,6 +254,14 @@ func (idx *OpIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 	_, err = pack.NewQuery("etl.op.delete", idx.table).
 		AndEqual("cycle", cycle).
 		Delete(ctx)
+	if err != nil {
+		return err
+	}
+	if first > 0 && last >= first {
+		_, err = pack.NewQuery("etl.endorse.delete", idx.endorse).
+			AndRange("height", first, last).
+			Delete(ctx)
+	}
 	return err
 }
 

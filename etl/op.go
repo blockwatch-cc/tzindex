@@ -205,27 +205,29 @@ func (b *Builder) AppendImplicitBlockOps(ctx context.Context) error {
 				var err error
 				op.Script, err = b.rpc.GetContractScript(ctx, dst.Address)
 				if err != nil {
-					return Errorf("loading contract script %s: %w", dst.Address, err)
+					return Errorf("loading contract script %s: %v", dst.Address, err)
 				}
 			}
 			id.Kind = model.MapOpType(op.Kind)
 			o := model.NewEventOp(b.block, dst.RowId, id)
 			o.IsContract = true
 			dst.IsContract = true
-			o.GasUsed = op.ConsumedGas
+			o.GasUsed = op.Gas()
 			o.StoragePaid = op.PaidStorageSizeDiff
 			if op.Storage.IsValid() {
 				o.Storage, _ = op.Storage.MarshalBinary()
+				o.StorageHash = op.Storage.Hash64()
+				o.IsStorageUpdate = true
 			}
 
 			// patch missing bigmap allocs
 			typs := op.Script.BigmapTypesByName()
 			ids := op.Script.BigmapsByName()
 			if len(ids) > 0 {
-				bmd := make(micheline.BigmapDiff, 0)
+				bmd := make(micheline.BigmapEvents, 0)
 				for n, id := range ids {
 					typ, _ := typs[n]
-					diff := micheline.BigmapDiffElem{
+					diff := micheline.BigmapEvent{
 						Action:    micheline.DiffActionAlloc,
 						Id:        id,
 						KeyType:   typ.Prim.Args[0],
@@ -233,12 +235,16 @@ func (b *Builder) AppendImplicitBlockOps(ctx context.Context) error {
 					}
 					bmd = append(bmd, diff)
 				}
-				o.Diff, _ = bmd.MarshalBinary()
-				o.BigmapDiff = bmd
+				// o.Diff, _ = bmd.MarshalBinary()
+				o.BigmapEvents = bmd
 			}
 
 			// add volume if balance update exists
 			for _, v := range op.BalanceUpdates {
+				// skip mint/burn flows
+				if v.Kind == "minted" || v.Kind == "burned" {
+					continue
+				}
 				o.Volume += v.Amount()
 				f := b.NewSubsidyFlow(dst, v.Amount(), id)
 				b.block.Flows = append(b.block.Flows, f)
@@ -247,7 +253,8 @@ func (b *Builder) AppendImplicitBlockOps(ctx context.Context) error {
 			b.block.Ops = append(b.block.Ops, o)
 
 			// register new implicit contract
-			b.conMap[dst.RowId] = model.NewImplicitContract(dst, op, o)
+			o.Contract = model.NewImplicitContract(dst, op, o, b.block.Params)
+			b.conMap[dst.RowId] = o.Contract
 
 		case tezos.OpTypeTransaction:
 			for _, v := range op.BalanceUpdates {
@@ -261,18 +268,20 @@ func (b *Builder) AppendImplicitBlockOps(ctx context.Context) error {
 				}
 				dCon, err := b.LoadContractByAccountId(ctx, dst.RowId)
 				if err != nil {
-					return Errorf("loading contract %d %s: %w", dst.RowId, v.Address(), err)
+					return Errorf("loading contract %d %s: %v", dst.RowId, v.Address(), err)
 				}
 				id.Kind = model.OpTypeSubsidy
 				o := model.NewEventOp(b.block, dst.RowId, id)
 				o.IsContract = true
 				o.Volume = v.Amount()
 				o.Reward = v.Amount()
-				o.GasUsed = op.ConsumedGas
+				o.GasUsed = op.Gas()
 				o.StoragePaid = op.PaidStorageSizeDiff
 				o.Entrypoint = 1
 				o.Storage, _ = op.Storage.MarshalBinary()
-				dCon.UpdateStorage(o, op.Storage)
+				o.StorageHash = op.Storage.Hash64()
+				o.IsStorageUpdate = dCon.Update(o, b.block.Params)
+				o.Contract = dCon
 				b.block.Ops = append(b.block.Ops, o)
 				if o.Volume > 0 {
 					b.block.Flows = append(b.block.Flows, b.NewSubsidyFlow(dst, o.Volume, id))
@@ -325,6 +334,10 @@ func (b *Builder) AppendRegularBlockOps(ctx context.Context, rollback bool) erro
 					err = b.AppendRegisterConstantOp(ctx, oh, id, rollback)
 				case model.OpTypeDepositsLimit:
 					err = b.AppendDepositsLimitOp(ctx, oh, id, rollback)
+				case model.OpTypeRollupOrigination:
+					err = b.AppendRollupOriginationOp(ctx, oh, id, rollback)
+				case model.OpTypeRollupTransaction:
+					err = b.AppendRollupTransactionOp(ctx, oh, id, rollback)
 				}
 				if err != nil {
 					return err
@@ -388,6 +401,9 @@ func (b *Builder) AppendContractMigrationOp(ctx context.Context, acc *model.Acco
 	op := model.NewEventOp(b.block, acc.RowId, id)
 	op.IsContract = true
 	op.Storage = c.Storage
+	op.StorageHash = c.StorageHash
+	op.IsStorageUpdate = true
+	op.Contract = c
 	b.block.Ops = append(b.block.Ops, op)
 	return nil
 }
@@ -409,7 +425,7 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.Operation, id 
 	// need to lookup using blinded key
 	bkey, err := tezos.BlindAddress(aop.Pkh, aop.Secret)
 	if err != nil {
-		return Errorf("blinded address creation failed: %w", err)
+		return Errorf("blinded address creation failed: %v", err)
 	}
 
 	acc, ok := b.AccountByAddress(bkey)
@@ -538,6 +554,7 @@ func (b *Builder) AppendEndorsementOp(ctx context.Context, oh *rpc.Operation, id
 	op.IsSuccess = true
 	op.SenderId = bkr.AccountId
 
+	// store endorsed slots as data
 	// pre-Ithaca: use slots
 	// post-Ithaca: use EndorsementPower and PreendorsementPower
 	power := meta.EndorsementPower + meta.PreendorsementPower + len(meta.Slots)
@@ -566,6 +583,7 @@ func (b *Builder) AppendEndorsementOp(ctx context.Context, oh *rpc.Operation, id
 			bkr.NPreendorsement++
 		} else {
 			bkr.NEndorsement++
+			bkr.BlocksEndorsed++
 			bkr.SlotsEndorsed += int64(power)
 		}
 		// extend grace period
@@ -587,6 +605,7 @@ func (b *Builder) AppendEndorsementOp(ctx context.Context, oh *rpc.Operation, id
 			bkr.NPreendorsement--
 		} else {
 			bkr.NEndorsement--
+			bkr.BlocksEndorsed--
 			bkr.SlotsEndorsed -= int64(power)
 		}
 		bkr.IsDirty = true
@@ -725,7 +744,7 @@ func (b *Builder) AppendSeedNonceOp(ctx context.Context, oh *rpc.Operation, id m
 
 	// lookup baker for original level
 	if refBlock, err := b.idx.BlockByHeight(ctx, sop.Level); err != nil {
-		return Errorf("missing block %d: %w", sop.Level, err)
+		return Errorf("missing block %d: %v", sop.Level, err)
 	} else {
 		op.CreatorId = refBlock.BakerId
 	}
@@ -801,7 +820,7 @@ func (b *Builder) AppendDoubleBakingOp(ctx context.Context, oh *rpc.Operation, i
 	// we store both block headers as json array
 	buf, err := json.Marshal(dop.Strip())
 	if err != nil {
-		return Errorf("cannot write data: %w", err)
+		return Errorf("cannot write data: %v", err)
 	}
 	op.Data = string(buf)
 
@@ -909,7 +928,7 @@ func (b *Builder) AppendDoubleEndorsingOp(ctx context.Context, oh *rpc.Operation
 	// we store double-endorsed evidences as JSON
 	buf, err := json.Marshal(dop.Strip())
 	if err != nil {
-		return Errorf("cannot write data: %w", err)
+		return Errorf("cannot write data: %v", err)
 	}
 	op.Data = string(buf)
 
@@ -1005,7 +1024,7 @@ func (b *Builder) AppendRevealOp(ctx context.Context, oh *rpc.Operation, id mode
 	op.Data = rop.PublicKey.String()
 
 	res := rop.Result()
-	op.GasUsed = res.ConsumedGas
+	op.GasUsed = res.Gas()
 	op.Status = res.Status
 	op.IsSuccess = op.Status.IsSuccess()
 	_ = b.NewRevealFlows(src, sbkr, rop.Fees(), id)
@@ -1097,13 +1116,13 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.Operation, id
 	if src.IsContract {
 		sCon, err = b.LoadContractByAccountId(ctx, src.RowId)
 		if err != nil {
-			return Errorf("loading contract %s %d: %w", top.Source, src.RowId, err)
+			return Errorf("loading contract %s %d: %v", top.Source, src.RowId, err)
 		}
 	}
 	if dst.IsContract {
 		dCon, err = b.LoadContractByAccountId(ctx, dst.RowId)
 		if err != nil {
-			return Errorf("loading contract %s %d: %w", top.Destination, dst.RowId, err)
+			return Errorf("loading contract %s %d: %v", top.Destination, dst.RowId, err)
 		}
 	}
 
@@ -1119,24 +1138,24 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.Operation, id
 	res := top.Result()
 	op.Status = res.Status
 	op.IsSuccess = op.Status.IsSuccess()
-	op.GasUsed = res.ConsumedGas
+	op.GasUsed = res.Gas()
 	op.Volume = top.Amount
 	op.StoragePaid = res.PaidStorageSizeDiff
 
 	if top.Parameters.Value.IsValid() {
 		op.Parameters, err = top.Parameters.MarshalBinary()
 		if err != nil {
-			return Errorf("marshal params: %w", err)
+			return Errorf("marshal params: %v", err)
 		}
 
 		if dCon != nil {
 			pTyp, _, err := dCon.LoadType()
 			if err != nil {
-				return Errorf("loading script: %w", err)
+				return Errorf("loading script: %v", err)
 			}
 			ep, _, err := top.Parameters.MapEntrypoint(pTyp)
 			if op.IsSuccess && err != nil {
-				return Errorf("searching entrypoint: %w", err)
+				return Errorf("searching entrypoint: %v", err)
 			}
 			op.Entrypoint = ep.Id
 			op.Data = ep.Name
@@ -1145,22 +1164,15 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.Operation, id
 	if res.Storage.IsValid() {
 		op.Storage, err = res.Storage.MarshalBinary()
 		if err != nil {
-			return Errorf("marshal storage: %w", err)
+			return Errorf("marshal storage: %v", err)
 		}
-		// dedup (don't store storage when similar to current value)
-		if bytes.Compare(op.Storage, dCon.Storage) == 0 {
-			op.Storage = nil
-		}
+		op.StorageHash = res.Storage.Hash64()
 	}
 
-	if len(res.BigmapDiff) > 0 {
-		op.BigmapDiff, err = b.PatchBigmapDiff(ctx, res.BigmapDiff, dst.Address, nil)
+	if ev := res.BigmapEvents(); len(ev) > 0 {
+		op.BigmapEvents, err = b.PatchBigmapEvents(ctx, ev, dst.Address, nil)
 		if err != nil {
-			return Errorf("patch bigmap: %w", err)
-		}
-		op.Diff, err = op.BigmapDiff.MarshalBinary()
-		if err != nil {
-			return Errorf("marshal bigmap: %w", err)
+			return Errorf("patch bigmap: %v", err)
 		}
 	}
 
@@ -1183,7 +1195,6 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.Operation, id
 				op.Burned += f.AmountOut
 			}
 		}
-
 	} else {
 		// handle errors
 		if len(res.Errors) > 0 {
@@ -1225,7 +1236,7 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.Operation, id
 			// - it seems from reverse engineering baker activation rules
 			//   that received transactions will reactivate an inactive baker
 			//   and extend grace period for active bakers
-			// - don't do this for magic bakers (missing self-registration)
+			// - don't do this for origination-big bakers (missing self-registration)
 			// - support for this feature ends with proto_004
 			if dst.IsBaker && b.block.Params.Version <= 3 {
 				if dbkr == nil {
@@ -1247,7 +1258,8 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.Operation, id
 
 			// update contract from op
 			if dCon != nil {
-				dCon.UpdateStorage(op, res.Storage)
+				op.IsStorageUpdate = dCon.Update(op, b.block.Params)
+				op.Contract = dCon
 			}
 		}
 	} else {
@@ -1267,9 +1279,12 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.Operation, id
 				// if nil, will rollback to previous state
 				prev, _ := b.idx.FindLastCall(ctx, dst.RowId, dst.FirstSeen, op.Height)
 				if prev != nil {
-					var store micheline.Prim
-					store.UnmarshalBinary(prev.Storage)
-					dCon.RollbackStorage(op, prev, store)
+					store, _ := b.idx.FindPreviousStorage(ctx, dst.RowId, prev.Height, prev.Height)
+					if store != nil {
+						prev.Storage = store.Storage
+						prev.StorageHash = store.Hash
+						dCon.Rollback(op, prev, b.block.Params)
+					}
 				}
 			}
 		}
@@ -1346,20 +1361,21 @@ func (b *Builder) AppendInternalTransactionOp(
 	if src.IsContract {
 		sCon, err = b.LoadContractByAccountId(ctx, src.RowId)
 		if err != nil {
-			return Errorf("loading contract %s %d: %w", iop.Source, src.RowId, err)
+			return Errorf("loading contract %s %d: %v", iop.Source, src.RowId, err)
 		}
 	}
 	if dst.IsContract {
 		dCon, err = b.LoadContractByAccountId(ctx, dst.RowId)
 		if err != nil {
-			return Errorf("loading contract %s %d: %w", iop.Destination, dst.RowId, err)
+			return Errorf("loading contract %s %d: %v", iop.Destination, dst.RowId, err)
 		}
 	}
 
 	// build op (internal and outer tx share the same hash and block location)
 	op := model.NewOp(b.block, id)
 	op.IsInternal = true
-	op.IsContract = dst.IsContract
+	op.IsContract = dst.IsContract && !dCon.Address.IsRollup()
+	op.IsRollup = dst.IsContract && dCon.Address.IsRollup()
 	op.SenderId = origsrc.RowId
 	op.ReceiverId = dst.RowId
 	op.CreatorId = src.RowId
@@ -1371,46 +1387,44 @@ func (b *Builder) AppendInternalTransactionOp(
 	res := iop.Result
 	op.Status = res.Status
 	op.IsSuccess = op.Status.IsSuccess()
-	op.GasUsed = res.ConsumedGas
+	op.GasUsed = res.Gas()
 	op.StoragePaid = res.PaidStorageSizeDiff
 
 	if iop.Parameters.Value.IsValid() {
 		op.Parameters, err = iop.Parameters.MarshalBinary()
 		if err != nil {
-			return Errorf("marshal params: %w", err)
+			return Errorf("marshal params: %v", err)
 		}
-		if dCon != nil {
+		if dCon != nil && op.IsContract {
 			pTyp, _, err := dCon.LoadType()
 			if err != nil {
-				return Errorf("loading script for %s: %w", dst, err)
+				return Errorf("loading script for %s: %v", dst, err)
 			}
 			ep, _, err := iop.Parameters.MapEntrypoint(pTyp)
 			if op.IsSuccess && err != nil {
-				return Errorf("searching entrypoint in %s: %w", dst, err)
+				return Errorf("searching entrypoint in %s: %v", dst, err)
 			}
 			op.Entrypoint = ep.Id
 			op.Data = ep.Name
+		}
+		// ticket deposit
+		if dCon != nil && op.IsRollup {
+			op.Entrypoint = 0
+			op.Data = iop.Parameters.Entrypoint
 		}
 	}
 	if res.Storage.IsValid() {
 		op.Storage, err = res.Storage.MarshalBinary()
 		if err != nil {
-			return Errorf("marshal storage: %w", err)
+			return Errorf("marshal storage: %v", err)
 		}
-		// dedup (don't store storage when similar to current value)
-		if bytes.Compare(op.Storage, dCon.Storage) == 0 {
-			op.Storage = nil
-		}
+		op.StorageHash = res.Storage.Hash64()
 	}
-	if len(res.BigmapDiff) > 0 {
+	if ev := res.BigmapEvents(); len(ev) > 0 {
 		// patch original bigmap diff
-		op.BigmapDiff, err = b.PatchBigmapDiff(ctx, res.BigmapDiff, dst.Address, nil)
+		op.BigmapEvents, err = b.PatchBigmapEvents(ctx, ev, dst.Address, nil)
 		if err != nil {
-			return Errorf("patch bigmap: %w", err)
-		}
-		op.Diff, err = op.BigmapDiff.MarshalBinary()
-		if err != nil {
-			return Errorf("marshal bigmap: %w", err)
+			return Errorf("patch bigmap: %v", err)
 		}
 	}
 
@@ -1433,7 +1447,6 @@ func (b *Builder) AppendInternalTransactionOp(
 				op.Burned += f.AmountOut
 			}
 		}
-
 	} else {
 		// handle errors
 		if len(res.Errors) > 0 {
@@ -1464,7 +1477,8 @@ func (b *Builder) AppendInternalTransactionOp(
 		} else {
 			// update contract from op
 			if dCon != nil {
-				dCon.UpdateStorage(op, res.Storage)
+				op.IsStorageUpdate = dCon.Update(op, b.block.Params)
+				op.Contract = dCon
 			}
 		}
 	} else {
@@ -1484,9 +1498,12 @@ func (b *Builder) AppendInternalTransactionOp(
 				// if nil, will rollback to previous state
 				prev, _ := b.idx.FindLastCall(ctx, dst.RowId, dst.FirstSeen, op.Height)
 				if prev != nil {
-					var store micheline.Prim
-					store.UnmarshalBinary(prev.Storage)
-					dCon.RollbackStorage(op, prev, store)
+					store, _ := b.idx.FindPreviousStorage(ctx, dst.RowId, prev.Height, prev.Height)
+					if store != nil {
+						prev.Storage = store.Storage
+						prev.StorageHash = store.Hash
+						dCon.Rollback(op, prev, b.block.Params)
+					}
 				}
 			}
 		}
@@ -1558,7 +1575,7 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.Operation, id
 	op.IsContract = oop.Script != nil
 	op.Status = res.Status
 	op.IsSuccess = op.Status.IsSuccess()
-	op.GasUsed = res.ConsumedGas
+	op.GasUsed = res.Gas()
 	op.Volume = oop.Balance
 	op.StoragePaid = res.PaidStorageSizeDiff
 
@@ -1602,14 +1619,10 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.Operation, id
 
 		// create or extend bigmap diff to inject alloc for proto < v005
 		// overwrite original diff
-		if len(res.BigmapDiff) > 0 {
-			op.BigmapDiff, err = b.PatchBigmapDiff(ctx, res.BigmapDiff, dst.Address, oop.Script)
+		if ev := res.BigmapEvents(); len(ev) > 0 {
+			op.BigmapEvents, err = b.PatchBigmapEvents(ctx, ev, dst.Address, oop.Script)
 			if err != nil {
-				return Errorf("patch bigmap: %w", err)
-			}
-			op.Diff, err = op.BigmapDiff.MarshalBinary()
-			if err != nil {
-				return Errorf("marshal bigmap: %w", err)
+				return Errorf("patch bigmap: %v", err)
 			}
 		}
 
@@ -1633,10 +1646,6 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.Operation, id
 	// update accounts
 	if !rollback {
 		src.Counter = op.Counter
-		src.NOps++
-		src.NOrigination++
-		src.LastSeen = b.block.Height
-		src.IsDirty = true
 		src.NOps++
 		src.NOrigination++
 		src.LastSeen = b.block.Height
@@ -1667,9 +1676,7 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.Operation, id
 				dst.DelegatedSince = b.block.Height
 
 				newbkr.TotalDelegations++
-				if op.Volume > 0 {
-					newbkr.ActiveDelegations++
-				}
+				newbkr.ActiveDelegations++
 				newbkr.IsDirty = true
 				newbkr.Account.LastSeen = b.block.Height
 				newbkr.Account.IsDirty = true
@@ -1677,19 +1684,12 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.Operation, id
 
 			// create and register a new contract here; the contract index
 			// will pick this up later & inserted a database row
-			dstCon := model.NewContract(dst, oop, op, nil, b.block.Params)
-
-			// if oop.Script.Code.Storage.ContainsOpCode(micheline.T_BIG_MAP) {
-			// 	// re-fetch initial storage to resolve bigmap pointers
-			// 	storage, err := b.rpc.GetContractStorage(ctx, dst.Address, rpc.BlockLevel(b.block.Height))
-			// 	if err != nil {
-			// 		return Errorf("fetching initial storage: %w", err)
-			// 	}
-			// 	dstCon.SetStorage(storage)
-			// }
-
-			// add to map
-			b.conMap[dst.RowId] = dstCon
+			con := model.NewContract(dst, oop, op, nil, b.block.Params)
+			b.conMap[dst.RowId] = con
+			op.Storage = con.Storage
+			op.StorageHash = con.StorageHash
+			op.IsStorageUpdate = true
+			op.Contract = con
 		}
 	} else {
 		src.Counter = op.Counter - 1
@@ -1706,9 +1706,7 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.Operation, id
 				dst.IsDelegated = false
 				dst.BakerId = 0
 				newbkr.TotalDelegations--
-				if op.Volume > 0 {
-					newbkr.ActiveDelegations--
-				}
+				newbkr.ActiveDelegations--
 				newbkr.IsDirty = true
 			}
 			// ignore, not possible anymore
@@ -1771,7 +1769,7 @@ func (b *Builder) AppendInternalOriginationOp(
 	op.IsContract = true // orign is always a contract op!
 	res := iop.Result    // internal result
 	op.Status = res.Status
-	op.GasUsed = res.ConsumedGas
+	op.GasUsed = res.Gas()
 	op.IsSuccess = op.Status.IsSuccess()
 	op.Volume = iop.Balance
 	op.StoragePaid = res.PaidStorageSizeDiff
@@ -1816,14 +1814,10 @@ func (b *Builder) AppendInternalOriginationOp(
 
 		// create or extend bigmap diff to inject alloc for proto < v005
 		// patch original result
-		if len(res.BigmapDiff) > 0 {
-			op.BigmapDiff, err = b.PatchBigmapDiff(ctx, res.BigmapDiff, dst.Address, iop.Script)
+		if ev := res.BigmapEvents(); len(ev) > 0 {
+			op.BigmapEvents, err = b.PatchBigmapEvents(ctx, ev, dst.Address, iop.Script)
 			if err != nil {
-				return Errorf("patch bigmap: %w", err)
-			}
-			op.Diff, err = op.BigmapDiff.MarshalBinary()
-			if err != nil {
-				return Errorf("marshal bigmap: %w", err)
+				return Errorf("patch bigmap: %v", err)
 			}
 		}
 
@@ -1868,10 +1862,7 @@ func (b *Builder) AppendInternalOriginationOp(
 				dst.DelegatedSince = b.block.Height
 
 				newbkr.TotalDelegations++
-				if op.Volume > 0 {
-					// delegation becomes active only when dst KT1 is funded
-					newbkr.ActiveDelegations++
-				}
+				newbkr.ActiveDelegations++
 				newbkr.IsDirty = true
 				newbkr.Account.LastSeen = b.block.Height
 				newbkr.Account.IsDirty = true
@@ -1879,19 +1870,12 @@ func (b *Builder) AppendInternalOriginationOp(
 
 			// create and register a new contract here; the contract index
 			// will pick this up later & inserted a database row
-			dstCon := model.NewInternalContract(dst, iop, op, nil)
-
-			// if iop.Script.Code.Storage.ContainsOpCode(micheline.T_BIG_MAP) {
-			// 	// re-fetch initial storage to resolve bigmap pointers
-			// 	storage, err := b.rpc.GetContractStorage(ctx, dst.Address, rpc.BlockLevel(b.block.Height))
-			// 	if err != nil {
-			// 		return Errorf("fetching initial storage: %w", err)
-			// 	}
-			// 	dstCon.SetStorage(storage)
-			// }
-
-			// add to map
-			b.conMap[dst.RowId] = dstCon
+			con := model.NewInternalContract(dst, iop, op, nil, b.block.Params)
+			b.conMap[dst.RowId] = con
+			op.Storage = con.Storage
+			op.StorageHash = con.StorageHash
+			op.IsStorageUpdate = true
+			op.Contract = con
 		}
 	} else {
 		src.Counter = op.Counter - 1
@@ -1908,9 +1892,7 @@ func (b *Builder) AppendInternalOriginationOp(
 				dst.IsDelegated = false
 				dst.BakerId = 0
 				newbkr.TotalDelegations--
-				if op.Volume > 0 {
-					newbkr.ActiveDelegations--
-				}
+				newbkr.ActiveDelegations--
 				newbkr.IsDirty = true
 			}
 		}
@@ -1996,7 +1978,7 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.Operation, id 
 
 	op.Status = res.Status
 	op.IsSuccess = op.Status.IsSuccess()
-	op.GasUsed = res.ConsumedGas
+	op.GasUsed = res.Gas()
 	op.Volume = src.Balance()
 	b.block.Ops = append(b.block.Ops, op)
 
@@ -2071,9 +2053,9 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.Operation, id 
 				}
 				// handle withdraw from old baker, exclude re-registrations
 				if obkr != nil && obkr.AccountId != nbkr.AccountId {
-					if src.Balance() > 0 {
-						obkr.ActiveDelegations--
-					}
+					// if src.Balance() > 0 {
+					obkr.ActiveDelegations--
+					// }
 				}
 
 			} else {
@@ -2091,16 +2073,16 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.Operation, id 
 						src.DelegatedSince = b.block.Height
 						nbkr.TotalDelegations++
 						// delegation becomes active only when src is funded
-						if src.Balance() > 0 {
-							nbkr.ActiveDelegations++
-						}
+						// if src.Balance() > 0 {
+						nbkr.ActiveDelegations++
+						// }
 					}
 				}
 				// handle withdraw from old baker if any
 				if obkr != nil {
-					if src.Balance() > 0 {
-						obkr.ActiveDelegations--
-					}
+					// if src.Balance() > 0 {
+					obkr.ActiveDelegations--
+					// }
 				}
 			}
 		}
@@ -2132,9 +2114,9 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.Operation, id 
 			// find previous baker, if any (accounts who are delegated can later
 			// become a baker, so we must search either way)
 			var lastsince int64
-			if prevop, err := b.idx.FindLatestDelegation(ctx, src.RowId); err != nil {
+			if prevop, err := b.idx.FindLatestDelegation(ctx, src.RowId, op.Height); err != nil {
 				if err != index.ErrNoOpEntry {
-					return Errorf("rollback: failed loading previous delegation op for account %d: %w", src.RowId, err)
+					return Errorf("rollback: failed loading previous delegation op for account %d: %v", src.RowId, err)
 				}
 				obkr = nil
 			} else if prevop.BakerId > 0 {
@@ -2149,7 +2131,7 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.Operation, id 
 				// set the initial baker
 				if prevop, err := b.idx.FindOrigination(ctx, src.RowId, src.FirstSeen); err != nil {
 					if err != index.ErrNoOpEntry {
-						return Errorf("rollback: failed loading previous origination op for account %d: %w", src.RowId, err)
+						return Errorf("rollback: failed loading previous origination op for account %d: %v", src.RowId, err)
 					}
 				} else if prevop.BakerId != 0 {
 					obkr, ok = b.BakerById(prevop.BakerId)
@@ -2233,7 +2215,7 @@ func (b *Builder) AppendInternalDelegationOp(
 	op.StorageLimit = 0 // n.a. for internal ops
 	res := iop.Result   // internal result
 	op.Status = res.Status
-	op.GasUsed = res.ConsumedGas
+	op.GasUsed = res.Gas()
 	op.IsSuccess = op.Status.IsSuccess()
 	op.Volume = src.Balance()
 
@@ -2293,18 +2275,18 @@ func (b *Builder) AppendInternalDelegationOp(
 					src.BakerId = nbkr.AccountId
 					src.DelegatedSince = b.block.Height
 					nbkr.TotalDelegations++
-					if src.Balance() > 0 {
-						// delegation becomes active only when src is funded
-						nbkr.ActiveDelegations++
-					}
+					// if src.Balance() > 0 {
+					// delegation becomes active only when src is funded
+					nbkr.ActiveDelegations++
+					// }
 				}
 			}
 
 			// handle withdraw from old baker (also ensures we're duplicate safe)
 			if obkr != nil {
-				if src.Balance() > 0 {
-					obkr.ActiveDelegations--
-				}
+				// if src.Balance() > 0 {
+				obkr.ActiveDelegations--
+				// }
 			}
 		}
 	} else {
@@ -2319,9 +2301,9 @@ func (b *Builder) AppendInternalDelegationOp(
 
 			// find previous baker, if any
 			var lastsince int64
-			if prevop, err := b.idx.FindLatestDelegation(ctx, src.RowId); err != nil {
+			if prevop, err := b.idx.FindLatestDelegation(ctx, src.RowId, op.Height); err != nil {
 				if err != index.ErrNoOpEntry {
-					return Errorf("rollback: failed loading previous delegation op for account %d: %w", src.RowId, err)
+					return Errorf("rollback: failed loading previous delegation op for account %d: %v", src.RowId, err)
 				}
 				obkr = nil
 			} else if prevop.BakerId > 0 {
@@ -2336,7 +2318,7 @@ func (b *Builder) AppendInternalDelegationOp(
 				// set the initial baker
 				if prevop, err := b.idx.FindOrigination(ctx, src.RowId, src.FirstSeen); err != nil {
 					if err != index.ErrNoOpEntry {
-						return Errorf("rollback: failed loading previous origination op for account %d: %w", src.RowId, err)
+						return Errorf("rollback: failed loading previous origination op for account %d: %v", src.RowId, err)
 					}
 				} else if prevop.BakerId != 0 {
 					obkr, ok = b.BakerById(prevop.BakerId)
@@ -2407,7 +2389,7 @@ func (b *Builder) AppendRegisterConstantOp(ctx context.Context, oh *rpc.Operatio
 	res := gop.Result()
 	op.Status = res.Status
 	op.IsSuccess = op.Status.IsSuccess()
-	op.GasUsed = res.ConsumedGas
+	op.GasUsed = res.Gas()
 	op.StoragePaid = res.StorageSize // sic!
 
 	var (
@@ -2432,7 +2414,7 @@ func (b *Builder) AppendRegisterConstantOp(ctx context.Context, oh *rpc.Operatio
 		op.Data = res.GlobalAddress.String()
 		// op.Storage, err = gop.Value.MarshalBinary()
 		// if err != nil {
-		// 	return Errorf("marshal value: %w", err)
+		// 	return Errorf("marshal value: %v", err)
 		// }
 
 	} else {
@@ -2511,7 +2493,7 @@ func (b *Builder) AppendDepositsLimitOp(ctx context.Context, oh *rpc.Operation, 
 
 	op.Status = res.Status
 	op.IsSuccess = op.Status.IsSuccess()
-	op.GasUsed = res.ConsumedGas
+	op.GasUsed = res.Gas()
 	op.StoragePaid = res.PaidStorageSizeDiff
 	if gop.Limit != nil {
 		op.Data = strconv.FormatInt(*gop.Limit, 10)
@@ -2556,6 +2538,315 @@ func (b *Builder) AppendDepositsLimitOp(ctx context.Context, oh *rpc.Operation, 
 			src.IsDirty = true
 		}
 	}
+
+	return nil
+}
+
+func (b *Builder) AppendRollupOriginationOp(ctx context.Context, oh *rpc.Operation, id model.OpRef, rollback bool) error {
+	o := id.Get(oh)
+
+	Errorf := func(format string, args ...interface{}) error {
+		return fmt.Errorf(
+			"%s op [%d:%d:%d]: "+format,
+			append([]interface{}{o.Kind(), id.L, id.P, id.C}, args...)...,
+		)
+	}
+
+	rollup, ok := o.(*rpc.Rollup)
+	if !ok {
+		return Errorf("unexpected type %T", o)
+	}
+
+	src, ok := b.AccountByAddress(rollup.Source)
+	if !ok {
+		return Errorf("missing source account %s", rollup.Source)
+	}
+	var (
+		dst    *model.Account
+		srcbkr *model.Baker
+	)
+	if src.BakerId != 0 {
+		if srcbkr, ok = b.BakerById(src.BakerId); !ok {
+			return Errorf("missing baker %d for source account %d", src.BakerId, src.RowId)
+		}
+	}
+	res := rollup.Result()
+	if res.OriginatedRollup.IsValid() && res.Status.IsSuccess() {
+		dst, ok = b.AccountByAddress(res.OriginatedRollup)
+		if !ok {
+			return Errorf("missing originated rollup %s", res.OriginatedRollup)
+		}
+	}
+
+	// build op
+	op := model.NewOp(b.block, id)
+	op.SenderId = src.RowId
+	op.Counter = rollup.Counter
+	op.Fee = rollup.Fee
+	op.GasLimit = rollup.GasLimit
+	op.StorageLimit = rollup.StorageLimit
+	op.IsRollup = true
+	op.Status = res.Status
+	op.IsSuccess = res.Status.IsSuccess()
+	op.GasUsed = res.Gas()
+	op.StoragePaid = res.PaidStorageSizeDiff
+
+	if op.IsSuccess {
+		flows := b.NewRollupOriginationFlows(
+			src, dst,
+			srcbkr,
+			rollup.Fees(),
+			res.Balances(),
+			id,
+		)
+
+		// update burn from burn flow
+		for _, f := range flows {
+			if f.IsBurned {
+				op.Burned += f.AmountOut
+			}
+		}
+
+	} else {
+		// handle errors
+		if len(res.Errors) > 0 {
+			if buf, err := json.Marshal(res.Errors); err == nil {
+				op.Errors = buf
+			} else {
+				// non-fatal, but error data will be missing from index
+				log.Error(Errorf("marshal op errors: %s", err))
+			}
+		}
+
+		// fees flows
+		_ = b.NewRollupOriginationFlows(src, nil, srcbkr, rollup.Fees(), nil, id)
+	}
+
+	b.block.Ops = append(b.block.Ops, op)
+
+	// update accounts
+	if !rollback {
+		src.Counter = op.Counter
+		src.NOps++
+		src.NOrigination++
+		src.LastSeen = b.block.Height
+		src.IsDirty = true
+
+		if !op.IsSuccess {
+			src.NOpsFailed++
+		} else {
+			// initialize originated rollup
+			op.ReceiverId = dst.RowId
+			dst.IsContract = true
+			dst.CreatorId = src.RowId
+			dst.LastSeen = b.block.Height
+			dst.IsDirty = true
+
+			// create and register a new contract here; the contract index
+			// will pick this up later & inserted a database row
+			con := model.NewRollupContract(dst, op, b.block.Params)
+			b.conMap[dst.RowId] = con
+		}
+	} else {
+		src.Counter = op.Counter - 1
+		src.NOps--
+		src.NOrigination--
+		src.IsDirty = true
+		if !op.IsSuccess {
+			src.NOpsFailed--
+		} else {
+			// reverse origination, dst will be deleted
+			dst.MustDelete = true
+			dst.IsDirty = true
+		}
+	}
+
+	return nil
+}
+
+func (b *Builder) AppendRollupTransactionOp(ctx context.Context, oh *rpc.Operation, id model.OpRef, rollback bool) error {
+	o := id.Get(oh)
+
+	Errorf := func(format string, args ...interface{}) error {
+		return fmt.Errorf(
+			"%s op [%d:%d:%d]: "+format,
+			append([]interface{}{o.Kind(), id.L, id.P, id.C}, args...)...,
+		)
+	}
+
+	rollup, ok := o.(*rpc.Rollup)
+	if !ok {
+		return Errorf("unexpected type %T", o)
+	}
+
+	src, ok := b.AccountByAddress(rollup.Source)
+	if !ok {
+		return Errorf("missing sender account %s", rollup.Source)
+	}
+
+	res := rollup.Result()
+
+	dst, ok := b.AccountByAddress(rollup.Target())
+	if !ok && res.Status.IsSuccess() {
+		return Errorf("missing target contract %s", rollup.Target())
+	}
+
+	var (
+		offender *model.Account
+		sbkr     *model.Baker
+		obkr     *model.Baker
+		dCon     *model.Contract
+		err      error
+	)
+	if src.BakerId != 0 {
+		if sbkr, ok = b.BakerById(src.BakerId); !ok {
+			return Errorf("missing baker %d for source account %s", src.BakerId, src)
+		}
+	}
+	dCon, err = b.LoadContractByAccountId(ctx, dst.RowId)
+	if err != nil {
+		return Errorf("loading contract %s %d: %v", rollup.Rollup, dst.RowId, err)
+	}
+
+	// rejection can slash offender (who we only find inside the result's balance update)
+	if rollup.Kind() == tezos.OpTypeToruRejection && res.Status.IsSuccess() {
+		addr := res.Balances()[0].Address()
+		offender, ok = b.AccountByAddress(addr)
+		if !ok {
+			return Errorf("missing rollup offender %s", addr)
+		}
+		if offender.BakerId != 0 {
+			if obkr, ok = b.BakerById(offender.BakerId); !ok {
+				return Errorf("missing baker %d for offender account %s", offender.BakerId, offender)
+			}
+		}
+	}
+
+	// build op
+	op := model.NewOp(b.block, id)
+	op.SenderId = src.RowId
+	op.ReceiverId = dst.RowId
+	op.Counter = rollup.Counter
+	op.Fee = rollup.Fee
+	op.GasLimit = rollup.GasLimit
+	op.StorageLimit = rollup.StorageLimit
+	op.IsRollup = true
+
+	op.Status = res.Status
+	op.IsSuccess = res.Status.IsSuccess()
+	op.GasUsed = res.Gas()
+	op.StoragePaid = res.PaidStorageSizeDiff
+
+	if dCon.Address.IsRollup() {
+		// receiver is rollup
+		op.Data = rollup.Kind().String()
+		op.Entrypoint = int(rollup.Kind()) - int(tezos.OpTypeToruOrigination)
+	} else {
+		// receiver is KT1 contract (used for transfer_ticket)
+		script, err := dCon.LoadScript()
+		if err != nil {
+			return Errorf("loading script: %v", err)
+		}
+		eps, _ := script.Entrypoints(false)
+		ep, ok := eps[rollup.Transfer.Entrypoint]
+		if !ok && op.IsSuccess {
+			return Errorf("missing entrypoint %q", rollup.Transfer.Entrypoint)
+		}
+		op.Entrypoint = ep.Id
+		op.Data = rollup.Transfer.Entrypoint
+	}
+
+	// add rollup args as parameters
+	op.Parameters, err = rollup.EncodeParameters().MarshalBinary()
+	if err != nil {
+		log.Error(Errorf("marshal parameters errors: %s", err))
+	}
+
+	if op.IsSuccess {
+		flows := b.NewRollupTransactionFlows(
+			src, dst, offender, // involved accounts
+			sbkr, obkr, // related bakers (optional)
+			rollup.Fees(),  // fees
+			res.Balances(), // move
+			b.block,
+			id,
+		)
+
+		// update burn from burn flow (on bond slash)
+		for _, f := range flows {
+			if f.IsBurned {
+				// storage or penalty
+				op.Burned += f.AmountOut
+			} else if f.IsUnfrozen {
+				// bond unfreeze
+				op.Reward -= f.AmountOut
+			} else {
+				// deduct accuser reward from burn as this is not burned
+				if f.Operation == model.FlowTypeRollupReward {
+					op.Burned -= f.AmountIn
+					op.Reward += f.AmountIn
+				} else if f.Category == model.FlowCategoryBond {
+					// bond freeze
+					op.Deposit = f.AmountIn
+				}
+			}
+		}
+	} else {
+		// handle errors
+		if len(res.Errors) > 0 {
+			if buf, err := json.Marshal(res.Errors); err == nil {
+				op.Errors = buf
+			} else {
+				// non-fatal, but error data will be missing from index
+				log.Error(Errorf("marshal op errors: %s", err))
+			}
+		}
+
+		// fees only
+		_ = b.NewRollupTransactionFlows(
+			src, nil, nil, // just source
+			sbkr, nil, // just source baker
+			rollup.Fees(),
+			nil, // no result balance updates
+			b.block,
+			id,
+		)
+	}
+
+	// update sender account
+	if !rollback {
+		src.Counter = op.Counter
+		src.LastSeen = b.block.Height
+		src.NOps++
+		src.NTx++
+		src.IsDirty = true
+		dst.LastSeen = b.block.Height
+		dst.NOps++
+		dst.NTx++
+		dst.IsDirty = true
+		if !op.IsSuccess {
+			src.NOpsFailed++
+			dst.NOpsFailed++
+		} else {
+			_ = dCon.Update(op, b.block.Params)
+		}
+	} else {
+		src.Counter = op.Counter - 1
+		src.NOps--
+		src.NTx--
+		src.IsDirty = true
+		dst.NOps--
+		dst.NTx--
+		dst.IsDirty = true
+		if !op.IsSuccess {
+			src.NOpsFailed--
+			dst.NOpsFailed--
+		} else {
+			dCon.Rollback(op, nil, b.block.Params)
+		}
+	}
+
+	b.block.Ops = append(b.block.Ops, op)
 
 	return nil
 }

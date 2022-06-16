@@ -117,9 +117,12 @@ func (c *ChainSeries) MarshalJSONVerbose() ([]byte, error) {
 		Count                int   `json:"count"`
 		TotalAccounts        int64 `json:"total_accounts"`
 		TotalContracts       int64 `json:"total_contracts"`
+		TotalRollups         int64 `json:"total_rollups"`
 		TotalOps             int64 `json:"total_ops"`
+		TotalOpsFailed       int64 `json:"total_ops_failed"`
 		TotalContractOps     int64 `json:"total_contract_ops"`
 		TotalContractCalls   int64 `json:"total_contract_calls"`
+		TotalRollupCalls     int64 `json:"total_rollup_calls"`
 		TotalActivations     int64 `json:"total_activations"`
 		TotalSeedNonces      int64 `json:"total_nonce_revelations"`
 		TotalEndorsements    int64 `json:"total_endorsements"`
@@ -158,9 +161,12 @@ func (c *ChainSeries) MarshalJSONVerbose() ([]byte, error) {
 		Count:                1,
 		TotalAccounts:        c.TotalAccounts,
 		TotalContracts:       c.TotalContracts,
+		TotalRollups:         c.TotalRollups,
 		TotalOps:             c.TotalOps,
+		TotalOpsFailed:       c.TotalOpsFailed,
 		TotalContractOps:     c.TotalContractOps,
 		TotalContractCalls:   c.TotalContractCalls,
+		TotalRollupCalls:     c.TotalRollupCalls,
 		TotalActivations:     c.TotalActivations,
 		TotalSeedNonces:      c.TotalSeedNonces,
 		TotalEndorsements:    c.TotalEndorsements,
@@ -221,12 +227,18 @@ func (c *ChainSeries) MarshalJSONBrief() ([]byte, error) {
 				buf = strconv.AppendInt(buf, c.TotalAccounts, 10)
 			case "total_contracts":
 				buf = strconv.AppendInt(buf, c.TotalContracts, 10)
+			case "total_rollups":
+				buf = strconv.AppendInt(buf, c.TotalRollups, 10)
 			case "total_ops":
 				buf = strconv.AppendInt(buf, c.TotalOps, 10)
+			case "total_ops_failed":
+				buf = strconv.AppendInt(buf, c.TotalOpsFailed, 10)
 			case "total_contract_ops":
 				buf = strconv.AppendInt(buf, c.TotalContractOps, 10)
 			case "total_contract_calls":
 				buf = strconv.AppendInt(buf, c.TotalContractCalls, 10)
+			case "total_rollup_calls":
+				buf = strconv.AppendInt(buf, c.TotalRollupCalls, 10)
 			case "total_activations":
 				buf = strconv.AppendInt(buf, c.TotalActivations, 10)
 			case "total_nonce_revelations":
@@ -325,12 +337,18 @@ func (c *ChainSeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(c.TotalAccounts, 10)
 		case "total_contracts":
 			res[i] = strconv.FormatInt(c.TotalContracts, 10)
+		case "total_rollups":
+			res[i] = strconv.FormatInt(c.TotalRollups, 10)
 		case "total_ops":
 			res[i] = strconv.FormatInt(c.TotalOps, 10)
+		case "total_ops_failed":
+			res[i] = strconv.FormatInt(c.TotalOpsFailed, 10)
 		case "total_contract_ops":
 			res[i] = strconv.FormatInt(c.TotalContractOps, 10)
 		case "total_contract_calls":
 			res[i] = strconv.FormatInt(c.TotalContractCalls, 10)
+		case "total_rollup_calls":
+			res[i] = strconv.FormatInt(c.TotalRollupCalls, 10)
 		case "total_activations":
 			res[i] = strconv.FormatInt(c.TotalActivations, 10)
 		case "total_nonce_revelations":

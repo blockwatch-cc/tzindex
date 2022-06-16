@@ -16,58 +16,68 @@ const (
 	"type": "object",
 	"required": [ "name", "kind" ],
 	"properties": {
-	   	"name": {
-	   		"type": "string",
-    		"description": "Display name for this address or asset."
-    	},
-	    "kind": {
-	      	"type": "string",
-	      	"enum": [
-				"validator",
-				"miner",
-				"foundation",
-				"payout",
-				"merchant",
-				"exchange",
-				"custodian",
-				"token",
-				"dex",
-				"infra",
-				"oracle",
-				"issuer",
-				"registry",
-				"charity",
-				"defi",
-				"nft",
-				"game",
-				"event",
-				"dao",
-				"other"
-	      	],
-	      	"description": "A structured type used for filtering."
-	    },
-	    "description": {
-	      "description": "A brief description.",
-	      "type": "string"
-	    },
-	    "category": {
-	      "description": "A user-defined category.",
-	      "type": "string"
-	    },
-	    "logo": {
-	      "description": "A filename or URL pointing to a logo image.",
-	      "type": "string"
-	    }
+   	"name": {
+   		"type": "string",
+  		"description": "Display name for this address or asset."
+  	},
+    "kind": {
+      	"type": "string",
+      	"enum": [
+			"validator",
+			"miner",
+			"foundation",
+			"payout",
+			"merchant",
+			"exchange",
+			"custodian",
+			"token",
+			"dex",
+			"infra",
+			"oracle",
+			"issuer",
+			"registry",
+			"charity",
+			"defi",
+			"nft",
+			"game",
+			"event",
+			"dao",
+			"treasury",
+			"ico",
+			"other"
+      	],
+      	"description": "A structured type used for filtering."
+    },
+    "description": {
+      "description": "A brief description.",
+      "type": "string"
+    },
+    "category": {
+      "description": "A user-defined category.",
+      "type": "string"
+    },
+    "logo": {
+      "description": "A filename or URL pointing to a logo image.",
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string"
+      }
+    }
 	}
 }`
 )
 
 type Alias struct {
-	Name        string `json:"name"`
-	Kind        string `json:"kind"`
-	Description string `json:"description,omitempty"`
-	Category    string `json:"category,omitempty"`
-	Logo        string `json:"logo,omitempty"`
+	Name        string   `json:"name"`
+	Kind        string   `json:"kind"`
+	Description string   `json:"description,omitempty"`
+	Category    string   `json:"category,omitempty"`
+	Logo        string   `json:"logo,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
 }
 
 func (d Alias) Namespace() string {

@@ -22,41 +22,45 @@ func (id BakerID) Value() uint64 {
 // For history look at Op and Flow (balance updates), for generic info look
 // at Account.
 type Baker struct {
-    RowId              BakerID       `pack:"I,pk,snappy" json:"row_id"`
-    AccountId          AccountID     `pack:"A,snappy"    json:"account_id"`
-    Address            tezos.Address `pack:"H,snappy"    json:"address"`
-    IsActive           bool          `pack:"v,snappy"    json:"is_active"`
-    BakerSince         int64         `pack:"*,snappy"    json:"baker_since"`
-    BakerUntil         int64         `pack:"/,snappy"    json:"baker_until"`
-    TotalRewardsEarned int64         `pack:"W,snappy"    json:"total_rewards_earned"`
-    TotalFeesEarned    int64         `pack:"E,snappy"    json:"total_fees_earned"`
-    TotalLost          int64         `pack:"L,snappy"    json:"total_lost"`
-    FrozenDeposits     int64         `pack:"z,snappy"    json:"frozen_deposits"`
-    FrozenRewards      int64         `pack:"Z,snappy"    json:"frozen_rewards"`
-    FrozenFees         int64         `pack:"Y,snappy"    json:"frozen_fees"`
-    DelegatedBalance   int64         `pack:"~,snappy"    json:"delegated_balance"`
-    DepositsLimit      int64         `pack:"T,snappy"    json:"deposit_limit"`
-    TotalDelegations   int64         `pack:">,snappy"    json:"total_delegations"`
-    ActiveDelegations  int64         `pack:"a,snappy"    json:"active_delegations"`
-    BlocksBaked        int64         `pack:"b,snappy"    json:"blocks_baked"`
-    BlocksProposed     int64         `pack:"P,snappy"    json:"blocks_proposed"`
-    SlotsEndorsed      int64         `pack:"e,snappy"    json:"slots_endorsed"`
-    NBakerOps          int64         `pack:"1,snappy"    json:"n_baker_ops"`
-    NProposal          int64         `pack:"2,snappy"    json:"n_proposals"`
-    NBallot            int64         `pack:"3,snappy"    json:"n_ballots"`
-    NEndorsement       int64         `pack:"4,snappy"    json:"n_endorsements"`
-    NPreendorsement    int64         `pack:"5,snappy"    json:"n_preendorsements"`
-    NSeedNonce         int64         `pack:"6,snappy"    json:"n_nonce_revelations"`
-    N2Baking           int64         `pack:"7,snappy"    json:"n_double_bakings"`
-    N2Endorsement      int64         `pack:"8,snappy"    json:"n_double_endorsements"`
-    NSetDepositsLimit  int64         `pack:"9,snappy"    json:"n_set_limits"`
-    NAccusations       int64         `pack:"0,i32"       json:"n_accusations"`
-    GracePeriod        int64         `pack:"G,snappy"    json:"grace_period"`
-    Version            uint32        `pack:"N,snappy"    json:"baker_version"`
+    RowId              BakerID       `pack:"I,pk"     json:"row_id"`
+    AccountId          AccountID     `pack:"A"        json:"account_id"`
+    Address            tezos.Address `pack:"H,snappy" json:"address"`
+    IsActive           bool          `pack:"v,snappy" json:"is_active"`
+    BakerSince         int64         `pack:"*"        json:"baker_since"`
+    BakerUntil         int64         `pack:"/"        json:"baker_until"`
+    TotalRewardsEarned int64         `pack:"W"        json:"total_rewards_earned"`
+    TotalFeesEarned    int64         `pack:"E"        json:"total_fees_earned"`
+    TotalLost          int64         `pack:"L"        json:"total_lost"`
+    FrozenDeposits     int64         `pack:"z"        json:"frozen_deposits"`
+    FrozenRewards      int64         `pack:"Z"        json:"frozen_rewards"`
+    FrozenFees         int64         `pack:"Y"        json:"frozen_fees"`
+    DelegatedBalance   int64         `pack:"~"        json:"delegated_balance"`
+    DepositsLimit      int64         `pack:"T"        json:"deposit_limit"`
+    TotalDelegations   int64         `pack:">"        json:"total_delegations"`
+    ActiveDelegations  int64         `pack:"a"        json:"active_delegations"`
+    BlocksBaked        int64         `pack:"b"        json:"blocks_baked"`
+    BlocksProposed     int64         `pack:"P"        json:"blocks_proposed"`
+    BlocksNotBaked     int64         `pack:"N"        json:"blocks_not_baked"`
+    BlocksEndorsed     int64         `pack:"x"        json:"blocks_endorsed"`
+    BlocksNotEndorsed  int64         `pack:"y"        json:"blocks_not_endorsed"`
+    SlotsEndorsed      int64         `pack:"e"        json:"slots_endorsed"`
+    NBakerOps          int64         `pack:"1"        json:"n_baker_ops"`
+    NProposal          int64         `pack:"2"        json:"n_proposals"`
+    NBallot            int64         `pack:"3"        json:"n_ballots"`
+    NEndorsement       int64         `pack:"4"        json:"n_endorsements"`
+    NPreendorsement    int64         `pack:"5"        json:"n_preendorsements"`
+    NSeedNonce         int64         `pack:"6"        json:"n_nonce_revelations"`
+    N2Baking           int64         `pack:"7"        json:"n_double_bakings"`
+    N2Endorsement      int64         `pack:"8"        json:"n_double_endorsements"`
+    NSetDepositsLimit  int64         `pack:"9"        json:"n_set_limits"`
+    NAccusations       int64         `pack:"0"        json:"n_accusations"`
+    GracePeriod        int64         `pack:"G"        json:"grace_period"`
+    Version            uint32        `pack:"V,snappy" json:"baker_version"`
 
-    Account *Account `pack:"-" json:"-"` // related account
-    IsNew   bool     `pack:"-" json:"-"` // first seen this block
-    IsDirty bool     `pack:"-" json:"-"` // indicates an update happened
+    Account     *Account `pack:"-" json:"-"` // related account
+    Reliability int64    `pack:"-" json:"-"` // current cycle reliability from rights
+    IsNew       bool     `pack:"-" json:"-"` // first seen this block
+    IsDirty     bool     `pack:"-" json:"-"` // indicates an update happened
 }
 
 // Ensure Baker implements the pack.Item interface.
@@ -86,7 +90,7 @@ func (b Baker) String() string {
 }
 
 func (b Baker) Balance() int64 {
-    return b.FrozenBalance() + b.Account.SpendableBalance
+    return b.FrozenBalance() + b.Account.Balance()
 }
 
 func (b Baker) FrozenBalance() int64 {
@@ -94,13 +98,13 @@ func (b Baker) FrozenBalance() int64 {
 }
 
 func (b Baker) TotalBalance() int64 {
-    return b.Account.SpendableBalance + b.FrozenDeposits + b.FrozenFees
+    return b.Account.Balance() + b.FrozenDeposits + b.FrozenFees
 }
 
 // own balance plus frozen deposits+fees (NOT REWARDS!) plus
 // all delegated balances (this is self-delegation safe)
 func (b Baker) StakingBalance() int64 {
-    return b.FrozenDeposits + b.FrozenFees + b.Account.SpendableBalance + b.DelegatedBalance
+    return b.FrozenDeposits + b.FrozenFees + b.Account.Balance() + b.DelegatedBalance
 }
 
 // <v12 staking balance capped by capacity
@@ -171,6 +175,9 @@ func (b *Baker) Reset() {
     b.ActiveDelegations = 0
     b.BlocksBaked = 0
     b.BlocksProposed = 0
+    b.BlocksNotBaked = 0
+    b.BlocksEndorsed = 0
+    b.BlocksNotEndorsed = 0
     b.SlotsEndorsed = 0
     b.NBakerOps = 0
     b.NProposal = 0
@@ -186,6 +193,7 @@ func (b *Baker) Reset() {
     b.Version = 0
     b.Account = nil
     b.IsNew = false
+    b.Reliability = 0
     b.IsDirty = false
 }
 
@@ -214,9 +222,9 @@ func (b *Baker) UpdateBalance(f *Flow) error {
             // return fmt.Errorf("baker.update id %d %s frozen rewards %d is smaller than "+
             //     "outgoing amount %d", b.RowId, b, b.FrozenRewards, f.AmountOut-f.AmountIn)
         }
-        b.TotalRewardsEarned += f.AmountIn - f.AmountOut
+        b.TotalRewardsEarned += f.AmountIn
         b.FrozenRewards += f.AmountIn - f.AmountOut
-        if f.Operation == FlowTypePenalty {
+        if f.Operation == FlowTypePenalty || f.Operation == FlowTypeNonceRevelation {
             b.TotalLost += f.AmountOut
         }
 
@@ -242,7 +250,7 @@ func (b *Baker) UpdateBalance(f *Flow) error {
             //     "outgoing amount %d", b.RowId, b, b.FrozenFees, f.AmountOut-f.AmountIn)
         }
         b.TotalFeesEarned += f.AmountIn
-        if f.Operation == FlowTypePenalty {
+        if f.Operation == FlowTypePenalty || f.Operation == FlowTypeNonceRevelation {
             b.TotalLost += f.AmountOut
         }
         b.FrozenFees += f.AmountIn - f.AmountOut

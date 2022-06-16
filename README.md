@@ -10,7 +10,7 @@ For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](h
 
 - indexes and cross-checks full on-chain state
 - feature-rich [REST API](https://tzstats.com/docs/api/index.html) with objects, bulk tables and time-series
-- supports protocols up to Ithaca (v012)
+- supports protocols up to Jakarta (v013)
 - auto-detects and locks Tezos network (never mixes data from different networks)
 - indexes all accounts and smart-contracts (including genesis data)
 - follows chain reorgs as they are resolved
@@ -26,21 +26,28 @@ For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](h
 **Supported indexes and data tables**
 
 - **blocks**: all blocks including orphans, indexed by hash and height
-- **operations**: all on-chain operations including contract call data, indexed by hash (no more endorsements in v12+)
+- **operations**: all on-chain operations including contract call data, indexed by hash ( endorsements are split into separate table, only available in full mode)
 - **accounts**: running account details like most recent balances, indexed by address
 - **balances**: end-of-block balance history for all addresses
 - **contracts**: running smart contract details, code and initial storage
+- **flows**: complete list of balance, freezer and delegation balance updates
 - **chain**: running blockchain totals
 - **supply**: running supply totals
 - **bigmap**: bigmap smart contract storage index
+- **rights**: compact representations of assigned and used baking and endorsing rights
+- **elections**, **votes**, **proposals** and **ballots** capturing all on-chain governance activities
+- **snapshots**: balances of active delegates & delegators at all snapshot blocks
+- baker **income**: per-cycle statistics on baker income, efficiency, etc
 - **metadata**: standardized and custom account/token metadata
 - **constants**: global constants (e.g. smart contract code/type macros to lower contract size and reuse common features)
+- **storage**: separate smart contract storage updates to decrease operation table cache pressure
 
 Starting v12 we are no longer supporting baker `rights`, `snapshots`, `income` and `governance` data as well as `flows` (use balances instead).
 
 **Operation modes**
 
 - **Light** (default) light-weight mode without consensus and governance data (CLI: `--light`)
+- **Full** regular operation mode that builds all indexes (CLI: `--full`)
 - **Validate** state validation mode for checking accounts and balances each block/cycle (CLI: `--validate`)
 
 **Light mode** dramatically reduces our maintainance costs for TzIndex and is best suited for dapps where access to baking-related data is not necessary. Light mode saves roughly \~50% storage costs and \~50% indexing time while still keeping all data required for Dapps.
@@ -50,8 +57,8 @@ Starting v12 we are no longer supporting baker `rights`, `snapshots`, `income` a
 
 ### Requirements
 
-- Storage: 22GB (Mainnet index in new light/default mode, Mar 2022)
-- RAM:  4-24GB (configurable, use more memory for better query latency)
+- Storage: 38GB (full Mainnet index, June 2022), 32G (light mode)
+- RAM:  8-64GB (configurable, use more memory for better query latency)
 - CPU:  2+ cores (configurable, use more for better query parallelism)
 - Tezos node in archive mode
 
@@ -63,6 +70,10 @@ Requires access to the following Tezos RPC calls
 
 ```
 /chains/main/blocks/{blockid}
+/chains/main/blocks/{blockid}/helpers/baking_rights (full mode only)
+/chains/main/blocks/{blockid}/helpers/endorsing_rights (full mode only)
+/chains/main/blocks/{blockid}/context/selected_snapshot (Ithaca+ full mode only)
+/chains/main/blocks/{blockid}/context/raw/json/cycle/{cycle} (full mode only)
 /chains/main/blocks/{blockid}/context/constants
 /chains/main/blocks/head/header
 /monitor/heads/main (optional)
@@ -182,6 +193,8 @@ Global Flags:
   -p, --dbpath path            database path
       --gogc int               trigger GC when used mem grows by N percent (default 20)
       --insecure               disable RPC TLS certificate checks (not recommended)
+      --light                  light mode (default, skips endorsement, baker and governance data)
+      --full                   full mode (index all data)
       --norpc                  disable RPC client
       --notls                  disable RPC TLS support (use http)
       --profile-block string   write blocking events to file

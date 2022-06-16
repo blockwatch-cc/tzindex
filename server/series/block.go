@@ -27,7 +27,9 @@ var (
 		"n_ops_applied",
 		"n_ops_failed",
 		"n_calls",
+		"n_rollup_calls",
 		"n_events",
+		"n_tx",
 		"volume",
 		"fee",
 		"reward",
@@ -53,7 +55,9 @@ type BlockSeries struct {
 	NOpsApplied     int64     `json:"n_ops_applied"`
 	NOpsFailed      int64     `json:"n_ops_failed"`
 	NContractCalls  int64     `json:"n_calls"`
+	NRollupCalls    int64     `json:"n_rollup_calls"`
 	NEvents         int64     `json:"n_events"`
+	NTx             int64     `json:"n_tx"`
 	Volume          int64     `json:"volume"`
 	Fee             int64     `json:"fee"`
 	Reward          int64     `json:"reward"`
@@ -91,8 +95,10 @@ func (s *BlockSeries) Add(m SeriesModel) {
 	s.NSlotsEndorsed += int64(b.NSlotsEndorsed)
 	s.NOpsApplied += int64(model.Int16Correct(b.NOpsApplied))
 	s.NOpsFailed += int64(model.Int16Correct(b.NOpsFailed))
-	s.NEvents += int64(model.Int16Correct(b.NEvents))
 	s.NContractCalls += int64(model.Int16Correct(b.NContractCalls))
+	s.NRollupCalls += int64(model.Int16Correct(b.NRollupCalls))
+	s.NEvents += int64(model.Int16Correct(b.NEvents))
+	s.NTx += int64(model.Int16Correct(b.NTx))
 	s.Volume += int64(b.Volume)
 	s.Fee += int64(b.Fee)
 	s.Reward += int64(b.Reward)
@@ -114,8 +120,10 @@ func (s *BlockSeries) Reset() {
 	s.NSlotsEndorsed = 0
 	s.NOpsApplied = 0
 	s.NOpsFailed = 0
-	s.NEvents = 0
 	s.NContractCalls = 0
+	s.NRollupCalls = 0
+	s.NEvents = 0
+	s.NTx = 0
 	s.Volume = 0
 	s.Fee = 0
 	s.Reward = 0
@@ -161,8 +169,10 @@ func (s *BlockSeries) Clone() SeriesBucket {
 		NSlotsEndorsed:  s.NSlotsEndorsed,
 		NOpsApplied:     s.NOpsApplied,
 		NOpsFailed:      s.NOpsFailed,
-		NEvents:         s.NEvents,
 		NContractCalls:  s.NContractCalls,
+		NRollupCalls:    s.NRollupCalls,
+		NEvents:         s.NEvents,
+		NTx:             s.NTx,
 		Volume:          s.Volume,
 		Fee:             s.Fee,
 		Reward:          s.Reward,
@@ -199,8 +209,9 @@ func (s *BlockSeries) Interpolate(m SeriesBucket, ts time.Time) SeriesBucket {
 			NSlotsEndorsed:  s.NSlotsEndorsed + int64(weight*float64(int64(b.NSlotsEndorsed)-s.NSlotsEndorsed)),
 			NOpsApplied:     s.NOpsApplied + int64(weight*float64(int64(b.NOpsApplied)-s.NOpsApplied)),
 			NOpsFailed:      s.NOpsFailed + int64(weight*float64(int64(b.NOpsFailed)-s.NOpsFailed)),
-			NEvents:         s.NEvents + int64(weight*float64(int64(b.NEvents)-s.NEvents)),
 			NContractCalls:  s.NContractCalls + int64(weight*float64(int64(b.NContractCalls)-s.NContractCalls)),
+			NRollupCalls:    s.NRollupCalls + int64(weight*float64(int64(b.NRollupCalls)-s.NRollupCalls)),
+			NTx:             s.NTx + int64(weight*float64(int64(b.NTx)-s.NTx)),
 			Volume:          s.Volume + int64(weight*float64(int64(b.Volume)-s.Volume)),
 			Fee:             s.Fee + int64(weight*float64(int64(b.Fee)-s.Fee)),
 			Reward:          s.Reward + int64(weight*float64(int64(b.Reward)-s.Reward)),
@@ -238,8 +249,10 @@ func (b *BlockSeries) MarshalJSONVerbose() ([]byte, error) {
 		NSlotsEndorsed  int64     `json:"n_endorsed_slots"`
 		NOpsApplied     int64     `json:"n_ops_applied"`
 		NOpsFailed      int64     `json:"n_ops_failed"`
+		NContractCalls  int64     `json:"n_calls"`
+		NRollupCalls    int64     `json:"n_rollup_calls"`
 		NEvents         int64     `json:"n_events"`
-		NContractCalls  int64     `json:"n_contract_calls"`
+		NTx             int64     `json:"n_tx"`
 		Volume          float64   `json:"volume"`
 		Fee             float64   `json:"fee"`
 		Reward          float64   `json:"reward"`
@@ -259,8 +272,10 @@ func (b *BlockSeries) MarshalJSONVerbose() ([]byte, error) {
 		NSlotsEndorsed:  b.NSlotsEndorsed,
 		NOpsApplied:     b.NOpsApplied,
 		NOpsFailed:      b.NOpsFailed,
-		NEvents:         b.NEvents,
 		NContractCalls:  b.NContractCalls,
+		NRollupCalls:    b.NRollupCalls,
+		NEvents:         b.NEvents,
+		NTx:             b.NTx,
 		Volume:          b.params.ConvertValue(b.Volume),
 		Fee:             b.params.ConvertValue(b.Fee),
 		Reward:          b.params.ConvertValue(b.Reward),
@@ -302,10 +317,14 @@ func (b *BlockSeries) MarshalJSONBrief() ([]byte, error) {
 				buf = strconv.AppendInt(buf, int64(b.NOpsApplied), 10)
 			case "n_ops_failed":
 				buf = strconv.AppendInt(buf, int64(b.NOpsFailed), 10)
+			case "n_calls":
+				buf = strconv.AppendInt(buf, int64(b.NContractCalls), 10)
+			case "n_rollup_calls":
+				buf = strconv.AppendInt(buf, int64(b.NRollupCalls), 10)
 			case "n_events":
 				buf = strconv.AppendInt(buf, int64(b.NEvents), 10)
-			case "n_contract_calls":
-				buf = strconv.AppendInt(buf, int64(b.NContractCalls), 10)
+			case "n_tx":
+				buf = strconv.AppendInt(buf, int64(b.NTx), 10)
 			case "volume":
 				buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Volume), 'f', dec, 64)
 			case "fee":
@@ -367,10 +386,14 @@ func (b *BlockSeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(int64(b.NOpsApplied), 10)
 		case "n_ops_failed":
 			res[i] = strconv.FormatInt(int64(b.NOpsFailed), 10)
+		case "n_calls":
+			res[i] = strconv.FormatInt(int64(b.NContractCalls), 10)
+		case "n_rollup_calls":
+			res[i] = strconv.FormatInt(int64(b.NRollupCalls), 10)
 		case "n_events":
 			res[i] = strconv.FormatInt(int64(b.NEvents), 10)
-		case "n_contract_calls":
-			res[i] = strconv.FormatInt(int64(b.NContractCalls), 10)
+		case "n_tx":
+			res[i] = strconv.FormatInt(int64(b.NTx), 10)
 		case "volume":
 			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Volume), 'f', dec, 64)
 		case "fee":

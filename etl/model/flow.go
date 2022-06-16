@@ -48,8 +48,8 @@ type Flow struct {
 	OpI            int          `pack:"3,snappy"       json:"op_i"`
 	AccountId      AccountID    `pack:"A,snappy,bloom" json:"account_id"`
 	CounterPartyId AccountID    `pack:"R,snappy"       json:"counterparty_id"` // account that initiated the flow
-	Category       FlowCategory `pack:"C,snappy"       json:"category"`        // sub-account that received the update
-	Operation      FlowType     `pack:"O,snappy"       json:"operation"`       // op type that caused this update
+	Category       FlowCategory `pack:"C,snappy,bloom" json:"category"`        // sub-account that received the update
+	Operation      FlowType     `pack:"O,snappy,bloom" json:"operation"`       // op type that caused this update
 	AmountIn       int64        `pack:"i,snappy"       json:"amount_in"`       // sum flowing in to the account
 	AmountOut      int64        `pack:"o,snappy"       json:"amount_out"`      // sum flowing out of the account
 	IsFee          bool         `pack:"e,snappy"       json:"is_fee"`          // flag: out-flow paid a fee

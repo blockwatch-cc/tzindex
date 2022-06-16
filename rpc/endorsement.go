@@ -14,7 +14,6 @@ var _ TypedOperation = (*Endorsement)(nil)
 type Endorsement struct {
 	Generic
 	Level       int64               `json:"level"`              // <= v008, v012+
-	Metadata    OperationMetadata   `json:"metadata"`           // all protocols
 	Endorsement *InlinedEndorsement `json:"endorsement"`        // v009+
 	Slot        int                 `json:"slot"`               // v009+
 	Round       int                 `json:"round"`              // v012+
@@ -26,11 +25,6 @@ func (e Endorsement) GetLevel() int64 {
 		return e.Endorsement.Operations.Level
 	}
 	return e.Level
-}
-
-// Meta returns an empty operation metadata to implement TypedOperation interface.
-func (e Endorsement) Meta() OperationMetadata {
-	return e.Metadata
 }
 
 // InlinedEndorsement represents and embedded endorsement

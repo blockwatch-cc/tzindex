@@ -127,7 +127,7 @@ func (idx *BalanceIndex) ConnectBlock(ctx context.Context, block *model.Block, b
     // handle bakers
     for _, bkr := range builder.Bakers() {
         acc := bkr.Account
-        if !acc.IsDirty || acc.PrevBalance == acc.SpendableBalance || acc.PrevSeen == block.Height {
+        if !acc.IsDirty || acc.PrevBalance == acc.Balance() || acc.PrevSeen == block.Height {
             // log.Infof("Skip %s from=%d to=%d bal=%d", acc, acc.PrevSeen, block.Height, acc.PrevBalance)
             continue
         }
@@ -143,7 +143,7 @@ func (idx *BalanceIndex) ConnectBlock(ctx context.Context, block *model.Block, b
 
     // handle regular accounts
     for _, acc := range builder.Accounts() {
-        if !acc.IsDirty || acc.PrevBalance == acc.SpendableBalance || acc.PrevSeen == block.Height {
+        if !acc.IsDirty || acc.PrevBalance == acc.Balance() || acc.PrevSeen == block.Height {
             continue
         }
         bal := &model.Balance{

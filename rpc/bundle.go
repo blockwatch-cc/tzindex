@@ -8,9 +8,14 @@ import (
 )
 
 type Bundle struct {
-    Block  *Block
-    Params *tezos.Params
-    Cycle  int64
+    Block         *Block
+    Params        *tezos.Params
+    Cycle         int64
+    Baking        [][]BakingRight    // all blocks from one or more cycle
+    Endorsing     [][]EndorsingRight // all blocks from one or more cycles
+    PrevEndorsing []EndorsingRight   // last block from previous cycle
+    Snapshot      *SnapshotIndex
+    SnapInfo      *SnapshotInfo
 }
 
 func (b *Bundle) Height() int64 {

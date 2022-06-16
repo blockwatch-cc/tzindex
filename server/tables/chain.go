@@ -202,12 +202,12 @@ func (c *Chain) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, c.UnclaimedAccounts, 10)
 		case "total_delegators":
 			buf = strconv.AppendInt(buf, c.TotalDelegators, 10)
-		case "dust_delegators":
-			buf = strconv.AppendInt(buf, c.DustDelegators, 10)
 		case "active_delegators":
 			buf = strconv.AppendInt(buf, c.ActiveDelegators, 10)
 		case "inactive_delegators":
 			buf = strconv.AppendInt(buf, c.InactiveDelegators, 10)
+		case "dust_delegators":
+			buf = strconv.AppendInt(buf, c.DustDelegators, 10)
 		case "total_bakers":
 			buf = strconv.AppendInt(buf, c.TotalBakers, 10)
 		case "active_bakers":
@@ -357,12 +357,10 @@ func StreamChainTable(ctx *server.Context, args *TableRequest) (interface{}, int
 	}
 
 	// build table query
-	q := pack.Query{
-		Name:   ctx.RequestID,
-		Fields: table.Fields().Select(srcNames...),
-		Limit:  int(args.Limit),
-		Order:  args.Order,
-	}
+	q := pack.NewQuery(ctx.RequestID, table).
+		WithFields(srcNames...).
+		WithLimit(int(args.Limit)).
+		WithOrder(args.Order)
 
 	// build dynamic filter conditions from query (will panic on error)
 	for key, val := range ctx.Request.URL.Query() {

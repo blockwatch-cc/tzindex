@@ -50,45 +50,49 @@ func (id OpID) Value() uint64 {
 }
 
 type Op struct {
-	RowId        OpID           `pack:"I,pk,snappy"    json:"row_id"`        // internal: unique row id
-	Type         OpType         `pack:"t,snappy"       json:"type"`          // indexer op type
-	Hash         tezos.OpHash   `pack:"H,snappy"       json:"hash"`          // op hash
-	Height       int64          `pack:"h,snappy"       json:"height"`        // block height
-	Cycle        int64          `pack:"c,snappy"       json:"cycle"`         // block cycle
-	Timestamp    time.Time      `pack:"T,snappy"       json:"time"`          // block time
-	OpN          int            `pack:"n,snappy"       json:"op_n"`          // unique in-block pos
-	OpP          int            `pack:"P,snappy"       json:"op_p"`          // op list pos (list can be derived from type)
-	Status       tezos.OpStatus `pack:"?,snappy"       json:"status"`        // op status
-	IsSuccess    bool           `pack:"!,snappy"       json:"is_success"`    // success flag
-	IsContract   bool           `pack:"C,snappy"       json:"is_contract"`   // contract call flag (target is contract)
-	IsInternal   bool           `pack:"N,snappy"       json:"is_internal"`   // internal contract call or op
-	IsEvent      bool           `pack:"m,snappy"       json:"is_event"`      // this is an implicit event
-	Counter      int64          `pack:"j,snappy"       json:"counter"`       // signer counter
-	GasLimit     int64          `pack:"l,snappy"       json:"gas_limit"`     // gas limit
-	GasUsed      int64          `pack:"G,snappy"       json:"gas_used"`      // gas used
-	StorageLimit int64          `pack:"Z,snappy"       json:"storage_limit"` // storage size limit
-	StoragePaid  int64          `pack:"$,snappy"       json:"storage_paid"`  // storage allocated/paid
-	Volume       int64          `pack:"v,snappy"       json:"volume"`        // transacted tez volume
-	Fee          int64          `pack:"f,snappy"       json:"fee"`           // tx fees
-	Reward       int64          `pack:"r,snappy"       json:"reward"`        // baking/endorsement reward
-	Deposit      int64          `pack:"d,snappy"       json:"deposit"`       // baker deposit
-	Burned       int64          `pack:"b,snappy"       json:"burned"`        // burned tez (for storage allocation)
-	SenderId     AccountID      `pack:"S,snappy,bloom" json:"sender_id"`     // sender id, also on internal ops
-	ReceiverId   AccountID      `pack:"R,snappy,bloom" json:"receiver_id"`   // receiver id
-	CreatorId    AccountID      `pack:"M,snappy"       json:"creator_id"`    // creator id, direct source for internal ops
-	BakerId      AccountID      `pack:"D,snappy,bloom" json:"baker_id"`      // delegate id
-	Data         string         `pack:"a,snappy"       json:"data"`          // custom op data
-	Parameters   []byte         `pack:"p,snappy"       json:"parameters"`    // call params
-	Storage      []byte         `pack:"s,snappy"       json:"storage"`       // call result storage
-	Diff         []byte         `pack:"B,snappy"       json:"big_map_diff"`  // call result big map diff
-	Errors       []byte         `pack:"e,snappy"       json:"errors"`        // call errors
-	Entrypoint   int            `pack:"E,snappy"       json:"entrypoint_id"` // update contract counters, search by entrypoint
+	RowId        OpID           `pack:"I,pk"              json:"row_id"`        // internal: unique row id
+	Type         OpType         `pack:"t,bloom"           json:"type"`          // indexer op type
+	Hash         tezos.OpHash   `pack:"H,snappy,bloom=3"  json:"hash"`          // op hash
+	Height       int64          `pack:"h"                 json:"height"`        // block height
+	Cycle        int64          `pack:"c"                 json:"cycle"`         // block cycle
+	Timestamp    time.Time      `pack:"T"                 json:"time"`          // block time
+	OpN          int            `pack:"n"                 json:"op_n"`          // unique in-block pos
+	OpP          int            `pack:"P"                 json:"op_p"`          // op list pos (list can be derived from type)
+	Status       tezos.OpStatus `pack:"?"                 json:"status"`        // op status
+	IsSuccess    bool           `pack:"!"                 json:"is_success"`    // success flag
+	IsContract   bool           `pack:"C"                 json:"is_contract"`   // contract call flag (target is contract)
+	IsInternal   bool           `pack:"N"                 json:"is_internal"`   // internal contract call or op
+	IsEvent      bool           `pack:"m"                 json:"is_event"`      // this is an implicit event
+	IsRollup     bool           `pack:"u"                 json:"is_rollup"`     // this is an rollup operation
+	Counter      int64          `pack:"j"                 json:"counter"`       // signer counter
+	GasLimit     int64          `pack:"l"                 json:"gas_limit"`     // gas limit
+	GasUsed      int64          `pack:"G"                 json:"gas_used"`      // gas used
+	StorageLimit int64          `pack:"Z"                 json:"storage_limit"` // storage size limit
+	StoragePaid  int64          `pack:"$"                 json:"storage_paid"`  // storage allocated/paid
+	Volume       int64          `pack:"v"                 json:"volume"`        // transacted tez volume
+	Fee          int64          `pack:"f"                 json:"fee"`           // tx fees
+	Reward       int64          `pack:"r"                 json:"reward"`        // baking/endorsement reward
+	Deposit      int64          `pack:"d"                 json:"deposit"`       // baker deposit
+	Burned       int64          `pack:"b"                 json:"burned"`        // burned tez (for storage allocation)
+	SenderId     AccountID      `pack:"S,bloom"           json:"sender_id"`     // sender id, also on internal ops
+	ReceiverId   AccountID      `pack:"R,bloom"           json:"receiver_id"`   // receiver id
+	CreatorId    AccountID      `pack:"M"                 json:"creator_id"`    // creator id, direct source for internal ops
+	BakerId      AccountID      `pack:"D,bloom"           json:"baker_id"`      // delegate id
+	Data         string         `pack:"a,snappy"          json:"data"`          // custom op data
+	Parameters   []byte         `pack:"p,snappy"          json:"parameters"`    // call params
+	StorageHash  uint64         `pack:"s"                 json:"storage_hash"`  // storage hash
+	Errors       []byte         `pack:"e,snappy"          json:"errors"`        // call errors
+	Entrypoint   int            `pack:"E"                 json:"entrypoint_id"` // update contract counters, search by entrypoint
 
 	// internal
-	OpC        int                  `pack:"-"  json:"-"` // contents list pos
-	OpI        int                  `pack:"-"  json:"-"` // internal op result list pos
-	Raw        rpc.TypedOperation   `pack:"-"  json:"-"` // cache
-	BigmapDiff micheline.BigmapDiff `pack:"-"  json:"-"` // cache here for bigmap index
+	OpC             int                    `pack:"-"  json:"-"` // contents list pos
+	OpI             int                    `pack:"-"  json:"-"` // internal op result list pos
+	Raw             rpc.TypedOperation     `pack:"-"  json:"-"` // cache
+	BigmapEvents    micheline.BigmapEvents `pack:"-"  json:"-"` // cache here for bigmap index
+	Storage         []byte                 `pack:"-"  json:"-"` // storage update
+	IsStorageUpdate bool                   `pack:"-"  json:"-"` // true when contract storage changed
+	Contract        *Contract              `pack:"-"  json:"-"` // cached contract
+	BigmapUpdates   []BigmapUpdate         `pack:"-"  json:"-"` // cached query result
 }
 
 // Ensure Op implements the pack.Item interface.
@@ -167,6 +171,7 @@ func (o *Op) Reset() {
 	o.IsContract = false
 	o.IsInternal = false
 	o.IsEvent = false
+	o.IsRollup = false
 	o.Counter = 0
 	o.GasLimit = 0
 	o.GasUsed = 0
@@ -183,29 +188,31 @@ func (o *Op) Reset() {
 	o.BakerId = 0
 	o.Data = ""
 	o.Parameters = nil
-	o.Storage = nil
-	o.Diff = nil
 	o.Errors = nil
 	o.Entrypoint = 0
 
 	o.OpC = 0
 	o.OpI = 0
 	o.Raw = nil
-	o.BigmapDiff = nil
+	o.BigmapEvents = nil
+	o.Storage = nil
+	o.StorageHash = 0
+	o.IsStorageUpdate = false
+	o.Contract = nil
 }
 
 // Separate endorsement table for better cache locality
 type Endorsement struct {
-	RowId    OpID         `pack:"I,pk,snappy"     json:"row_id"`            // internal: unique row id
-	Hash     tezos.OpHash `pack:"H,snappy"        json:"hash"`              // op hash
-	Height   int64        `pack:"h,snappy"        json:"height"`            // block height
-	OpN      int          `pack:"n,snappy"        json:"op_n"`              // unique in-block pos
-	OpP      int          `pack:"P,snappy"        json:"op_p"`              // op list pos (list can be derived from type)
-	Reward   int64        `pack:"r,snappy"        json:"reward"`            // baking/endorsement reward
-	Deposit  int64        `pack:"d,snappy"        json:"deposit"`           // baker deposit
-	SenderId AccountID    `pack:"S,snappy,bloom"  json:"sender_id"`         // sender id, also on internal ops
-	Power    int64        `pack:"p,snappy"        json:"power"`             // power
-	IsPre    bool         `pack:"i,snappy"        json:"is_preendorsement"` // Ithaca pre-endorsement
+	RowId    OpID         `pack:"I,pk"             json:"row_id"`            // internal: unique row id
+	Hash     tezos.OpHash `pack:"H,snappy,bloom=3" json:"hash"`              // op hash
+	Height   int64        `pack:"h"                json:"height"`            // block height
+	OpN      int          `pack:"n"                json:"op_n"`              // unique in-block pos
+	OpP      int          `pack:"P"                json:"op_p"`              // op list pos (list can be derived from type)
+	Reward   int64        `pack:"r"                json:"reward"`            // baking/endorsement reward
+	Deposit  int64        `pack:"d"                json:"deposit"`           // baker deposit
+	SenderId AccountID    `pack:"S,bloom"          json:"sender_id"`         // sender id, also on internal ops
+	Power    int64        `pack:"p"                json:"power"`             // power
+	IsPre    bool         `pack:"i"                json:"is_preendorsement"` // Ithaca pre-endorsement
 }
 
 func (o Endorsement) ID() uint64 {

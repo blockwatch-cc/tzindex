@@ -103,6 +103,8 @@ func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 		TotalFeesPaid      float64   `json:"total_fees_paid"`
 		UnclaimedBalance   float64   `json:"unclaimed_balance"`
 		SpendableBalance   float64   `json:"spendable_balance"`
+		FrozenBond         float64   `json:"frozen_bond"`
+		LostBond           float64   `json:"lost_bond"`
 		IsFunded           bool      `json:"is_funded"`
 		IsActivated        bool      `json:"is_activated"`
 		IsDelegated        bool      `json:"is_delegated"`
@@ -145,6 +147,8 @@ func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 		TotalFeesPaid:      a.params.ConvertValue(a.TotalFeesPaid),
 		UnclaimedBalance:   a.params.ConvertValue(a.UnclaimedBalance),
 		SpendableBalance:   a.params.ConvertValue(a.SpendableBalance),
+		FrozenBond:         a.params.ConvertValue(a.FrozenBond),
+		LostBond:           a.params.ConvertValue(a.LostBond),
 		IsFunded:           a.IsFunded,
 		IsActivated:        a.IsActivated,
 		IsDelegated:        a.IsDelegated,
@@ -228,6 +232,10 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendFloat(buf, a.params.ConvertValue(a.UnclaimedBalance), 'f', dec, 64)
 		case "spendable_balance":
 			buf = strconv.AppendFloat(buf, a.params.ConvertValue(a.SpendableBalance), 'f', dec, 64)
+		case "frozen_bond":
+			buf = strconv.AppendFloat(buf, a.params.ConvertValue(a.FrozenBond), 'f', dec, 64)
+		case "lost_bond":
+			buf = strconv.AppendFloat(buf, a.params.ConvertValue(a.LostBond), 'f', dec, 64)
 		case "is_funded":
 			if a.IsFunded {
 				buf = append(buf, '1')
@@ -350,6 +358,10 @@ func (a *Account) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(a.params.ConvertValue(a.UnclaimedBalance), 'f', dec, 64)
 		case "spendable_balance":
 			res[i] = strconv.FormatFloat(a.params.ConvertValue(a.SpendableBalance), 'f', dec, 64)
+		case "frozen_bond":
+			res[i] = strconv.FormatFloat(a.params.ConvertValue(a.FrozenBond), 'f', dec, 64)
+		case "lost_bond":
+			res[i] = strconv.FormatFloat(a.params.ConvertValue(a.LostBond), 'f', dec, 64)
 		case "is_funded":
 			res[i] = strconv.FormatBool(a.IsFunded)
 		case "is_activated":
@@ -446,12 +458,10 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 	}
 
 	// build table query
-	q := pack.Query{
-		Name:   ctx.RequestID,
-		Fields: table.Fields().Select(srcNames...),
-		Limit:  int(args.Limit),
-		Order:  args.Order,
-	}
+	q := pack.NewQuery(ctx.RequestID, table).
+		WithFields(srcNames...).
+		WithLimit(int(args.Limit)).
+		WithOrder(args.Order)
 
 	// build dynamic filter conditions from query (will panic on error)
 	for key, val := range ctx.Request.URL.Query() {
@@ -636,7 +646,8 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 				// convert amounts from float to int64, handle multiple values for rg, in, nin
 				switch prefix {
 				case "total_received", "total_sent", "total_burned",
-					"total_fees_paid", "unclaimed_balance", "spendable_balance":
+					"total_fees_paid", "unclaimed_balance", "spendable_balance",
+					"frozen_bond", "lost_bond":
 					fvals := make([]string, 0)
 					for _, vv := range strings.Split(v, ",") {
 						fval, err := strconv.ParseFloat(vv, 64)

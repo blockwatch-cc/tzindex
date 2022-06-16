@@ -123,6 +123,7 @@ func (s *SupplySeries) MarshalJSONVerbose() ([]byte, error) {
 		Delegated           float64   `json:"delegated"`
 		Staking             float64   `json:"staking"`
 		Shielded            float64   `json:"shielded"`
+		ActiveStake         float64   `json:"active_stake"`
 		ActiveDelegated     float64   `json:"active_delegated"`
 		ActiveStaking       float64   `json:"active_staking"`
 		InactiveDelegated   float64   `json:"inactive_delegated"`
@@ -142,10 +143,12 @@ func (s *SupplySeries) MarshalJSONVerbose() ([]byte, error) {
 		BurnedExplicit      float64   `json:"burned_explicit"`
 		BurnedSeedMiss      float64   `json:"burned_seed_miss"`
 		BurnedAbsence       float64   `json:"burned_absence"`
+		BurnedRollup        float64   `json:"burned_rollup"`
 		Frozen              float64   `json:"frozen"`
 		FrozenDeposits      float64   `json:"frozen_deposits"`
 		FrozenRewards       float64   `json:"frozen_rewards"`
 		FrozenFees          float64   `json:"frozen_fees"`
+		FrozenBonds         float64   `json:"frozen_bonds"`
 	}{
 		Height:              s.Height,
 		Cycle:               s.Cycle,
@@ -159,6 +162,7 @@ func (s *SupplySeries) MarshalJSONVerbose() ([]byte, error) {
 		Delegated:           s.params.ConvertValue(s.Delegated),
 		Staking:             s.params.ConvertValue(s.Staking),
 		Shielded:            s.params.ConvertValue(s.Shielded),
+		ActiveStake:         s.params.ConvertValue(s.ActiveStake),
 		ActiveDelegated:     s.params.ConvertValue(s.ActiveDelegated),
 		ActiveStaking:       s.params.ConvertValue(s.ActiveStaking),
 		InactiveDelegated:   s.params.ConvertValue(s.InactiveDelegated),
@@ -178,10 +182,12 @@ func (s *SupplySeries) MarshalJSONVerbose() ([]byte, error) {
 		BurnedExplicit:      s.params.ConvertValue(s.BurnedExplicit),
 		BurnedSeedMiss:      s.params.ConvertValue(s.BurnedSeedMiss),
 		BurnedAbsence:       s.params.ConvertValue(s.BurnedAbsence),
+		BurnedRollup:        s.params.ConvertValue(s.BurnedRollup),
 		Frozen:              s.params.ConvertValue(s.Frozen),
 		FrozenDeposits:      s.params.ConvertValue(s.FrozenDeposits),
 		FrozenRewards:       s.params.ConvertValue(s.FrozenRewards),
 		FrozenFees:          s.params.ConvertValue(s.FrozenFees),
+		FrozenBonds:         s.params.ConvertValue(s.FrozenBonds),
 	}
 	return json.Marshal(supply)
 }
@@ -224,6 +230,8 @@ func (s *SupplySeries) MarshalJSONBrief() ([]byte, error) {
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Staking), 'f', dec, 64)
 			case "shielded":
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Shielded), 'f', dec, 64)
+			case "active_stake":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.ActiveStake), 'f', dec, 64)
 			case "active_delegated":
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.ActiveDelegated), 'f', dec, 64)
 			case "active_staking":
@@ -262,6 +270,8 @@ func (s *SupplySeries) MarshalJSONBrief() ([]byte, error) {
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedSeedMiss), 'f', dec, 64)
 			case "burned_absence":
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedAbsence), 'f', dec, 64)
+			case "burned_rollup":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedRollup), 'f', dec, 64)
 			case "frozen":
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Frozen), 'f', dec, 64)
 			case "frozen_deposits":
@@ -270,6 +280,8 @@ func (s *SupplySeries) MarshalJSONBrief() ([]byte, error) {
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.FrozenRewards), 'f', dec, 64)
 			case "frozen_fees":
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.FrozenFees), 'f', dec, 64)
+			case "frozen_bonds":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.FrozenBonds), 'f', dec, 64)
 			default:
 				continue
 			}
@@ -319,6 +331,8 @@ func (s *SupplySeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Staking), 'f', dec, 64)
 		case "shielded":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Shielded), 'f', dec, 64)
+		case "active_stake":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.ActiveStake), 'f', dec, 64)
 		case "active_delegated":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.ActiveDelegated), 'f', dec, 64)
 		case "active_staking":
@@ -357,6 +371,8 @@ func (s *SupplySeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.BurnedSeedMiss), 'f', dec, 64)
 		case "burned_absence":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.BurnedAbsence), 'f', dec, 64)
+		case "burned_rollup":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.BurnedRollup), 'f', dec, 64)
 		case "frozen":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Frozen), 'f', dec, 64)
 		case "frozen_deposits":
@@ -365,6 +381,8 @@ func (s *SupplySeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.FrozenRewards), 'f', dec, 64)
 		case "frozen_fees":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.FrozenFees), 'f', dec, 64)
+		case "frozen_bonds":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.FrozenBonds), 'f', dec, 64)
 		default:
 			continue
 		}

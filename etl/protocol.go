@@ -55,7 +55,7 @@ func (r *Registry) GetParams(h tezos.ProtocolHash) (*tezos.Params, error) {
 
 func (r *Registry) GetParamsByHeight(height int64) *tezos.Params {
 	r.RLock()
-	for _, v := range r.byDeployment {
+	for _, v := range r.inOrder {
 		if height >= v.StartHeight && (v.EndHeight < 0 || height <= v.EndHeight) {
 			r.RUnlock()
 			return v

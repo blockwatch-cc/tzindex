@@ -122,3 +122,32 @@ func marshalMultiTypeJSONArray(vals ...interface{}) (data []byte, err error) {
 	data = buf.Bytes()
 	return
 }
+
+type Int64orString int64
+
+func (i *Int64orString) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	if data[0] == '"' {
+		data = data[1 : len(data)-1]
+	}
+	num, err := strconv.ParseInt(string(data), 10, 64)
+	if err != nil {
+		return err
+	}
+	*i = Int64orString(num)
+	return nil
+}
+
+func (i Int64orString) MarshalJSON() ([]byte, error) {
+	return []byte(strconv.Quote(i.String())), nil
+}
+
+func (i Int64orString) Int64() int64 {
+	return int64(i)
+}
+
+func (i Int64orString) String() string {
+	return strconv.FormatInt(int64(i), 10)
+}

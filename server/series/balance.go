@@ -128,7 +128,7 @@ func (s *BalanceSeries) MarshalJSONVerbose() ([]byte, error) {
 
 func (s *BalanceSeries) MarshalJSONBrief() ([]byte, error) {
     dec := s.params.Decimals
-    buf := make([]byte, 0, 1028)
+    buf := make([]byte, 0, 128)
     buf = append(buf, '[')
     for i, v := range s.columns {
         if s.null {

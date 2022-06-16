@@ -193,134 +193,18 @@ func fillStruct(m map[string]string, alias *tzpro.Metadata) error {
 	for k, v := range m {
 		keyParts := strings.Split(k, ".")
 		ns := keyParts[0]
+		data := alias.Get(ns)
 		var err error
-		switch ns {
-		case "alias":
-			if alias.Alias == nil {
-				alias.Alias = &tzpro.AliasMetadata{}
+		if len(keyParts) > 1 {
+			// check value type
+			if dataMap, ok := data.(map[string]interface{}); ok {
+				dataMap[keyParts[1]] = v
+			} else {
+				err = setField(data, keyParts[1], v)
 			}
-			if len(keyParts) > 1 {
-				err = setField(alias.Alias, keyParts[1], v)
-			} else if v == "null" {
-				alias.Alias = nil
-			}
-		case "baker":
-			if alias.Baker == nil {
-				alias.Baker = &tzpro.BakerMetadata{}
-			}
-			if len(keyParts) > 1 {
-				err = setField(alias.Baker, keyParts[1], v)
-			} else if v == "null" {
-				alias.Baker = nil
-			}
-		case "payout":
-			if alias.Payout == nil {
-				alias.Payout = &tzpro.PayoutMetadata{}
-			}
-			if len(keyParts) > 1 {
-				err = setField(alias.Payout, keyParts[1], v)
-			} else if v == "null" {
-				alias.Payout = nil
-			}
-		case "asset":
-			if alias.Asset == nil {
-				alias.Asset = &tzpro.AssetMetadata{}
-			}
-			if len(keyParts) > 1 {
-				err = setField(alias.Asset, keyParts[1], v)
-			} else if v == "null" {
-				alias.Asset = nil
-			}
-		case "location":
-			if alias.Location == nil {
-				alias.Location = &tzpro.LocationMetadata{}
-			}
-			if len(keyParts) > 1 {
-				err = setField(alias.Location, keyParts[1], v)
-			} else if v == "null" {
-				alias.Location = nil
-			}
-		case "domain":
-			if alias.Domain == nil {
-				alias.Domain = &tzpro.DomainMetadata{}
-			}
-			if len(keyParts) > 1 {
-				err = setField(alias.Domain, keyParts[1], v)
-			} else if v == "null" {
-				alias.Domain = nil
-			}
-		case "media":
-			if alias.Media == nil {
-				alias.Media = &tzpro.MediaMetadata{}
-			}
-			if len(keyParts) > 1 {
-				err = setField(alias.Media, keyParts[1], v)
-			} else if v == "null" {
-				alias.Media = nil
-			}
-		case "rights":
-			if alias.Rights == nil {
-				alias.Rights = &tzpro.RightsMetadata{}
-			}
-			if len(keyParts) > 1 {
-				err = setField(alias.Rights, keyParts[1], v)
-			} else if v == "null" {
-				alias.Rights = nil
-			}
-		case "social":
-			if alias.Social == nil {
-				alias.Social = &tzpro.SocialMetadata{}
-			}
-			if len(keyParts) > 1 {
-				err = setField(alias.Social, keyParts[1], v)
-			} else if v == "null" {
-				alias.Social = nil
-			}
-		case "tz16":
-			if alias.Tz16 == nil {
-				alias.Tz16 = &tzpro.Tz16Metadata{}
-			}
-			if len(keyParts) > 1 {
-				err = setField(alias.Tz16, keyParts[1], v)
-			} else if v == "null" {
-				alias.Tz16 = nil
-			}
-		case "tz21":
-			if alias.Tz21 == nil {
-				alias.Tz21 = &tzpro.Tz21Metadata{}
-			}
-			if len(keyParts) > 1 {
-				err = setField(alias.Tz21, keyParts[1], v)
-			} else if v == "null" {
-				alias.Tz21 = nil
-			}
-		case "updated":
-			if alias.Updated == nil {
-				alias.Updated = &tzpro.UpdatedMetadata{}
-			}
-			err = setField(alias.Updated, keyParts[1], v)
-		default:
-			if alias.Extra == nil {
-				alias.Extra = make(map[string]interface{})
-			}
-			// use custom metadata schema
-			desc, ok := alias.Extra[ns]
-			if !ok {
-				desc = make(map[string]interface{})
-			}
-			if len(keyParts) > 1 {
-				// check value type
-				if descVal, ok := desc.(map[string]interface{}); ok {
-					descVal[keyParts[1]] = v
-				} else {
-					if err := setField(desc, keyParts[1], v); err != nil {
-						return err
-					}
-				}
-				alias.Extra[ns] = desc
-			} else if v == "null" {
-				delete(alias.Extra, ns)
-			}
+			alias.Set(ns, data)
+		} else if v == "null" {
+			alias.Delete(ns)
 		}
 		if err != nil {
 			return fmt.Errorf("Setting %s=%s: %w", k, v, err)

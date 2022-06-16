@@ -7,13 +7,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
@@ -37,6 +37,7 @@ type ListRequest struct {
 	BigmapId    int64
 	BigmapKey   tezos.ExprHash
 	OpId        model.OpID
+	WithStorage bool
 }
 
 func (r ListRequest) WithDelegation() bool {
@@ -378,6 +379,72 @@ func (m *Indexer) LookupLastBakedBlock(ctx context.Context, bkr *model.Baker) (*
 	return b, nil
 }
 
+func (m *Indexer) LookupLastEndorsedBlock(ctx context.Context, bkr *model.Baker) (*model.Block, error) {
+	if bkr.SlotsEndorsed == 0 {
+		return nil, index.ErrNoBlockEntry
+	}
+	ops, err := m.Table(index.EndorseOpTableKey)
+	if err != nil {
+		return nil, err
+	}
+	var ed model.Endorsement
+	err = pack.NewQuery("last_endorse_op", ops).
+		WithFields("h").
+		WithLimit(1).
+		WithDesc().
+		AndRange("height", bkr.Account.FirstSeen, bkr.Account.LastSeen).
+		AndEqual("sender_id", bkr.AccountId).
+		Execute(ctx, &ed)
+	if err != nil {
+		return nil, err
+	}
+	if ed.Height == 0 {
+		return nil, index.ErrNoBlockEntry
+	}
+	return m.BlockByHeight(ctx, ed.Height)
+}
+
+func (m *Indexer) ListBlockRights(ctx context.Context, height int64, typ tezos.RightType) ([]model.BaseRight, error) {
+	rights, err := m.Table(index.RightsTableKey)
+	if err != nil {
+		return nil, err
+	}
+	p := m.ParamsByHeight(height)
+	q := pack.NewQuery("list_rights", rights).
+		AndEqual("cycle", p.CycleFromHeight(height))
+	if typ.IsValid() {
+		q = q.AndEqual("type", typ)
+	}
+	resp := make([]model.BaseRight, 0)
+	right := model.Right{}
+	start := p.CycleStartHeight(p.CycleFromHeight(height))
+	pos := int(height - start)
+	err = q.Stream(ctx, func(r pack.Row) error {
+		if err := r.Decode(&right); err != nil {
+			return err
+		}
+		switch typ {
+		case tezos.RightTypeBaking:
+			if r, ok := right.ToBase(pos, tezos.RightTypeBaking); ok {
+				resp = append(resp, r)
+			}
+		case tezos.RightTypeEndorsing:
+			if r, ok := right.ToBase(pos, tezos.RightTypeEndorsing); ok {
+				resp = append(resp, r)
+			}
+		default:
+			if r, ok := right.ToBase(pos, tezos.RightTypeBaking); ok {
+				resp = append(resp, r)
+			}
+			if r, ok := right.ToBase(pos, tezos.RightTypeEndorsing); ok {
+				resp = append(resp, r)
+			}
+		}
+		return nil
+	})
+	return resp, nil
+}
+
 func (m *Indexer) LookupAccount(ctx context.Context, addr tezos.Address) (*model.Account, error) {
 	if !addr.IsValid() {
 		return nil, ErrInvalidHash
@@ -655,11 +722,16 @@ func (m *Indexer) LookupOp(ctx context.Context, opIdent string) ([]*model.Op, er
 		}
 		q = q.AndEqual("height", int64(eventId>>16)).AndEqual("op_n", int64(eventId&0xFFFF))
 	}
+	var couldHaveStorage bool
 	ops := make([]*model.Op, 0)
 	err = table.Stream(ctx, q, func(r pack.Row) error {
 		op := &model.Op{}
 		if err := r.Decode(op); err != nil {
 			return err
+		}
+		if op.IsSuccess && op.IsContract &&
+			(op.Type == model.OpTypeTransaction || op.Type == model.OpTypeOrigination) {
+			couldHaveStorage = true
 		}
 		ops = append(ops, op)
 		return nil
@@ -669,6 +741,23 @@ func (m *Indexer) LookupOp(ctx context.Context, opIdent string) ([]*model.Op, er
 	}
 	if len(ops) == 0 {
 		return nil, index.ErrNoOpEntry
+	}
+
+	if couldHaveStorage {
+		// load and merge storage updates and bigmap diffs
+		for _, v := range ops {
+			if !v.IsSuccess || !v.IsContract {
+				continue
+			}
+			if v.Type != model.OpTypeTransaction && v.Type != model.OpTypeOrigination {
+				continue
+			}
+			store, err := m.LookupStorage(ctx, v.ReceiverId, v.StorageHash, 0, v.Height)
+			if err == nil {
+				v.Storage = store.Storage
+			}
+			v.BigmapUpdates, _ = m.ListBigmapUpdates(ctx, ListRequest{OpId: v.RowId})
+		}
 	}
 	return ops, nil
 }
@@ -687,6 +776,46 @@ func (m *Indexer) LookupOpHash(ctx context.Context, opid model.OpID) tezos.OpHas
 		return tezos.OpHash{}
 	}
 	return o.Hash
+}
+
+func (m *Indexer) LookupEndorsement(ctx context.Context, opIdent string) ([]*model.Op, error) {
+	table, err := m.Table(index.EndorseOpTableKey)
+	if err != nil {
+		return nil, err
+	}
+	q := pack.NewQuery("find_endorsement", table)
+	switch true {
+	case len(opIdent) == tezos.HashTypeOperation.Base58Len() || tezos.HashTypeOperation.MatchPrefix(opIdent):
+		// assume it's a hash
+		oh, err := tezos.ParseOpHash(opIdent)
+		if err != nil {
+			return nil, ErrInvalidHash
+		}
+		q = q.AndEqual("hash", oh.Hash.Hash[:])
+	default:
+		// try parsing as event id
+		eventId, err := strconv.ParseUint(opIdent, 10, 64)
+		if err != nil {
+			return nil, index.ErrInvalidOpID
+		}
+		q = q.AndEqual("height", int64(eventId>>16)).AndEqual("op_n", int64(eventId&0xFFFF))
+	}
+	ops := make([]*model.Op, 0)
+	err = table.Stream(ctx, q, func(r pack.Row) error {
+		ed := &model.Endorsement{}
+		if err := r.Decode(ed); err != nil {
+			return err
+		}
+		ops = append(ops, ed.ToOp())
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(ops) == 0 {
+		return nil, index.ErrNoOpEntry
+	}
+	return ops, nil
 }
 
 func (m *Indexer) FindActivatedAccount(ctx context.Context, addr tezos.Address) (*model.Account, error) {
@@ -737,7 +866,7 @@ func (m *Indexer) FindActivatedAccount(ctx context.Context, addr tezos.Address) 
 	return m.LookupAccountId(ctx, o.SenderId)
 }
 
-func (m *Indexer) FindLatestDelegation(ctx context.Context, id model.AccountID) (*model.Op, error) {
+func (m *Indexer) FindLatestDelegation(ctx context.Context, id model.AccountID, height int64) (*model.Op, error) {
 	table, err := m.Table(index.OpTableKey)
 	if err != nil {
 		return nil, err
@@ -750,6 +879,7 @@ func (m *Indexer) FindLatestDelegation(ctx context.Context, id model.AccountID) 
 		AndEqual("type", model.OpTypeDelegation). // type
 		AndEqual("sender_id", id).                // search for sender account id
 		AndNotEqual("baker_id", 0).               // delegate id
+		AndLt("height", height).                  // must be in a previous block
 		Execute(ctx, o)
 	if err != nil {
 		return nil, err
@@ -837,7 +967,14 @@ func (m *Indexer) ListBlockOps(ctx context.Context, r ListRequest) ([]*model.Op,
 	if r.ReceiverId > 0 {
 		q = q.AndEqual("receiver_id", r.ReceiverId)
 	}
-
+	if r.Account != nil {
+		q = q.Or(
+			pack.Equal("sender_id", r.Account.RowId),
+			pack.Equal("receiver_id", r.Account.RowId),
+			pack.Equal("baker_id", r.Account.RowId),
+			pack.Equal("creator_id", r.Account.RowId),
+		)
+	}
 	if r.Cursor > 0 {
 		opn := int64(r.Cursor & 0xFFFF)
 		if r.Order == pack.OrderDesc {
@@ -858,6 +995,45 @@ func (m *Indexer) ListBlockOps(ctx context.Context, r ListRequest) ([]*model.Op,
 		return nil, err
 	}
 	return ops, nil
+}
+
+func (m *Indexer) ListBlockEndorsements(ctx context.Context, r ListRequest) ([]*model.Endorsement, error) {
+	table, err := m.Table(index.EndorseOpTableKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// cursor and offset are mutually exclusive
+	if r.Cursor > 0 {
+		r.Offset = 0
+	}
+
+	q := pack.NewQuery("list_block_endorse", table).
+		WithOrder(r.Order).
+		AndEqual("height", r.Since).
+		WithLimit(int(r.Limit)).
+		WithOffset(int(r.Offset))
+
+	if r.Cursor > 0 {
+		opn := int64(r.Cursor & 0xFFFF)
+		if r.Order == pack.OrderDesc {
+			q = q.AndLt("op_n", opn)
+		} else {
+			q = q.AndGt("op_n", opn)
+		}
+	}
+	if r.SenderId > 0 {
+		q = q.AndEqual("sender_id", r.SenderId)
+	}
+	if r.Account != nil {
+		q = q.AndEqual("sender_id", r.Account.RowId)
+	}
+	endorse := make([]*model.Endorsement, 0)
+	err = q.Execute(ctx, &endorse)
+	if err != nil {
+		return nil, err
+	}
+	return endorse, nil
 }
 
 // Note:
@@ -1003,6 +1179,24 @@ func (m *Indexer) ListAccountOps(ctx context.Context, r ListRequest) ([]*model.O
 	if err := q.Execute(ctx, &ops); err != nil {
 		return nil, err
 	}
+
+	if r.WithStorage {
+		// load and merge storage updates and bigmap diffs
+		for _, v := range ops {
+			if !v.IsSuccess || !v.IsContract {
+				continue
+			}
+			if v.Type != model.OpTypeTransaction && v.Type != model.OpTypeOrigination {
+				continue
+			}
+			store, err := m.LookupStorage(ctx, v.ReceiverId, v.StorageHash, 0, v.Height)
+			if err == nil {
+				v.Storage = store.Storage
+			}
+			v.BigmapUpdates, _ = m.ListBigmapUpdates(ctx, ListRequest{OpId: v.RowId})
+		}
+	}
+
 	return ops, nil
 }
 
@@ -1193,6 +1387,69 @@ func (m *Indexer) ListAccountOpsCollapsed(ctx context.Context, r ListRequest) ([
 	return ops, nil
 }
 
+func (m *Indexer) ListBakerEndorsements(ctx context.Context, r ListRequest) ([]*model.Op, error) {
+	table, err := m.Table(index.EndorseOpTableKey)
+	if err != nil {
+		return nil, err
+	}
+	// cursor and offset are mutually exclusive
+	if r.Cursor > 0 {
+		r.Offset = 0
+	}
+
+	// clamp time range to account lifetime
+	r.Since = util.Max64(r.Since, r.Account.FirstSeen-1)
+	r.Until = util.NonZeroMin64(r.Until, r.Account.LastSeen)
+
+	q := pack.NewQuery("list_baker_endorsements", table).
+		WithOrder(r.Order).
+		WithLimit(int(r.Limit)).
+		WithOffset(int(r.Offset)).
+		AndEqual("sender_id", r.Account.RowId)
+
+	if r.Cursor > 0 {
+		height := int64(r.Cursor >> 16)
+		opn := int64(r.Cursor & 0xFFFF)
+		if r.Order == pack.OrderDesc {
+			q = q.Or(
+				pack.Lt("height", height),
+				pack.And(
+					pack.Equal("height", height),
+					pack.Lt("op_n", opn),
+				),
+			)
+		} else {
+			q = q.Or(
+				pack.Gt("height", height),
+				pack.And(
+					pack.Equal("height", height),
+					pack.Gt("op_n", opn),
+				),
+			)
+		}
+	}
+
+	if r.Since > 0 || r.Account.FirstSeen > 0 {
+		q = q.AndGt("height", util.Max64(r.Since, r.Account.FirstSeen-1))
+	}
+	if r.Until > 0 || r.Account.LastSeen > 0 {
+		q = q.AndLte("height", util.NonZeroMin64(r.Until, r.Account.LastSeen))
+	}
+
+	ops := make([]*model.Op, 0)
+	var end model.Endorsement
+	if err := q.Stream(ctx, func(row pack.Row) error {
+		if err := row.Decode(&end); err != nil {
+			return err
+		}
+		ops = append(ops, end.ToOp())
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return ops, nil
+}
+
 func (m *Indexer) ListContractCalls(ctx context.Context, r ListRequest) ([]*model.Op, error) {
 	table, err := m.Table(index.OpTableKey)
 	if err != nil {
@@ -1213,8 +1470,17 @@ func (m *Indexer) ListContractCalls(ctx context.Context, r ListRequest) ([]*mode
 		WithLimit(int(r.Limit)).
 		WithOffset(int(r.Offset)).
 		AndEqual("receiver_id", r.Account.RowId).
-		AndEqual("type", model.OpTypeTransaction).
 		AndEqual("is_success", true)
+
+	if r.Account.Address.IsContract() {
+		q = q.AndEqual("type", model.OpTypeTransaction)
+	} else if r.Account.Address.IsRollup() {
+		q = q.AndIn("type", []model.OpType{
+			model.OpTypeTransaction,
+			model.OpTypeRollupOrigination,
+			model.OpTypeRollupTransaction,
+		})
+	}
 
 	if r.SenderId > 0 {
 		q = q.AndEqual("sender_id", r.SenderId)
@@ -1264,6 +1530,24 @@ func (m *Indexer) ListContractCalls(ctx context.Context, r ListRequest) ([]*mode
 	if err := q.Execute(ctx, &ops); err != nil {
 		return nil, err
 	}
+
+	if r.WithStorage {
+		// load and merge storage updates and bigmap diffs
+		for _, v := range ops {
+			if !v.IsSuccess || !v.IsContract {
+				continue
+			}
+			if v.Type != model.OpTypeTransaction && v.Type != model.OpTypeOrigination {
+				continue
+			}
+			store, err := m.LookupStorage(ctx, v.ReceiverId, v.StorageHash, 0, v.Height)
+			if err == nil {
+				v.Storage = store.Storage
+			}
+			v.BigmapUpdates, _ = m.ListBigmapUpdates(ctx, ListRequest{OpId: v.RowId})
+		}
+	}
+
 	return ops, nil
 }
 
@@ -1296,26 +1580,294 @@ func (m *Indexer) FindLastCall(ctx context.Context, acc model.AccountID, from, t
 	return op, nil
 }
 
-func (m *Indexer) ListContractBigmapIds(ctx context.Context, acc model.AccountID) ([]int64, error) {
-	table, err := m.Table(index.BigmapAllocTableKey)
+func (m *Indexer) ElectionByHeight(ctx context.Context, height int64) (*model.Election, error) {
+	table, err := m.Table(index.ElectionTableKey)
 	if err != nil {
 		return nil, err
 	}
-	q := pack.NewQuery("list_bigmaps", table).AndEqual("account_id", acc)
-	ids := make([]int64, 0)
-	alloc := &model.BigmapAlloc{}
+	// we are looking for the last election with start_height <= height
+	e := &model.Election{}
+	err = pack.NewQuery("election_height", table).
+		WithDesc().
+		WithLimit(1).
+		AndLte("start_height", height).
+		Execute(ctx, e)
+	if err != nil {
+		return nil, err
+	}
+	if e.RowId == 0 {
+		return nil, index.ErrNoElectionEntry
+	}
+	return e, nil
+}
+
+func (m *Indexer) ElectionById(ctx context.Context, id model.ElectionID) (*model.Election, error) {
+	table, err := m.Table(index.ElectionTableKey)
+	if err != nil {
+		return nil, err
+	}
+	e := &model.Election{}
+	err = pack.NewQuery("election_id", table).
+		WithLimit(1).
+		AndEqual("I", id).
+		Execute(ctx, e)
+	if err != nil {
+		return nil, err
+	}
+	if e.RowId == 0 {
+		return nil, index.ErrNoElectionEntry
+	}
+	return e, nil
+}
+
+func (m *Indexer) VotesByElection(ctx context.Context, id model.ElectionID) ([]*model.Vote, error) {
+	table, err := m.Table(index.VoteTableKey)
+	if err != nil {
+		return nil, err
+	}
+	votes := make([]*model.Vote, 0)
+	err = pack.NewQuery("list_votes", table).
+		AndEqual("election_id", id).
+		Execute(ctx, &votes)
+	if err != nil {
+		return nil, err
+	}
+	if len(votes) == 0 {
+		return nil, index.ErrNoVoteEntry
+	}
+	return votes, nil
+}
+
+// r.Since is the true vote start block
+func (m *Indexer) ListVoters(ctx context.Context, r ListRequest) ([]*model.Voter, error) {
+	// cursor and offset are mutually exclusive
+	if r.Cursor > 0 {
+		r.Offset = 0
+	}
+
+	// Step 1
+	// collect voters from governance roll snapshot
+	rollsTable, err := m.Table(index.RollsTableKey)
+	if err != nil {
+		return nil, err
+	}
+	q := pack.NewQuery("list_voters", rollsTable).
+		WithLimit(int(r.Limit)).
+		WithOffset(int(r.Offset)).
+		AndEqual("height", r.Since-1) // snapshots are made at end of previous vote
+
+	if r.Cursor > 0 {
+		if r.Order == pack.OrderDesc {
+			q = q.AndLt("I", r.Cursor)
+		} else {
+			q = q.AndGt("I", r.Cursor)
+		}
+	}
+	voters := make(map[model.AccountID]*model.Voter)
+	snap := &model.RollSnapshot{}
 	err = q.Stream(ctx, func(r pack.Row) error {
-		if err := r.Decode(alloc); err != nil {
+		if err := r.Decode(snap); err != nil {
 			return err
 		}
-		ids = append(ids, alloc.BigmapId)
+		voters[snap.AccountId] = &model.Voter{
+			RowId: snap.AccountId,
+			Rolls: snap.Rolls,
+			Stake: snap.Stake,
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	vec.Int64Sorter(ids).Sort()
-	return ids, nil
+
+	// Step 2: list ballots
+	ballotTable, err := m.Table(index.BallotTableKey)
+	if err != nil {
+		return nil, err
+	}
+	ballot := &model.Ballot{}
+	err = pack.NewQuery("list_voters", ballotTable).
+		AndEqual("voting_period", r.Period).
+		Stream(ctx, func(r pack.Row) error {
+			if err := r.Decode(ballot); err != nil {
+				return err
+			}
+			if voter, ok := voters[ballot.SourceId]; ok {
+				voter.Ballot = ballot.Ballot
+				voter.Time = ballot.Time
+				voter.HasVoted = true
+				found := false
+				for _, v := range voter.Proposals {
+					if v != ballot.ProposalId {
+						continue
+					}
+					found = true
+					break
+				}
+				if !found {
+					voter.Proposals = append(voter.Proposals, ballot.ProposalId)
+				}
+			}
+			return nil
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]*model.Voter, 0, len(voters))
+	for _, v := range voters {
+		out = append(out, v)
+	}
+	if r.Order == pack.OrderAsc {
+		sort.Slice(out, func(i, j int) bool { return out[i].RowId < out[j].RowId })
+	} else {
+		sort.Slice(out, func(i, j int) bool { return out[i].RowId > out[j].RowId })
+	}
+	return out, nil
+}
+
+func (m *Indexer) ProposalsByElection(ctx context.Context, id model.ElectionID) ([]*model.Proposal, error) {
+	table, err := m.Table(index.ProposalTableKey)
+	if err != nil {
+		return nil, err
+	}
+	proposals := make([]*model.Proposal, 0)
+	err = pack.NewQuery("list_proposals", table).
+		AndEqual("election_id", id).
+		Execute(ctx, &proposals)
+	if err != nil {
+		return nil, err
+	}
+	return proposals, nil
+}
+
+func (m *Indexer) LookupProposal(ctx context.Context, proto tezos.ProtocolHash) (*model.Proposal, error) {
+	if !proto.IsValid() {
+		return nil, ErrInvalidHash
+	}
+
+	table, err := m.Table(index.ProposalTableKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// use hash and type to protect against duplicates
+	prop := &model.Proposal{}
+	err = pack.NewQuery("proposal_by_hash", table).
+		AndEqual("hash", proto.Hash.Hash).
+		Execute(ctx, prop)
+	if err != nil {
+		return nil, err
+	}
+	if prop.RowId == 0 {
+		return nil, index.ErrNoProposalEntry
+	}
+	return prop, nil
+}
+
+func (m *Indexer) LookupProposalIds(ctx context.Context, ids []uint64) ([]*model.Proposal, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	table, err := m.Table(index.ProposalTableKey)
+	if err != nil {
+		return nil, err
+	}
+	props := make([]*model.Proposal, len(ids))
+	var count int
+	err = table.StreamLookup(ctx, ids, func(r pack.Row) error {
+		if count >= len(props) {
+			return io.EOF
+		}
+		p := &model.Proposal{}
+		if err := r.Decode(p); err != nil {
+			return err
+		}
+		props[count] = p
+		count++
+		return nil
+	})
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	if count == 0 {
+		return nil, index.ErrNoProposalEntry
+	}
+	props = props[:count]
+	return props, nil
+}
+
+func (m *Indexer) ListBallots(ctx context.Context, r ListRequest) ([]*model.Ballot, error) {
+	table, err := m.Table(index.BallotTableKey)
+	if err != nil {
+		return nil, err
+	}
+	// cursor and offset are mutually exclusive
+	if r.Cursor > 0 {
+		r.Offset = 0
+	}
+	q := pack.NewQuery("list_ballots", table).
+		WithOrder(r.Order).
+		WithOffset(int(r.Offset)).
+		WithLimit(int(r.Limit))
+	if r.Account != nil {
+		// clamp time range to account lifetime
+		r.Since = util.Max64(r.Since, r.Account.FirstSeen-1)
+		r.Until = util.NonZeroMin64(r.Until, r.Account.LastSeen)
+		q = q.AndEqual("source_id", r.Account.RowId)
+	}
+	if r.Period > 0 {
+		q = q.AndEqual("voting_period", r.Period)
+	}
+	if r.Since > 0 {
+		q = q.AndGt("height", r.Since)
+	}
+	if r.Until > 0 {
+		q = q.AndLte("height", r.Until)
+	}
+	if r.Cursor > 0 {
+		if r.Order == pack.OrderDesc {
+			q = q.AndLt("I", r.Cursor)
+		} else {
+			q = q.AndGt("I", r.Cursor)
+		}
+	}
+	ballots := make([]*model.Ballot, 0)
+	if err := q.Execute(ctx, &ballots); err != nil {
+		return nil, err
+	}
+	return ballots, nil
+}
+
+func (m *Indexer) ListContractBigmaps(ctx context.Context, acc model.AccountID, height int64) ([]*model.BigmapAlloc, error) {
+	table, err := m.Table(index.BigmapAllocTableKey)
+	if err != nil {
+		return nil, err
+	}
+	q := pack.NewQuery("list_bigmaps", table).AndEqual("account_id", acc)
+	if height > 0 {
+		// bigmap must exist at this height
+		q = q.AndLte("alloc_height", height).
+			// and not be deleted
+			Or(
+				pack.Equal("delete_height", 0),
+				pack.Gt("delete_height", height),
+			)
+	}
+	allocs := make([]*model.BigmapAlloc, 0)
+	err = q.Stream(ctx, func(r pack.Row) error {
+		a := &model.BigmapAlloc{}
+		if err := r.Decode(a); err != nil {
+			return err
+		}
+		allocs = append(allocs, a)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(allocs, func(i, j int) bool { return allocs[i].BigmapId < allocs[j].BigmapId })
+	return allocs, nil
 }
 
 func (m *Indexer) LookupBigmapAlloc(ctx context.Context, id int64) (*model.BigmapAlloc, error) {
@@ -1475,7 +2027,7 @@ func (m *Indexer) ListBigmapKeys(ctx context.Context, r ListRequest) ([]*model.B
 	return items, nil
 }
 
-func (m *Indexer) ListBigmapUpdates(ctx context.Context, r ListRequest) ([]*model.BigmapUpdate, error) {
+func (m *Indexer) ListBigmapUpdates(ctx context.Context, r ListRequest) ([]model.BigmapUpdate, error) {
 	table, err := m.Table(index.BigmapUpdateTableKey)
 	if err != nil {
 		return nil, err
@@ -1504,14 +2056,14 @@ func (m *Indexer) ListBigmapUpdates(ctx context.Context, r ListRequest) ([]*mode
 	if r.BigmapKey.IsValid() {
 		q = q.AndEqual("key_id", model.GetKeyId(r.BigmapId, r.BigmapKey))
 	}
-	items := make([]*model.BigmapUpdate, 0)
+	items := make([]model.BigmapUpdate, 0)
 	err = table.Stream(ctx, q, func(row pack.Row) error {
 		if r.Offset > 0 {
 			r.Offset--
 			return nil
 		}
-		b := &model.BigmapUpdate{}
-		if err := row.Decode(b); err != nil {
+		b := model.BigmapUpdate{}
+		if err := row.Decode(&b); err != nil {
 			return err
 		}
 		// skip hash collisions on key_id
@@ -1528,6 +2080,39 @@ func (m *Indexer) ListBigmapUpdates(ctx context.Context, r ListRequest) ([]*mode
 		return nil, err
 	}
 	return items, nil
+}
+
+// luck, performance, contribution (reliability)
+func (m *Indexer) BakerPerformance(ctx context.Context, id model.AccountID, fromCycle, toCycle int64) ([3]int64, error) {
+	perf := [3]int64{}
+	table, err := m.Table(index.IncomeTableKey)
+	if err != nil {
+		return perf, err
+	}
+	q := pack.NewQuery("baker_income", table).
+		AndEqual("account_id", id).
+		AndRange("cycle", fromCycle, toCycle)
+	var count int64
+	income := &model.Income{}
+	err = q.Stream(ctx, func(r pack.Row) error {
+		if err := r.Decode(income); err != nil {
+			return err
+		}
+		perf[0] += income.LuckPct
+		perf[1] += income.PerformancePct
+		perf[2] += income.ContributionPct
+		count++
+		return nil
+	})
+	if err != nil {
+		return perf, err
+	}
+	if count > 0 {
+		perf[0] /= count
+		perf[1] /= count
+		perf[2] /= count
+	}
+	return perf, nil
 }
 
 func (m *Indexer) UpdateMetadata(ctx context.Context, md *model.Metadata) error {
@@ -1686,4 +2271,50 @@ func (m *Indexer) LookupConstant(ctx context.Context, hash tezos.ExprHash) (*mod
 		return nil, index.ErrNoConstantEntry
 	}
 	return cc, nil
+}
+
+func (m *Indexer) FindPreviousStorage(ctx context.Context, id model.AccountID, since, until int64) (*model.Storage, error) {
+	table, err := m.Table(index.StorageTableKey)
+	if err != nil {
+		return nil, err
+	}
+	store := &model.Storage{}
+	err = pack.NewQuery("api.storage.find", table).
+		WithLimit(1). // there should only be one match anyways
+		WithDesc().   // search in reverse order to find latest update
+		AndGte("height", since).
+		AndLte("height", until).
+		AndEqual("account_id", id).
+		Execute(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+	if store.RowId == 0 {
+		return nil, index.ErrNoStorageEntry
+	}
+	return store, nil
+}
+
+func (m *Indexer) LookupStorage(ctx context.Context, id model.AccountID, h uint64, since, until int64) (*model.Storage, error) {
+	table, err := m.Table(index.StorageTableKey)
+	if err != nil {
+		return nil, err
+	}
+	store := &model.Storage{}
+	err = pack.NewQuery("api.storage.lookup", table).
+		WithLimit(1). // there should only be one match anyways
+		WithDesc().   // search in reverse order to find latest update
+		AndGte("height", since).
+		AndLte("height", until).
+		AndEqual("account_id", id).
+		AndEqual("hash", h).
+		// WithStatsAfter(10).
+		Execute(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+	if store.RowId == 0 {
+		return nil, index.ErrNoStorageEntry
+	}
+	return store, nil
 }

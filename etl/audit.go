@@ -25,6 +25,8 @@ func (b *Builder) AuditState(ctx context.Context, offset int64) error {
 		return nil
 	}
 
+	isCycleEnd := b.block.Params.IsCycleEnd(b.block.Height)
+
 	plog := logpkg.NewProgressLogger(log).SetAction("Verified").SetEvent("account")
 
 	// exclusivity
@@ -144,13 +146,12 @@ bloop:
 		// check baker status against node rpc
 		state, err := b.rpc.GetDelegate(ctx, acc.Address, rpc.BlockLevel(b.block.Height-offset))
 		if err != nil {
-			// ignore magic bakers
-			if v001MagicBakerFilter.Contains(acc.Address) {
-				continue
-			}
 			return fmt.Errorf("Audit: fetching baker state for %s: %v", acc, err)
 		}
-		if bkr.IsActive && state.Deactivated {
+		// the indexer deactivates bakers at start of cycle, when we run this check at the
+		// last block of a cycle where the node has already deactivated the baker, we
+		// get a wrong result, just skip this check at cycle end
+		if !isCycleEnd && bkr.IsActive && state.Deactivated {
 			log.Errorf("Audit: baker active state mismatch for %s: index=%t node=%t", bkr, bkr.IsActive, !state.Deactivated)
 			failed++
 		}
@@ -270,10 +271,6 @@ bloop:
 		// check baker status against node rpc
 		state, err := b.rpc.GetDelegate(ctx, acc.Address, rpc.BlockLevel(b.block.Height))
 		if err != nil {
-			// ignore magic bakers
-			if v001MagicBakerFilter.Contains(acc.Address) {
-				continue
-			}
 			log.Errorf("Audit: fetching baker state for %s: %v", acc, err)
 			continue
 		}
@@ -423,37 +420,5 @@ aloop:
 }
 
 func (b *Builder) DumpState() {
-	// log.Infof("Builder dump at block %d", b.block.Height)
-	// for n, v := range b.accHashMap { // map[uint64]*Account
-	// 	log.Infof("HashMap %x -> %s %s %t", n, v, v.Key(), v.IsRevealed)
-	// }
-	// for n, v := range b.accMap { //   map[AccountID]*Account
-	// 	log.Infof("AccMap %d -> %s %s %t", n, v, v.Key(), v.IsRevealed)
-	// }
-	// for n, v := range b.dlgHashMap { // map[uint64]*Account
-	// 	log.Infof("DlgHashMap %x -> %s %s %t", n, v, v.Key(), v.IsRevealed)
-	// }
-	// for n, v := range b.dlgMap { //    map[AccountID]*Account
-	// 	log.Infof("DlgMap %d -> %s %s %t", n, v, v.Key(), v.IsRevealed)
-	// }
-	// for n, v := range b.conMap { //   map[AccountID]*Contract
-	// 	log.Infof("ContractMap %d -> %s", n, v)
-	// }
-	// if f, err := os.OpenFile("cache-dump.json", os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644); err == nil {
-	// 	enc := json.NewEncoder(f)
-	// 	err := b.accCache.Walk(func(key uint64, acc *model.Account) error {
-	// 		if err := enc.Encode(acc); err != nil {
-	// 			return err
-	// 		}
-	// 		f.Write([]byte{','})
-	// 		f.Write([]byte{'\n'})
-	// 		return nil
-	// 	})
-	// 	f.Close()
-	// 	if err != nil {
-	// 		log.Errorf("Cache dump error: %s", err)
-	// 	}
-	// } else {
-	// 	log.Errorf("Cache dump failed: %s", err)
-	// }
+	// not implemented
 }

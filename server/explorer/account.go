@@ -51,6 +51,8 @@ type Account struct {
 	TotalFeesPaid      float64              `json:"total_fees_paid"`
 	UnclaimedBalance   float64              `json:"unclaimed_balance,omitempty"`
 	SpendableBalance   float64              `json:"spendable_balance"`
+	FrozenBond         float64              `json:"frozen_bond"`
+	LostBond           float64              `json:"lost_bond"`
 	IsFunded           bool                 `json:"is_funded"`
 	IsActivated        bool                 `json:"is_activated"`
 	IsDelegated        bool                 `json:"is_delegated"`
@@ -96,6 +98,8 @@ func NewAccount(ctx *server.Context, a *model.Account, args server.Options) *Acc
 		TotalBurned:      p.ConvertValue(a.TotalBurned),
 		TotalFeesPaid:    p.ConvertValue(a.TotalFeesPaid),
 		SpendableBalance: p.ConvertValue(a.SpendableBalance),
+		FrozenBond:       p.ConvertValue(a.FrozenBond),
+		LostBond:         p.ConvertValue(a.LostBond),
 		IsFunded:         a.IsFunded,
 		IsActivated:      a.IsActivated,
 		IsDelegated:      a.IsDelegated,
@@ -324,15 +328,16 @@ func ListAccountOperations(ctx *server.Context) (interface{}, int) {
 	acc := loadAccount(ctx)
 
 	r := etl.ListRequest{
-		Account: acc,
-		Mode:    args.TypeMode,
-		Typs:    args.TypeList,
-		Since:   args.SinceHeight,
-		Until:   args.BlockHeight,
-		Offset:  args.Offset,
-		Limit:   ctx.Cfg.ClampExplore(args.Limit),
-		Cursor:  args.Cursor,
-		Order:   args.Order,
+		Account:     acc,
+		Mode:        args.TypeMode,
+		Typs:        args.TypeList,
+		Since:       args.SinceHeight,
+		Until:       args.BlockHeight,
+		Offset:      args.Offset,
+		Limit:       ctx.Cfg.ClampExplore(args.Limit),
+		Cursor:      args.Cursor,
+		Order:       args.Order,
+		WithStorage: args.WithStorage(),
 	}
 
 	if args.Sender.IsValid() {
@@ -354,7 +359,6 @@ func ListAccountOperations(ctx *server.Context) (interface{}, int) {
 	if err != nil {
 		panic(server.EInternal(server.EC_DATABASE, "cannot read account operations", err))
 	}
-
 	resp := make(OpList, 0)
 	cache := make(map[int64]interface{})
 	for _, v := range ops {

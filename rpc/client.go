@@ -52,28 +52,19 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	key := u.Query().Get("X-Api-Key")
+	u.Query().Del("X-Api-Key")
 	c := &Client{
 		client:    httpClient,
 		BaseURL:   u,
 		UserAgent: userAgent,
-		ApiKey:    u.Query().Get("X-Api-Key"),
+		ApiKey:    key,
 	}
 	return c, nil
 }
 
-func (c *Client) InitChain(ctx context.Context) error {
-	// pull chain id if not yet set
-	_, err := c.ResolveChainId(ctx)
-	if err != nil {
-		return err
-	}
-
-	// pull chain params
-	_, err = c.ResolveChainConfig(ctx)
-	if err != nil {
-		return err
-	}
-	return nil
+func (c *Client) Init(ctx context.Context) error {
+	return c.ResolveChainConfig(ctx)
 }
 
 func (c *Client) SetChainId(id tezos.ChainIdHash) {
@@ -84,29 +75,18 @@ func (c *Client) SetChainParams(p *tezos.Params) {
 	c.Params = p
 }
 
-func (c *Client) ResolveChainId(ctx context.Context) (tezos.ChainIdHash, error) {
-	if c.ChainId.IsValid() {
-		return c.ChainId, nil
-	}
+func (c *Client) ResolveChainConfig(ctx context.Context) error {
 	id, err := c.GetChainId(ctx)
+	if err != nil {
+		return err
+	}
 	c.ChainId = id
-	return id, err
-}
-
-func (c *Client) ResolveChainConfig(ctx context.Context) (*tezos.Params, error) {
-	if c.Params != nil {
-		return c.Params, nil
-	}
-	id, err := c.ResolveChainId(ctx)
+	p, err := c.GetParams(ctx, Head)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	con, err := c.GetConstants(ctx, Head)
-	if err != nil {
-		return nil, err
-	}
-	c.Params = con.MapToChainParams().ForNetwork(id)
-	return c.Params, nil
+	c.Params = p
+	return nil
 }
 
 func (c *Client) Get(ctx context.Context, urlpath string, result interface{}) error {
@@ -211,9 +191,11 @@ func (c *Client) Do(req *http.Request, v interface{}) error {
 	if err != nil {
 		return err
 	}
-
+	mustClear := true
 	defer func() {
-		io.Copy(ioutil.Discard, resp.Body)
+		if mustClear {
+			io.Copy(ioutil.Discard, resp.Body)
+		}
 		resp.Body.Close()
 	}()
 
@@ -231,9 +213,15 @@ func (c *Client) Do(req *http.Request, v interface{}) error {
 		if v == nil {
 			return nil
 		}
-		return c.handleResponse(req.Context(), resp, v)
+		err = c.handleResponse(req.Context(), resp, v)
+		if err != nil {
+			return err
+		}
+		mustClear = false
+		return nil
 	}
 
+	mustClear = false
 	return handleError(resp)
 }
 

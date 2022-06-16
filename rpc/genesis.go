@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/go-bson/bson"
+	"github.com/echa/bson"
 
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
@@ -124,9 +124,9 @@ func (b *GenesisData) UnmarshalText(data []byte) error {
 
 // BSON data types
 type bootstrap struct {
-	Accounts    [][]interface{} `bson:"bootstrap_accounts"`
-	Contracts   []*contract     `bson:"bootstrap_contracts"`
-	Commitments [][]interface{} `bson:"commitments"`
+	Accounts    [][]string  `bson:"bootstrap_accounts"`
+	Contracts   []*contract `bson:"bootstrap_contracts"`
+	Commitments [][]string  `bson:"commitments"`
 }
 
 type contract struct {
@@ -138,7 +138,6 @@ type contract struct {
 func (b *bootstrap) DecodeContracts() ([]*X1, error) {
 	// ignore non-mainnet contract lists (we don't know their addresses)
 	if len(b.Contracts) != len(vestingContractAddrs) {
-		log.Warnf("ignoring genesis contracts")
 		return nil, nil
 	}
 	c := make([]*X1, len(b.Contracts))
@@ -239,7 +238,7 @@ func (b *bootstrap) DecodeAccounts() ([]*X0, error) {
 	acc := make([]*X0, len(b.Accounts))
 	for i, v := range b.Accounts {
 		acc[i] = &X0{}
-		pk := v[0].(string)
+		pk := v[0]
 		switch true {
 		case tezos.HasKeyPrefix(pk):
 			key, err := tezos.ParseKey(pk)
@@ -255,15 +254,11 @@ func (b *bootstrap) DecodeAccounts() ([]*X0, error) {
 			}
 			acc[i].Addr = addr
 		}
-		if val, ok := v[1].(string); !ok {
-			return nil, fmt.Errorf("invalid mutez type %T", v[1])
-		} else {
-			amount, err := strconv.ParseInt(val, 10, 64)
-			if err != nil {
-				return nil, err
-			}
-			acc[i].Value = amount
+		amount, err := strconv.ParseInt(v[1], 10, 64)
+		if err != nil {
+			return nil, err
 		}
+		acc[i].Value = amount
 	}
 	return acc, nil
 }
@@ -273,22 +268,16 @@ func (b *bootstrap) DecodeCommitments() ([]*X2, error) {
 	for i, v := range b.Commitments {
 		c[i] = &X2{}
 		// [ $Blinded public key hash, $mutez ]
-		pk := v[0].(string)
-		addr, err := tezos.ParseAddress(pk)
+		addr, err := tezos.ParseAddress(v[0])
 		if err != nil {
 			return nil, err
 		}
 		c[i].Addr = addr
-
-		if val, ok := v[1].(string); !ok {
-			return nil, fmt.Errorf("invalid mutez type %T", v[1])
-		} else {
-			amount, err := strconv.ParseInt(val, 10, 64)
-			if err != nil {
-				return nil, err
-			}
-			c[i].Value = amount
+		amount, err := strconv.ParseInt(v[1], 10, 64)
+		if err != nil {
+			return nil, err
 		}
+		c[i].Value = amount
 	}
 	return c, nil
 }

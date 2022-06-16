@@ -58,6 +58,9 @@ type OperationMetadata struct {
 	Slots               []int         `json:"slots,omitempty"`
 	EndorsementPower    int           `json:"endorsement_power,omitempty"`    // v12+
 	PreendorsementPower int           `json:"preendorsement_power,omitempty"` // v12+
+
+	// some rollup ops only
+	Level int64 `json:"level"`
 }
 
 func (m OperationMetadata) Power() int {
@@ -77,26 +80,82 @@ func (m OperationMetadata) Balances() BalanceUpdates {
 // This type is a generic container for all possible results. Which fields are actually
 // used depends on operation type and performed actions.
 type OperationResult struct {
-	Status              tezos.OpStatus       `json:"status"`
-	BalanceUpdates      BalanceUpdates       `json:"balance_updates"` // burn, etc
-	ConsumedGas         int64                `json:"consumed_gas,string"`
-	Errors              []OperationError     `json:"errors,omitempty"`
-	Allocated           bool                 `json:"allocated_destination_contract"` // tx only
-	Storage             micheline.Prim       `json:"storage,omitempty"`              // tx, orig
-	OriginatedContracts []tezos.Address      `json:"originated_contracts"`           // orig only
-	StorageSize         int64                `json:"storage_size,string"`            // tx, orig, const
-	PaidStorageSizeDiff int64                `json:"paid_storage_size_diff,string"`  // tx, orig
-	BigmapDiff          micheline.BigmapDiff `json:"big_map_diff,omitempty"`         // tx, orig
-	GlobalAddress       tezos.ExprHash       `json:"global_address"`                 // const
+	Status              tezos.OpStatus   `json:"status"`
+	BalanceUpdates      BalanceUpdates   `json:"balance_updates"` // burn, etc
+	ConsumedGas         int64            `json:"consumed_gas,string"`
+	ConsumedMilliGas    int64            `json:"consumed_milligas,string"` // v007+
+	Errors              []OperationError `json:"errors,omitempty"`
+	Allocated           bool             `json:"allocated_destination_contract"` // tx only
+	Storage             micheline.Prim   `json:"storage,omitempty"`              // tx, orig
+	OriginatedContracts []tezos.Address  `json:"originated_contracts"`           // orig only
+	StorageSize         int64            `json:"storage_size,string"`            // tx, orig, const
+	PaidStorageSizeDiff int64            `json:"paid_storage_size_diff,string"`  // tx, orig
+	BigmapDiff          json.RawMessage  `json:"big_map_diff,omitempty"`         // tx, orig, <v013
+	LazyStorageDiff     json.RawMessage  `json:"lazy_storage_diff,omitempty"`    // v008+ tx, orig
+	GlobalAddress       tezos.ExprHash   `json:"global_address"`                 // const
+	OriginatedRollup    tezos.Address    `json:"originated_rollup"`              // v013
+}
+
+func (r OperationResult) BigmapEvents() micheline.BigmapEvents {
+	if r.LazyStorageDiff != nil {
+		res := make(micheline.LazyEvents, 0)
+		if err := json.Unmarshal(r.LazyStorageDiff, &res); err != nil {
+			log.Debugf("rpc: lazy decode: %v", err)
+		}
+		return res.BigmapEvents()
+	}
+	if r.BigmapDiff != nil {
+		res := make(micheline.BigmapEvents, 0)
+		if err := json.Unmarshal(r.BigmapDiff, &res); err != nil {
+			log.Debugf("rpc: bigmap decode: %v", err)
+		}
+		return res
+	}
+	return nil
 }
 
 func (r OperationResult) Balances() BalanceUpdates {
 	return r.BalanceUpdates
 }
 
+func (r OperationResult) Gas() int64 {
+	if r.ConsumedMilliGas > 0 {
+		return r.ConsumedMilliGas / 1000
+	}
+	return r.ConsumedGas
+}
+
+func (r OperationResult) MilliGas() int64 {
+	if r.ConsumedMilliGas > 0 {
+		return r.ConsumedMilliGas
+	}
+	return r.ConsumedGas * 1000
+}
+
 // Generic is the most generic operation type.
 type Generic struct {
-	OpKind tezos.OpType `json:"kind"`
+	OpKind   tezos.OpType       `json:"kind"`
+	Metadata *OperationMetadata `json:"metadata"`
+}
+
+// Kind returns the operation's type. Implements TypedOperation interface.
+func (e Generic) Kind() tezos.OpType {
+	return e.OpKind
+}
+
+// Meta returns an empty operation metadata to implement TypedOperation interface.
+func (e Generic) Meta() OperationMetadata {
+	return *e.Metadata
+}
+
+// Result returns an empty operation result to implement TypedOperation interface.
+func (e Generic) Result() OperationResult {
+	return e.Metadata.Result
+}
+
+// Fees returns an empty balance update list to implement TypedOperation interface.
+func (e Generic) Fees() BalanceUpdates {
+	return e.Metadata.BalanceUpdates
 }
 
 // Manager represents data common for all manager operations.
@@ -109,24 +168,13 @@ type Manager struct {
 	StorageLimit int64         `json:"storage_limit,string"`
 }
 
-// Kind returns the operation's type. Implements TypedOperation interface.
-func (e Generic) Kind() tezos.OpType {
-	return e.OpKind
-}
-
-// Meta returns an empty operation metadata to implement TypedOperation interface.
-func (e Generic) Meta() OperationMetadata {
-	return OperationMetadata{}
-}
-
-// Result returns an empty operation result to implement TypedOperation interface.
-func (e Generic) Result() OperationResult {
-	return OperationResult{}
-}
-
-// Fees returns an empty balance update list to implement TypedOperation interface.
-func (e Generic) Fees() BalanceUpdates {
-	return nil
+// Limits returns manager operation limits to implement TypedOperation interface.
+func (e Manager) Limits() tezos.Limits {
+	return tezos.Limits{
+		Fee:          e.Fee,
+		GasLimit:     e.GasLimit,
+		StorageLimit: e.StorageLimit,
+	}
 }
 
 // OperationList is a slice of TypedOperation (interface type) with custom JSON unmarshaller
@@ -198,6 +246,22 @@ func (e *OperationList) UnmarshalJSON(data []byte) error {
 			op = &ConstantRegistration{}
 		case tezos.OpTypeSetDepositsLimit:
 			op = &SetDepositsLimit{}
+
+			// rollup operations
+		case tezos.OpTypeTransferTicket,
+			tezos.OpTypeToruOrigination,
+			tezos.OpTypeToruSubmitBatch,
+			tezos.OpTypeToruCommit,
+			tezos.OpTypeToruReturnBond,
+			tezos.OpTypeToruFinalizeCommitment,
+			tezos.OpTypeToruRemoveCommitment,
+			tezos.OpTypeToruRejection,
+			tezos.OpTypeToruDispatchTickets,
+			tezos.OpTypeScruOriginate,
+			tezos.OpTypeScruAddMessages,
+			tezos.OpTypeScruCement,
+			tezos.OpTypeScruPublish:
+			op = &Rollup{}
 
 		default:
 			return fmt.Errorf("rpc: unsupported op %q", kind)

@@ -28,22 +28,23 @@ func (id ContractID) Value() uint64 {
 
 // Contract holds code and info about smart contracts on the Tezos blockchain.
 type Contract struct {
-	RowId         ContractID           `pack:"I,pk,snappy"   json:"row_id"`
-	Address       tezos.Address        `pack:"H,snappy"      json:"address"`
-	AccountId     AccountID            `pack:"A,snappy"      json:"account_id"`
-	CreatorId     AccountID            `pack:"C,snappy"      json:"creator_id"`
-	FirstSeen     int64                `pack:"f,snappy"      json:"first_seen"`
-	LastSeen      int64                `pack:"l,snappy"      json:"last_seen"`
-	StorageSize   int64                `pack:"z,snappy"      json:"storage_size"`
-	StoragePaid   int64                `pack:"y,snappy"      json:"storage_paid"`
-	Script        []byte               `pack:"s,snappy"      json:"script"`
-	Storage       []byte               `pack:"g,snappy"      json:"storage"`
-	InterfaceHash uint64               `pack:"i,snappy"      json:"iface_hash"`
-	CodeHash      uint64               `pack:"c,snappy"      json:"code_hash"`
-	StorageHash   uint64               `pack:"x,snappy"      json:"storage_hash"`
-	CallStats     []byte               `pack:"S,snappy"      json:"call_stats"`
-	Features      micheline.Features   `pack:"F,snappy"      json:"features"`
-	Interfaces    micheline.Interfaces `pack:"n,snappy"      json:"interfaces"`
+	RowId         ContractID           `pack:"I,pk"     json:"row_id"`
+	Address       tezos.Address        `pack:"H,snappy" json:"address"`
+	AccountId     AccountID            `pack:"A"        json:"account_id"`
+	CreatorId     AccountID            `pack:"C"        json:"creator_id"`
+	FirstSeen     int64                `pack:"f"        json:"first_seen"`
+	LastSeen      int64                `pack:"l"        json:"last_seen"`
+	StorageSize   int64                `pack:"z"        json:"storage_size"`
+	StoragePaid   int64                `pack:"y"        json:"storage_paid"`
+	StorageBurn   int64                `pack:"Y"        json:"storage_burn"`
+	Script        []byte               `pack:"s,snappy" json:"script"`
+	Storage       []byte               `pack:"g,snappy" json:"storage"`
+	InterfaceHash uint64               `pack:"i,snappy" json:"iface_hash"`
+	CodeHash      uint64               `pack:"c,snappy" json:"code_hash"`
+	StorageHash   uint64               `pack:"x,snappy" json:"storage_hash"`
+	CallStats     []byte               `pack:"S,snappy" json:"call_stats"`
+	Features      micheline.Features   `pack:"F,snappy" json:"features"`
+	Interfaces    micheline.Interfaces `pack:"n,snappy" json:"interfaces"`
 
 	IsDirty bool              `pack:"-" json:"-"` // indicates an update happened
 	IsNew   bool              `pack:"-" json:"-"` // new contract, used during migration
@@ -66,6 +67,7 @@ func NewContract(acc *Account, oop *rpc.Origination, op *Op, dict micheline.Cons
 	res := oop.Result()
 	c.StorageSize = res.StorageSize
 	c.StoragePaid = res.PaidStorageSizeDiff
+	c.StorageBurn += c.StoragePaid * p.CostPerByte
 	if oop.Script != nil {
 		c.Features = oop.Script.Features()
 		if c.Features.Contains(micheline.FeatureGlobalConstant) {
@@ -93,7 +95,7 @@ func NewContract(acc *Account, oop *rpc.Origination, op *Op, dict micheline.Cons
 	return c
 }
 
-func NewInternalContract(acc *Account, iop rpc.InternalResult, op *Op, dict micheline.ConstantDict) *Contract {
+func NewInternalContract(acc *Account, iop rpc.InternalResult, op *Op, dict micheline.ConstantDict, p *tezos.Params) *Contract {
 	c := AllocContract()
 	c.Address = acc.Address.Clone()
 	c.AccountId = acc.RowId
@@ -103,6 +105,7 @@ func NewInternalContract(acc *Account, iop rpc.InternalResult, op *Op, dict mich
 	res := iop.Result
 	c.StorageSize = res.StorageSize
 	c.StoragePaid = res.PaidStorageSizeDiff
+	c.StorageBurn += c.StoragePaid * p.CostPerByte
 	if iop.Script != nil {
 		c.Features = iop.Script.Features()
 		if c.Features.Contains(micheline.FeatureGlobalConstant) {
@@ -125,7 +128,7 @@ func NewInternalContract(acc *Account, iop rpc.InternalResult, op *Op, dict mich
 	return c
 }
 
-func NewImplicitContract(acc *Account, res rpc.ImplicitResult, op *Op) *Contract {
+func NewImplicitContract(acc *Account, res rpc.ImplicitResult, op *Op, p *tezos.Params) *Contract {
 	c := AllocContract()
 	c.Address = acc.Address.Clone()
 	c.AccountId = acc.RowId
@@ -134,6 +137,7 @@ func NewImplicitContract(acc *Account, res rpc.ImplicitResult, op *Op) *Contract
 	c.LastSeen = op.Height
 	c.StorageSize = res.StorageSize
 	c.StoragePaid = res.PaidStorageSizeDiff
+	c.StorageBurn += c.StoragePaid * p.CostPerByte
 	if res.Script != nil {
 		c.Script, _ = res.Script.MarshalBinary()
 		c.Storage, _ = res.Script.Storage.MarshalBinary()
@@ -175,6 +179,25 @@ func NewManagerTzContract(a *Account, height int64) (*Contract, error) {
 	return c, nil
 }
 
+func NewRollupContract(acc *Account, op *Op, p *tezos.Params) *Contract {
+	c := AllocContract()
+	c.Address = acc.Address.Clone()
+	c.AccountId = acc.RowId
+	c.CreatorId = op.SenderId
+	c.FirstSeen = op.Height
+	c.LastSeen = op.Height
+	c.StorageSize = 4000 // toru fixed, tx_rollup_origination_size
+	c.StoragePaid = 4000 // toru fixed, tx_rollup_origination_size
+	c.StorageBurn += c.StoragePaid * p.CostPerByte
+	// no script
+	// 7+1 toru ops excl origination are defined
+	// first is the fake `deposit` op for tickets
+	c.CallStats = make([]byte, 4*8)
+	c.IsNew = true
+	c.IsDirty = true
+	return c
+}
+
 func AllocContract() *Contract {
 	return contractPool.Get().(*Contract)
 }
@@ -205,6 +228,7 @@ func (c *Contract) Reset() {
 	c.LastSeen = 0
 	c.StorageSize = 0
 	c.StoragePaid = 0
+	c.StorageBurn = 0
 	c.Script = nil
 	c.Storage = nil
 	c.InterfaceHash = 0
@@ -220,43 +244,30 @@ func (c *Contract) Reset() {
 	c.storage = micheline.Type{}
 }
 
-// update storage size and size paid
-func (c *Contract) UpdateStorage(op *Op, storage micheline.Prim) {
-	if storage.IsValid() {
-		hash := storage.Hash64()
-		if hash != c.StorageHash {
-			c.Storage, _ = storage.MarshalBinary()
-			c.StorageHash = hash
-			c.StorageSize = int64(len(c.Storage))
-		}
-	}
-	c.StoragePaid += op.StoragePaid
+func (c *Contract) Update(op *Op, p *tezos.Params) bool {
 	c.LastSeen = op.Height
 	c.IncCallStats(op.Entrypoint)
 	c.IsDirty = true
-}
-
-func (c *Contract) SetStorage(storage micheline.Prim) {
-	if !storage.IsValid() {
-		return
-	}
-	hash := storage.Hash64()
-	if hash != c.StorageHash {
-		c.Storage, _ = storage.MarshalBinary()
+	if op.Storage != nil && op.StorageHash != c.StorageHash {
+		c.Storage = op.Storage
+		c.StorageHash = op.StorageHash
 		c.StorageSize = int64(len(c.Storage))
+		c.StoragePaid += op.StoragePaid
+		c.StorageBurn += op.StoragePaid * p.CostPerByte
+		return true
 	}
-	c.IsDirty = true
+	return false
 }
 
-func (c *Contract) RollbackStorage(drop, last *Op, storage micheline.Prim) {
+func (c *Contract) Rollback(drop, last *Op, p *tezos.Params) {
 	if last != nil {
 		c.LastSeen = last.Height
-		if storage.IsValid() {
-			c.Storage, _ = storage.MarshalBinary()
+		if last.Storage != nil {
+			c.Storage = last.Storage
 			c.StorageSize = int64(len(c.Storage))
-			c.StorageHash = storage.Hash64()
+			c.StorageHash = last.StorageHash
 		}
-	} else {
+	} else if c.script != nil {
 		// back to origination
 		c.Storage, _ = c.script.Storage.MarshalBinary()
 		c.StorageHash = c.script.Storage.Hash64()
@@ -264,11 +275,32 @@ func (c *Contract) RollbackStorage(drop, last *Op, storage micheline.Prim) {
 		c.StorageSize = int64(len(c.Storage))
 	}
 	c.StoragePaid -= drop.StoragePaid
+	c.StorageBurn -= drop.StoragePaid * p.CostPerByte
 	c.DecCallStats(drop.Entrypoint)
 	c.IsDirty = true
 }
 
+func (c *Contract) ListRollupCallStats() map[string]int {
+	res := make(map[string]int, len(c.CallStats)>>2)
+	for i, v := range []string{
+		"deposit", // fake, /sigh/ :(
+		"tx_rollup_submit_batch",
+		"tx_rollup_commit",
+		"tx_rollup_return_bond",
+		"tx_rollup_finalize_commitment",
+		"tx_rollup_remove_commitment",
+		"tx_rollup_rejection",
+		"tx_rollup_dispatch_tickets",
+	} {
+		res[v] = int(binary.BigEndian.Uint32(c.CallStats[i*4:]))
+	}
+	return res
+}
+
 func (c *Contract) ListCallStats() map[string]int {
+	if c.Address.Type == tezos.AddressTypeToru {
+		return c.ListRollupCallStats()
+	}
 	// list entrypoint names first
 	pTyp, _, err := c.LoadType()
 	if err != nil {
@@ -293,8 +325,8 @@ func (c *Contract) ListCallStats() map[string]int {
 	return res
 }
 
-func (c *Contract) NamedBigmaps(ids []int64) map[string]int64 {
-	if len(ids) == 0 {
+func (c *Contract) NamedBigmaps(m []*BigmapAlloc) map[string]int64 {
+	if len(m) == 0 {
 		return nil
 	}
 	_, sTyp, err := c.LoadType()
@@ -302,16 +334,52 @@ func (c *Contract) NamedBigmaps(ids []int64) map[string]int64 {
 		return nil
 	}
 	named := make(map[string]int64)
+
+	// find bigmap typedefs in script
 	bigmaps, _ := sTyp.FindOpCodes(micheline.T_BIG_MAP)
-	for i := 0; i < util.Min(len(ids), len(bigmaps)); i++ {
-		n := bigmaps[i].GetVarAnnoAny()
-		if n == "" {
-			n = strconv.Itoa(i)
+
+	// unpack micheline types into tzgo types for matching
+	// this resolves ambiguities from different comb pair expressions
+	types := make([]micheline.Typedef, len(bigmaps))
+	for i, v := range bigmaps {
+		types[i] = micheline.Type{v}.Typedef("")
+	}
+
+	// match bigmap allocs to type annotations using type comparison
+	for i, v := range m {
+		kt, vt := v.GetKeyType().Typedef(""), v.GetValueType().Typedef("")
+		var name string
+		for _, typ := range types {
+			if !typ.Left().Equal(kt) {
+				continue
+			}
+			if !typ.Right().Equal(vt) {
+				continue
+			}
+			name = typ.Name
+			// some bigmap types may be reused (different bigmap use the same type)
+			// so be carful not overwriting existing matches
+			if _, ok := named[name]; !ok {
+				break
+			}
 		}
-		if _, ok := named[n]; ok {
-			n += "_" + strconv.Itoa(i)
+		// generate a unique name when annots are missing
+		if name == "" {
+			name = "bigmap_" + strconv.Itoa(i)
 		}
-		named[n] = ids[i]
+		// make sure name is not a duplicate
+		if _, ok := named[name]; ok {
+			var c int
+			for {
+				n := name + "_" + strconv.Itoa(c)
+				if _, ok := named[n]; !ok {
+					name = n
+					break
+				}
+				c++
+			}
+		}
+		named[name] = v.BigmapId
 	}
 	return named
 }
@@ -352,7 +420,7 @@ func (c *Contract) LoadType() (micheline.Type, micheline.Type, error) {
 		if c.script != nil {
 			c.params = c.script.ParamType()
 			c.storage = c.script.StorageType()
-		} else {
+		} else if c.Script != nil {
 			c.params, c.storage, err = micheline.UnmarshalScriptType(c.Script)
 		}
 	}

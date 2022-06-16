@@ -16,14 +16,15 @@ import (
 
 // /tables/bigmaps
 type BigmapAlloc struct {
-	RowId     uint64    `pack:"I,pk,snappy" json:"row_id"`        // internal: id
-	BigmapId  int64     `pack:"B,snappy"    json:"bigmap_id"`     // unique bigmap id
-	AccountId AccountID `pack:"A,snappy"    json:"account_id"`    // account table id for contract
-	Height    int64     `pack:"h,snappy"    json:"alloc_height"`  // allocation height
-	NUpdates  int64     `pack:"n,snappy"    json:"n_updates"`     // running update counter
-	NKeys     int64     `pack:"k,snappy"    json:"n_keys"`        // current number of active keys
-	Updated   int64     `pack:"u,snappy"    json:"update_height"` // last update height
-	Data      []byte    `pack:"d,snappy"    json:"-"`             // micheline encoded type tree (key/val pair)
+	RowId     uint64    `pack:"I,pk"     json:"row_id"`        // internal: id
+	BigmapId  int64     `pack:"B"        json:"bigmap_id"`     // unique bigmap id
+	AccountId AccountID `pack:"A"        json:"account_id"`    // account table id for contract
+	Height    int64     `pack:"h"        json:"alloc_height"`  // allocation height
+	NUpdates  int64     `pack:"n"        json:"n_updates"`     // running update counter
+	NKeys     int64     `pack:"k"        json:"n_keys"`        // current number of active keys
+	Updated   int64     `pack:"u"        json:"update_height"` // last update height
+	Deleted   int64     `pack:"D"        json:"delete_height"` // block when bigmap was removed
+	Data      []byte    `pack:"d,snappy" json:"-"`             // micheline encoded type tree (key/val pair)
 
 	// internal, not stored
 	KeyType   micheline.Type `pack:"-" json:"-"`
@@ -72,22 +73,20 @@ func (b *BigmapAlloc) decodeType() {
 }
 
 func (b *BigmapAlloc) GetKeyTypeBytes() []byte {
-	if !b.KeyType.IsValid() {
-		b.decodeType()
-	}
-	buf, _ := b.KeyType.MarshalBinary()
+	var prim micheline.Prim
+	_ = prim.UnmarshalBinary(b.Data)
+	buf, _ := prim.Args[0].MarshalBinary()
 	return buf
 }
 
 func (b *BigmapAlloc) GetValueTypeBytes() []byte {
-	if !b.ValueType.IsValid() {
-		b.decodeType()
-	}
-	buf, _ := b.ValueType.MarshalBinary()
+	var prim micheline.Prim
+	_ = prim.UnmarshalBinary(b.Data)
+	buf, _ := prim.Args[1].MarshalBinary()
 	return buf
 }
 
-func NewBigmapAlloc(op *Op, b micheline.BigmapDiffElem) *BigmapAlloc {
+func NewBigmapAlloc(op *Op, b micheline.BigmapEvent) *BigmapAlloc {
 	if b.Action != micheline.DiffActionAlloc {
 		return nil
 	}
@@ -141,8 +140,17 @@ func (b *BigmapAlloc) ToUpdateCopy(op *Op, srcid int64) *BigmapUpdate {
 	}
 	m.Key, _ = b.GetKeyType().MarshalBinary()
 	m.Value, _ = b.GetValueType().MarshalBinary()
-
 	return m
+}
+
+func (b *BigmapAlloc) ToRemove(op *Op) *BigmapUpdate {
+	return &BigmapUpdate{
+		BigmapId:  b.BigmapId,
+		Action:    micheline.DiffActionRemove,
+		OpId:      op.RowId,
+		Height:    op.Height,
+		Timestamp: op.Timestamp,
+	}
 }
 
 func (m *BigmapAlloc) Reset() {
@@ -152,6 +160,7 @@ func (m *BigmapAlloc) Reset() {
 	m.NUpdates = 0
 	m.NKeys = 0
 	m.Updated = 0
+	m.Deleted = 0
 	m.Data = nil
 	m.KeyType = micheline.Type{}
 	m.ValueType = micheline.Type{}
@@ -159,12 +168,12 @@ func (m *BigmapAlloc) Reset() {
 
 // /tables/bigmap_values
 type BigmapKV struct {
-	RowId    uint64 `pack:"I,pk,snappy"    json:"row_id"`    // internal: id
-	BigmapId int64  `pack:"B,snappy,bloom" json:"bigmap_id"` // unique bigmap id
-	Height   int64  `pack:"h,snappy"       json:"height"`    // update height
-	KeyId    uint64 `pack:"K,snappy"       json:"key_id"`    // xxhash(BigmapId, KeyHash)
-	Key      []byte `pack:"k,snappy"       json:"key"`       // key/value bytes: binary encoded micheline.Prim Pair
-	Value    []byte `pack:"v,snappy"       json:"value"`     // key/value bytes: binary encoded micheline.Prim Pair
+	RowId    uint64 `pack:"I,pk"             json:"row_id"`    // internal: id
+	BigmapId int64  `pack:"B,bloom"          json:"bigmap_id"` // unique bigmap id
+	Height   int64  `pack:"h"                json:"height"`    // update height
+	KeyId    uint64 `pack:"K,bloom=3,snappy" json:"key_id"`    // xxhash(BigmapId, KeyHash)
+	Key      []byte `pack:"k,snappy"         json:"key"`       // key/value bytes: binary encoded micheline.Prim Pair
+	Value    []byte `pack:"v,snappy"         json:"value"`     // key/value bytes: binary encoded micheline.Prim Pair
 }
 
 var _ pack.Item = (*BigmapKV)(nil)
@@ -191,7 +200,7 @@ func (b *BigmapKV) GetKeyHash() tezos.ExprHash {
 	return micheline.KeyHash(b.Key)
 }
 
-func NewBigmapKV(b micheline.BigmapDiffElem, height int64) *BigmapKV {
+func NewBigmapKV(b micheline.BigmapEvent, height int64) *BigmapKV {
 	if b.Action != micheline.DiffActionUpdate {
 		return nil
 	}
@@ -260,15 +269,15 @@ func (m *BigmapKV) Reset() {
 
 // /tables/bigmap_updates
 type BigmapUpdate struct {
-	RowId     uint64               `pack:"I,pk,snappy"     json:"row_id"`    // internal: id
-	BigmapId  int64                `pack:"B,snappy,bloom"  json:"bigmap_id"` // unique bigmap id
-	KeyId     uint64               `pack:"K,snappy"        json:"key_id"`    // xxhash(BigmapId, KeyHash)
-	Action    micheline.DiffAction `pack:"a,snappy"        json:"action"`    // action (alloc, copy, update, remove)
-	OpId      OpID                 `pack:"o,snappy"        json:"op_id"`     // operation id
-	Height    int64                `pack:"h,snappy"        json:"height"`    // creation time
-	Timestamp time.Time            `pack:"t,snappy"        json:"time"`      // creation height
-	Key       []byte               `pack:"k,snappy"        json:"key"`       // key/value bytes: binary encoded micheline.Prim
-	Value     []byte               `pack:"v,snappy"        json:"value"`     // key/value bytes: binary encoded micheline.Prim, (Pair(int,int) on copy)
+	RowId     uint64               `pack:"I,pk"       json:"row_id"`    // internal: id
+	BigmapId  int64                `pack:"B,bloom"    json:"bigmap_id"` // unique bigmap id
+	KeyId     uint64               `pack:"K,bloom=3"  json:"key_id"`    // xxhash(BigmapId, KeyHash)
+	Action    micheline.DiffAction `pack:"a"          json:"action"`    // action (alloc, copy, update, remove)
+	OpId      OpID                 `pack:"o"          json:"op_id"`     // operation id
+	Height    int64                `pack:"h"          json:"height"`    // creation time
+	Timestamp time.Time            `pack:"t"          json:"time"`      // creation height
+	Key       []byte               `pack:"k,snappy"   json:"key"`       // key/value bytes: binary encoded micheline.Prim
+	Value     []byte               `pack:"v,snappy"   json:"value"`     // key/value bytes: binary encoded micheline.Prim, (Pair(int,int) on copy)
 }
 
 var _ pack.Item = (*BigmapUpdate)(nil)
@@ -307,7 +316,7 @@ func (b *BigmapUpdate) GetValueType() micheline.Type {
 	return micheline.NewType(prim)
 }
 
-func NewBigmapUpdate(op *Op, b micheline.BigmapDiffElem) *BigmapUpdate {
+func NewBigmapUpdate(op *Op, b micheline.BigmapEvent) *BigmapUpdate {
 	m := &BigmapUpdate{
 		BigmapId:  b.Id,
 		KeyId:     GetKeyId(b.Id, b.KeyHash),
@@ -326,7 +335,6 @@ func NewBigmapUpdate(op *Op, b micheline.BigmapDiffElem) *BigmapUpdate {
 	case micheline.DiffActionCopy:
 		m.BigmapId = b.DestId
 		m.KeyId = uint64(b.SourceId)
-		m.Key, _ = micheline.NewInt64(b.SourceId).MarshalBinary()
 	case micheline.DiffActionRemove:
 		if b.Key.IsValid() {
 			m.Key, _ = b.Key.MarshalBinary()
@@ -354,6 +362,30 @@ func (b *BigmapUpdate) ToAlloc() *BigmapAlloc {
 		KeyType:   b.GetKeyType(),
 		ValueType: b.GetValueType(),
 	}
+}
+
+func (b *BigmapUpdate) ToEvent() micheline.BigmapEvent {
+	ev := micheline.BigmapEvent{
+		Action: b.Action,
+		Id:     b.BigmapId,
+	}
+	switch b.Action {
+	case micheline.DiffActionAlloc:
+		ev.KeyType.UnmarshalBinary(b.Key)
+		ev.ValueType.UnmarshalBinary(b.Value)
+	case micheline.DiffActionUpdate:
+		ev.Key.UnmarshalBinary(b.Key)
+		ev.Value.UnmarshalBinary(b.Value)
+		ev.KeyHash = micheline.KeyHash(b.Key)
+	case micheline.DiffActionCopy:
+		ev.DestId = b.BigmapId
+		ev.SourceId = int64(b.KeyId)
+	case micheline.DiffActionRemove:
+		if len(b.Key) > 0 {
+			ev.Key.UnmarshalBinary(b.Key)
+		}
+	}
+	return ev
 }
 
 func (m *BigmapUpdate) Reset() {

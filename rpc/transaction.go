@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -17,22 +17,6 @@ type Transaction struct {
 	Destination tezos.Address        `json:"destination"`
 	Amount      int64                `json:"amount,string"`
 	Parameters  micheline.Parameters `json:"parameters"`
-	Metadata    OperationMetadata    `json:"metadata"`
-}
-
-// Meta returns operation metadata to implement TypedOperation interface.
-func (t Transaction) Meta() OperationMetadata {
-	return t.Metadata
-}
-
-// Result returns operation result to implement TypedOperation interface.
-func (t Transaction) Result() OperationResult {
-	return t.Metadata.Result
-}
-
-// Fees returns fee-related balance updates to implement TypedOperation interface.
-func (t Transaction) Fees() BalanceUpdates {
-	return t.Metadata.BalanceUpdates
 }
 
 type InternalResult struct {
@@ -53,9 +37,24 @@ type ImplicitResult struct {
 	Kind                tezos.OpType      `json:"kind"`
 	BalanceUpdates      BalanceUpdates    `json:"balance_updates"`
 	ConsumedGas         int64             `json:"consumed_gas,string"`
+	ConsumedMilliGas    int64             `json:"consumed_milligas,string"`
 	Storage             micheline.Prim    `json:"storage"`
 	StorageSize         int64             `json:"storage_size,string"`
 	OriginatedContracts []tezos.Address   `json:"originated_contracts,omitempty"`
 	PaidStorageSizeDiff int64             `json:"paid_storage_size_diff,string"`
 	Script              *micheline.Script `json:"script"`
+}
+
+func (r ImplicitResult) Gas() int64 {
+	if r.ConsumedMilliGas > 0 {
+		return r.ConsumedMilliGas / 1000
+	}
+	return r.ConsumedGas
+}
+
+func (r ImplicitResult) MilliGas() int64 {
+	if r.ConsumedMilliGas > 0 {
+		return r.ConsumedMilliGas
+	}
+	return r.ConsumedGas * 1000
 }

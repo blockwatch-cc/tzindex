@@ -19,6 +19,7 @@ import (
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -139,51 +140,53 @@ func (l OpList) RegisterRoutes(r *mux.Router) error {
 }
 
 type Op struct {
-	Id            uint64               `json:"id"`
-	Hash          string               `json:"hash,omitempty"`
-	Type          model.OpType         `json:"type"`
-	BlockHash     tezos.BlockHash      `json:"block"`
-	Timestamp     time.Time            `json:"time"`
-	Height        int64                `json:"height"`
-	Cycle         int64                `json:"cycle"`
-	Counter       int64                `json:"counter,omitempty"`
-	OpN           int                  `json:"op_n"`
-	OpP           *int                 `json:"op_p,omitempty"`
-	Status        string               `json:"status,omitempty"`
-	IsSuccess     bool                 `json:"is_success"`
-	IsContract    bool                 `json:"is_contract,omitempty"`
-	IsEvent       bool                 `json:"is_event,omitempty"`
-	IsInternal    bool                 `json:"is_internal,omitempty"`
-	GasLimit      int64                `json:"gas_limit,omitempty"`
-	GasUsed       int64                `json:"gas_used,omitempty"`
-	StorageLimit  int64                `json:"storage_limit,omitempty"`
-	StoragePaid   int64                `json:"storage_paid,omitempty"`
-	Volume        float64              `json:"volume,omitempty"`
-	Fee           float64              `json:"fee,omitempty"`
-	Reward        float64              `json:"reward,omitempty"`
-	Deposit       float64              `json:"deposit,omitempty"`
-	Burned        float64              `json:"burned,omitempty"`
-	Data          json.RawMessage      `json:"data,omitempty"`
-	Errors        json.RawMessage      `json:"errors,omitempty"`
-	Parameters    *ExplorerParameters  `json:"parameters,omitempty"`
-	Value         *micheline.Prim      `json:"value,omitempty"`
-	Storage       *StorageValue        `json:"storage,omitempty"`
-	BigmapDiff    *BigmapUpdateList    `json:"big_map_diff,omitempty"`
-	Sender        *tezos.Address       `json:"sender,omitempty"`
-	Receiver      *tezos.Address       `json:"receiver,omitempty"`
-	Creator       *tezos.Address       `json:"creator,omitempty"`
-	Baker         *tezos.Address       `json:"baker,omitempty"`
-	OldBaker      *tezos.Address       `json:"previous_baker,omitempty"`
-	Source        *tezos.Address       `json:"source,omitempty"`
-	Accuser       *tezos.Address       `json:"offender,omitempty"`
-	Offender      *tezos.Address       `json:"accuser,omitempty"`
-	Power         int64                `json:"power,omitempty"`
-	Limit         *NullMoney           `json:"limit,omitempty"`
-	Confirmations int64                `json:"confirmations"`
-	NOps          int                  `json:"n_ops,omitempty"`
-	Batch         []*Op                `json:"batch,omitempty"`
-	Internal      []*Op                `json:"internal,omitempty"`
-	Metadata      map[string]*Metadata `json:"metadata,omitempty"`
+	Id            uint64                    `json:"id"`
+	Hash          string                    `json:"hash,omitempty"`
+	Type          model.OpType              `json:"type"`
+	BlockHash     tezos.BlockHash           `json:"block"`
+	Timestamp     time.Time                 `json:"time"`
+	Height        int64                     `json:"height"`
+	Cycle         int64                     `json:"cycle"`
+	Counter       int64                     `json:"counter,omitempty"`
+	OpN           int                       `json:"op_n"`
+	OpP           *int                      `json:"op_p,omitempty"`
+	Status        string                    `json:"status,omitempty"`
+	IsSuccess     bool                      `json:"is_success"`
+	IsContract    bool                      `json:"is_contract,omitempty"`
+	IsEvent       bool                      `json:"is_event,omitempty"`
+	IsInternal    bool                      `json:"is_internal,omitempty"`
+	IsRollup      bool                      `json:"is_rollup,omitempty"`
+	GasLimit      int64                     `json:"gas_limit,omitempty"`
+	GasUsed       int64                     `json:"gas_used,omitempty"`
+	StorageLimit  int64                     `json:"storage_limit,omitempty"`
+	StoragePaid   int64                     `json:"storage_paid,omitempty"`
+	Volume        float64                   `json:"volume,omitempty"`
+	Fee           float64                   `json:"fee,omitempty"`
+	Reward        float64                   `json:"reward,omitempty"`
+	Deposit       float64                   `json:"deposit,omitempty"`
+	Burned        float64                   `json:"burned,omitempty"`
+	Data          json.RawMessage           `json:"data,omitempty"`
+	Errors        json.RawMessage           `json:"errors,omitempty"`
+	Parameters    *ExplorerParameters       `json:"parameters,omitempty"`
+	Value         *micheline.Prim           `json:"value,omitempty"`
+	Storage       *StorageValue             `json:"storage,omitempty"`
+	BigmapDiff    *BigmapUpdateList         `json:"big_map_diff,omitempty"`
+	Sender        *tezos.Address            `json:"sender,omitempty"`
+	Receiver      *tezos.Address            `json:"receiver,omitempty"`
+	Creator       *tezos.Address            `json:"creator,omitempty"`
+	Baker         *tezos.Address            `json:"baker,omitempty"`
+	OldBaker      *tezos.Address            `json:"previous_baker,omitempty"`
+	Source        *tezos.Address            `json:"source,omitempty"`
+	Accuser       *tezos.Address            `json:"offender,omitempty"`
+	Offender      *tezos.Address            `json:"accuser,omitempty"`
+	Power         int64                     `json:"power,omitempty"`
+	Level         *int64                    `json:"level,omitempty"`
+	Limit         *NullMoney                `json:"limit,omitempty"`
+	Confirmations int64                     `json:"confirmations"`
+	NOps          int                       `json:"n_ops,omitempty"`
+	Batch         []*Op                     `json:"batch,omitempty"`
+	Internal      []*Op                     `json:"internal,omitempty"`
+	Metadata      map[string]*ShortMetadata `json:"metadata,omitempty"`
 
 	expires time.Time `json:"-"`
 }
@@ -229,6 +232,7 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 		IsContract:    op.IsContract,
 		IsInternal:    op.IsInternal,
 		IsEvent:       op.IsEvent,
+		IsRollup:      op.IsRollup,
 		GasLimit:      op.GasLimit,
 		GasUsed:       op.GasUsed,
 		StorageLimit:  op.StorageLimit,
@@ -330,7 +334,7 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 
 	// add metadata, if any account is supported
 	if args.WithMeta() {
-		meta := make(map[string]*Metadata)
+		meta := make(map[string]*ShortMetadata)
 		for _, v := range []model.AccountID{
 			op.SenderId,
 			op.ReceiverId,
@@ -341,7 +345,8 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 				continue
 			}
 			if md, ok := lookupMetadataById(ctx, v, 0, false); ok {
-				meta[md.Address.String()] = md
+				// a := ctx.Indexer.LookupAddress(ctx, v)
+				meta[md.Address.String()] = md.Short()
 			}
 		}
 		if len(meta) > 0 {
@@ -372,12 +377,15 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 		o.Power, _ = strconv.ParseInt(op.Data, 10, 64)
 		o.Data = nil
 	case model.OpTypeDepositsLimit:
-		limit, _ := strconv.ParseInt(op.Data, 10, 64)
+		var limit int64 = -1
+		if op.Data != "" {
+			limit, _ = strconv.ParseInt(op.Data, 10, 64)
+		}
 		nm := NullMoney(limit)
 		o.Limit = &nm
 		o.Data = nil
 	default:
-		if op.Data != "" && !op.IsContract {
+		if op.Data != "" && !(op.IsContract || op.IsRollup) {
 			o.Data = json.RawMessage(strconv.Quote(op.Data))
 		}
 	}
@@ -393,6 +401,64 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 		blockHash = ctx.Indexer.LookupBlockHash(ctx.Context, op.Height)
 	}
 	o.BlockHash = blockHash
+
+	// special treatment for rollup ops (params behave differently)
+	if op.IsRollup && op.Type != model.OpTypeRollupOrigination {
+		o.Parameters = &ExplorerParameters{
+			Method: op.Data,
+		}
+
+		switch op.Data {
+		case "deposit":
+			// fake deposit entrypoint call with ticket
+			o.Parameters.Method = ""
+			o.Parameters.Entrypoint = op.Data
+			var call micheline.Parameters
+			_ = call.UnmarshalBinary(op.Parameters)
+			if call.Value.IsValid() {
+				o.Parameters.Value = micheline.NewValuePtr(
+					micheline.TicketType(call.Value.Args[1]),
+					call.Value.Args[0].Args[0],
+				)
+				o.Parameters.L2Address = &tezos.Address{
+					Type: tezos.AddressTypeBls12_381,
+					Hash: call.Value.Args[0].Args[1].Bytes,
+				}
+			}
+		case "transfer_ticket":
+			if ticket, err := rpc.DecodeTransferTicket(op.Parameters); err == nil {
+				o.Parameters.Arguments, _ = ticket.MarshalJSON()
+			}
+		case "tx_rollup_submit_batch":
+			if batch, err := rpc.DecodeRollupBatch(op.Parameters); err == nil {
+				o.Parameters.Arguments, _ = batch.MarshalJSON()
+			}
+		case "tx_rollup_commit":
+			if commit, err := rpc.DecodeRollupCommit(op.Parameters); err == nil {
+				o.Parameters.Arguments, _ = commit.MarshalJSON()
+			}
+		case "tx_rollup_return_bond":
+			// empty, no args
+		case "tx_rollup_finalize_commitment", "tx_rollup_remove_commitment":
+			var p micheline.Prim
+			if err := p.UnmarshalBinary(op.Parameters); err == nil {
+				lvl := p.Int.Int64()
+				o.Level = &lvl
+			}
+		case "tx_rollup_rejection":
+			if reject, err := rpc.DecodeRollupRejection(op.Parameters); err == nil {
+				o.Parameters.Arguments, _ = reject.MarshalJSON()
+			}
+		case "tx_rollup_dispatch_tickets":
+			if dispatch, err := rpc.DecodeRollupDispatch(op.Parameters); err == nil {
+				o.Parameters.Arguments, _ = dispatch.MarshalJSON()
+			}
+		case "sc_rollup_originate", "sc_rollup_add_messages", "sc_rollup_cement", "sc_rollup_publish":
+			// unsupported right niw
+		}
+
+		o.Data = nil
+	}
 
 	if o.IsContract {
 		pTyp, sTyp, err := ctx.Indexer.LookupContractType(ctx.Context, op.ReceiverId)
@@ -421,8 +487,9 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 				// strip entrypoint name annot
 				typ.Prim.Anno = nil
 				o.Parameters = &ExplorerParameters{
-					Entrypoint: callParams.Entrypoint, // from params, e.g. "default"
-					Value:      micheline.NewValue(typ, prim),
+					// Entrypoint: callParams.Entrypoint, // from params, e.g. "default"
+					Entrypoint: ep.Name, // from real entrypoint
+					Value:      micheline.NewValuePtr(typ, prim),
 				}
 				// only render params when type check did not fail / fix type
 				if op.Status == tezos.OpStatusFailed {
@@ -437,7 +504,7 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 				}
 				if args.WithUnpack() && o.Parameters.Value.IsPackedAny() {
 					if up, err := o.Parameters.Value.UnpackAll(); err == nil {
-						o.Parameters.Value = up
+						o.Parameters.Value = &up
 					}
 				}
 			}
@@ -480,32 +547,32 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 		}
 
 		// handle bigmap diffs
-		if args.WithStorage() && len(op.Diff) > 0 {
+		if args.WithStorage() && len(op.BigmapUpdates) > 0 {
 			var (
 				alloc            *model.BigmapAlloc
 				keyType, valType micheline.Type
 				err              error
 			)
-			bmd := make(micheline.BigmapDiff, 0)
-			if err := bmd.UnmarshalBinary(op.Diff); err != nil {
-				log.Errorf("%s: unmarshal %s bigmap: %v", op.Hash, op.Type, err)
-			}
+			// bmd := make(micheline.BigmapEvents, 0)
+			// if err := bmd.UnmarshalBinary(op.Diff); err != nil {
+			// 	log.Errorf("%s: unmarshal %s bigmap: %v", op.Hash, op.Type, err)
+			// }
 			o.BigmapDiff = &BigmapUpdateList{
 				diff: make([]BigmapUpdate, 0),
 			}
 
-			for _, v := range bmd {
+			for _, v := range op.BigmapUpdates {
 				// need bigmap type to unbox and convert keys
-				if alloc == nil || alloc.BigmapId != v.Id {
-					lookupId := v.Id
+				if alloc == nil || alloc.BigmapId != v.BigmapId {
+					lookupId := v.BigmapId
 					// cache temporary bigmap types
 					switch v.Action {
 					case micheline.DiffActionAlloc:
-						if v.Id < 0 {
-							cache[lookupId] = model.NewBigmapAlloc(op, v)
+						if v.BigmapId < 0 {
+							cache[lookupId] = v.ToAlloc()
 						}
 					case micheline.DiffActionCopy:
-						lookupId = v.SourceId
+						lookupId = int64(v.KeyId)
 					}
 					a, ok := cache[lookupId]
 					if ok {
@@ -521,38 +588,47 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 						cache[lookupId] = alloc
 					}
 					if v.Action == micheline.DiffActionCopy {
-						cache[v.DestId] = alloc
+						cache[v.BigmapId] = alloc
 					}
 					keyType, valType = alloc.GetKeyType(), alloc.GetValueType()
 				}
 
 				upd := BigmapUpdate{
 					Action:   v.Action,
-					BigmapId: v.Id,
+					BigmapId: v.BigmapId,
 				}
 				if args.WithMeta() {
 					upd.BigmapValue.Meta = &BigmapMeta{
 						Contract:     *o.Receiver,
-						BigmapId:     v.Id,
+						BigmapId:     v.BigmapId,
 						UpdateTime:   &op.Timestamp,
 						UpdateHeight: op.Height,
-						UpdateBlock:  &blockHash,
 					}
 				}
 				switch v.Action {
 				case micheline.DiffActionUpdate:
 					// temporary bigmap updates may lack type info
+					// FIXME: IS THIS NECESSARY?
 					if !keyType.IsValid() {
-						keyType = v.Key.BuildType()
+						var prim micheline.Prim
+						prim.UnmarshalBinary(v.Key)
+						keyType = prim.BuildType()
 					}
 					if !valType.IsValid() {
-						valType = v.Value.BuildType()
+						var prim micheline.Prim
+						prim.UnmarshalBinary(v.Value)
+						valType = prim.BuildType()
 					}
 					// regular bigmap updates
-					upd.Key = v.GetKeyPtr(keyType)
-					kh := v.KeyHash.Clone()
+					k, _ := v.GetKey(keyType)
+					upd.Key = &k
+					// upd.Key = v.GetKeyPtr(keyType)
+					// kh := v.KeyHash.Clone()
+					kh := v.GetKeyHash()
 					upd.KeyHash = &kh
-					upd.Value = micheline.NewValuePtr(valType, v.Value)
+					val := v.GetValue(valType)
+					upd.Value = &val
+					// upd.Value = micheline.NewValuePtr(valType, v.Value)
 					if args.WithPrim() {
 						upd.KeyPrim = upd.Key.PrimPtr()
 						upd.ValuePrim = &upd.Value.Value
@@ -572,13 +648,17 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 
 				case micheline.DiffActionRemove:
 					// remove may be a bigmap removal without key
-					if v.Key.OpCode != micheline.I_EMPTY_BIG_MAP {
+					// if v.Key.OpCode != micheline.I_EMPTY_BIG_MAP {
+					var keyprim micheline.Prim
+					keyprim.UnmarshalBinary(v.Key)
+					if keyprim.IsValid() {
 						// temporary bigmap updates lack type info
 						if !keyType.IsValid() {
-							keyType = v.Key.BuildType()
+							keyType = keyprim.BuildType()
 						}
-						upd.Key = v.GetKeyPtr(keyType)
-						kh := v.KeyHash.Clone()
+						k, _ := v.GetKey(keyType)
+						upd.Key = &k
+						kh := v.GetKeyHash()
 						upd.KeyHash = &kh
 						if args.WithPrim() {
 							upd.KeyPrim = upd.Key.PrimPtr()
@@ -593,26 +673,25 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 					}
 
 				case micheline.DiffActionAlloc:
-					upd.KeyType = micheline.NewType(v.KeyType).TypedefPtr(micheline.CONST_KEY)
-					upd.ValueType = micheline.NewType(v.ValueType).TypedefPtr(micheline.CONST_VALUE)
+					kt, vt := v.GetKeyType(), v.GetValueType()
+					upd.KeyType = kt.TypedefPtr(micheline.CONST_KEY)
+					upd.ValueType = vt.TypedefPtr(micheline.CONST_VALUE)
 					if args.WithPrim() {
-						kt := v.KeyType.Clone()
-						upd.KeyTypePrim = &kt
-						vt := v.ValueType.Clone()
-						upd.ValueTypePrim = &vt
+						upd.KeyTypePrim = &kt.Prim
+						upd.ValueTypePrim = &vt.Prim
 					}
 
 				case micheline.DiffActionCopy:
-					upd.BigmapId = v.DestId
+					upd.BigmapId = v.BigmapId
 					upd.KeyType = keyType.TypedefPtr(micheline.CONST_KEY)
 					upd.ValueType = valType.TypedefPtr(micheline.CONST_VALUE)
-					upd.SourceId = v.SourceId
-					upd.DestId = v.DestId
-					if v.DestId < 0 {
-						cache[v.DestId] = alloc
+					upd.SourceId = int64(v.KeyId)
+					upd.DestId = v.BigmapId
+					if v.BigmapId < 0 {
+						cache[v.BigmapId] = alloc
 					}
 					if args.WithMeta() {
-						upd.BigmapValue.Meta.BigmapId = v.DestId
+						upd.BigmapValue.Meta.BigmapId = v.BigmapId
 					}
 					if args.WithPrim() {
 						upd.KeyTypePrim = &keyType.Prim
@@ -774,12 +853,17 @@ func (r *OpsRequest) Parse(ctx *server.Context) {
 	}
 }
 
-func loadOps(ctx *server.Context) []*model.Op {
+func loadOps(ctx *server.Context, args server.Options) []*model.Op {
 	if opIdent, ok := mux.Vars(ctx.Request)["ident"]; !ok || opIdent == "" {
 		panic(server.EBadRequest(server.EC_RESOURCE_ID_MISSING, "missing operation hash", nil))
 	} else {
-		ops, err := ctx.Indexer.LookupOp(ctx, opIdent)
-		if err != nil {
+		var err2 error
+		ops, err := ctx.Indexer.LookupOp(ctx.Context, opIdent)
+		if err == index.ErrNoOpEntry {
+			// also try loading an endorsement
+			ops, err2 = ctx.Indexer.LookupEndorsement(ctx, opIdent)
+		}
+		if err != nil && err2 != nil {
 			switch err {
 			case index.ErrNoOpEntry:
 				panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no such operation", err))
@@ -800,7 +884,7 @@ func ReadOp(ctx *server.Context) (interface{}, int) {
 		Storage: true,
 	}
 	ctx.ParseRequestArgs(args)
-	ops := loadOps(ctx)
+	ops := loadOps(ctx, args)
 	resp := make(OpList, 0)
 	cache := make(map[int64]interface{})
 	for _, v := range ops {

@@ -28,6 +28,7 @@
 	},
 	"crawler": {
 		"queue": 100,
+		"delay": 1,
 		"cache_size_log2": 12,
 		"snapshot_path": "./db/xtz/snapshots",
 		"snapshot_blocks": [],
@@ -40,28 +41,28 @@
 		"gc_ratio": 1.0,
 		"log_slow_queries": "2s",
 		"account": {
-			"cache_size": 4
+			"cache_size": 128
 		},
 		"account_index":{
-			"cache_size": 8
+			"cache_size": 256
+		},
+		"balance": {
+			"cache_size": 512
 		},
 		"contract": {
-			"cache_size": 2
+			"cache_size": 8
 		},
 		"contract_index":{
-			"cache_size": 2
+			"cache_size": 16
 		},
 		"op": {
-			"cache_size": 4
-		},
-		"op_index":{
 			"cache_size": 128
 		},
 		"block": {
-			"cache_size": 8
+			"cache_size": 2
 		},
-		"block_index":{
-			"cache_size": 64
+		"flow": {
+			"cache_size": 2
 		},
 		"supply": {
 			"cache_size": 2
@@ -69,12 +70,18 @@
 		"chain": {
 			"cache_size": 2
 		},
-		"bigmap": {
-			"cache_size": 128
+		"right": {
+			"cache_size": 2
 		},
-		"bigmap_index": {
-			"cache_size": 128
- 		}
+		"income": {
+			"cache_size": 2
+		},
+		"bigmap": {
+			"cache_size": 512
+		},
+		"storage": {
+			"cache_size": 16
+		}
  	},
 	"metadata": {
 		"validate": true,

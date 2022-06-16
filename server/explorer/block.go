@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"github.com/gorilla/mux"
 	"net/http"
+	"sort"
 	"time"
 
 	"blockwatch.cc/packdb/util"
@@ -26,45 +27,48 @@ var _ server.RESTful = (*Block)(nil)
 var _ server.Resource = (*Block)(nil)
 
 type Block struct {
-	Hash              tezos.BlockHash        `json:"hash"`
-	ParentHash        tezos.BlockHash        `json:"predecessor"`
-	FollowerHash      tezos.BlockHash        `json:"successor"`
-	Baker             tezos.Address          `json:"baker"`
-	Proposer          tezos.Address          `json:"proposer"`
-	Height            int64                  `json:"height"`
-	Cycle             int64                  `json:"cycle"`
-	IsCycleSnapshot   bool                   `json:"is_cycle_snapshot"`
-	Timestamp         time.Time              `json:"time"`
-	Solvetime         int                    `json:"solvetime"`
-	Version           int                    `json:"version"`
-	Round             int                    `json:"round"`
-	Nonce             string                 `json:"nonce"`
-	VotingPeriodKind  tezos.VotingPeriodKind `json:"voting_period_kind"`
-	NSlotsEndorsed    int                    `json:"n_endorsed_slots"`
-	NOps              int                    `json:"n_ops_applied"`
-	NOpsFailed        int                    `json:"n_ops_failed"`
-	NEvents           int                    `json:"n_events"`
-	NContractCalls    int                    `json:"n_contract_calls"`
-	Volume            float64                `json:"volume"`
-	Fee               float64                `json:"fee"`
-	Reward            float64                `json:"reward"`
-	Deposit           float64                `json:"deposit"`
-	ActivatedSupply   float64                `json:"activated_supply"`
-	MintedSupply      float64                `json:"minted_supply"`
-	BurnedSupply      float64                `json:"burned_supply"`
-	SeenAccounts      int                    `json:"n_accounts"`
-	NewAccounts       int                    `json:"n_new_accounts"`
-	NewContracts      int                    `json:"n_new_contracts"`
-	ClearedAccounts   int                    `json:"n_cleared_accounts"`
-	FundedAccounts    int                    `json:"n_funded_accounts"`
-	GasLimit          int64                  `json:"gas_limit"`
-	GasUsed           int64                  `json:"gas_used"`
-	StoragePaid       int64                  `json:"storage_paid"`
-	PctAccountsReused float64                `json:"pct_account_reuse"`
-	LbEscapeVote      bool                   `json:"lb_esc_vote"`
-	LbEscapeEma       int64                  `json:"lb_esc_ema"`
-	Metadata          map[string]*Metadata   `json:"metadata,omitempty"`
-	Protocol          tezos.ProtocolHash     `json:"protocol"`
+	Hash              tezos.BlockHash           `json:"hash"`
+	ParentHash        tezos.BlockHash           `json:"predecessor"`
+	FollowerHash      tezos.BlockHash           `json:"successor"`
+	Baker             tezos.Address             `json:"baker"`
+	Proposer          tezos.Address             `json:"proposer"`
+	Height            int64                     `json:"height"`
+	Cycle             int64                     `json:"cycle"`
+	IsCycleSnapshot   bool                      `json:"is_cycle_snapshot"`
+	Timestamp         time.Time                 `json:"time"`
+	Solvetime         int                       `json:"solvetime"`
+	Version           int                       `json:"version"`
+	Round             int                       `json:"round"`
+	Nonce             string                    `json:"nonce"`
+	VotingPeriodKind  tezos.VotingPeriodKind    `json:"voting_period_kind"`
+	NSlotsEndorsed    int                       `json:"n_endorsed_slots"`
+	NOps              int                       `json:"n_ops_applied"`
+	NOpsFailed        int                       `json:"n_ops_failed"`
+	NEvents           int                       `json:"n_events"`
+	NContractCalls    int                       `json:"n_calls"`
+	NRollupCalls      int                       `json:"n_rollup_calls"`
+	NTx               int                       `json:"n_tx"`
+	Volume            float64                   `json:"volume"`
+	Fee               float64                   `json:"fee"`
+	Reward            float64                   `json:"reward"`
+	Deposit           float64                   `json:"deposit"`
+	ActivatedSupply   float64                   `json:"activated_supply"`
+	MintedSupply      float64                   `json:"minted_supply"`
+	BurnedSupply      float64                   `json:"burned_supply"`
+	SeenAccounts      int                       `json:"n_accounts"`
+	NewAccounts       int                       `json:"n_new_accounts"`
+	NewContracts      int                       `json:"n_new_contracts"`
+	ClearedAccounts   int                       `json:"n_cleared_accounts"`
+	FundedAccounts    int                       `json:"n_funded_accounts"`
+	GasLimit          int64                     `json:"gas_limit"`
+	GasUsed           int64                     `json:"gas_used"`
+	StoragePaid       int64                     `json:"storage_paid"`
+	PctAccountsReused float64                   `json:"pct_account_reuse"`
+	LbEscapeVote      tezos.LbVote              `json:"lb_esc_vote"`
+	LbEscapeEma       int64                     `json:"lb_esc_ema"`
+	Metadata          map[string]*ShortMetadata `json:"metadata,omitempty"`
+	Rights            []Right                   `json:"rights,omitempty"`
+	Protocol          tezos.ProtocolHash        `json:"protocol"`
 
 	// LEGACY
 	Ops OpList `json:"ops,omitempty"`
@@ -72,6 +76,52 @@ type Block struct {
 	// caching
 	expires time.Time `json:"-"`
 	lastmod time.Time `json:"-"`
+}
+
+type Right struct {
+	Type           tezos.RightType `json:"type"`
+	AccountId      model.AccountID `json:"-"`
+	Address        tezos.Address   `json:"address"`
+	Round          *int            `json:"round,omitempty"`
+	IsUsed         *bool           `json:"is_used,omitempty"`
+	IsLost         *bool           `json:"is_lost,omitempty"`
+	IsStolen       *bool           `json:"is_stolen,omitempty"`
+	IsMissed       *bool           `json:"is_missed,omitempty"`
+	IsSeedRequired *bool           `json:"is_seed_required,omitempty"`
+	IsSeedRevealed *bool           `json:"is_seed_revealed,omitempty"`
+}
+
+func NewRight(ctx *server.Context, r model.BaseRight, addFlags bool) Right {
+	er := Right{
+		Type:      r.Type,
+		AccountId: r.AccountId,
+		Address:   ctx.Indexer.LookupAddress(ctx, r.AccountId),
+	}
+	if r.Type == tezos.RightTypeBaking {
+		var round int
+		er.Round = IntPtr(round)
+	}
+	if addFlags {
+		if r.IsUsed {
+			er.IsUsed = BoolPtr(true)
+		}
+		if r.IsLost {
+			er.IsLost = BoolPtr(true)
+		}
+		if r.IsStolen {
+			er.IsStolen = BoolPtr(true)
+		}
+		if r.IsMissed {
+			er.IsMissed = BoolPtr(true)
+		}
+		if r.IsSeedRequired {
+			er.IsSeedRequired = BoolPtr(true)
+		}
+		if r.IsSeedRevealed {
+			er.IsSeedRevealed = BoolPtr(true)
+		}
+	}
+	return er
 }
 
 func NewBlock(ctx *server.Context, block *model.Block, args server.Options) *Block {
@@ -99,6 +149,8 @@ func NewBlock(ctx *server.Context, block *model.Block, args server.Options) *Blo
 		NOpsFailed:       model.Int16Correct(block.NOpsFailed),
 		NEvents:          model.Int16Correct(block.NEvents),
 		NContractCalls:   model.Int16Correct(block.NContractCalls),
+		NRollupCalls:     model.Int16Correct(block.NRollupCalls),
+		NTx:              model.Int16Correct(block.NTx),
 		Volume:           p.ConvertValue(block.Volume),
 		Fee:              p.ConvertValue(block.Fee),
 		Reward:           p.ConvertValue(block.Reward),
@@ -136,13 +188,40 @@ func NewBlock(ctx *server.Context, block *model.Block, args server.Options) *Blo
 		}
 	}
 
+	if args.WithRights() {
+		rights, err := ctx.Indexer.ListBlockRights(ctx.Context, block.Height, 0)
+		if err != nil {
+			log.Errorf("explorer: cannot resolve rights for block %d: %v", block.Height, err)
+		} else {
+			b.Rights = make([]Right, 0)
+			for _, v := range rights {
+				switch v.Type {
+				case tezos.RightTypeEndorsing:
+					b.Rights = append(b.Rights, NewRight(ctx, v, block.Height < ctx.Tip.BestHeight))
+				case tezos.RightTypeBaking:
+					b.Rights = append(b.Rights, NewRight(ctx, v, block.Height < ctx.Tip.BestHeight))
+				}
+			}
+		}
+	}
+
 	if args.WithMeta() {
 		// add metadata for baker and rights holders
-		b.Metadata = make(map[string]*Metadata)
+		b.Metadata = make(map[string]*ShortMetadata)
 
 		// add baker
 		if md, ok := lookupMetadataById(ctx, block.BakerId, 0, false); ok {
-			b.Metadata[b.Baker.String()] = md
+			b.Metadata[b.Baker.String()] = md.Short()
+		}
+
+		// add rightholders
+		for _, v := range b.Rights {
+			if _, ok := b.Metadata[v.Address.String()]; ok {
+				continue
+			}
+			if md, ok := lookupMetadataById(ctx, v.AccountId, 0, false); ok {
+				b.Metadata[v.Address.String()] = md.Short()
+			}
 		}
 	}
 
@@ -282,6 +361,17 @@ func listBlockOps(ctx *server.Context) OpList {
 		}
 	}
 
+	var (
+		endorse []*model.Endorsement
+		err     error
+	)
+	if args.TypeList.IsEmpty() || args.TypeList.Contains(model.OpTypeEndorsement) {
+		endorse, err = ctx.Indexer.ListBlockEndorsements(ctx, r)
+		if err != nil {
+			panic(server.EInternal(server.EC_DATABASE, "cannot read block endorsements", err))
+		}
+	}
+
 	ops, err := ctx.Indexer.ListBlockOps(ctx, r)
 	if err != nil {
 		panic(server.EInternal(server.EC_DATABASE, "cannot read block operations", err))
@@ -290,6 +380,12 @@ func listBlockOps(ctx *server.Context) OpList {
 	cache := make(map[int64]interface{})
 	for _, v := range ops {
 		resp.Append(NewOp(ctx, v, block, nil, args, cache), args.WithMerge())
+	}
+	if len(endorse) > 0 {
+		for _, v := range endorse {
+			resp.Append(NewOp(ctx, v.ToOp(), block, nil, args, cache), args.WithMerge())
+		}
+		sort.Slice(resp, func(i, j int) bool { return resp[i].OpN < resp[j].OpN })
 	}
 
 	// apply offset/limit

@@ -4,17 +4,17 @@
 package metadata
 
 import (
-	"blockwatch.cc/tzgo/tezos"
-	"time"
+  "blockwatch.cc/tzgo/tezos"
+  "time"
 )
 
 func init() {
-	LoadSchema(domainNs, []byte(domainSchema), &TezosDomains{})
+  LoadSchema(domainNs, []byte(domainSchema), &TezosDomains{})
 }
 
 const (
-	domainNs     = "domain"
-	domainSchema = `{
+  domainNs     = "domain"
+  domainSchema = `{
     "$schema": "http://json-schema.org/draft/2019-09/schema#",
     "$id": "https://api.tzstats.com/metadata/schemas/domain.json",
     "title": "Tezos Domains",
@@ -60,26 +60,26 @@ const (
 )
 
 type TezosDomains struct {
-	Name    string               `json:"name"`
-	Records []TezosDomainsRecord `json:"records"`
+  Name    string               `json:"name"`
+  Records []TezosDomainsRecord `json:"records"`
 }
 
 type TezosDomainsRecord struct {
-	Address tezos.Address     `json:"address"`
-	Name    string            `json:"name"`
-	Owner   tezos.Address     `json:"owner"`
-	Expiry  time.Time         `json:"expiry"`
-	Data    map[string]string `json:"data,omitempty"`
+  Address tezos.Address     `json:"address"`
+  Name    string            `json:"name"`
+  Owner   tezos.Address     `json:"owner"`
+  Expiry  time.Time         `json:"expiry"`
+  Data    map[string]string `json:"data,omitempty"`
 }
 
 func (d TezosDomains) Namespace() string {
-	return domainNs
+  return domainNs
 }
 
 func (d TezosDomains) Validate() error {
-	s, ok := GetSchema(domainNs)
-	if ok {
-		return s.Validate(d)
-	}
-	return nil
+  s, ok := GetSchema(domainNs)
+  if ok {
+    return s.Validate(d)
+  }
+  return nil
 }

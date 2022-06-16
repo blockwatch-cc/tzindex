@@ -9,6 +9,7 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
+	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/cache"
@@ -18,14 +19,17 @@ import (
 )
 
 type Builder struct {
-	idx          *Indexer                            // storage reference
-	accHashMap   map[uint64]*model.Account           // hash(acc_hash) -> *Account (both known and new accounts)
-	accMap       map[model.AccountID]*model.Account  // id -> *Account (both known and new accounts)
-	accCache     *cache.AccountCache                 // cache for binary encodings of regular accounts
-	bakerHashMap map[uint64]*model.Baker             // bakers by hash
-	bakerMap     map[model.AccountID]*model.Baker    // bakers by id
-	conMap       map[model.AccountID]*model.Contract // smart contracts by account id
-	constDict    micheline.ConstantDict              // global constants used in smart contracts this block
+	idx             *Indexer                            // storage reference
+	accHashMap      map[uint64]*model.Account           // hash(acc_hash) -> *Account (both known and new accounts)
+	accMap          map[model.AccountID]*model.Account  // id -> *Account (both known and new accounts)
+	accCache        *cache.AccountCache                 // cache for binary encodings of regular accounts
+	bakerHashMap    map[uint64]*model.Baker             // bakers by hash
+	bakerMap        map[model.AccountID]*model.Baker    // bakers by id
+	conMap          map[model.AccountID]*model.Contract // smart contracts by account id
+	constDict       micheline.ConstantDict              // global constants used in smart contracts this block
+	bakeRights      map[model.AccountID]*vec.BitSet
+	endorseRights   map[model.AccountID]*vec.BitSet
+	absentEndorsers map[model.AccountID]struct{}
 
 	// build state
 	validate bool
@@ -38,15 +42,18 @@ const buildMapSizeHint = 1024
 
 func NewBuilder(idx *Indexer, cachesz int, c *rpc.Client, validate bool) *Builder {
 	return &Builder{
-		idx:          idx,
-		accHashMap:   make(map[uint64]*model.Account, buildMapSizeHint),
-		accMap:       make(map[model.AccountID]*model.Account, buildMapSizeHint),
-		accCache:     cache.NewAccountCache(cachesz),
-		bakerMap:     make(map[model.AccountID]*model.Baker, buildMapSizeHint),
-		bakerHashMap: make(map[uint64]*model.Baker, buildMapSizeHint),
-		conMap:       make(map[model.AccountID]*model.Contract, buildMapSizeHint),
-		validate:     validate,
-		rpc:          c,
+		idx:             idx,
+		accHashMap:      make(map[uint64]*model.Account, buildMapSizeHint),
+		accMap:          make(map[model.AccountID]*model.Account, buildMapSizeHint),
+		accCache:        cache.NewAccountCache(cachesz),
+		bakerMap:        make(map[model.AccountID]*model.Baker, buildMapSizeHint),
+		bakerHashMap:    make(map[uint64]*model.Baker, buildMapSizeHint),
+		conMap:          make(map[model.AccountID]*model.Contract, buildMapSizeHint),
+		bakeRights:      make(map[model.AccountID]*vec.BitSet),
+		endorseRights:   make(map[model.AccountID]*vec.BitSet),
+		absentEndorsers: make(map[model.AccountID]struct{}),
+		validate:        validate,
+		rpc:             c,
 	}
 }
 
@@ -96,16 +103,11 @@ func (b *Builder) RegisterBaker(acc *model.Account, activate bool) *model.Baker 
 	baker.InitGracePeriod(b.block.Cycle, b.block.Params)
 	baker.IsDirty = true
 
-	isMagic := v001MagicBakerFilter.Contains(acc.Address)
-
-	// only activate when explicitly requested
-	if activate || isMagic {
+	// only activate when explicitly requested, this ensures we can
+	// track origination bug bakers through protocol v001 until v002 migration
+	if activate {
 		b.ActivateBaker(baker)
 		acc.BakerId = acc.RowId
-		if isMagic {
-			// inject an implicit baker registration
-			b.AppendMagicBakerRegistrationOp(context.Background(), baker, 0)
-		}
 	}
 
 	// add to delegate map
@@ -362,9 +364,15 @@ func (b *Builder) Clean() {
 	for n, _ := range b.accMap {
 		delete(b.accMap, n)
 	}
-	for n, _ := range b.conMap {
-		delete(b.conMap, n)
+	for _, v := range b.conMap {
+		v.IsDirty = false
 	}
+	for n, _ := range b.absentEndorsers {
+		delete(b.absentEndorsers, n)
+	}
+	// for n, _ := range b.conMap {
+	// 	delete(b.conMap, n)
+	// }
 	b.constDict = nil
 
 	// drop block contents
@@ -393,6 +401,11 @@ func (b *Builder) Purge() {
 	// clear delegate state
 	b.bakerHashMap = make(map[uint64]*model.Baker, buildMapSizeHint)
 	b.bakerMap = make(map[model.AccountID]*model.Baker, buildMapSizeHint)
+
+	// clear rights
+	b.bakeRights = make(map[model.AccountID]*vec.BitSet)
+	b.endorseRights = make(map[model.AccountID]*vec.BitSet)
+	b.absentEndorsers = make(map[model.AccountID]struct{})
 
 	// free previous parent block
 	if b.parent != nil {
@@ -463,10 +476,27 @@ func (b *Builder) CleanReorg() {
 	}
 
 	// clear build state
-	b.accHashMap = make(map[uint64]*model.Account, buildMapSizeHint)
-	b.accMap = make(map[model.AccountID]*model.Account, buildMapSizeHint)
-	b.conMap = make(map[model.AccountID]*model.Contract, buildMapSizeHint)
+	for n, _ := range b.accHashMap {
+		delete(b.accHashMap, n)
+	}
+	for n, _ := range b.accMap {
+		delete(b.accMap, n)
+	}
+	for n, _ := range b.conMap {
+		delete(b.conMap, n)
+	}
 	b.constDict = nil
+
+	// clear rights
+	for n, _ := range b.bakeRights {
+		delete(b.bakeRights, n)
+	}
+	for n, _ := range b.endorseRights {
+		delete(b.endorseRights, n)
+	}
+	for n, _ := range b.absentEndorsers {
+		delete(b.absentEndorsers, n)
+	}
 
 	for _, bkr := range b.bakerMap {
 		// reset flags
@@ -565,14 +595,14 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 				case tezos.OpTypeRegisterConstant:
 					addUnique(op.(*rpc.ConstantRegistration).Source)
 
-				// all bakers are already known
-				// case tezos.OpTypeBallot:
-				// case tezos.OpTypeProposals:
-				// case tezos.OpTypeSeedNonceRevelation:
-				// case tezos.OpTypeDoubleBakingEvidence:
-				// case tezos.OpTypeDoubleEndorsementEvidence:
-				// case tezos.OpTypeDoublePreendorsementEvidence:
-				// case tezos.OpTypeEndorsement, tezos.OpTypeEndorsementWithSlot:
+					// all bakers are already known
+					// case tezos.OpTypeBallot:
+					// case tezos.OpTypeProposals:
+					// case tezos.OpTypeSeedNonceRevelation:
+					// case tezos.OpTypeDoubleBakingEvidence:
+					// case tezos.OpTypeDoubleEndorsementEvidence:
+					// case tezos.OpTypeDoublePreendorsementEvidence:
+					// case tezos.OpTypeEndorsement, tezos.OpTypeEndorsementWithSlot:
 				case tezos.OpTypeSetDepositsLimit:
 					// successful ops have a baker, but failed ops may use
 					// a non-baker account
@@ -580,6 +610,29 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 					if !dop.Result().Status.IsSuccess() {
 						addUnique(dop.Source)
 					}
+
+				case tezos.OpTypeTransferTicket,
+					tezos.OpTypeToruOrigination,
+					tezos.OpTypeToruSubmitBatch,
+					tezos.OpTypeToruCommit,
+					tezos.OpTypeToruReturnBond,
+					tezos.OpTypeToruFinalizeCommitment,
+					tezos.OpTypeToruRemoveCommitment,
+					tezos.OpTypeToruRejection,
+					tezos.OpTypeToruDispatchTickets:
+
+					tx := op.(*rpc.Rollup)
+					addUnique(tx.Source)
+					addUnique(tx.Target())
+					addUnique(tx.Metadata.Result.OriginatedRollup)
+					if bal := tx.Metadata.Result.BalanceUpdates; len(bal) > 0 {
+						addUnique(bal[0].Address()) // offender
+					}
+					// log.Infof("Found %s in block %d", kind, b.block.Height)
+					// case tezos.OpTypeScruOriginate,
+					// 	tezos.OpTypeScruAdd_messages,
+					// 	tezos.OpTypeScruCement,
+					// 	tezos.OpTypeScruPublish:
 				}
 			}
 		}
@@ -598,6 +651,18 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 			}
 		default:
 			return fmt.Errorf("implicit block op [%d]: unsupported op %s", i, op.Kind)
+		}
+	}
+
+	// collect from future cycle rights when available
+	for _, r := range b.block.TZ.Baking {
+		for _, rr := range r {
+			addUnique(rr.Address())
+		}
+	}
+	for _, r := range b.block.TZ.Endorsing {
+		for _, rr := range r {
+			addUnique(rr.Address())
 		}
 	}
 
@@ -771,6 +836,92 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 		return err
 	}
 
+	// identify absent rights holders
+	if err := b.LoadAbsentRightsHolders(ctx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (b *Builder) LoadAbsentRightsHolders(ctx context.Context) error {
+	if b.IsLightMode() {
+		return nil
+	}
+
+	ofs := b.block.Height - b.block.Params.CycleStartHeight(b.block.Cycle)
+	if ofs == 0 {
+		// start of cycle
+
+		// 1 use endorse rights from last block of previous cycle
+		adj := b.parent.Params.BlocksPerCycle - 1
+		for n, bits := range b.endorseRights {
+			if bits.IsSet(int(adj)) {
+				b.absentEndorsers[n] = struct{}{}
+			}
+		}
+
+		// 2 drop past cycle rights
+		for n, _ := range b.bakeRights {
+			delete(b.bakeRights, n)
+		}
+		for n, _ := range b.endorseRights {
+			delete(b.endorseRights, n)
+		}
+
+		// 3 load new rights for current cycle
+		rights, err := b.idx.Table(index.RightsTableKey)
+		if err != nil {
+			return err
+		}
+		err = pack.NewQuery("load_cycle_rights", rights).
+			WithFields("account_id", "baking_rights", "endorsing_rights").
+			AndEqual("cycle", b.block.Cycle).
+			Stream(ctx, func(r pack.Row) error {
+				right := &model.Right{}
+				if err := r.Decode(right); err != nil {
+					return err
+				}
+				b.bakeRights[right.AccountId] = &right.Bake
+				b.endorseRights[right.AccountId] = &right.Endorse
+				return nil
+			})
+		if err != nil {
+			return err
+		}
+	} else {
+		// use endorse rights from previous block
+		for n, bits := range b.endorseRights {
+			if bits.IsSet(int(ofs - 1)) {
+				b.absentEndorsers[n] = struct{}{}
+			}
+		}
+	}
+
+	// remove seen endorsers from absent map
+	for _, v := range b.block.Ops {
+		if v.Type != model.OpTypeEndorsement {
+			continue
+		}
+		delete(b.absentEndorsers, v.SenderId)
+	}
+	// produce absentee list in block
+	if l := len(b.absentEndorsers); l > 0 {
+		b.block.AbsentEndorsers = make([]model.AccountID, 0, l)
+		for n, _ := range b.absentEndorsers {
+			b.block.AbsentEndorsers = append(b.block.AbsentEndorsers, n)
+		}
+	}
+
+	// if prio/round is > 0, identify absent first baker
+	if b.block.Round > 0 {
+		for n, bits := range b.bakeRights {
+			if bits.IsSet(int(ofs)) {
+				b.block.AbsentBaker = n
+				break
+			}
+		}
+	}
 	return nil
 }
 
@@ -874,7 +1025,7 @@ func (b *Builder) LoadConstants(ctx context.Context) error {
 					}
 
 				case tezos.OpTypeRegisterConstant:
-					// register new constants to in case they are used right away
+					// register new constants in case they are used right away
 					cop := o.(*rpc.ConstantRegistration)
 					b.constDict.Add(cop.Metadata.Result.GlobalAddress, cop.Value)
 				}
@@ -929,17 +1080,33 @@ func (b *Builder) UpdateStats(ctx context.Context) error {
 		b.block.Baker.Account.IsDirty = true
 	}
 
+	// absentees
+	if b.block.AbsentBaker > 0 {
+		bkr, ok := b.BakerById(b.block.AbsentBaker)
+		if ok {
+			bkr.BlocksNotBaked++
+			bkr.IsDirty = true
+		}
+	}
+	for _, v := range b.block.AbsentEndorsers {
+		bkr, ok := b.BakerById(v)
+		if ok {
+			bkr.BlocksNotEndorsed++
+			bkr.IsDirty = true
+		}
+	}
+
 	// init pre-funded state
 	for _, acc := range b.accMap {
 		acc.WasFunded = acc.Balance() > 0
 		acc.WasDust = acc.IsDust()
-		acc.PrevBalance = acc.SpendableBalance
+		acc.PrevBalance = acc.Balance()
 		acc.PrevSeen = util.Max64(acc.LastIn, acc.LastOut)
 	}
 	for _, bkr := range b.bakerMap {
 		bkr.Account.WasFunded = bkr.Balance() > 0 // !sic
 		bkr.Account.WasDust = bkr.Account.IsDust()
-		bkr.Account.PrevBalance = bkr.Account.SpendableBalance
+		bkr.Account.PrevBalance = bkr.Account.Balance()
 		bkr.Account.PrevSeen = util.Max64(bkr.Account.LastIn, bkr.Account.LastOut)
 	}
 
@@ -993,34 +1160,7 @@ func (b *Builder) UpdateStats(ctx context.Context) error {
 		}
 	}
 
-	// update delegation counters when delegator balance flips funded state
-	for _, acc := range b.accMap {
-		// skip new accounts and accounts without activity this block
-		if acc.IsNew || acc.LastSeen != b.block.Height {
-			continue
-		}
-		// skip undelegated accounts and bakers
-		if !acc.IsDelegated || acc.IsBaker {
-			continue
-		}
-		bkr, ok := b.BakerById(acc.BakerId)
-		if !ok {
-			// in rare circumstances an account has an invalid baker
-			log.Errorf("Missing baker %d for account %s", acc.BakerId, acc)
-			continue
-		}
-		if !acc.IsFunded && acc.WasFunded {
-			// remove active delegation
-			bkr.ActiveDelegations--
-			bkr.IsDirty = true
-		} else if acc.IsFunded && !acc.WasFunded {
-			// re-add active delegation
-			bkr.ActiveDelegations++
-			bkr.IsDirty = true
-		}
-	}
-
-	// update supplies and totals
+	// update supplies and totals (order matters: block >> chain >> stake)
 	b.block.Update(b.accMap, b.bakerMap)
 	b.block.Chain.Update(b.block, b.accMap, b.bakerMap)
 	b.block.Supply.Update(b.block, b.bakerMap)
@@ -1032,6 +1172,22 @@ func (b *Builder) RollbackStats(ctx context.Context) error {
 	if b.block.Baker != nil {
 		b.block.Proposer.BlocksProposed--
 		b.block.Baker.BlocksBaked--
+	}
+
+	// absentees
+	if b.block.AbsentBaker > 0 {
+		bkr, ok := b.BakerById(b.block.AbsentBaker)
+		if ok {
+			bkr.BlocksNotBaked--
+			bkr.IsDirty = true
+		}
+	}
+	for _, v := range b.block.AbsentEndorsers {
+		bkr, ok := b.BakerById(v)
+		if ok {
+			bkr.BlocksNotEndorsed--
+			bkr.IsDirty = true
+		}
 	}
 
 	// init pre-funded state (at the end of block processing using current state)
@@ -1093,27 +1249,6 @@ func (b *Builder) RollbackStats(ctx context.Context) error {
 		}
 		if err := acc.RollbackBalance(f); err != nil {
 			return err
-		}
-	}
-
-	// revert delegation count updates
-	for _, acc := range b.accMap {
-		// skip new accounts and accounts without activity this block
-		if acc.IsNew || acc.LastSeen != b.block.Height {
-			continue
-		}
-		if acc.IsDelegated && !acc.IsBaker {
-			bkr, _ := b.BakerById(acc.BakerId)
-			if !acc.IsFunded && acc.WasFunded {
-				// remove active delegation
-				bkr.ActiveDelegations--
-				bkr.IsDirty = true
-			}
-			if acc.IsFunded && !acc.WasFunded {
-				// re-add active delegation
-				bkr.ActiveDelegations++
-				bkr.IsDirty = true
-			}
 		}
 	}
 

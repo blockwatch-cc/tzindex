@@ -4,12 +4,14 @@
 package tables
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
+	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
@@ -60,6 +63,7 @@ func init() {
 	opSourceNames["creator"] = "M"
 	opSourceNames["baker"] = "D"
 	opSourceNames["block"] = "h"
+	opSourceNames["big_map_diff"] = "I"  // need rowid to find bigmap updates
 	opSourceNames["entrypoint"] = "a"    // stored in data field
 	opSourceNames["entrypoint_id"] = "-" // ignore, internal
 	opSourceNames["address"] = "-"       // any address
@@ -73,6 +77,7 @@ func init() {
 		"baker",
 		"block",
 		"entrypoint",
+		"big_map_diff",
 	)
 }
 
@@ -120,6 +125,7 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		IsContract   bool            `json:"is_contract"`
 		IsEvent      bool            `json:"is_event"`
 		IsInternal   bool            `json:"is_internal"`
+		IsRollup     bool            `json:"is_rollup"`
 		Counter      int64           `json:"counter"`
 		GasLimit     int64           `json:"gas_limit"`
 		GasUsed      int64           `json:"gas_used"`
@@ -140,8 +146,8 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		Baker        string          `json:"baker"`
 		Data         string          `json:"data,omitempty"`
 		Parameters   string          `json:"parameters,omitempty"`
-		Storage      string          `json:"storage,omitempty"`
-		BigmapDiff   string          `json:"big_map_diff,omitempty"`
+		StorageHash  string          `json:"storage_hash,omitempty"`
+		BigmapEvents tezos.HexBytes  `json:"big_map_diff,omitempty"`
 		Errors       json.RawMessage `json:"errors,omitempty"`
 		Entrypoint   string          `json:"entrypoint"`
 	}{
@@ -159,6 +165,7 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		IsContract:   o.IsContract,
 		IsEvent:      o.IsEvent,
 		IsInternal:   o.IsInternal,
+		IsRollup:     o.IsRollup,
 		Counter:      o.Counter,
 		GasLimit:     o.GasLimit,
 		GasUsed:      o.GasUsed,
@@ -179,8 +186,6 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		Baker:        o.ctx.Indexer.LookupAddress(o.ctx, o.BakerId).String(),
 		Data:         o.Data,
 		Parameters:   "",
-		Storage:      "",
-		BigmapDiff:   "",
 		Errors:       nil,
 	}
 	if o.Type.ListId() >= 0 {
@@ -189,18 +194,19 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 	if len(o.Parameters) > 0 {
 		op.Parameters = hex.EncodeToString(o.Parameters)
 	}
-	if len(o.Storage) > 0 {
-		op.Storage = hex.EncodeToString(o.Storage)
-	}
-	if len(o.BigmapDiff) > 0 {
-		op.BigmapDiff = hex.EncodeToString(o.Diff)
-	}
+	var tmp [8]byte
+	binary.BigEndian.PutUint64(tmp[:], o.StorageHash)
+	op.StorageHash = hex.EncodeToString(tmp[:])
 	if o.Errors != nil {
 		op.Errors = json.RawMessage(o.Errors)
 	}
 	if o.IsContract {
 		op.Entrypoint = o.Data
 		op.Data = ""
+	}
+	if len(o.BigmapEvents) > 0 {
+		buf, _ := o.BigmapEvents.MarshalBinary()
+		op.BigmapEvents = tezos.HexBytes(buf)
 	}
 
 	return json.Marshal(op)
@@ -256,6 +262,12 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 			}
 		case "is_internal":
 			if o.IsInternal {
+				buf = append(buf, '1')
+			} else {
+				buf = append(buf, '0')
+			}
+		case "is_rollup":
+			if o.IsRollup {
 				buf = append(buf, '1')
 			} else {
 				buf = append(buf, '0')
@@ -321,17 +333,18 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 			} else {
 				buf = append(buf, null...)
 			}
-		case "storage":
-			// storage is binary
-			if len(o.Storage) > 0 {
-				buf = strconv.AppendQuote(buf, hex.EncodeToString(o.Storage))
+		case "storage_hash":
+			if o.StorageHash != 0 {
+				var tmp [8]byte
+				binary.BigEndian.PutUint64(tmp[:], o.StorageHash)
+				buf = strconv.AppendQuote(buf, hex.EncodeToString(tmp[:]))
 			} else {
 				buf = append(buf, null...)
 			}
 		case "big_map_diff":
-			// big_map_diff is binary
-			if len(o.Diff) > 0 {
-				buf = strconv.AppendQuote(buf, hex.EncodeToString(o.Diff))
+			if len(o.BigmapEvents) > 0 {
+				b, _ := o.BigmapEvents.MarshalBinary()
+				buf = strconv.AppendQuote(buf, hex.EncodeToString(b))
 			} else {
 				buf = append(buf, null...)
 			}
@@ -396,6 +409,8 @@ func (o *Op) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatBool(o.IsEvent)
 		case "is_internal":
 			res[i] = strconv.FormatBool(o.IsInternal)
+		case "is_rollup":
+			res[i] = strconv.FormatBool(o.IsRollup)
 		case "counter":
 			res[i] = strconv.FormatInt(o.Counter, 10)
 		case "gas_limit":
@@ -440,10 +455,17 @@ func (o *Op) MarshalCSV() ([]string, error) {
 			}
 		case "parameters":
 			res[i] = strconv.Quote(hex.EncodeToString(o.Parameters))
-		case "storage":
-			res[i] = strconv.Quote(hex.EncodeToString(o.Storage))
+		case "storage_hash":
+			var tmp [8]byte
+			binary.BigEndian.PutUint64(tmp[:], o.StorageHash)
+			res[i] = strconv.Quote(hex.EncodeToString(tmp[:]))
 		case "big_map_diff":
-			res[i] = strconv.Quote(hex.EncodeToString(o.Diff))
+			if len(o.BigmapEvents) > 0 {
+				b, _ := o.BigmapEvents.MarshalBinary()
+				res[i] = strconv.Quote(hex.EncodeToString(b))
+			} else {
+				res[i] = `""`
+			}
 		case "errors":
 			res[i] = strconv.Quote(string(o.Errors))
 		case "entrypoint":
@@ -471,7 +493,9 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 
 	// translate long column names to short names used in pack tables
 	var (
-		srcNames []string
+		srcNames         []string
+		needEndorse      bool = true
+		needBigmapEvents bool = false // default = false unless explicitly requested !!
 	)
 	if len(args.Columns) > 0 {
 		// resolve short column names
@@ -489,6 +513,8 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				srcNames = append(srcNames, "sender_id", "receiver_id", "baker_id", "creator_id")
 			case "id":
 				srcNames = append(srcNames, "height", "op_n")
+			case "big_map_diff":
+				needBigmapEvents = true
 			}
 		}
 	} else {
@@ -594,7 +620,9 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid operation type '%s'", val[0]), nil))
 				}
 				q = q.AndCondition("type", mode, typ)
+				needEndorse = typ == model.OpTypeEndorsement || typ == model.OpTypePreendorsement
 			case pack.FilterModeIn, pack.FilterModeNotIn:
+				needEndorse = false
 				typs := make([]uint8, 0)
 				for _, t := range strings.Split(val[0], ",") {
 					typ := model.ParseOpType(t)
@@ -602,6 +630,9 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid operation type '%s'", t), nil))
 					}
 					typs = append(typs, uint8(typ))
+					if mode == pack.FilterModeIn {
+						needEndorse = needEndorse || typ == model.OpTypeEndorsement || typ == model.OpTypePreendorsement
+					}
 				}
 				q = q.AndCondition("type", mode, typs)
 			default:
@@ -694,6 +725,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
 		case "sender", "receiver", "creator", "baker":
+			needEndorse = needEndorse && prefix == "sender"
 			// parse address and lookup id
 			// valid filter modes: eq, in
 			// 1 resolve account_id from account table
@@ -786,11 +818,6 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 		}
 	}
 
-	var (
-		count  int
-		lastId uint64
-	)
-
 	// run queries
 	res, err := table.Query(ctx, q)
 	if err != nil {
@@ -805,11 +832,284 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 	})
 	res.Close()
 
+	// join bigmap events
+	if needBigmapEvents {
+		ids := make([]uint64, len(ops))
+		for i, v := range ops {
+			ids[i] = v.RowId.Value()
+		}
+		ids = vec.UniqueUint64Slice(ids)
+		bigmaps, err := ctx.Indexer.Table(index.BigmapUpdateTableKey)
+		if err != nil {
+			panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", index.BigmapUpdateTableKey), err))
+		}
+		var (
+			upd                model.BigmapUpdate
+			lastidx            int
+			nEvents, nAssigned int
+		)
+		err = pack.NewQuery(ctx.RequestID, bigmaps).
+			WithFields("bigmap_id", "action", "op_id", "key", "value", "key_id").
+			AndIn("op_id", ids).
+			WithOrder(args.Order).
+			Stream(ctx, func(r pack.Row) error {
+				if err := r.Decode(&upd); err != nil {
+					return err
+				}
+				nEvents++
+				idx := sort.Search(len(ops)-lastidx, func(i int) bool {
+					if args.Order == pack.OrderAsc {
+						return ops[lastidx+i].RowId >= upd.OpId
+					} else {
+						return ops[lastidx+i].RowId <= upd.OpId
+					}
+				})
+				idx += lastidx
+				if idx < len(ops) && ops[idx].RowId == upd.OpId {
+					ops[idx].BigmapEvents = append(ops[idx].BigmapEvents, upd.ToEvent())
+					nAssigned++
+				}
+				lastidx = idx
+				return nil
+			})
+		if err != nil {
+			panic(server.EInternal(server.EC_DATABASE, "cannot join bigmap events", err))
+		}
+		// if nEvents != nAssigned {
+		// 	log.Errorf("Bigmap update mismatch nevents=%d nassigned=%d", nEvents, nAssigned)
+		// } else {
+		// 	log.Infof("Bigmap update OK nevents=%d => ops=%d", nEvents, len(ops))
+		// }
+	}
+
+	// join endorsements
+	if needEndorse {
+		endorse, err := ctx.Indexer.Table(index.EndorseOpTableKey)
+		if err != nil {
+			panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", index.EndorseOpTableKey), err))
+		}
+		q = pack.NewQuery(ctx.RequestID, endorse).
+			WithLimit(int(args.Limit)).
+			WithOrder(args.Order)
+
+		// build dynamic filter conditions from query (will panic on error)
+		for key, val := range ctx.Request.URL.Query() {
+			keys := strings.Split(key, ".")
+			prefix := keys[0]
+			mode := pack.FilterModeEqual
+			if len(keys) > 1 {
+				mode = pack.ParseFilterMode(keys[1])
+				if !mode.IsValid() {
+					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s'", keys[1]), nil))
+				}
+			}
+			switch prefix {
+			case "columns", "limit", "order", "verbose", "filename":
+				// skip these fields
+			case "receiver", "creator", "baker", "status",
+				"is_success", "is_contract", "is_internal", "is_event",
+				"counter", "gas_limit", "gas_used", "storage_limit", "storage_used", "volume", "fee",
+				"receiver_id", "creator_id", "baker_id", "data", "parameters", "storage_hash",
+				"errors", "days_destroyed", "entrypoint_id":
+				// ignore these op fields as they are not part of endorsements
+				// also skip loading endorsements if any of these args is present
+				needEndorse = false
+			case "cursor":
+				id, err := strconv.ParseUint(val[0], 10, 64)
+				if err != nil {
+					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid cursor value '%s'", val), err))
+				}
+				height := int64(id >> 16)
+				opn := int64(id & 0xFFFF)
+				if args.Order == pack.OrderDesc {
+					q = q.Or(
+						pack.Lt("height", height),
+						pack.And(
+							pack.Equal("height", height),
+							pack.Lt("op_n", opn),
+						),
+					)
+				} else {
+					q = q.Or(
+						pack.Gt("height", height),
+						pack.And(
+							pack.Equal("height", height),
+							pack.Gt("op_n", opn),
+						),
+					)
+				}
+			case "id":
+				switch mode {
+				case pack.FilterModeEqual:
+					id, err := strconv.ParseUint(val[0], 10, 64)
+					if err != nil {
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid id value '%s'", val[0]), err))
+					}
+					height := int64(id >> 16)
+					opn := int64(id & 0xFFFF)
+					q = q.AndCondition("height", mode, height).AndCondition("op_n", mode, opn)
+				default:
+					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
+				}
+
+			case "hash":
+				// special hash type to []byte conversion
+				hashes := make([][]byte, len(val))
+				for i, v := range val {
+					h, err := tezos.ParseOpHash(v)
+					if err != nil {
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid operation hash '%s'", v), err))
+					}
+					hashes[i] = h.Hash.Hash
+				}
+				if len(hashes) == 1 {
+					q = q.AndEqual("hash", hashes[0])
+				} else {
+					q = q.AndIn("hash", hashes)
+				}
+			case "block":
+				// special hash type to []byte conversion
+				heights := make([]int64, len(val))
+				for i, v := range val {
+					b, err := ctx.Indexer.LookupBlock(ctx.Context, v)
+					if err != nil {
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid block '%s'", v), err))
+					}
+					heights[i] = b.Height
+				}
+				if len(heights) == 1 {
+					q = q.AndEqual("height", heights[0])
+				} else {
+					q = q.AndIn("height", heights)
+				}
+			case "time":
+				// find block heights matching this time query
+				heights := make([]int64, 0)
+				for _, v := range strings.Split(val[0], ",") {
+					tm, err := util.ParseTime(v)
+					if err != nil {
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid time '%s'", v), err))
+					}
+					heights = append(heights, ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, tm.Time()))
+				}
+				switch mode {
+				case pack.FilterModeIn, pack.FilterModeNotIn, pack.FilterModeRange:
+					q = q.AndCondition("height", mode, heights)
+				default:
+					if len(heights) > 0 {
+						q = q.AndCondition("height", mode, heights[0])
+					} else {
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid empty filter for column '%s'", mode, prefix), nil))
+					}
+				}
+
+			case "address", "sender":
+				// any address, use OR cond
+				// parse address and lookup id
+				addrs := make([]model.AccountID, 0)
+				for _, v := range strings.Split(val[0], ",") {
+					addr, err := tezos.ParseAddress(v)
+					if err != nil || !addr.IsValid() {
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
+					}
+					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
+					if err != nil && err != index.ErrNoAccountEntry {
+						panic(err)
+					}
+					if err == nil && acc.RowId > 0 {
+						addrs = append(addrs, acc.RowId)
+					}
+				}
+
+				switch mode {
+				case pack.FilterModeEqual:
+					if len(addrs) == 1 {
+						q = q.AndEqual("sender_id", addrs[0])
+					}
+				case pack.FilterModeNotEqual:
+					if len(addrs) == 1 {
+						q = q.AndNotEqual("sender_id", addrs[0])
+					}
+				case pack.FilterModeIn:
+					q = q.AndIn("sender_id", addrs)
+				case pack.FilterModeNotIn: // AND
+					q = q.AndNotIn("sender_id", addrs)
+				default:
+					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
+				}
+			case "type":
+				typ := model.ParseOpType(val[0])
+				if !typ.IsValid() {
+					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid operation type '%s'", val[0]), nil))
+				}
+				switch mode {
+				case pack.FilterModeEqual:
+					q = q.AndEqual("is_preendorsement", typ == model.OpTypePreendorsement)
+				case pack.FilterModeNotEqual:
+					q = q.AndNotEqual("is_preendorsement", typ == model.OpTypePreendorsement)
+				}
+			default:
+				// translate long column name used in query to short column name used in packs
+				if short, ok := endSourceNames[prefix]; !ok {
+					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("unknown column '%s'", prefix), nil))
+				} else {
+					key = strings.Replace(key, prefix, short, 1)
+				}
+
+				// the same field name may appear multiple times, in which case conditions
+				// are combined like any other condition with logical AND
+				for _, v := range val {
+					// convert amounts from float to int64
+					switch prefix {
+					case "reward", "deposit":
+						fvals := make([]string, 0)
+						for _, vv := range strings.Split(v, ",") {
+							fval, err := strconv.ParseFloat(vv, 64)
+							if err != nil {
+								panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, vv), err))
+							}
+							fvals = append(fvals, strconv.FormatInt(params.ConvertAmount(fval), 10))
+						}
+						v = strings.Join(fvals, ",")
+					}
+					if cond, err := pack.ParseCondition(key, v, endorse.Fields()); err != nil {
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
+					} else {
+						q.Conditions.AddAndCondition(&cond)
+					}
+				}
+			}
+		}
+		if needEndorse {
+			res2, err := endorse.Query(ctx, q)
+			if err != nil {
+				panic(server.EInternal(server.EC_DATABASE, "cannot read endorsements", err))
+			}
+			// merge results
+			res2.Walk(func(r pack.Row) error {
+				e := &model.Endorsement{}
+				r.Decode(e)
+				ops = append(ops, e.ToOp())
+				return nil
+			})
+			res2.Close()
+			if q.Order == pack.OrderDesc {
+				sort.Reverse(OpSorter(ops))
+			} else {
+				sort.Sort(OpSorter(ops))
+			}
+		}
+	}
 	defer func() {
 		for _, v := range ops {
 			v.Free()
 		}
 	}()
+
+	var (
+		count  int
+		lastId uint64
+	)
 
 	// prepare return type marshalling
 	op := &Op{

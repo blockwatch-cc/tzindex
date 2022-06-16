@@ -61,13 +61,10 @@ type Context struct {
 	// QoS and Debugging
 	RequestID string
 	Log       logpkg.Logger
-	// - operation priority     X-Priority
-	// - network QoS label      X-QoS-Label
 
 	// Statistics
 	Now         time.Time
 	Performance *PerformanceCounter
-	// Quota int
 
 	// input
 	name string
@@ -368,6 +365,7 @@ func (api *Context) writeResponseHeaders(contentType, trailers string) {
 
 	// add blockchain info
 	h.Set("X-Network-Id", api.Tip.ChainId.String())
+	h.Set("X-Chain-Height", strconv.FormatInt(api.Tip.BestHeight, 10))
 	if l := len(api.Tip.Deployments); l > 0 {
 		h.Set("X-Protocol-Hash", api.Tip.Deployments[l-1].Protocol.String())
 	}

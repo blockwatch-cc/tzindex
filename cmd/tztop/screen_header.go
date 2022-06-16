@@ -36,12 +36,17 @@ var headers []*TableHeader = []*TableHeader{
 	{
 		Label: "DISKSIZE",
 		Align: AlignRight,
-		Width: 15,
+		Width: 12,
+	},
+	{
+		Label: "METASIZE",
+		Align: AlignRight,
+		Width: 10,
 	},
 	{
 		Label: "CACHED",
 		Align: AlignSlash,
-		Width: 17,
+		Width: 15,
 	},
 	{
 		Label: "CACHESIZE",
@@ -56,7 +61,7 @@ var headers []*TableHeader = []*TableHeader{
 	{
 		Label: "JOURNAL",
 		Align: AlignSlash,
-		Width: 25,
+		Width: 22,
 	},
 	{
 		Label: "JOURNALSIZE",
@@ -69,6 +74,10 @@ var headers []*TableHeader = []*TableHeader{
 	},
 	{
 		Label: "I/O",
+		Align: AlignSlash,
+	},
+	{
+		Label: "R/W",
 		Align: AlignSlash,
 	},
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -21,7 +21,6 @@ type Origination struct {
 	Delegatable    *bool             `json:"delegatable"` // true when missing before v5 Babylon
 	Delegate       *tezos.Address    `json:"delegate"`
 	Script         *micheline.Script `json:"script"`
-	Metadata       OperationMetadata `json:"metadata"`
 }
 
 func (o Origination) ManagerAddress() tezos.Address {
@@ -29,21 +28,6 @@ func (o Origination) ManagerAddress() tezos.Address {
 		return o.ManagerPubkey2
 	}
 	return o.ManagerPubkey
-}
-
-// Meta returns an empty operation metadata to implement TypedOperation interface.
-func (o Origination) Meta() OperationMetadata {
-	return o.Metadata
-}
-
-// Result returns an empty operation result to implement TypedOperation interface.
-func (o Origination) Result() OperationResult {
-	return o.Metadata.Result
-}
-
-// Fees returns fee-related balance updates to implement TypedOperation interface.
-func (o Origination) Fees() BalanceUpdates {
-	return o.Metadata.BalanceUpdates
 }
 
 type BabylonFlags byte

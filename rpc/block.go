@@ -113,6 +113,17 @@ type BlockHeader struct {
 	ProofOfWorkNonce          tezos.HexBytes    `json:"proof_of_work_nonce"`
 	Content                   *BlockContent     `json:"content,omitempty"`
 	LiquidityBakingEscapeVote bool              `json:"liquidity_baking_escape_vote"`
+	LiquidityBakingToggleVote tezos.LbVote      `json:"liquidity_baking_toggle_vote"`
+}
+
+func (h BlockHeader) LbVote() tezos.LbVote {
+	if h.LiquidityBakingToggleVote.IsValid() {
+		return h.LiquidityBakingToggleVote
+	}
+	if h.LiquidityBakingEscapeVote {
+		return tezos.LbVoteOn
+	}
+	return tezos.LbVoteOff
 }
 
 // BlockContent is part of block 1 header that seeds the initial context
@@ -161,6 +172,13 @@ type BlockMetadata struct {
 	LiquidityBakingEscapeEma  int64            `json:"liquidity_baking_escape_ema"`
 }
 
+func (m *BlockMetadata) GetLevel() int64 {
+	if m.LevelInfo != nil {
+		return m.LevelInfo.Level
+	}
+	return m.Level.Level
+}
+
 // GetBlock returns information about a Tezos block
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-block-id
 func (c *Client) GetBlock(ctx context.Context, id BlockID) (*Block, error) {
@@ -181,6 +199,17 @@ func (c *Client) GetBlockHeader(ctx context.Context, id BlockID) (*BlockHeader, 
 		return nil, err
 	}
 	return &head, nil
+}
+
+// GetBlockMetadata returns a block metadata.
+// https://tezos.gitlab.io/mainnet/api/rpc.html#chains-chain-id-blocks
+func (c *Client) GetBlockMetadata(ctx context.Context, id BlockID) (*BlockMetadata, error) {
+	var meta BlockMetadata
+	u := fmt.Sprintf("chains/main/blocks/%s/metadata", id)
+	if err := c.Get(ctx, u, &meta); err != nil {
+		return nil, err
+	}
+	return &meta, nil
 }
 
 // GetTips returns hashes of the current chain tip blocks, first in the array is the

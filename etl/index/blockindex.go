@@ -15,16 +15,12 @@ import (
 )
 
 const (
-	BlockPackSizeLog2         = 15 // 32k packs
-	BlockJournalSizeLog2      = 16 // 64k - search only on rollback and lookup
-	BlockCacheSize            = 2
-	BlockFillLevel            = 100
-	BlockIndexPackSizeLog2    = 15 // 16k packs (32k split size)
-	BlockIndexJournalSizeLog2 = 16 // 64k
-	BlockIndexCacheSize       = 2  // not essential
-	BlockIndexFillLevel       = 90
-	BlockIndexKey             = "block"
-	BlockTableKey             = "block"
+	BlockPackSizeLog2    = 15 // 32k packs
+	BlockJournalSizeLog2 = 16 // 64k - search only on rollback and lookup
+	BlockCacheSize       = 2
+	BlockFillLevel       = 100
+	BlockIndexKey        = "block"
+	BlockTableKey        = "block"
 )
 
 var (
@@ -42,14 +38,13 @@ var (
 type BlockIndex struct {
 	db    *pack.DB
 	opts  pack.Options
-	iopts pack.Options
 	table *pack.Table
 }
 
 var _ model.BlockIndexer = (*BlockIndex)(nil)
 
-func NewBlockIndex(opts, iopts pack.Options) *BlockIndex {
-	return &BlockIndex{opts: opts, iopts: iopts}
+func NewBlockIndex(opts pack.Options) *BlockIndex {
+	return &BlockIndex{opts: opts}
 }
 
 func (idx *BlockIndex) DB() *pack.DB {
@@ -106,10 +101,6 @@ func (idx *BlockIndex) Init(path, label string, opts interface{}) error {
 			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, BlockJournalSizeLog2),
 			CacheSize:       util.NonZero(idx.opts.CacheSize, BlockCacheSize),
 		},
-		pack.Options{
-			JournalSizeLog2: util.NonZero(idx.iopts.JournalSizeLog2, BlockIndexJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.iopts.CacheSize, BlockIndexCacheSize),
-		},
 	)
 	if err != nil {
 		idx.Close()
@@ -119,44 +110,7 @@ func (idx *BlockIndex) Init(path, label string, opts interface{}) error {
 }
 
 func (idx *BlockIndex) FinalizeSync(ctx context.Context) error {
-	if idxs := idx.table.Indexes(); len(idxs) > 0 {
-		return nil
-	}
-	index, err := idx.table.CreateIndex(
-		"hash",
-		idx.table.Fields().Find("H"), // any type
-		pack.IndexTypeHash,           // hash table, index stores hash(field) -> pk value
-		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.iopts.PackSizeLog2, BlockIndexPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.iopts.JournalSizeLog2, BlockIndexJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.iopts.CacheSize, BlockIndexCacheSize),
-			FillLevel:       util.NonZero(idx.iopts.FillLevel, BlockIndexFillLevel),
-		})
-	if err != nil {
-		if err != pack.ErrIndexExists {
-			return err
-		}
-		return nil
-	}
-	log.Infof("Building %s ... (this may take some time)", idx.Name())
-
-	progress := make(chan float64, 100)
-	defer close(progress)
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case f := <-progress:
-				log.Infof("%s build progress %.2f%%", idx.Name(), f)
-				if f == 100 {
-					return
-				}
-			}
-		}
-	}()
-
-	return index.Reindex(ctx, 128, progress)
+	return nil
 }
 
 func (idx *BlockIndex) Close() error {
@@ -180,6 +134,35 @@ func (idx *BlockIndex) ConnectBlock(ctx context.Context, block *model.Block, b m
 	if block.Parent != nil && block.Parent.RowId > 0 {
 		if err := idx.table.Update(ctx, []pack.Item{block.Parent}); err != nil {
 			return fmt.Errorf("parent update: %w", err)
+		}
+	}
+
+	// fetch and update snapshot block
+	if snap := block.TZ.Snapshot; snap != nil {
+		// protocol upgrades happen 1 block before cycle end. when changes to
+		// cycle lenth happen, we miss snapshot 15
+		p := block.Params
+		if block.Parent != nil {
+			p = block.Parent.Params
+		}
+		snapHeight := p.SnapshotBlock(snap.Cycle, snap.Index)
+		log.Debugf("Marking block %d [%d] index %d as roll snapshot for cycle %d",
+			snapHeight, block.Params.CycleFromHeight(snapHeight), snap.Index, snap.Cycle)
+		snapBlock := &model.Block{}
+		err := pack.NewQuery("block_height.search", idx.table).
+			WithoutCache().
+			WithLimit(1).
+			AndEqual("height", snapHeight).
+			Execute(ctx, snapBlock)
+		if err != nil {
+			return fmt.Errorf("snapshot index block %d for cycle %d index %d: %w", snapHeight, snap.Cycle, snap.Index, err)
+		}
+		if snapBlock.RowId == 0 {
+			return fmt.Errorf("missing snapshot index block %d for cycle %d index %d", snapHeight, snap.Cycle, snap.Index)
+		}
+		snapBlock.IsCycleSnapshot = true
+		if err := idx.table.Update(ctx, []pack.Item{snapBlock}); err != nil {
+			return fmt.Errorf("snapshot index block %d: %w", snapHeight, err)
 		}
 	}
 

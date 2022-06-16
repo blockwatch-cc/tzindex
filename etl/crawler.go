@@ -25,8 +25,8 @@ const (
 	StateDBName = "state.db"
 
 	// state database schema
-	stateDBSchemaName    = "2022-02-22"
-	stateDBSchemaVersion = 5
+	stateDBSchemaName    = "2022-04-16"
+	stateDBSchemaVersion = 6
 	stateDBKey           = "statedb"
 )
 
@@ -232,6 +232,10 @@ func (c *Crawler) BlockByHeight(ctx context.Context, height int64) (*model.Block
 	return c.indexer.BlockByHeight(ctx, height)
 }
 
+func (c *Crawler) BlockHeightFromTime(ctx context.Context, tm time.Time) int64 {
+	return c.indexer.LookupBlockHeightFromTime(ctx, tm)
+}
+
 func (c *Crawler) CacheStats() map[string]interface{} {
 	return c.builder.CacheStats()
 }
@@ -435,6 +439,7 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 			return err
 		}
 
+		// retry reporting in case the last try failed
 		if mode == MODE_SYNC {
 			// retry database snapshot in case it failed last time
 			if err := c.MaybeSnapshot(ctx); err != nil {
@@ -905,6 +910,9 @@ func (c *Crawler) syncBlockchain() {
 				return
 			}
 			log.Tracef("Processing block %d %s", tzblock.Height(), tzblock.Hash())
+			if c.bchead.Level > tzblock.Height()+c.delay {
+				c.setState(STATE_SYNCHRONIZING, MONITOR_KEEP)
+			}
 		}
 
 		// under very rare conditions (tick and monitor triggered the same block download,
@@ -1025,6 +1033,11 @@ func (c *Crawler) syncBlockchain() {
 			if err := c.indexer.Finalize(ctx); err != nil {
 				log.Errorf("finalizing tables: %v", err)
 			}
+
+			// update rights cache at cycle start (or later when we we're not in sync then)
+			if err := c.indexer.updateRights(ctx, block.Height); err != nil {
+				log.Errorf("updating rights cache: %s", err)
+			}
 		}
 
 		// log progress once every 10sec
@@ -1082,7 +1095,10 @@ func (c *Crawler) fetchParamsForBlock(ctx context.Context, block *rpc.Block) (*t
 			params = tezos.NewParams()
 		}
 		// changes will be updated during build
-		params = params.ForNetwork(block.ChainId).ForProtocol(block.Metadata.Protocol)
+		params = params.
+			ForNetwork(block.ChainId).
+			ForProtocol(block.Metadata.Protocol).
+			ForHeight(height)
 		params.Deployment = block.Header.Proto
 		params.StartHeight = start
 		// adjust deployment number for genesis & bootstrap blocks
@@ -1113,6 +1129,39 @@ func (c *Crawler) fetchBlock(ctx context.Context, blockID rpc.BlockID) (*rpc.Bun
 
 	height := b.Block.GetLevel()
 	b.Cycle = b.Params.CycleFromHeight(height)
+
+	if !c.indexer.lightMode {
+		// on first block after genesis, fetch rights for first 6 cycles [0..5]
+		// cycle 6 bootstrap rights are then processed at start of cycle 1
+		// cycle 7+ rights from snapshots are then processed at start of cycle 2
+		if height == 1 {
+			log.Infof("Fetching bootstrap rights for %d(+1) preserved cycles", b.Params.PreservedCycles)
+			for cycle := int64(0); cycle < b.Params.PreservedCycles+1; cycle++ {
+				// fetch using current height (context stores from [n-5, n+5])
+				if err := c.rpc.FetchRightsByCycle(ctx, height, cycle, b); err != nil {
+					return nil, fmt.Errorf("fetching rights for cycle %d: %w", cycle, err)
+				}
+				b.PrevEndorsing = nil
+			}
+			return b, nil
+		} else if b.Cycle > 0 && b.Params.IsCycleStart(height) {
+			// in monitor mode we are live, so we don't have to check for early cycles
+			// still max look-ahead is 5 (e.g. PreservedCycles)
+
+			// snapshot index and rights for future cycle N; the snapshot index
+			// refers to a snapshot block taken in cycle N-7 (6 post-Ithaca) and
+			// randomness collected from seed_nonce_revelations during cycle N-6
+			// (5 post-Ithaca); N is the farthest future cycle that exists.
+			//
+			// Note that for consistency and due to an off-by-one error in Tezos RPC
+			// nodes we fetch snapshot index and rights at the start of a cycle even
+			// though they must have been created at the end of the previous cycle!
+			cycle := b.Cycle + b.Params.PreservedCycles
+			if err := c.rpc.FetchRightsByCycle(ctx, height, cycle, b); err != nil {
+				return nil, fmt.Errorf("fetching rights for cycle %d: %w", cycle, err)
+			}
+		}
+	}
 	return b, nil
 }
 

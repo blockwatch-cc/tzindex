@@ -29,7 +29,10 @@ type IndexerConfig struct {
 type Indexer struct {
 	mu             sync.Mutex
 	blocks         atomic.Value              // cache for all block hashes and timestamps
+	ranks          atomic.Value              // top addresses (>10tez, 100k = 10 MB)
+	rights         atomic.Value              // bitset 400 (bakers) * 6 (cycles) * 4096 (blocks) * 33 (rights)
 	addrs          atomic.Value              // all on-chain address hashes by id
+	proposals      atomic.Value              // gov proposals/protocol hashes by id
 	bigmap_values  *cache.BigmapHistoryCache // bigmap history cache
 	bigmap_types   *cache.BigmapCache        // bigmap allocs
 	contract_types *cache.ContractTypeCache  // contract type data
@@ -336,6 +339,9 @@ func (m *Indexer) ConnectBlock(ctx context.Context, block *model.Block, builder 
 		return err
 	}
 	if err := m.updateAddrs(ctx, builder.Accounts()); err != nil {
+		return err
+	}
+	if err := m.updateProposals(ctx, block); err != nil {
 		return err
 	}
 	return nil

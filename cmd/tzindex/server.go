@@ -42,6 +42,8 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&norpc, "norpc", false, "disable RPC client")
 	rootCmd.PersistentFlags().BoolVar(&notls, "notls", false, "disable RPC TLS support (use http)")
 	rootCmd.PersistentFlags().BoolVar(&insecure, "insecure", false, "disable RPC TLS certificate checks (not recommended)")
+	rootCmd.PersistentFlags().BoolVar(&lightIndex, "light", true, "light mode (default, skips endorsement, baker and governance data)")
+	rootCmd.PersistentFlags().BoolVar(&fullIndex, "full", false, "full mode (index all data)")
 
 	serverCmd.Flags().BoolVar(&noapi, "noapi", false, "disable API server")
 	serverCmd.Flags().BoolVar(&noindex, "noindex", false, "disable indexing")
@@ -69,6 +71,10 @@ func runServer(args []string) error {
 	server.UserAgent = UserAgent()
 	server.ApiVersion = apiVersion
 	pack.QueryLogMinDuration = config.GetDuration("database.log_slow_queries")
+
+	if fullIndex {
+		lightIndex = false
+	}
 
 	// load metadata extensions
 	if err := metadata.LoadExtensions(); err != nil {
@@ -126,7 +132,7 @@ func runServer(args []string) error {
 		DBOpts:    DBOpts(engine, false, unsafe),
 		StateDB:   statedb,
 		Indexes:   enabledIndexes(),
-		LightMode: true,
+		LightMode: lightIndex,
 	})
 	defer indexer.Close()
 

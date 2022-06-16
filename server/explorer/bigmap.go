@@ -93,14 +93,13 @@ func (b Bigmap) RegisterRoutes(r *mux.Router) error {
 
 // bigmap metadata
 type BigmapMeta struct {
-	Contract     tezos.Address    `json:"contract"`
-	BigmapId     int64            `json:"bigmap_id"`
-	UpdateTime   *time.Time       `json:"time,omitempty"`
-	UpdateHeight int64            `json:"height,omitempty"`
-	UpdateBlock  *tezos.BlockHash `json:"block,omitempty"`
-	UpdateOp     *tezos.OpHash    `json:"op,omitempty"`
-	Sender       *tezos.Address   `json:"sender,omitempty"`
-	Source       *tezos.Address   `json:"source,omitempty"`
+	Contract     tezos.Address  `json:"contract"`
+	BigmapId     int64          `json:"bigmap_id"`
+	UpdateTime   *time.Time     `json:"time,omitempty"`
+	UpdateHeight int64          `json:"height,omitempty"`
+	UpdateOp     *tezos.OpHash  `json:"op,omitempty"`
+	Sender       *tezos.Address `json:"sender,omitempty"`
+	Source       *tezos.Address `json:"source,omitempty"`
 }
 
 // keys
@@ -151,26 +150,6 @@ func (l BigmapValueList) LastModified() time.Time      { return l.modified }
 func (l BigmapValueList) Expires() time.Time           { return l.expires }
 
 var _ server.Resource = (*BigmapKeyList)(nil)
-
-// storage
-type StorageValue struct {
-	Value    interface{}     `json:"value,omitempty"`
-	Prim     *micheline.Prim `json:"prim,omitempty"`
-	modified time.Time       `json:"-"`
-	expires  time.Time       `json:"-"`
-}
-
-func (t StorageValue) LastModified() time.Time { return t.modified }
-func (t StorageValue) Expires() time.Time      { return t.expires }
-
-var _ server.Resource = (*StorageValue)(nil)
-
-// params
-type ExplorerParameters struct {
-	Entrypoint string          `json:"entrypoint"`
-	Value      micheline.Value `json:"value"`
-	Prim       *micheline.Prim `json:"prim,omitempty"`
-}
 
 // updates
 type BigmapUpdate struct {
@@ -290,8 +269,10 @@ func ListBigmapKeys(ctx *server.Context) (interface{}, int) {
 		}
 		if args.WithMeta() {
 			key.Meta = &BigmapMeta{
-				Contract: contract,
-				BigmapId: alloc.BigmapId,
+				Contract:     contract,
+				BigmapId:     alloc.BigmapId,
+				UpdateHeight: v.Height,
+				UpdateTime:   ctx.Indexer.LookupBlockTimePtr(ctx, v.Height),
 			}
 		}
 		if args.WithPrim() {
@@ -359,8 +340,10 @@ func ListBigmapValues(ctx *server.Context) (interface{}, int) {
 		}
 		if args.WithMeta() {
 			val.Meta = &BigmapMeta{
-				Contract: contract,
-				BigmapId: alloc.BigmapId,
+				Contract:     contract,
+				BigmapId:     alloc.BigmapId,
+				UpdateHeight: v.Height,
+				UpdateTime:   ctx.Indexer.LookupBlockTimePtr(ctx, v.Height),
 			}
 		}
 		if args.WithPrim() {
@@ -433,8 +416,10 @@ func ReadBigmapValue(ctx *server.Context) (interface{}, int) {
 	}
 	if args.WithMeta() {
 		resp.Meta = &BigmapMeta{
-			Contract: ctx.Indexer.LookupAddress(ctx, alloc.AccountId),
-			BigmapId: alloc.BigmapId,
+			Contract:     ctx.Indexer.LookupAddress(ctx, alloc.AccountId),
+			BigmapId:     alloc.BigmapId,
+			UpdateHeight: v.Height,
+			UpdateTime:   ctx.Indexer.LookupBlockTimePtr(ctx, v.Height),
 		}
 	}
 	if args.WithPrim() {
@@ -575,8 +560,6 @@ func ListBigmapUpdates(ctx *server.Context) (interface{}, int) {
 				UpdateTime:   &v.Timestamp,
 				UpdateHeight: v.Height,
 			}
-			bh := ctx.Indexer.LookupBlockHash(ctx.Context, v.Height)
-			upd.BigmapValue.Meta.UpdateBlock = &bh
 			if op, ok := opCache[v.OpId]; ok {
 				upd.BigmapValue.Meta.UpdateOp = &op.Hash
 				snd := ctx.Indexer.LookupAddress(ctx, op.SenderId)
@@ -655,8 +638,6 @@ func ListBigmapKeyUpdates(ctx *server.Context) (interface{}, int) {
 				UpdateTime:   &v.Timestamp,
 				UpdateHeight: v.Height,
 			}
-			bh := ctx.Indexer.LookupBlockHash(ctx.Context, v.Height)
-			upd.BigmapValue.Meta.UpdateBlock = &bh
 			if op, ok := opCache[v.OpId]; ok {
 				upd.BigmapValue.Meta.UpdateOp = &op.Hash
 				snd := ctx.Indexer.LookupAddress(ctx, op.SenderId)

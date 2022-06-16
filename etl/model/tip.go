@@ -11,17 +11,16 @@ import (
 
 // ChainTip reflects the blockchain state at the currently indexed height.
 type ChainTip struct {
-	Name          string            `json:"name"`         // chain name, e.g. Bitcoin
-	Symbol        string            `json:"symbol"`       // chain symbol, e.g. BTC
-	ChainId       tezos.ChainIdHash `json:"chain_id"`     // chain identifier (same for all blocks)
-	BestHash      tezos.BlockHash   `json:"last_block"`   // The hash of the chain tip block.
-	BestId        uint64            `json:"last_id"`      // The internal blockindex id of the tip block;
-	BestHeight    int64             `json:"height"`       // The height of the tip block.
-	BestTime      time.Time         `json:"timestamp"`    // The timestamp of the tip block.
-	GenesisTime   time.Time         `json:"genesis_time"` // cache of first block generation time
-	NYEveBlocks   []int64           `json:"nye_blocks"`   // first block heights per year for annual statistics
-	QuarterBlocks []int64           `json:"qtr_blocks"`   // first block heights per quarter for annual statistics
-	Deployments   []Deployment      `json:"deployments"`  // protocol deployments
+	Name        string            `json:"name"`         // chain name, e.g. Bitcoin
+	Symbol      string            `json:"symbol"`       // chain symbol, e.g. BTC
+	ChainId     tezos.ChainIdHash `json:"chain_id"`     // chain identifier (same for all blocks)
+	BestHash    tezos.BlockHash   `json:"last_block"`   // The hash of the chain tip block.
+	BestId      uint64            `json:"last_id"`      // The internal blockindex id of the tip block;
+	BestHeight  int64             `json:"height"`       // The height of the tip block.
+	BestTime    time.Time         `json:"timestamp"`    // The timestamp of the tip block.
+	GenesisTime time.Time         `json:"genesis_time"` // cache of first block generation time
+	NYEveBlocks []int64           `json:"nye_blocks"`   // first block heights per year for annual statistics
+	Deployments []Deployment      `json:"deployments"`  // protocol deployments
 }
 
 type Deployment struct {
@@ -48,20 +47,18 @@ func (t *ChainTip) AddDeployment(p *tezos.Params) {
 
 func (t *ChainTip) Clone() *ChainTip {
 	tip := &ChainTip{
-		Name:          t.Name,
-		Symbol:        t.Symbol,
-		ChainId:       t.ChainId.Clone(),
-		BestHash:      t.BestHash.Clone(),
-		BestId:        t.BestId,
-		BestHeight:    t.BestHeight,
-		BestTime:      t.BestTime,
-		GenesisTime:   t.GenesisTime,
-		NYEveBlocks:   make([]int64, len(t.NYEveBlocks)),
-		QuarterBlocks: make([]int64, len(t.QuarterBlocks)),
-		Deployments:   make([]Deployment, len(t.Deployments)),
+		Name:        t.Name,
+		Symbol:      t.Symbol,
+		ChainId:     t.ChainId.Clone(),
+		BestHash:    t.BestHash.Clone(),
+		BestId:      t.BestId,
+		BestHeight:  t.BestHeight,
+		BestTime:    t.BestTime,
+		GenesisTime: t.GenesisTime,
+		NYEveBlocks: make([]int64, len(t.NYEveBlocks)),
+		Deployments: make([]Deployment, len(t.Deployments)),
 	}
 	copy(tip.NYEveBlocks, t.NYEveBlocks)
-	copy(tip.QuarterBlocks, t.QuarterBlocks)
 	copy(tip.Deployments, t.Deployments)
 	return tip
 }

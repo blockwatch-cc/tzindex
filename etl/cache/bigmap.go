@@ -218,7 +218,7 @@ func (c *BigmapHistoryCache) Build(ctx context.Context, updates *pack.Table, id,
 	upd := &model.BigmapUpdate{}
 	var count int
 	err := pack.NewQuery("build_history_cache", updates).
-		WithFields("a", "k", "v").
+		WithFields("a", "K", "k", "v").
 		AndEqual("bigmap_id", id).
 		AndLte("height", height).
 		Stream(ctx, func(r pack.Row) error {

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -88,6 +88,9 @@ type Constants struct {
 	FrozenDepositsPercentage                         int         `json:"frozen_deposits_percentage"`
 	DoubleBakingPunishment                           int64       `json:"double_baking_punishment,string"`
 	RatioOfFrozenDepositsSlashedPerDoubleEndorsement tezos.Ratio `json:"ratio_of_frozen_deposits_slashed_per_double_endorsement"`
+
+	// New in v13
+	CyclesPerVotingPeriod int64 `json:"cycles_per_voting_period"`
 }
 
 func (c Constants) HaveV6Rewards() bool {
@@ -173,19 +176,25 @@ func (c *Client) GetConstants(ctx context.Context, id BlockID) (con Constants, e
 // GetParams returns a translated parameters structure for the current
 // network at block id.
 func (c *Client) GetParams(ctx context.Context, id BlockID) (*tezos.Params, error) {
-	p, err := c.ResolveChainConfig(ctx)
-	if err != nil {
-		return nil, err
-	}
-	height := id.Int64()
-	if height < 0 {
-		head, err := c.GetBlockHeader(ctx, id)
+	if !c.ChainId.IsValid() {
+		id, err := c.GetChainId(ctx)
 		if err != nil {
 			return nil, err
 		}
-		height = head.Level
+		c.ChainId = id
 	}
-	return p.ForHeight(height), nil
+	meta, err := c.GetBlockMetadata(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	con, err := c.GetConstants(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return con.MapToChainParams().
+		ForNetwork(c.ChainId).
+		ForProtocol(meta.Protocol).
+		ForHeight(meta.GetLevel()), nil
 }
 
 func (c Constants) MapToChainParams() *tezos.Params {
@@ -263,5 +272,11 @@ func (c Constants) MapToChainParams() *tezos.Params {
 	p.FrozenDepositsPercentage = c.FrozenDepositsPercentage
 	p.DoubleBakingPunishment = c.DoubleBakingPunishment
 	p.RatioOfFrozenDepositsSlashedPerDoubleEndorsement = c.RatioOfFrozenDepositsSlashedPerDoubleEndorsement
+
+	// New in V13
+	if p.BlocksPerVotingPeriod == 0 {
+		p.BlocksPerVotingPeriod = c.CyclesPerVotingPeriod * c.BlocksPerCycle
+	}
+
 	return p
 }

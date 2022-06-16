@@ -6,6 +6,7 @@ package explorer
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"github.com/gorilla/mux"
 	"net/http"
@@ -31,26 +32,27 @@ var _ server.RESTful = (*Contract)(nil)
 var _ server.Resource = (*Contract)(nil)
 
 type Contract struct {
-	AccountId     model.AccountID      `json:"account_id"`
-	Address       string               `json:"address"`
-	Creator       string               `json:"creator"`
-	Baker         string               `json:"baker"`
-	StorageSize   int64                `json:"storage_size"`
-	StoragePaid   int64                `json:"storage_paid"`
-	FirstSeen     int64                `json:"first_seen"`
-	LastSeen      int64                `json:"last_seen"`
-	FirstSeenTime time.Time            `json:"first_seen_time"`
-	LastSeenTime  time.Time            `json:"last_seen_time"`
-	NCallsSuccess int                  `json:"n_calls_success"`
-	NCallsFailed  int                  `json:"n_calls_failed"`
-	Bigmaps       map[string]int64     `json:"bigmaps,omitempty"`
-	InterfaceHash string               `json:"iface_hash"`
-	CodeHash      string               `json:"code_hash"`
-	StorageHash   string               `json:"storage_hash"`
-	CallStats     map[string]int       `json:"call_stats"`
-	Features      micheline.Features   `json:"features"`
-	Interfaces    micheline.Interfaces `json:"interfaces"`
-	Metadata      map[string]*Metadata `json:"metadata,omitempty"`
+	AccountId     model.AccountID           `json:"account_id"`
+	Address       string                    `json:"address"`
+	Creator       string                    `json:"creator"`
+	Baker         string                    `json:"baker"`
+	StorageSize   int64                     `json:"storage_size"`
+	StoragePaid   int64                     `json:"storage_paid"`
+	StorageBurn   float64                   `json:"storage_burn"`
+	FirstSeen     int64                     `json:"first_seen"`
+	LastSeen      int64                     `json:"last_seen"`
+	FirstSeenTime time.Time                 `json:"first_seen_time"`
+	LastSeenTime  time.Time                 `json:"last_seen_time"`
+	NCallsSuccess int                       `json:"n_calls_success"`
+	NCallsFailed  int                       `json:"n_calls_failed"`
+	Bigmaps       map[string]int64          `json:"bigmaps,omitempty"`
+	InterfaceHash string                    `json:"iface_hash"`
+	CodeHash      string                    `json:"code_hash"`
+	StorageHash   string                    `json:"storage_hash"`
+	CallStats     map[string]int            `json:"call_stats"`
+	Features      micheline.Features        `json:"features"`
+	Interfaces    micheline.Interfaces      `json:"interfaces"`
+	Metadata      map[string]*ShortMetadata `json:"metadata,omitempty"`
 
 	expires time.Time `json:"-"`
 }
@@ -62,6 +64,7 @@ func NewContract(ctx *server.Context, c *model.Contract, a *model.Account, args 
 		Address:       a.String(),
 		StorageSize:   c.StorageSize,
 		StoragePaid:   c.StoragePaid,
+		StorageBurn:   p.ConvertValue(c.StorageBurn),
 		FirstSeen:     a.FirstSeen,
 		LastSeen:      a.LastSeen,
 		NCallsSuccess: a.NOps - a.NOpsFailed,
@@ -85,9 +88,19 @@ func NewContract(ctx *server.Context, c *model.Contract, a *model.Account, args 
 	cc.FirstSeenTime = ctx.Indexer.LookupBlockTime(ctx.Context, a.FirstSeen)
 	cc.LastSeenTime = ctx.Indexer.LookupBlockTime(ctx.Context, a.LastSeen)
 
-	// map bigmap ids to storage annotation names
-	if ids, err := ctx.Indexer.ListContractBigmapIds(ctx.Context, a.RowId); err == nil {
-		cc.Bigmaps = c.NamedBigmaps(ids)
+	if maps, err := ctx.Indexer.ListContractBigmaps(ctx.Context, a.RowId, args.WithHeight()); err == nil {
+		cc.Bigmaps = c.NamedBigmaps(maps)
+		// cc.Bigmaps = make(map[string]int64)
+		// for _, v := range maps {
+		// 	var prim micheline.Prim
+		// 	_ = prim.UnmarshalBinary(v.Data)
+		// 	// name := v.Name
+		// 	name := ""
+		// 	if name == "" {
+		// 		name = strconv.FormatInt(v.BigmapId, 10)
+		// 	}
+		// 	cc.Bigmaps[name] = v.BigmapId
+		// }
 	} else {
 		log.Errorf("explorer contract: cannot load bigmap ids: %v", err)
 	}
@@ -96,18 +109,18 @@ func NewContract(ctx *server.Context, c *model.Contract, a *model.Account, args 
 
 	// add metadata
 	if args.WithMeta() {
-		cc.Metadata = make(map[string]*Metadata)
+		cc.Metadata = make(map[string]*ShortMetadata)
 		if md, ok := lookupMetadataById(ctx, a.RowId, 0, false); ok {
-			cc.Metadata[cc.Address] = md
+			cc.Metadata[cc.Address] = md.Short()
 		}
 		// fetch baker metadata for delegators
 		if a.IsDelegated {
 			if md, ok := lookupMetadataById(ctx, a.BakerId, 0, false); ok {
-				cc.Metadata[cc.Baker] = md
+				cc.Metadata[cc.Baker] = md.Short()
 			}
 		}
 		if md, ok := lookupMetadataById(ctx, c.CreatorId, 0, false); ok {
-			cc.Metadata[cc.Creator] = md
+			cc.Metadata[cc.Creator] = md.Short()
 		}
 	}
 
@@ -138,11 +151,20 @@ func (b Contract) RegisterDirectRoutes(r *mux.Router) error {
 func (b Contract) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/{ident}", server.C(ReadContract)).Methods("GET").Name("contract")
 	r.HandleFunc("/{ident}/calls", server.C(ReadContractCalls)).Methods("GET")
-	r.HandleFunc("/{ident}/creator", server.C(ReadContractCreator)).Methods("GET")
 	r.HandleFunc("/{ident}/script", server.C(ReadContractScript)).Methods("GET")
 	r.HandleFunc("/{ident}/storage", server.C(ReadContractStorage)).Methods("GET")
 	return nil
 
+}
+
+// params
+type ExplorerParameters struct {
+	Entrypoint string           `json:"entrypoint,omitempty"` // contract
+	Value      *micheline.Value `json:"value,omitempty"`      // contract
+	Prim       *micheline.Prim  `json:"prim,omitempty"`       // contract
+	L2Address  *tezos.Address   `json:"l2_address,omitempty"` // rollup
+	Method     string           `json:"method,omitempty"`     // rollup
+	Arguments  json.RawMessage  `json:"arguments,omitempty"`  // rollup
 }
 
 type ContractRequest struct {
@@ -303,14 +325,15 @@ func ReadContractCalls(ctx *server.Context) (interface{}, int) {
 	}
 
 	r := etl.ListRequest{
-		Account: acc,
-		Mode:    args.EntrypointMode,
-		Since:   args.SinceHeight,
-		Until:   args.BlockHeight,
-		Offset:  args.Offset,
-		Limit:   ctx.Cfg.ClampExplore(args.Limit),
-		Cursor:  args.Cursor,
-		Order:   args.Order,
+		Account:     acc,
+		Mode:        args.EntrypointMode,
+		Since:       args.SinceHeight,
+		Until:       args.BlockHeight,
+		Offset:      args.Offset,
+		Limit:       ctx.Cfg.ClampExplore(args.Limit),
+		Cursor:      args.Cursor,
+		Order:       args.Order,
+		WithStorage: args.WithStorage(),
 	}
 
 	if args.Sender.IsValid() {
@@ -383,32 +406,14 @@ func ReadContractCalls(ctx *server.Context) (interface{}, int) {
 	return resp, http.StatusOK
 }
 
-func ReadContractCreator(ctx *server.Context) (interface{}, int) {
-	args := &AccountRequest{}
-	ctx.ParseRequestArgs(args)
-	cc := loadContract(ctx)
-	if cc.CreatorId == 0 {
-		panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no creator for this contract", nil))
-	}
-	acc, err := ctx.Indexer.LookupAccountId(ctx, cc.CreatorId)
-	if err != nil {
-		switch err {
-		case index.ErrNoAccountEntry:
-			panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no such account", err))
-		default:
-			panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
-		}
-	}
-	return NewAccount(ctx, acc, args), http.StatusOK
-}
-
 type Script struct {
-	Script      *micheline.Script     `json:"script,omitempty"`
-	Type        micheline.Typedef     `json:"storage_type"`
-	Entrypoints micheline.Entrypoints `json:"entrypoints"`
-	Views       micheline.Views       `json:"views,omitempty"`
-	Bigmaps     map[string]int64      `json:"bigmaps,omitempty"`
-	modified    time.Time             `json:"-"`
+	Script      *micheline.Script         `json:"script,omitempty"`
+	Type        micheline.Typedef         `json:"storage_type"`
+	Entrypoints micheline.Entrypoints     `json:"entrypoints"`
+	Views       micheline.Views           `json:"views,omitempty"`
+	Bigmaps     map[string]int64          `json:"bigmaps,omitempty"`
+	BigmapTypes map[string]micheline.Prim `json:"bigmap_types,omitempty"`
+	modified    time.Time                 `json:"-"`
 }
 
 func (s Script) LastModified() time.Time { return s.modified }
@@ -438,23 +443,35 @@ func ReadContractScript(ctx *server.Context) (interface{}, int) {
 
 	ep, err := script.Entrypoints(args.WithPrim())
 	if err != nil {
-		ctx.Log.Errorf("script entrypoint parsing failed", err)
+		ctx.Log.Errorf("script entrypoint parsing failed: %v", err)
 	}
 	views, err := script.Views(args.WithPrim(), args.WithPrim())
 	if err != nil {
-		ctx.Log.Errorf("script view parsing failed", err)
+		ctx.Log.Errorf("script view parsing failed: %v", err)
 	}
-	ids, err := ctx.Indexer.ListContractBigmapIds(ctx.Context, cc.AccountId)
+	bigmaps, err := ctx.Indexer.ListContractBigmaps(ctx.Context, cc.AccountId, args.BlockHeight)
 	if err != nil {
-		ctx.Log.Errorf("script bigmap parsing failed", err)
+		ctx.Log.Errorf("script bigmap parsing failed: %v", err)
 	}
 
+	bigmapMap := make(map[string]micheline.Prim)
+	nameMap := cc.NamedBigmaps(bigmaps)
+	idMap := make(map[int64]string)
+	for n, v := range nameMap {
+		idMap[v] = n
+	}
+	for _, v := range bigmaps {
+		var prim micheline.Prim
+		_ = prim.UnmarshalBinary(v.Data)
+		bigmapMap[idMap[v.BigmapId]] = prim
+	}
 	resp := &Script{
 		Script:      script,
 		Type:        script.StorageType().Typedef("storage"),
 		Entrypoints: ep,
 		Views:       views,
-		Bigmaps:     cc.NamedBigmaps(ids),
+		Bigmaps:     nameMap,
+		BigmapTypes: bigmapMap,
 		modified:    ctx.Indexer.LookupBlockTime(ctx.Context, cc.FirstSeen),
 	}
 	if !args.WithPrim() {
@@ -463,6 +480,19 @@ func ReadContractScript(ctx *server.Context) (interface{}, int) {
 
 	return resp, http.StatusOK
 }
+
+// storage
+type StorageValue struct {
+	Value    interface{}     `json:"value,omitempty"`
+	Prim     *micheline.Prim `json:"prim,omitempty"`
+	modified time.Time       `json:"-"`
+	expires  time.Time       `json:"-"`
+}
+
+func (t StorageValue) LastModified() time.Time { return t.modified }
+func (t StorageValue) Expires() time.Time      { return t.expires }
+
+var _ server.Resource = (*StorageValue)(nil)
 
 func ReadContractStorage(ctx *server.Context) (interface{}, int) {
 	args := &ContractRequest{}
@@ -473,6 +503,10 @@ func ReadContractStorage(ctx *server.Context) (interface{}, int) {
 		panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "empty storage before origination", nil))
 	}
 
+	if cc.Address.IsRollup() {
+		panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no script", nil))
+	}
+
 	// unmarshal full script, post-babylon migration has been applied
 	script, err := cc.LoadScript()
 	if err != nil {
@@ -481,22 +515,20 @@ func ReadContractStorage(ctx *server.Context) (interface{}, int) {
 
 	// type is always the most recently upgraded type stored in contract table
 	var (
-		prim   micheline.Prim = micheline.Prim{}
-		typ    micheline.Type = script.StorageType()
-		ts     time.Time
-		height int64
+		typ  micheline.Type = script.StorageType()
+		prim micheline.Prim
+		ts   time.Time
 		// patchBigmaps bool
 	)
 
 	if args.BlockHeight == 0 || args.BlockHeight >= cc.LastSeen {
 		// most recent storage is now stored in contract table!
-		height = cc.LastSeen
 		if err := prim.UnmarshalBinary(cc.Storage); err != nil {
-			log.Errorf("explorer: storage unmarshal in contract %s: %v", cc, err)
+			log.Errorf("explorer: storage unmarshal from %s: %v", cc, err)
 		}
 		// when data is loaded from origination, we must patch bigmap pointers
 		// patchBigmaps = cc.FirstSeen == cc.LastSeen && bytes.Count(cc.CallStats, []byte{0}) == len(cc.CallStats)
-		ts = ctx.Indexer.LookupBlockTime(ctx.Context, height)
+		ts = ctx.Indexer.LookupBlockTime(ctx.Context, cc.LastSeen)
 	} else {
 		// find earlier incoming call before height
 		op, err := ctx.Indexer.FindLastCall(
@@ -509,20 +541,20 @@ func ReadContractStorage(ctx *server.Context) (interface{}, int) {
 			panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
 		}
 
-		// when no most recent call exists, load from origination
-		if op == nil {
-			op, err = ctx.Indexer.FindOrigination(ctx, cc.AccountId, cc.FirstSeen)
+		if op != nil {
+			store, err := ctx.Indexer.LookupStorage(ctx, cc.AccountId, op.StorageHash, cc.FirstSeen, op.Height)
 			if err != nil {
 				panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
 			}
+			if err := prim.UnmarshalBinary(store.Storage); err != nil {
+				log.Errorf("explorer: storage unmarshal from store for %s: %v", cc, err)
+			}
+			ts = op.Timestamp
+		} else {
+			// when no most recent call exists, load from origination
+			prim = script.Storage
+			ts = ctx.Indexer.LookupBlockTime(ctx.Context, cc.FirstSeen)
 			// patchBigmaps = true
-		}
-
-		// unmarshal from op
-		height = op.Height
-		ts = op.Timestamp
-		if err := prim.UnmarshalBinary(op.Storage); err != nil {
-			log.Errorf("explorer: storage unmarshal in op %s: %v", op.Hash, err)
 		}
 	}
 

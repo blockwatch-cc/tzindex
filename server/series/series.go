@@ -386,6 +386,9 @@ func StreamSeries(ctx *server.Context) (interface{}, int) {
 	case "op":
 		args.bucket = &OpSeries{}
 		args.model = &model.Op{}
+	case "flow":
+		args.bucket = &FlowSeries{}
+		args.model = &model.Flow{}
 	case "chain":
 		args.bucket = &ChainSeries{}
 		args.model = &model.Chain{}

@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"time"
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzgo/micheline"
@@ -37,6 +38,9 @@ type BlockCrawler interface {
 
 	// returns stored supply table data at specified height
 	SupplyByHeight(ctx context.Context, height int64) (*Supply, error)
+
+	// returns height for timestamp
+	BlockHeightFromTime(ctx context.Context, tm time.Time) int64
 }
 
 // BlockBuilder provides an interface to access information about the currently

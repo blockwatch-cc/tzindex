@@ -60,8 +60,8 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 			// update supply counters
 			b.block.Supply.ActiveStaking += v.Value
 
-			// log.Debugf("1 BOOT REG SELF %d %s -> %d bal=%d",
-			//  acc.RowId, acc, acc.ActiveDelegations, acc.Balance())
+			log.Debugf("1 BOOT REG SELF %d %s -> %d bal=%d",
+				acc.RowId, acc, bkr.ActiveDelegations, acc.Balance())
 		}
 
 		// update block counters
@@ -158,6 +158,28 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		b.block.Ops = append(b.block.Ops, op)
 		opCounter++
 
+		// prepare for insert
+		accounts = append(accounts, acc)
+
+		// save as contract (not spendable, not delegatebale, no fee, no gas, no limits)
+		var not bool
+		oop := &rpc.Origination{
+			Script:      &v.Script,
+			Spendable:   &not,
+			Delegatable: &not,
+			Manager: rpc.Manager{
+				Generic: rpc.Generic{
+					Metadata: &rpc.OperationMetadata{},
+				},
+			},
+		}
+		con := model.NewContract(acc, oop, op, nil, b.block.Params)
+		op.IsStorageUpdate = true
+		op.Storage = con.Storage
+		op.StorageHash = con.StorageHash
+		op.Contract = con
+		contracts = append(contracts, con)
+
 		// link to and update baker
 		bkr, _ := b.BakerByAddress(v.Delegate)
 		acc.IsDelegated = true
@@ -166,8 +188,8 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		bkr.TotalDelegations++
 		bkr.ActiveDelegations++
 		bkr.DelegatedBalance += acc.Balance()
-		// log.Debugf("1 BOOT ADD delegation %s %d bal=%d -> %s %d delegations=%d",
-		//  acc, acc.RowId, acc.Balance(), bkr, bkr.AccountId, bkr.ActiveDelegations)
+		log.Debugf("1 BOOT ADD delegation %s %d bal=%d -> %s %d delegations=%d",
+			acc, acc.RowId, acc.Balance(), bkr, bkr.AccountId, bkr.ActiveDelegations)
 
 		id = model.OpRef{
 			Kind: model.OpTypeDelegation,
@@ -191,18 +213,6 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		op.Volume = acc.Balance()
 		b.block.Ops = append(b.block.Ops, op)
 		opCounter++
-
-		// prepare for insert
-		accounts = append(accounts, acc)
-
-		// save as contract (not spendable, not delegatebale, no fee, no gas, no limits)
-		var not bool
-		oop := &rpc.Origination{
-			Script:      &v.Script,
-			Spendable:   &not,
-			Delegatable: &not,
-		}
-		contracts = append(contracts, model.NewContract(acc, oop, op, nil, b.block.Params))
 
 		log.Debug(newLogClosure(func() string {
 			var sfx string

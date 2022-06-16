@@ -109,10 +109,26 @@ func StreamTable(ctx *server.Context) (interface{}, int) {
 		return StreamSupplyTable(ctx, args)
 	case "op":
 		return StreamOpTable(ctx, args)
+	case "flow":
+		return StreamFlowTable(ctx, args)
 	case "contract":
 		return StreamContractTable(ctx, args)
 	case "account":
 		return StreamAccountTable(ctx, args)
+	case "rights":
+		return StreamRightsTable(ctx, args)
+	case "snapshot":
+		return StreamSnapshotTable(ctx, args)
+	case "election":
+		return StreamElectionTable(ctx, args)
+	case "proposal":
+		return StreamProposalTable(ctx, args)
+	case "vote":
+		return StreamVoteTable(ctx, args)
+	case "ballot":
+		return StreamBallotTable(ctx, args)
+	case "income":
+		return StreamIncomeTable(ctx, args)
 	case "bigmaps":
 		return StreamBigmapAllocTable(ctx, args)
 	case "bigmap_values":

@@ -17,7 +17,7 @@ const (
 	ContractPackSizeLog2         = 15 // 32k packs
 	ContractJournalSizeLog2      = 16 // 64k
 	ContractCacheSize            = 8
-	ContractFillLevel            = 100
+	ContractFillLevel            = 80
 	ContractIndexPackSizeLog2    = 15 // 16k packs (32k split size)
 	ContractIndexJournalSizeLog2 = 16 // 64k
 	ContractIndexCacheSize       = 8
@@ -143,17 +143,18 @@ func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 	upd := make([]pack.Item, 0)
 	for _, op := range block.Ops {
 		// don't process failed or unrelated ops
-		if !op.IsSuccess || !op.IsContract {
+		if !op.IsSuccess || !(op.IsContract || op.IsRollup) {
 			continue
 		}
 
 		switch op.Type {
-		case model.OpTypeTransaction, model.OpTypeSubsidy:
+		case model.OpTypeTransaction,
+			model.OpTypeSubsidy,
+			model.OpTypeRollupTransaction:
 			// load from builder cache
 			contract, ok := builder.ContractById(op.ReceiverId)
 			if !ok {
-				return fmt.Errorf("contract: missing contract %d in %s op [%d:%d]",
-					op.ReceiverId, op.Type, 3, op.OpP)
+				return fmt.Errorf("contract: missing contract %d in %s op [%d:%d]", op.ReceiverId, op.Type, 3, op.OpP)
 			}
 
 			// skip contracts that have been originated in this block, they have
@@ -168,12 +169,13 @@ func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 				contract.IsDirty = false
 			}
 
-		case model.OpTypeOrigination, model.OpTypeMigration:
+		case model.OpTypeOrigination,
+			model.OpTypeMigration,
+			model.OpTypeRollupOrigination:
 			// load from builder cache
 			contract, ok := builder.ContractById(op.ReceiverId)
 			if !ok {
-				return fmt.Errorf("contract: missing contract %d in %s op [%d:%d]",
-					op.ReceiverId, op.Type, 3, op.OpP)
+				return fmt.Errorf("contract: missing contract %d in %s op [%d:%d]", op.ReceiverId, op.Type, 3, op.OpP)
 			}
 			if contract.IsNew {
 				// insert new contracts

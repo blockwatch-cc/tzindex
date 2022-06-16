@@ -20,7 +20,7 @@ type AddressCache struct {
 }
 
 const (
-	defaultAddrCacheSize = 1 << 21 // 2M addresses
+	defaultAddrCacheSize = 1 << 22 // 4M addresses = 88MB
 	addrLen              = 21      // efficient binary encoding for addresses plus type
 )
 

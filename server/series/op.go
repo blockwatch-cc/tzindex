@@ -136,11 +136,6 @@ func (s *OpSeries) Interpolate(m SeriesBucket, ts time.Time) SeriesBucket {
 	if math.IsInf(weight, 1) {
 		weight = 1
 	}
-	// log.Infof("INTERPOLATE %s -> %s %f = %d .. %s / %s", o.Timestamp, ts, weight,
-	// 	s.Volume+int64(weight*float64(o.Volume-s.Volume)),
-	// 	ts.Sub(s.Timestamp),
-	// 	o.Timestamp, //.Truncate(window).Sub(s.Timestamp),
-	// )
 	switch weight {
 	case 0:
 		return s
@@ -182,6 +177,7 @@ func (o *OpSeries) MarshalJSONVerbose() ([]byte, error) {
 		Reward      float64   `json:"reward"`
 		Deposit     float64   `json:"deposit"`
 		Burned      float64   `json:"burned"`
+		TDD         float64   `json:"days_destroyed"`
 	}{
 		Timestamp:   o.Timestamp,
 		Count:       o.Count,

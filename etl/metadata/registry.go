@@ -78,11 +78,11 @@ func LoadExtensions() error {
 		ns := c.GetString("namespace")
 		buf, err := json.Marshal(c.GetInterface("schema"))
 		if err != nil {
-			return fmt.Errorf("metadata: reading extension schema %s: %v", ns, err)
+			return fmt.Errorf("metadata: reading extension schema %s: %w", ns, err)
 		}
 		ext, err := NewSchema(ns, buf, nil)
 		if err != nil {
-			return fmt.Errorf("metadata: loading extension %s: %v", ns, err)
+			return fmt.Errorf("metadata: loading extension %s: %w", ns, err)
 		}
 		RegisterSchema(ext)
 		log.Infof("Registered %s metadata extension.", ns)

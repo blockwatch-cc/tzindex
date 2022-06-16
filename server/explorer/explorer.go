@@ -6,14 +6,17 @@ package explorer
 import (
 	"encoding/json"
 	"github.com/gorilla/mux"
+	"math"
 	"net/http"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"blockwatch.cc/packdb/pack"
+
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
+	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/server"
 )
@@ -25,6 +28,7 @@ func init() {
 var _ server.RESTful = (*Explorer)(nil)
 
 func PurgeCaches() {
+	purgeCycleStore()
 	purgeTipStore()
 	purgeMetadataStore()
 }
@@ -54,7 +58,7 @@ func (e Explorer) RegisterDirectRoutes(r *mux.Router) error {
 func (b Explorer) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/tip", server.C(GetBlockchainTip)).Methods("GET")
 	r.HandleFunc("/protocols", server.C(GetBlockchainProtocols)).Methods("GET")
-	r.HandleFunc("/config/{height}", server.C(GetBlockchainConfig)).Methods("GET")
+	r.HandleFunc("/config/{ident}", server.C(GetBlockchainConfig)).Methods("GET")
 	r.HandleFunc("/status", server.C(GetStatus)).Methods("GET")
 	return nil
 }
@@ -77,14 +81,21 @@ type BlockchainTip struct {
 
 	TotalAccounts  int64 `json:"total_accounts"`
 	TotalContracts int64 `json:"total_contracts"`
+	TotalRollups   int64 `json:"total_rollups"`
 	FundedAccounts int64 `json:"funded_accounts"`
 	DustAccounts   int64 `json:"dust_accounts"`
 	DustDelegators int64 `json:"dust_delegators"`
 	TotalOps       int64 `json:"total_ops"`
 	Delegators     int64 `json:"delegators"`
 	Bakers         int64 `json:"bakers"`
-	Rolls          int64 `json:"rolls"`
-	RollOwners     int64 `json:"roll_owners"`
+
+	NewAccounts30d     int64   `json:"new_accounts_30d"`
+	ClearedAccounts30d int64   `json:"cleared_accounts_30d"`
+	FundedAccounts30d  int64   `json:"funded_accounts_30d"`
+	Inflation1Y        float64 `json:"inflation_1y"`
+	InflationRate1Y    float64 `json:"inflation_rate_1y"`
+
+	Health int `json:"health"`
 
 	Supply *Supply           `json:"supply"`
 	Status etl.CrawlerStatus `json:"status"`
@@ -141,6 +152,7 @@ func GetBlockchainTip(ctx *server.Context) (interface{}, int) {
 }
 
 func buildBlockchainTip(ctx *server.Context, tip *model.ChainTip) *BlockchainTip {
+	oneDay := 24 * time.Hour
 	params := ctx.Params
 	// most recent chain data (medium expensive)
 	ch, err := ctx.Indexer.ChainByHeight(ctx.Context, tip.BestHeight)
@@ -153,6 +165,19 @@ func buildBlockchainTip(ctx *server.Context, tip *model.ChainTip) *BlockchainTip
 	if err != nil {
 		panic(server.EInternal(server.EC_DATABASE, "cannot read tip supply", err))
 	}
+
+	// for 30d block data (expensive call)
+	growth, err := ctx.Indexer.GrowthByDuration(ctx.Context, tip.BestTime, 30*oneDay)
+	if err != nil {
+		panic(server.EInternal(server.EC_DATABASE, "cannot read growth data", err))
+	}
+
+	// for annualized inflation (medium expensive)
+	supply365, err := ctx.Indexer.SupplyByTime(ctx.Context, supply.Timestamp.Add(-365*oneDay))
+	if err != nil {
+		panic(server.EInternal(server.EC_DATABASE, "cannot read last year supply", err))
+	}
+	supplyDays := int64(supply.Timestamp.Truncate(oneDay).Sub(supply365.Timestamp.Truncate(oneDay)) / oneDay)
 
 	return &BlockchainTip{
 		Name:        tip.Name,
@@ -169,13 +194,21 @@ func buildBlockchainTip(ctx *server.Context, tip *model.ChainTip) *BlockchainTip
 		TotalOps:       ch.TotalOps,
 		TotalAccounts:  ch.TotalAccounts,
 		TotalContracts: ch.TotalContracts,
+		TotalRollups:   ch.TotalRollups,
 		FundedAccounts: ch.FundedAccounts,
 		DustAccounts:   ch.DustAccounts,
 		DustDelegators: ch.DustDelegators,
 		Delegators:     ch.ActiveDelegators,
 		Bakers:         ch.ActiveBakers,
-		Rolls:          ch.Rolls,
-		RollOwners:     ch.RollOwners,
+
+		NewAccounts30d:     growth.NewAccounts,
+		ClearedAccounts30d: growth.ClearedAccounts,
+		FundedAccounts30d:  growth.FundedAccounts,
+		Inflation1Y:        params.ConvertValue(supply.Total - supply365.Total),
+		InflationRate1Y:    annualizedPercent(supply.Total, supply365.Total, supplyDays),
+
+		// track health over the past 128 blocks
+		Health: estimateHealth(ctx, tip.BestHeight, 127),
 
 		Supply: &Supply{
 			Supply: *supply,
@@ -186,6 +219,14 @@ func buildBlockchainTip(ctx *server.Context, tip *model.ChainTip) *BlockchainTip
 		// expires when next block is expected
 		expires: tip.BestTime.Add(params.BlockTime()),
 	}
+}
+
+func annualizedPercent(a, b, days int64) float64 {
+	if days == 0 {
+		days = 1
+	}
+	diff := float64(a) - float64(b)
+	return diff / float64(days) * 365 / float64(b) * 100.0
 }
 
 func GetBlockchainProtocols(ctx *server.Context) (interface{}, int) {
@@ -280,18 +321,8 @@ func (c BlockchainConfig) Expires() time.Time {
 }
 
 func GetBlockchainConfig(ctx *server.Context) (interface{}, int) {
-	var height int64 = -1
-	if s, ok := mux.Vars(ctx.Request)["height"]; ok && s != "" {
-		var err error
-		height, err = strconv.ParseInt(s, 10, 64)
-		switch true {
-		case s == "head":
-			height = ctx.Tip.BestHeight
-		case err != nil:
-			panic(server.EBadRequest(server.EC_PARAM_INVALID, "invalid height", err))
-		}
-	}
-	p := ctx.Crawler.ParamsByHeight(height)
+	b := loadBlock(ctx)
+	p := ctx.Crawler.ParamsByHeight(b.Height)
 	cfg := BlockchainConfig{
 		Name:                              p.Name,
 		Network:                           p.Network,
@@ -384,6 +415,102 @@ func GetBlockchainConfig(ctx *server.Context) (interface{}, int) {
 	return cfg, http.StatusOK
 }
 
+// Estimates network health based on past on-chain observations.
+//
+// Result [0..100]
+//
+// Factor                  Penalty      Comment
+//
+// missed priorities       2            also translates past due blocks into missed prio
+// missed endorsements     50/size
+// double-x                10           TODO
+//
+// Decay function: x^(1/n)
+//
+func estimateHealth(ctx *server.Context, height, history int64) int {
+	nowheight := ctx.Tip.BestHeight
+	params := ctx.Params
+	isSync := ctx.Crawler.Status().Status == etl.STATE_SYNCHRONIZED
+	health := 100.0
+	const (
+		missedRoundPenalty = 2.0
+		doubleSignPenalty  = 10.0
+	)
+	var missedEndorsePenalty = 50.0 / float64(params.EndorsersPerBlock+params.ConsensusCommitteeSize) / float64(history)
+
+	blocks, err := ctx.Indexer.Table(index.BlockTableKey)
+	if err != nil {
+		log.Errorf("health: block table: %v", err)
+		return 0
+	}
+	b := &model.Block{}
+	err = pack.NewQuery("health.blocks", blocks).
+		WithDesc().
+		WithLimit(int(history)).
+		AndGt("height", height-history).
+		Stream(ctx.Context, func(r pack.Row) error {
+			if err := r.Decode(b); err != nil {
+				return err
+			}
+			// skip blocks past height (may happen during sync)
+			if b.Height > height {
+				return nil
+			}
+
+			// more weight for recent blocks
+			weight := 1.0 / float64(height-b.Height+1)
+
+			// priority penalty
+			health -= float64(b.Round) * missedRoundPenalty * weight
+			if b.Round > 0 {
+				// log.Warnf("Health penalty %.3f due to %d missed priorities at block %d",
+				// 	float64(b.Priority)*missedRoundPenalty*weight, b.Priority, b.Height)
+			}
+
+			// endorsement penalty, don't count endorsements for the most recent block
+			if b.Height < nowheight {
+				missed := float64(params.EndorsersPerBlock + params.ConsensusCommitteeSize - b.NSlotsEndorsed)
+				health -= missed * missedEndorsePenalty * weight
+				// if missed > 0 {
+				// 	log.Warnf("Health penalty %.3f due to %d missed endorsements at block %d",
+				// 		missed*missedEndorsePenalty*weight, int(missed), b.Height)
+				// }
+			}
+
+			return nil
+		})
+	if err != nil {
+		log.Errorf("health: block stream: %v", err)
+	}
+
+	// check if next block is past due and estimate expected priority
+	if height == nowheight && isSync {
+		delay := ctx.Now.Sub(ctx.Tip.BestTime)
+		t1 := params.BlockTime()
+		t2 := params.TimeBetweenBlocks[1]
+		if t2 == 0 {
+			t2 = t1
+		}
+		if delay > t1 {
+			var round int = int((delay-t1+t2/2)/t2) + 1
+			if params.Version >= 12 {
+				round = 1
+				for d := delay - t1; d > 0; d -= t1 + time.Duration(round-1)*params.DelayIncrementPerRound {
+					round++
+				}
+			}
+			health -= float64(round) * missedRoundPenalty
+			// log.Warnf("Health penalty %.3f due to %s overdue next block %d [%d]",
+			// 	float64(estprio)*missedRoundPenalty, delay, nowheight+1, estprio)
+		}
+	}
+
+	if health < 0 {
+		health = 0
+	}
+	return int(math.Round(health))
+}
+
 // configurable marshalling helper
 type Supply struct {
 	model.Supply
@@ -404,6 +531,7 @@ func (s *Supply) MarshalJSON() ([]byte, error) {
 		Delegated           float64   `json:"delegated"`
 		Staking             float64   `json:"staking"`
 		Shielded            float64   `json:"shielded"`
+		ActiveStake         float64   `json:"active_stake"`
 		ActiveDelegated     float64   `json:"active_delegated"`
 		ActiveStaking       float64   `json:"active_staking"`
 		InactiveDelegated   float64   `json:"inactive_delegated"`
@@ -423,10 +551,12 @@ func (s *Supply) MarshalJSON() ([]byte, error) {
 		BurnedExplicit      float64   `json:"burned_explicit"`
 		BurnedSeedMiss      float64   `json:"burned_seed_miss"`
 		BurnedAbsence       float64   `json:"burned_absence"`
+		BurnedRollup        float64   `json:"burned_rollup"`
 		Frozen              float64   `json:"frozen"`
 		FrozenDeposits      float64   `json:"frozen_deposits"`
 		FrozenRewards       float64   `json:"frozen_rewards"`
 		FrozenFees          float64   `json:"frozen_fees"`
+		FrozenBonds         float64   `json:"frozen_bonds"`
 	}{
 		RowId:               s.RowId,
 		Height:              s.Height,
@@ -440,6 +570,7 @@ func (s *Supply) MarshalJSON() ([]byte, error) {
 		Delegated:           s.params.ConvertValue(s.Delegated),
 		Staking:             s.params.ConvertValue(s.Staking),
 		Shielded:            s.params.ConvertValue(s.Shielded),
+		ActiveStake:         s.params.ConvertValue(s.ActiveStake),
 		ActiveDelegated:     s.params.ConvertValue(s.ActiveDelegated),
 		ActiveStaking:       s.params.ConvertValue(s.ActiveStaking),
 		InactiveDelegated:   s.params.ConvertValue(s.InactiveDelegated),
@@ -459,10 +590,12 @@ func (s *Supply) MarshalJSON() ([]byte, error) {
 		BurnedExplicit:      s.params.ConvertValue(s.BurnedExplicit),
 		BurnedSeedMiss:      s.params.ConvertValue(s.BurnedSeedMiss),
 		BurnedAbsence:       s.params.ConvertValue(s.BurnedAbsence),
+		BurnedRollup:        s.params.ConvertValue(s.BurnedRollup),
 		Frozen:              s.params.ConvertValue(s.Frozen),
 		FrozenDeposits:      s.params.ConvertValue(s.FrozenDeposits),
 		FrozenRewards:       s.params.ConvertValue(s.FrozenRewards),
 		FrozenFees:          s.params.ConvertValue(s.FrozenFees),
+		FrozenBonds:         s.params.ConvertValue(s.FrozenBonds),
 	}
 	return json.Marshal(supply)
 }

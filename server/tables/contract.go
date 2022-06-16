@@ -67,25 +67,26 @@ func (c *Contract) MarshalJSON() ([]byte, error) {
 
 func (c *Contract) MarshalJSONVerbose() ([]byte, error) {
 	cc := struct {
-		RowId         uint64 `json:"row_id"`
-		AccountId     uint64 `json:"account_id"`
-		Address       string `json:"address"`
-		CreatorId     uint64 `json:"creator_id"`
-		Creator       string `json:"creator"`
-		FirstSeen     int64  `json:"first_seen"`
-		LastSeen      int64  `json:"last_seen"`
-		FirstSeenTime int64  `json:"first_seen_time"`
-		LastSeenTime  int64  `json:"last_seen_time"`
-		StorageSize   int64  `json:"storage_size"`
-		StoragePaid   int64  `json:"storage_paid"`
-		Script        string `json:"script"`
-		Storage       string `json:"storage"`
-		InterfaceHash string `json:"iface_hash"`
-		CodeHash      string `json:"code_hash"`
-		StorageHash   string `json:"storage_hash"`
-		CallStats     string `json:"call_stats"`
-		Features      string `json:"features"`
-		Interfaces    string `json:"interfaces"`
+		RowId         uint64  `json:"row_id"`
+		AccountId     uint64  `json:"account_id"`
+		Address       string  `json:"address"`
+		CreatorId     uint64  `json:"creator_id"`
+		Creator       string  `json:"creator"`
+		FirstSeen     int64   `json:"first_seen"`
+		LastSeen      int64   `json:"last_seen"`
+		FirstSeenTime int64   `json:"first_seen_time"`
+		LastSeenTime  int64   `json:"last_seen_time"`
+		StorageSize   int64   `json:"storage_size"`
+		StoragePaid   int64   `json:"storage_paid"`
+		StorageBurn   float64 `json:"storage_burn"`
+		Script        string  `json:"script"`
+		Storage       string  `json:"storage"`
+		InterfaceHash string  `json:"iface_hash"`
+		CodeHash      string  `json:"code_hash"`
+		StorageHash   string  `json:"storage_hash"`
+		CallStats     string  `json:"call_stats"`
+		Features      string  `json:"features"`
+		Interfaces    string  `json:"interfaces"`
 	}{
 		RowId:         c.RowId.Value(),
 		AccountId:     c.AccountId.Value(),
@@ -98,6 +99,7 @@ func (c *Contract) MarshalJSONVerbose() ([]byte, error) {
 		LastSeenTime:  c.ctx.Indexer.LookupBlockTimeMs(c.ctx.Context, c.LastSeen),
 		StorageSize:   c.StorageSize,
 		StoragePaid:   c.StoragePaid,
+		StorageBurn:   c.params.ConvertValue(c.StorageBurn),
 		Script:        hex.EncodeToString(c.Script),
 		Storage:       hex.EncodeToString(c.Storage),
 		CallStats:     hex.EncodeToString(c.CallStats),
@@ -143,19 +145,21 @@ func (c *Contract) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, c.StorageSize, 10)
 		case "storage_paid":
 			buf = strconv.AppendInt(buf, c.StoragePaid, 10)
+		case "storage_burn":
+			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.StorageBurn), 'f', c.params.Decimals, 64)
 		case "script":
 			// code is binary
 			if c.Script != nil {
 				buf = strconv.AppendQuote(buf, hex.EncodeToString(c.Script))
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "storage":
 			// code is binary
 			if c.Storage != nil {
 				buf = strconv.AppendQuote(buf, hex.EncodeToString(c.Storage))
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "iface_hash":
 			if c.InterfaceHash != 0 {
@@ -163,7 +167,7 @@ func (c *Contract) MarshalJSONBrief() ([]byte, error) {
 				binary.BigEndian.PutUint64(tmp[:], c.InterfaceHash)
 				buf = strconv.AppendQuote(buf, hex.EncodeToString(tmp[:]))
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "code_hash":
 			if c.CodeHash != 0 {
@@ -171,7 +175,7 @@ func (c *Contract) MarshalJSONBrief() ([]byte, error) {
 				binary.BigEndian.PutUint64(tmp[:], c.CodeHash)
 				buf = strconv.AppendQuote(buf, hex.EncodeToString(tmp[:]))
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "storage_hash":
 			if c.StorageHash != 0 {
@@ -179,7 +183,7 @@ func (c *Contract) MarshalJSONBrief() ([]byte, error) {
 				binary.BigEndian.PutUint64(tmp[:], c.StorageHash)
 				buf = strconv.AppendQuote(buf, hex.EncodeToString(tmp[:]))
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "call_stats":
 			buf = strconv.AppendQuote(buf, hex.EncodeToString(c.CallStats))
@@ -222,6 +226,8 @@ func (c *Contract) MarshalCSV() ([]string, error) {
 			res[i] = strconv.Quote(c.ctx.Indexer.LookupBlockTime(c.ctx.Context, c.LastSeen).Format(time.RFC3339))
 		case "storage_size":
 			res[i] = strconv.FormatInt(c.StorageSize, 10)
+		case "storage_burn":
+			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.StorageBurn), 'f', c.params.Decimals, 64)
 		case "storage_paid":
 			res[i] = strconv.FormatInt(c.StoragePaid, 10)
 		case "script":
@@ -291,12 +297,10 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 	}
 
 	// build table query
-	q := pack.Query{
-		Name:   ctx.RequestID,
-		Fields: table.Fields().Select(srcNames...),
-		Limit:  int(args.Limit),
-		Order:  args.Order,
-	}
+	q := pack.NewQuery(ctx.RequestID, table).
+		WithFields(srcNames...).
+		WithLimit(int(args.Limit)).
+		WithOrder(args.Order)
 
 	// build dynamic filter conditions from query (will panic on error)
 	for key, val := range ctx.Request.URL.Query() {
@@ -408,24 +412,6 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					To:    toBlock,
 					Raw:   val[0], // debugging aid
 				})
-			case pack.FilterModeIn, pack.FilterModeNotIn:
-				// cond.Value is slice
-				valueBlocks := make([]int64, 0)
-				for _, v := range cond.Value.([]time.Time) {
-					if !v.After(bestTime) {
-						valueBlocks = append(valueBlocks, ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, v))
-					} else {
-						nDiff := int64(v.Sub(bestTime) / params.BlockTime())
-						valueBlocks = append(valueBlocks, bestHeight+nDiff)
-					}
-				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find(field),
-					Mode:  cond.Mode,
-					Value: valueBlocks,
-					Raw:   val[0], // debugging aid
-				})
-
 			default:
 				// cond.Value is time.Time
 				valueTime := cond.Value.(time.Time)
@@ -552,6 +538,18 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 			// the same field name may appear multiple times, in which case conditions
 			// are combined like any other condition with logical AND
 			for _, v := range val {
+				switch prefix {
+				case "storage_burn":
+					fvals := make([]string, 0)
+					for _, vv := range strings.Split(v, ",") {
+						fval, err := strconv.ParseFloat(vv, 64)
+						if err != nil {
+							panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, vv), err))
+						}
+						fvals = append(fvals, strconv.FormatInt(params.ConvertAmount(fval), 10))
+					}
+					v = strings.Join(fvals, ",")
+				}
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {

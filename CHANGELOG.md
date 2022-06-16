@@ -1,5 +1,60 @@
 # Changelog
 
+### v13.0.0 (v013-2022-06-15)
+
+Jakarta release
+
+- support new (transaction) **optimistic rollup** operations
+- re-add previously removed indexes for `rights`, `snapshots`, `flows`, `income` and `governance` data
+- extend income, supply, chain, block, and operation models with new rollup fields
+- replace hash indexes on operation, block and bigmap tables with bloom filters
+- split storage and bigmap updates from operation into separate tables
+- use lazy storage diff for bigmap indexing
+- use active stake for governance counters in Ithaca+
+- new Micheline opcodes
+- new metadata schema for DEXs
+- support filter by vote period in ballot and vote tables
+- keep zero delegators in snapshot index
+- fix nested entrypoint detection
+
+Model changes
+
+- supply model
+  - new `active_stake`, `frozen_bonds` and `burned_rollup` (for penalties)
+- chain model
+  - new `total_ops_failed`, `total_rollup_calls` and `total_rollups`
+- flow model
+  - new balance category `bond`
+  - new operations types `rollup_origination`, `rollup_transaction`, `rollup_reward`, `rollup_penalty`
+- op model
+  - new types `rollup_origination` and `rollup_transaction`
+  - rollup op arguments are packed into `parameters`
+  - new parameter fields `l2_address`, `method` and `arguments`
+  - different rollup op types are represented as method names
+  - new `is_rollup` flag
+- block model
+  - new counter `n_rollup_calls`
+- account model
+  - new balance type `frozen_bond` for current rollup bonds
+  - new `lost_bond` for rollup slashes
+- contract model
+  - new `storage_burn` counter
+- vote model
+  - new `eligible_stake`, `quorum_stake`, `turnout_stake`, `yay_stake`, `nay_stake`, `pass_stake`
+- baker model
+  - new `active_stake`
+- snapshot model
+  - new `active_stake`
+- income model
+  - add `lost_accusation_fees`, `lost_accusation_rewards`, `lost_accusation_deposits`, `lost_seed_fees`, `lost_seed_rewards`,
+  - renamed `total_bonds` to `total_deposits` to avoid name conflict with rollup bonds
+  - `contribution_percent` and `avg_contribution_64` are now counted up until position in cycle, formerly this was end of cycle which skewed numbers for the current cycle
+- tip model
+  - removed `rolls` and `roll_owners`
+- bigmap model
+  - add `delete_height` field to signal when a bigmap was removed from storage
+  - fix detection for dynamic allocated bigmaps
+
 ### v12.0.3 (v012-2022-03-25)
 
 - ETL: Detect pruned metadata and fail safely

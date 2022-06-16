@@ -29,7 +29,7 @@ const (
 		"format": {
 		  "type": "string",
 		  "format": "regex",
-		  "pattern": "^(application|image|video|audio|text)/"
+		  "pattern": "^\\w+\/[-+.\\w]+$"
 		},
 		"language": {
 		  "type": "string"

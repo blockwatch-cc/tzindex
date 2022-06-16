@@ -49,6 +49,10 @@ func createTable(g *gocui.Gui) (*View, error) {
 			row = append(row, &RowCell{
 				Text: t.GetDiskSize(),
 			})
+			// set meta size
+			row = append(row, &RowCell{
+				Text: FormatBytes(int(t.MetaSize)),
+			})
 			// set cached
 			row = append(row, &RowCell{
 				Text: t.GetCached(),
@@ -76,6 +80,12 @@ func createTable(g *gocui.Gui) (*View, error) {
 			// set I/O
 			row = append(row, &RowCell{
 				Text: t.GetIO(p, prev.Time),
+			})
+			// set R/W
+			row = append(row, &RowCell{
+				Text: FormatBytes(int(t.PacksBytesRead)) +
+					" / " +
+					FormatBytes(int(t.PacksBytesWritten+t.JournalBytesWritten+t.TombstoneBytesWritten)),
 			})
 			tr := &Row{
 				RowCells: row,

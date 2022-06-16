@@ -42,40 +42,42 @@ type AccountRank struct {
 // For history look at Op and Flow (balance updates) for baker info look at Baker,
 // for smart contract info at Contract.
 type Account struct {
-	RowId            AccountID         `pack:"I,pk,snappy" json:"row_id"`
-	Address          tezos.Address     `pack:"H,snappy"    json:"address"`
-	Type             tezos.AddressType `pack:"t,snappy"    json:"address_type"`
-	Pubkey           []byte            `pack:"k,snappy"    json:"pubkey"`
-	Counter          int64             `pack:"j,snappy"    json:"counter"`
-	BakerId          AccountID         `pack:"D,snappy"    json:"baker_id"`
-	CreatorId        AccountID         `pack:"C,snappy"    json:"creator_id"`
-	FirstIn          int64             `pack:"i,snappy"    json:"first_in"`
-	FirstOut         int64             `pack:"o,snappy"    json:"first_out"`
-	LastIn           int64             `pack:"J,snappy"    json:"last_in"`
-	LastOut          int64             `pack:"O,snappy"    json:"last_out"`
-	FirstSeen        int64             `pack:"0,snappy"    json:"first_seen"`
-	LastSeen         int64             `pack:"l,snappy"    json:"last_seen"`
-	DelegatedSince   int64             `pack:"+,snappy"    json:"delegated_since"`
-	TotalReceived    int64             `pack:"R,snappy"    json:"total_received"`
-	TotalSent        int64             `pack:"S,snappy"    json:"total_sent"`
-	TotalBurned      int64             `pack:"B,snappy"    json:"total_burned"`
-	TotalFeesPaid    int64             `pack:"F,snappy"    json:"total_fees_paid"`
-	UnclaimedBalance int64             `pack:"U,snappy"    json:"unclaimed_balance"`
-	SpendableBalance int64             `pack:"s,snappy"    json:"spendable_balance"`
-	IsFunded         bool              `pack:"f,snappy"    json:"is_funded"`
-	IsActivated      bool              `pack:"A,snappy"    json:"is_activated"`
-	IsDelegated      bool              `pack:"=,snappy"    json:"is_delegated"`
-	IsRevealed       bool              `pack:"r,snappy"    json:"is_revealed"`
-	IsBaker          bool              `pack:"d,snappy"    json:"is_baker"`
-	IsContract       bool              `pack:"c,snappy"    json:"is_contract"`
-	NOps             int               `pack:"1,snappy"    json:"n_ops"`
-	NOpsFailed       int               `pack:"2,snappy"    json:"n_ops_failed"`
-	NTx              int               `pack:"3,snappy"    json:"n_tx"`
-	NDelegation      int               `pack:"4,snappy"    json:"n_delegation"`
-	NOrigination     int               `pack:"5,snappy"    json:"n_origination"`
-	NConstants       int               `pack:"6,snappy"    json:"n_constants"`
-	TokenGenMin      int64             `pack:"m,snappy"    json:"token_gen_min"`
-	TokenGenMax      int64             `pack:"M,snappy"    json:"token_gen_max"`
+	RowId            AccountID         `pack:"I,pk" json:"row_id"`
+	Address          tezos.Address     `pack:"H"    json:"address"`
+	Type             tezos.AddressType `pack:"t"    json:"address_type"`
+	Pubkey           []byte            `pack:"k"    json:"pubkey"`
+	Counter          int64             `pack:"j"    json:"counter"`
+	BakerId          AccountID         `pack:"D"    json:"baker_id"`
+	CreatorId        AccountID         `pack:"C"    json:"creator_id"`
+	FirstIn          int64             `pack:"i"    json:"first_in"`
+	FirstOut         int64             `pack:"o"    json:"first_out"`
+	LastIn           int64             `pack:"J"    json:"last_in"`
+	LastOut          int64             `pack:"O"    json:"last_out"`
+	FirstSeen        int64             `pack:"0"    json:"first_seen"`
+	LastSeen         int64             `pack:"l"    json:"last_seen"`
+	DelegatedSince   int64             `pack:"+"    json:"delegated_since"`
+	TotalReceived    int64             `pack:"R"    json:"total_received"`
+	TotalSent        int64             `pack:"S"    json:"total_sent"`
+	TotalBurned      int64             `pack:"B"    json:"total_burned"`
+	TotalFeesPaid    int64             `pack:"F"    json:"total_fees_paid"`
+	UnclaimedBalance int64             `pack:"U"    json:"unclaimed_balance"`
+	SpendableBalance int64             `pack:"s"    json:"spendable_balance"`
+	FrozenBond       int64             `pack:"L"    json:"frozen_bond"`
+	LostBond         int64             `pack:"X"    json:"lost_bond"`
+	IsFunded         bool              `pack:"f"    json:"is_funded"`
+	IsActivated      bool              `pack:"A"    json:"is_activated"`
+	IsDelegated      bool              `pack:"="    json:"is_delegated"`
+	IsRevealed       bool              `pack:"r"    json:"is_revealed"`
+	IsBaker          bool              `pack:"d"    json:"is_baker"`
+	IsContract       bool              `pack:"c"    json:"is_contract"`
+	NOps             int               `pack:"1"    json:"n_ops"`
+	NOpsFailed       int               `pack:"2"    json:"n_ops_failed"`
+	NTx              int               `pack:"3"    json:"n_tx"`
+	NDelegation      int               `pack:"4"    json:"n_delegation"`
+	NOrigination     int               `pack:"5"    json:"n_origination"`
+	NConstants       int               `pack:"6"    json:"n_constants"`
+	TokenGenMin      int64             `pack:"m"    json:"token_gen_min"`
+	TokenGenMax      int64             `pack:"M"    json:"token_gen_max"`
 
 	// used during block processing, not stored in DB
 	IsNew       bool  `pack:"-" json:"-"` // first seen this block
@@ -134,11 +136,12 @@ func (a Account) Key() tezos.Key {
 }
 
 func (a Account) IsDust() bool {
-	return a.SpendableBalance > 0 && a.SpendableBalance < DustLimit
+	b := a.Balance()
+	return b > 0 && b < DustLimit
 }
 
 func (a Account) Balance() int64 {
-	return a.SpendableBalance
+	return a.SpendableBalance + a.FrozenBond
 }
 
 func (a *Account) Reset() {
@@ -162,6 +165,8 @@ func (a *Account) Reset() {
 	a.TotalFeesPaid = 0
 	a.UnclaimedBalance = 0
 	a.SpendableBalance = 0
+	a.FrozenBond = 0
+	a.LostBond = 0
 	a.IsFunded = false
 	a.IsActivated = false
 	a.IsDelegated = false
@@ -236,11 +241,21 @@ func (a *Account) UpdateBalance(f *Flow) error {
 		// for all types adjust spendable balance
 		a.SpendableBalance += f.AmountIn - f.AmountOut
 
-		// update token generation on in-flows only
-		if f.AmountIn > 0 {
+		// update token generation on in-flows only for non-rollup bonds
+		if f.AmountIn > 0 && f.Operation != FlowTypeRollupTransaction && f.Operation != FlowTypeRollupReward {
 			// add +1 more hop
 			a.TokenGenMin = util.Min64(a.TokenGenMin, f.TokenGenMin+1)
 			a.TokenGenMax = util.Max64(a.TokenGenMax, f.TokenGenMax+1)
+		}
+	case FlowCategoryBond:
+		if a.FrozenBond < f.AmountOut-f.AmountIn {
+			return fmt.Errorf("acc.update id %d %s frozen bond %d is smaller than "+
+				"outgoing amount %d", a.RowId, a, a.FrozenBond, f.AmountOut-f.AmountIn)
+		}
+		a.FrozenBond += f.AmountIn - f.AmountOut
+		if f.IsBurned {
+			a.TotalBurned += f.AmountOut
+			a.LostBond += f.AmountOut
 		}
 	}
 
@@ -261,8 +276,8 @@ func (a *Account) UpdateBalance(f *Flow) error {
 	}
 
 	// any flow contributes to `last seen`
-	a.IsFunded = a.IsBaker || a.SpendableBalance > 0
-	a.LastSeen = util.Max64(a.LastSeen, f.Height)
+	a.IsFunded = a.Balance() > 0
+	a.LastSeen = util.Max64N(a.LastSeen, f.Height)
 
 	// reset token generation
 	if !a.IsFunded {
@@ -326,12 +341,22 @@ func (a *Account) RollbackBalance(f *Flow) error {
 		a.SpendableBalance -= f.AmountIn - f.AmountOut
 
 		// cannot update token age
+	case FlowCategoryBond:
+		if a.FrozenBond < f.AmountIn-f.AmountOut {
+			return fmt.Errorf("acc.update id %d %s frozen bond %d is smaller than "+
+				"reversed incoming  amount %d", a.RowId, a, a.FrozenBond, f.AmountIn-f.AmountOut)
+		}
+		a.FrozenBond -= f.AmountIn - f.AmountOut
+		if f.IsBurned {
+			a.TotalBurned -= f.AmountOut
+			a.LostBond -= f.AmountOut
+		}
 	}
 
 	// skip activity updates (too complex to track previous in/out heights)
 	// and rely on subsequent block updates, we still set LastSeen to the current block
-	a.IsFunded = a.IsBaker || a.SpendableBalance > 0
-	a.LastSeen = util.Min64(f.Height, util.Max64(a.LastIn, a.LastOut))
+	a.IsFunded = a.Balance() > 0
+	a.LastSeen = util.Min64(f.Height, util.Max64N(a.LastIn, a.LastOut))
 	return nil
 }
 
@@ -360,6 +385,8 @@ func (a Account) MarshalBinary() ([]byte, error) {
 	binary.Write(buf, le, a.TotalFeesPaid)
 	binary.Write(buf, le, a.UnclaimedBalance)
 	binary.Write(buf, le, a.SpendableBalance)
+	binary.Write(buf, le, a.FrozenBond)
+	binary.Write(buf, le, a.LostBond)
 	binary.Write(buf, le, a.IsFunded)
 	binary.Write(buf, le, a.IsActivated)
 	binary.Write(buf, le, a.IsDelegated)
@@ -413,6 +440,8 @@ func (a *Account) UnmarshalBinary(data []byte) error {
 	binary.Read(buf, le, &a.TotalFeesPaid)
 	binary.Read(buf, le, &a.UnclaimedBalance)
 	binary.Read(buf, le, &a.SpendableBalance)
+	binary.Read(buf, le, &a.FrozenBond)
+	binary.Read(buf, le, &a.LostBond)
 	binary.Read(buf, le, &a.IsFunded)
 	binary.Read(buf, le, &a.IsActivated)
 	binary.Read(buf, le, &a.IsDelegated)

@@ -26,7 +26,7 @@ func NewSchema(name string, data []byte, tpl interface{}) (Schema, error) {
 		schema: &jsonschema.Schema{},
 	}
 	if err := json.Unmarshal(data, cs.schema); err != nil {
-		return nil, fmt.Errorf("metadata: reading %s schema failed: %v", name, err)
+		return nil, fmt.Errorf("metadata: reading %s schema failed: %w", name, err)
 	}
 	if tpl != nil {
 		cs.typ = reflect.TypeOf(tpl)

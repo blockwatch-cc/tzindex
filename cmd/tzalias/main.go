@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qri-io/jsonschema"
+
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzpro-go"
 	"github.com/echa/config"
@@ -148,6 +150,8 @@ func run() error {
 		return updateAlias(ctx, client)
 	case "remove":
 		return removeAlias(ctx, client)
+	case "validate":
+		return validateAliases(ctx, client)
 	default:
 		return fmt.Errorf("unkown command %s", cmd)
 	}
@@ -417,11 +421,11 @@ func (s SortedAliases) MarshalJSON() ([]byte, error) {
 	canSort := true
 	for _, v := range s {
 		sorted = append(sorted, v)
-		canSort = canSort && v.Alias != nil
+		canSort = canSort && v.Has("alias")
 	}
 	if canSort {
 		sort.Slice(sorted, func(i, j int) bool {
-			return strings.ToUpper(sorted[i].Alias.Name) < strings.ToUpper(sorted[j].Alias.Name)
+			return strings.ToUpper(sorted[i].Alias().Name) < strings.ToUpper(sorted[j].Alias().Name)
 		})
 	}
 
@@ -443,4 +447,62 @@ func (s SortedAliases) MarshalJSON() ([]byte, error) {
 	buf = append(buf, '}')
 
 	return buf, nil
+}
+
+func validateAliases(ctx context.Context, c *tzpro.Client) error {
+	if flags.NArg() < 2 {
+		return fmt.Errorf("missing filename")
+	}
+	fname := flags.Arg(1)
+	buf, err := ioutil.ReadFile(fname)
+	if err != nil {
+		return fmt.Errorf("%s: %w", fname, err)
+	}
+
+	content := make(map[string]tzpro.Metadata)
+	if err := json.Unmarshal(buf, &content); err != nil {
+		return fmt.Errorf("%s: %w", fname, err)
+	}
+
+	ss, err := c.GetAllMetadataSchemas(ctx)
+	if err != nil {
+		return err
+	}
+
+	schemas := make(map[string]*jsonschema.Schema)
+	for n, s := range ss {
+		schema := &jsonschema.Schema{}
+		if err := json.Unmarshal(s, schema); err != nil {
+			return fmt.Errorf("metadata: reading %s schema failed: %v", n, err)
+		}
+		schemas[n] = schema
+	}
+
+	allgood := true
+	for n, v := range content {
+		validate := func(name string, buf []byte) bool {
+			var failed bool
+			if s, ok := schemas[name]; ok {
+				errs, err := s.ValidateBytes(ctx, buf)
+				if err != nil {
+					failed = true
+					fmt.Printf("Error: %s - %s: %v\n", n, name, err)
+				}
+				for _, e := range errs {
+					failed = true
+					fmt.Printf("Error: %s - %s: %v\n", n, name, e.Error())
+				}
+			}
+			return !failed
+		}
+		for name, data := range v.Contents {
+			buf, _ := json.Marshal(data)
+			allgood = allgood && validate(name, buf)
+		}
+	}
+	if allgood {
+		fmt.Println("OK.")
+	}
+
+	return nil
 }

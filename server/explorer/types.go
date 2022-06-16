@@ -4,6 +4,7 @@
 package explorer
 
 import (
+    "encoding/json"
     "strconv"
 
     "blockwatch.cc/packdb/pack"
@@ -38,4 +39,9 @@ func (m NullMoney) MarshalJSON() ([]byte, error) {
         return null, nil
     }
     return []byte(strconv.FormatFloat(float64(m)/1000000, 'f', 6, 64)), nil
+}
+
+type Sortable interface {
+    Id() uint64
+    json.Marshaler
 }

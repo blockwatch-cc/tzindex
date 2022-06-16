@@ -28,10 +28,12 @@ type RestServer struct {
 }
 
 var (
-	UserAgent  = "Blockwatch-TzIndex/1.0"
-	ApiVersion string
-	debugHttp  bool
-	srv        *RestServer
+	UserAgent           = "Blockwatch-TzIndex/1.0"
+	ApiVersion          string
+	debugHttp           bool
+	srv                 *RestServer
+	defaultCacheExpires = 30 * time.Second
+	maxCacheExpires     = 24 * time.Hour
 )
 
 func New(cfg *Config) (*RestServer, error) {

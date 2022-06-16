@@ -136,17 +136,16 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *model.Blo
 
 			// rollback chain state to parent block
 			newTip := &model.ChainTip{
-				Name:          tip.Name,
-				Symbol:        tip.Symbol,
-				ChainId:       tip.ChainId,
-				BestHash:      parent.Hash,
-				BestId:        parent.RowId,
-				BestHeight:    parent.Height,
-				BestTime:      parent.Timestamp,
-				GenesisTime:   tip.GenesisTime,
-				NYEveBlocks:   tip.NYEveBlocks,
-				QuarterBlocks: tip.QuarterBlocks,
-				Deployments:   tip.Deployments,
+				Name:        tip.Name,
+				Symbol:      tip.Symbol,
+				ChainId:     tip.ChainId,
+				BestHash:    parent.Hash,
+				BestId:      parent.RowId,
+				BestHeight:  parent.Height,
+				BestTime:    parent.Timestamp,
+				GenesisTime: tip.GenesisTime,
+				NYEveBlocks: tip.NYEveBlocks,
+				Deployments: tip.Deployments,
 			}
 
 			if err := c.db.Update(func(dbTx store.Tx) error {
@@ -215,24 +214,19 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *model.Blo
 
 		// foreward chain tip
 		newTip := &model.ChainTip{
-			Name:          tip.Name,
-			Symbol:        tip.Symbol,
-			ChainId:       tip.ChainId,
-			BestHash:      block.Hash,
-			BestId:        block.RowId,
-			BestHeight:    block.Height,
-			BestTime:      block.Timestamp,
-			GenesisTime:   tip.GenesisTime,
-			NYEveBlocks:   tip.NYEveBlocks,
-			QuarterBlocks: tip.QuarterBlocks,
-			Deployments:   tip.Deployments,
+			Name:        tip.Name,
+			Symbol:      tip.Symbol,
+			ChainId:     tip.ChainId,
+			BestHash:    block.Hash,
+			BestId:      block.RowId,
+			BestHeight:  block.Height,
+			BestTime:    block.Timestamp,
+			GenesisTime: tip.GenesisTime,
+			NYEveBlocks: tip.NYEveBlocks,
+			Deployments: tip.Deployments,
 		}
 
 		// update blockchain years
-		if newTip.GenesisTime.AddDate(0, 3*(len(newTip.QuarterBlocks)+1), 0).Before(block.Timestamp) {
-			newTip.QuarterBlocks = append(newTip.QuarterBlocks, block.Height)
-			log.Infof("Happy New Blockchain Quarter %d at block %d!", len(newTip.QuarterBlocks)+1, block.Height)
-		}
 		if newTip.GenesisTime.AddDate(len(newTip.NYEveBlocks)+1, 0, 0).Before(block.Timestamp) {
 			newTip.NYEveBlocks = append(newTip.NYEveBlocks, block.Height)
 			log.Infof("Happy New Blockchain Year %d at block %d!", len(newTip.NYEveBlocks)+1, block.Height)
