@@ -1,5 +1,9 @@
 # Changelog
 
+### v13.0.1 (v013-2022-06-15)
+
+Fix Jakarta protocol detection on network migration.
+
 ### v13.0.0 (v013-2022-06-15)
 
 Jakarta release
