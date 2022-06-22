@@ -153,6 +153,9 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 	ins := make([]pack.Item, 0, int(block.Chain.FundedAccounts)) // hint
 	for _, b := range builder.Bakers() {
 		stake := b.ActiveStake(block.Params, block.Chain.Rolls)
+		if block.Params.Version < 12 {
+			stake = b.StakingBalance()
+		}
 		isActive := b.IsActive
 
 		// adjust end-of-cycle snapshot: reduce balance by unfrozen rewards

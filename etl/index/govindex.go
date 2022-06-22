@@ -743,6 +743,9 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *model.Block, b
 		if block.Cycle == 0 && rolls == 0 {
 			rolls = bkr.Rolls(block.Params)
 			stake = bkr.ActiveStake(block.Params, block.Chain.Rolls)
+			if block.Params.Version < 12 {
+				stake = bkr.StakingBalance()
+			}
 		}
 
 		// create ballots for all proposals
@@ -870,6 +873,9 @@ func (idx *GovIndex) processBallots(ctx context.Context, block *model.Block, bui
 		if block.Cycle == 0 && rolls == 0 {
 			rolls = bkr.Rolls(block.Params)
 			stake = bkr.ActiveStake(block.Params, block.Chain.Rolls)
+			if block.Params.Version < 12 {
+				stake = bkr.StakingBalance()
+			}
 		}
 
 		// update vote
@@ -1000,22 +1006,25 @@ func (idx *GovIndex) makeRollSnapshot(ctx context.Context, block *model.Block, b
 	// snapshot all active bakers with at least 1 roll (deactivation happens at
 	// start of the next cycle, so here bakers are still active!)
 	ins := make([]pack.Item, 0, int(block.Chain.RollOwners)) // hint
-	for _, v := range builder.Bakers() {
+	for _, bkr := range builder.Bakers() {
 		// check for deactivation
-		if deactivated.Contains(v.Address) {
+		if deactivated.Contains(bkr.Address) {
 			continue
 		}
 
 		// check account owns at least one roll
-		stake := v.ActiveStake(p, block.Chain.Rolls)
-		rolls := v.Rolls(p)
+		stake := bkr.ActiveStake(p, block.Chain.Rolls)
+		if block.Params.Version < 12 {
+			stake = bkr.StakingBalance()
+		}
+		rolls := bkr.Rolls(p)
 		if rolls == 0 {
 			continue
 		}
 
 		snap := &model.RollSnapshot{
 			Height:    block.Height,
-			AccountId: v.AccountId,
+			AccountId: bkr.AccountId,
 			Rolls:     rolls,
 			Stake:     stake,
 		}
