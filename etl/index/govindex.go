@@ -817,8 +817,8 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *model.Block, b
 		vote.QuorumPct, _, _ = idx.quorumByHeight(ctx, block.Height, block.Params)
 	}
 
-	// finalize vote for this round and safe
-	if block.Params.Version < 12 {
+	// finalize vote for this round and safe; stake is used in Jakarta+
+	if block.Params.Version < 13 {
 		vote.TurnoutPct = vote.TurnoutRolls * 10000 / vote.EligibleRolls
 	} else {
 		vote.TurnoutPct = vote.TurnoutStake * 10000 / vote.EligibleStake
@@ -921,8 +921,8 @@ func (idx *GovIndex) processBallots(ctx context.Context, block *model.Block, bui
 		vote.QuorumPct, _, _ = idx.quorumByHeight(ctx, block.Height, block.Params)
 	}
 
-	// finalize vote for this round and safe
-	if block.Params.Version < 12 {
+	// finalize vote for this round and safe; stake is used in Jakarta+
+	if block.Params.Version < 13 {
 		vote.TurnoutPct = vote.TurnoutRolls * 10000 / vote.EligibleRolls
 	} else {
 		vote.TurnoutPct = vote.TurnoutStake * 10000 / vote.EligibleStake
