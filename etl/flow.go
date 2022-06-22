@@ -428,7 +428,7 @@ func (b *Builder) NewDenunciationFlows(accuser, offender *model.Baker, bal rpc.B
 					f.Operation = model.FlowTypePenalty
 					f.Category = model.FlowCategoryRewards
 					f.AmountOut = -u.Change
-					f.IsFrozen = true
+					f.IsUnfrozen = true
 					f.IsBurned = true
 					flows = append(flows, f)
 				}
