@@ -1684,7 +1684,7 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.Operation, id
 
 			// create and register a new contract here; the contract index
 			// will pick this up later & inserted a database row
-			con := model.NewContract(dst, oop, op, nil, b.block.Params)
+			con := model.NewContract(dst, oop, op, b.Constants(), b.block.Params)
 			b.conMap[dst.RowId] = con
 			op.Storage = con.Storage
 			op.StorageHash = con.StorageHash
@@ -1870,7 +1870,7 @@ func (b *Builder) AppendInternalOriginationOp(
 
 			// create and register a new contract here; the contract index
 			// will pick this up later & inserted a database row
-			con := model.NewInternalContract(dst, iop, op, nil, b.block.Params)
+			con := model.NewInternalContract(dst, iop, op, b.Constants(), b.block.Params)
 			b.conMap[dst.RowId] = con
 			op.Storage = con.Storage
 			op.StorageHash = con.StorageHash
