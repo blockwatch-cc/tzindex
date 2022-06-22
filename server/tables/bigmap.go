@@ -42,18 +42,22 @@ func init() {
 
 	// add extra transalations for accounts
 	bigmapAllocSourceNames["contract"] = "A"
-	bigmapAllocSourceNames["update_time"] = "-"
-	bigmapAllocSourceNames["update_block"] = "-"
 	bigmapAllocSourceNames["alloc_time"] = "-"
 	bigmapAllocSourceNames["alloc_block"] = "-"
+	bigmapAllocSourceNames["update_time"] = "-"
+	bigmapAllocSourceNames["update_block"] = "-"
+	bigmapAllocSourceNames["delete_time"] = "-"
+	bigmapAllocSourceNames["delete_block"] = "-"
 	bigmapAllocSourceNames["key_type"] = "d"
 	bigmapAllocSourceNames["value_type"] = "d"
 	bigmapAllocAllAliases = append(bigmapAllocAllAliases, []string{
 		"contract",
-		"update_time",
-		"update_block",
 		"alloc_time",
 		"alloc_block",
+		"update_time",
+		"update_block",
+		"delete_time",
+		"delete_block",
 		"key_type",
 		"value_type",
 	}...)
@@ -91,6 +95,9 @@ func (b *BigmapAllocItem) MarshalJSONVerbose() ([]byte, error) {
 		UpdateHeight int64           `json:"update_height"`
 		UpdateTime   time.Time       `json:"update_time"`
 		UpdateBlock  tezos.BlockHash `json:"update_block"`
+		DeleteHeight int64           `json:"delete_height"`
+		DeleteTime   time.Time       `json:"delete_time"`
+		DeleteBlock  tezos.BlockHash `json:"delete_block"`
 	}{
 		RowId:        b.RowId,
 		BigmapId:     b.BigmapId,
@@ -106,6 +113,11 @@ func (b *BigmapAllocItem) MarshalJSONVerbose() ([]byte, error) {
 		UpdateHeight: b.Updated,
 		UpdateTime:   b.ctx.Indexer.LookupBlockTime(b.ctx, b.Updated),
 		UpdateBlock:  b.ctx.Indexer.LookupBlockHash(b.ctx, b.Updated),
+	}
+	if b.Deleted > 0 {
+		bigmap.DeleteHeight = b.Deleted
+		bigmap.DeleteTime = b.ctx.Indexer.LookupBlockTime(b.ctx, b.Deleted)
+		bigmap.DeleteBlock = b.ctx.Indexer.LookupBlockHash(b.ctx, b.Deleted)
 	}
 	return json.Marshal(bigmap)
 }
@@ -143,6 +155,12 @@ func (b *BigmapAllocItem) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, b.ctx.Indexer.LookupBlockTimeMs(b.ctx, b.Updated), 10)
 		case "update_block":
 			buf = strconv.AppendQuote(buf, b.ctx.Indexer.LookupBlockHash(b.ctx, b.Updated).String())
+		case "delete_height":
+			buf = strconv.AppendInt(buf, b.Deleted, 10)
+		case "delete_time":
+			buf = strconv.AppendInt(buf, b.ctx.Indexer.LookupBlockTimeMs(b.ctx, b.Deleted), 10)
+		case "delete_block":
+			buf = strconv.AppendQuote(buf, b.ctx.Indexer.LookupBlockHash(b.ctx, b.Deleted).String())
 		default:
 			continue
 		}
@@ -186,6 +204,12 @@ func (b *BigmapAllocItem) MarshalCSV() ([]string, error) {
 			res[i] = strconv.Quote(b.ctx.Indexer.LookupBlockTime(b.ctx, b.Updated).Format(time.RFC3339))
 		case "update_block":
 			res[i] = strconv.Quote(b.ctx.Indexer.LookupBlockHash(b.ctx, b.Updated).String())
+		case "delete_height":
+			res[i] = strconv.FormatInt(b.Deleted, 10)
+		case "delete_time":
+			res[i] = strconv.Quote(b.ctx.Indexer.LookupBlockTime(b.ctx, b.Deleted).Format(time.RFC3339))
+		case "delete_block":
+			res[i] = strconv.Quote(b.ctx.Indexer.LookupBlockHash(b.ctx, b.Deleted).String())
 		default:
 			continue
 		}
@@ -216,6 +240,9 @@ func StreamBigmapAllocTable(ctx *server.Context, args *TableRequest) (interface{
 				continue
 			case "alloc_time", "alloc_block":
 				srcNames = append(srcNames, "h") // height
+				continue
+			case "delete_time", "delete_block":
+				srcNames = append(srcNames, "D") // deleteed
 				continue
 			case "contract":
 				srcNames = append(srcNames, "A") // account_id

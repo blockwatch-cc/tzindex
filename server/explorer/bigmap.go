@@ -36,6 +36,9 @@ type Bigmap struct {
 	UpdatedHeight int64             `json:"update_height"`
 	UpdatedBlock  tezos.BlockHash   `json:"update_block"`
 	UpdatedTime   time.Time         `json:"update_time"`
+	DeletedHeight *int64            `json:"deleted_height"`
+	DeletedBlock  *tezos.BlockHash  `json:"deleted_block"`
+	DeletedTime   *time.Time        `json:"deleted_time"`
 	KeyType       micheline.Typedef `json:"key_type"`
 	ValueType     micheline.Typedef `json:"value_type"`
 	KeyTypePrim   *micheline.Prim   `json:"key_type_prim,omitempty"`
@@ -60,6 +63,13 @@ func NewBigmap(ctx *server.Context, alloc *model.BigmapAlloc, args server.Option
 		KeyType:       kt.Typedef(micheline.CONST_KEY),
 		ValueType:     vt.Typedef(micheline.CONST_VALUE),
 		expires:       ctx.Tip.BestTime.Add(ctx.Params.BlockTime()),
+	}
+	if alloc.Deleted > 0 {
+		m.DeletedHeight = &alloc.Deleted
+		tm := ctx.Indexer.LookupBlockTime(ctx, alloc.Deleted)
+		m.DeletedTime = &tm
+		bh := ctx.Indexer.LookupBlockHash(ctx.Context, alloc.Deleted)
+		m.DeletedBlock = &bh
 	}
 	if args.WithPrim() {
 		m.KeyTypePrim = &kt.Prim
