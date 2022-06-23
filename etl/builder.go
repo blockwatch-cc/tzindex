@@ -809,6 +809,11 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 		}
 	}
 
+	// load global constants that are referenced by newly originated contracts
+	if err := b.LoadConstants(ctx); err != nil {
+		return err
+	}
+
 	// collect data from header balance updates, note these are no explicit 'operations'
 	// in Tezos (i.e. no op hash exists); handles baker rewards, deposits, unfreeze
 	// and seed nonce slashing
@@ -828,11 +833,6 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 	// - sum op volume, fees, rewards, deposits
 	// - attach extra data if defined
 	if err := b.AppendRegularBlockOps(ctx, rollback); err != nil {
-		return err
-	}
-
-	// load global constants that are referenced by newly originated contracts
-	if err := b.LoadConstants(ctx); err != nil {
 		return err
 	}
 

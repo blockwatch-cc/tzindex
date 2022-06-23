@@ -2,10 +2,11 @@
 
 ### v13.0.1 (v013-2022-06-15)
 
-- fix Jakarta protocol detection on network migration.
+- fix Jakarta protocol detection on network migration
 - fix pre-Ithaca protocol stake usage in gov and snapshot
 - fix marking burned rewards as unfrozen to fix supply accounting
 - add missing API fields to bigmap and chain models
+- fix script top-level constants expansion
 
 ### v13.0.0 (v013-2022-06-15)
 

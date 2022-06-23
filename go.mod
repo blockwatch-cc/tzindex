@@ -4,7 +4,7 @@ go 1.16
 
 require (
 	blockwatch.cc/packdb v0.0.0-20220616123948-df5dfad03f95
-	blockwatch.cc/tzgo v1.13.1-0.20220621170945-938e9f8ac91d
+	blockwatch.cc/tzgo v1.13.1-0.20220623070439-4f1ff1236235
 	blockwatch.cc/tzpro-go v0.13.1-0.20220615144324-59d397546113
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d
 	github.com/awesome-gocui/gocui v1.0.1
