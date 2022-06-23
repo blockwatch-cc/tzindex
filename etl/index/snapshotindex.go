@@ -153,32 +153,31 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 	ins := make([]pack.Item, 0, int(block.Chain.FundedAccounts)) // hint
 	for _, b := range builder.Bakers() {
 		stake := b.ActiveStake(block.Params, block.Chain.Rolls)
+		isActive := b.IsActive
 		if block.Params.Version < 12 {
 			stake = b.StakingBalance()
-		}
-		isActive := b.IsActive
-
-		// adjust end-of-cycle snapshot: reduce balance by unfrozen rewards
-		if isCycleEnd {
-			for _, flow := range block.Flows {
-				if flow.AccountId != b.AccountId {
-					continue
+			// adjust end-of-cycle snapshot: reduce balance by unfrozen rewards
+			if isCycleEnd {
+				for _, flow := range block.Flows {
+					if flow.AccountId != b.AccountId {
+						continue
+					}
+					if flow.Category != model.FlowCategoryRewards {
+						continue
+					}
+					if flow.Operation != model.FlowTypeInternal {
+						continue
+					}
+					stake -= flow.AmountOut
+					break
 				}
-				if flow.Category != model.FlowCategoryRewards {
-					continue
-				}
-				if flow.Operation != model.FlowTypeInternal {
-					continue
-				}
-				stake -= flow.AmountOut
-				break
+				// predict deactivation at end of cycle
+				isActive = isActive && b.GracePeriod > block.Cycle
 			}
-			// predict deactivation at end of cycle
-			isActive = isActive && b.GracePeriod > block.Cycle
 		}
 
 		// skip non-roll owners
-		if stake < block.Params.TokensPerRoll {
+		if b.StakingBalance() < block.Params.TokensPerRoll {
 			continue
 		}
 
@@ -187,7 +186,7 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 		snap.Cycle = block.Cycle
 		snap.Timestamp = block.Timestamp
 		snap.Index = sn
-		snap.Rolls = stake / block.Params.TokensPerRoll
+		snap.Rolls = b.StakingBalance() / block.Params.TokensPerRoll
 		snap.ActiveStake = stake
 		snap.AccountId = b.AccountId
 		snap.BakerId = b.AccountId

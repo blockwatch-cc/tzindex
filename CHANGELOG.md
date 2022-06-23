@@ -7,6 +7,7 @@
 - fix marking burned rewards as unfrozen to fix supply accounting
 - add missing API fields to bigmap and chain models
 - fix script top-level constants expansion
+- use staking balance instead of active stake for snapshot selection
 
 ### v13.0.0 (v013-2022-06-15)
 
