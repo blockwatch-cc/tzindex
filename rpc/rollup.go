@@ -71,29 +71,30 @@ func (r *Rollup) Target() tezos.Address {
     return r.Rollup
 }
 
-func (r *Rollup) EncodeParameters() micheline.Prim {
+func (r *Rollup) EncodeParameters() micheline.Parameters {
+    params := micheline.Parameters{
+        Entrypoint: r.Kind().String(),
+    }
     switch r.Kind() {
     case tezos.OpTypeTransferTicket:
-        return r.Transfer.Prim()
+        params.Value = r.Transfer.Prim()
     case tezos.OpTypeToruSubmitBatch:
-        return r.Batch.Prim()
+        params.Value = r.Batch.Prim()
     case tezos.OpTypeToruCommit:
-        return r.Commit.Prim()
+        params.Value = r.Commit.Prim()
     case tezos.OpTypeToruReturnBond:
         // no data
-        return micheline.InvalidPrim
+        params.Value = micheline.InvalidPrim
     case tezos.OpTypeToruFinalizeCommitment,
         tezos.OpTypeToruRemoveCommitment:
         // level in receipt
-        return micheline.NewInt64(r.Metadata.Level)
+        params.Value = micheline.NewInt64(r.Metadata.Level)
     case tezos.OpTypeToruRejection:
-        return r.Reject.Prim()
+        params.Value = r.Reject.Prim()
     case tezos.OpTypeToruDispatchTickets:
-        return r.Dispatch.Prim()
-    default:
-        // not supported
-        return micheline.InvalidPrim
+        params.Value = r.Dispatch.Prim()
     }
+    return params
 }
 
 type RollupBatch struct {
@@ -102,11 +103,11 @@ type RollupBatch struct {
 }
 
 func DecodeRollupBatch(data []byte) (*RollupBatch, error) {
-    var p micheline.Prim
+    var p micheline.Parameters
     if err := p.UnmarshalBinary(data); err != nil {
         return nil, err
     }
-    return &RollupBatch{Content: tezos.HexBytes(p.Bytes)}, nil
+    return &RollupBatch{Content: tezos.HexBytes(p.Value.Bytes)}, nil
 }
 
 func (b RollupBatch) Prim() micheline.Prim {
@@ -128,15 +129,15 @@ type TransferTicket struct {
 }
 
 func DecodeTransferTicket(data []byte) (*TransferTicket, error) {
-    var p micheline.Prim
+    var p micheline.Parameters
     if err := p.UnmarshalBinary(data); err != nil {
         return nil, err
     }
     return &TransferTicket{
-        Type:     p.Args[0],
-        Contents: p.Args[1].Args[1].Args[0],
-        Ticketer: tezos.NewAddress(tezos.AddressTypeContract, p.Args[1].Args[0].Bytes),
-        Amount:   tezos.Z(*p.Args[1].Args[1].Args[1].Int),
+        Type:     p.Value.Args[0],
+        Contents: p.Value.Args[1].Args[1].Args[0],
+        Ticketer: tezos.NewAddress(tezos.AddressTypeContract, p.Value.Args[1].Args[0].Bytes),
+        Amount:   tezos.Z(*p.Value.Args[1].Args[1].Args[1].Int),
     }, nil
 }
 
@@ -163,19 +164,19 @@ type RollupCommit struct {
 }
 
 func DecodeRollupCommit(data []byte) (*RollupCommit, error) {
-    var p micheline.Prim
+    var p micheline.Parameters
     if err := p.UnmarshalBinary(data); err != nil {
         return nil, err
     }
     c := &RollupCommit{
-        Level:           p.Args[0].Int.Int64(),
-        InboxMerkleRoot: tezos.NewHash(tezos.HashTypeToruInbox, p.Args[3].Bytes),
+        Level:           p.Value.Args[0].Int.Int64(),
+        InboxMerkleRoot: tezos.NewHash(tezos.HashTypeToruInbox, p.Value.Args[3].Bytes),
     }
-    for _, v := range p.Args[1].Args {
+    for _, v := range p.Value.Args[1].Args {
         c.Messages = append(c.Messages, tezos.NewHash(tezos.HashTypeToruMessageResult, v.Bytes))
     }
-    if p.Args[2].OpCode != micheline.D_NONE {
-        pre := tezos.NewHash(tezos.HashTypeToruCommitment, p.Args[2].Bytes)
+    if p.Value.Args[2].OpCode != micheline.D_NONE {
+        pre := tezos.NewHash(tezos.HashTypeToruCommitment, p.Value.Args[2].Bytes)
         c.Predecessor = &pre
     }
     return c, nil
@@ -224,12 +225,12 @@ func (r RollupRejection) MarshalJSON() ([]byte, error) {
 }
 
 func DecodeRollupRejection(data []byte) (*RollupRejection, error) {
-    var p micheline.Prim
+    var p micheline.Parameters
     if err := p.UnmarshalBinary(data); err != nil {
         return nil, err
     }
     r := &RollupRejection{}
-    if err := json.Unmarshal(p.Bytes, r); err != nil {
+    if err := json.Unmarshal(p.Value.Bytes, r); err != nil {
         return nil, err
     }
     return r, nil
@@ -254,12 +255,12 @@ func (r RollupDispatch) MarshalJSON() ([]byte, error) {
 }
 
 func DecodeRollupDispatch(data []byte) (*RollupDispatch, error) {
-    var p micheline.Prim
+    var p micheline.Parameters
     if err := p.UnmarshalBinary(data); err != nil {
         return nil, err
     }
     r := &RollupDispatch{}
-    if err := json.Unmarshal(p.Bytes, r); err != nil {
+    if err := json.Unmarshal(p.Value.Bytes, r); err != nil {
         return nil, err
     }
     return r, nil
