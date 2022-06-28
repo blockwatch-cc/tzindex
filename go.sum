@@ -1,8 +1,8 @@
 blockwatch.cc/packdb v0.0.0-20220616123948-df5dfad03f95 h1:A+86HqFIGQCuP6IbLmvZWLF8wBYe1jSzugAkjF4w4gA=
 blockwatch.cc/packdb v0.0.0-20220616123948-df5dfad03f95/go.mod h1:dOpFQYVwUBED5/oosCZDn77j1RYy4Y1BswFJJsrozV8=
 blockwatch.cc/tzgo v1.13.0/go.mod h1:NvQyDM6E1tB2Ubyx352Ex8vvC6fpcQ444dnxtyRGeZE=
-blockwatch.cc/tzgo v1.13.1-0.20220623070439-4f1ff1236235 h1:l/grgpAQ6IvXRofLXFL/6aD+Px6rSIHTpnHV0/idAUI=
-blockwatch.cc/tzgo v1.13.1-0.20220623070439-4f1ff1236235/go.mod h1:NvQyDM6E1tB2Ubyx352Ex8vvC6fpcQ444dnxtyRGeZE=
+blockwatch.cc/tzgo v1.13.1 h1:Ljdmdau1ahBm3/4itTF6z2cBMHSzpbGiY9TlXRxiYkc=
+blockwatch.cc/tzgo v1.13.1/go.mod h1:NvQyDM6E1tB2Ubyx352Ex8vvC6fpcQ444dnxtyRGeZE=
 blockwatch.cc/tzpro-go v0.13.1-0.20220615144324-59d397546113 h1:tC7PVs2IM7XfCKhgHovHBCTA58DQ0sN0CKWUSY42Fs4=
 blockwatch.cc/tzpro-go v0.13.1-0.20220615144324-59d397546113/go.mod h1:PfF88hlh6wSCCPdrITmImFzR4wj7j4uzGxZcGr+DJGE=
 cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
