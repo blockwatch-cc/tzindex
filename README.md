@@ -50,7 +50,7 @@ Starting v12 we are no longer supporting baker `rights`, `snapshots`, `income` a
 - **Full** regular operation mode that builds all indexes (CLI: `--full`)
 - **Validate** state validation mode for checking accounts and balances each block/cycle (CLI: `--validate`)
 
-**Light mode** dramatically reduces our maintainance costs for TzIndex and is best suited for dapps where access to baking-related data is not necessary. Light mode saves roughly \~50% storage costs and \~50% indexing time while still keeping all data required for Dapps.
+**Light mode** dramatically reduces our maintenance costs for TzIndex and is best suited for dapps where access to baking-related data is not necessary. Light mode saves roughly \~50% storage costs and \~50% indexing time while still keeping all data required for Dapps.
 
 **Validate mode** works in combination with full and light mode. At each block it checks balances and states of all touched accounts against a Tezos archive node before any change is written to the database. At the end of each cycle, all known accounts in the indexer database are checked as well. This ensures 100% consistency although at the cost of a reduction in indexing speed.
 
