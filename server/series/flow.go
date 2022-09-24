@@ -218,15 +218,13 @@ func (s *FlowSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Q
 		panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", args.Series), err))
 	}
 
-	// translate long column names to short names used in pack tables
-	var srcNames []string
 	// time is auto-added from parser
 	if len(args.Columns) == 1 {
 		// use all series columns
 		args.Columns = flowSeriesNames
 	}
 	// resolve short column names
-	srcNames = make([]string, 0, len(args.Columns))
+	srcNames := make([]string, 0, len(args.Columns))
 	for _, v := range args.Columns {
 		// ignore count column
 		if v == "count" {
@@ -240,7 +238,8 @@ func (s *FlowSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Q
 	}
 
 	// build table query
-	q := pack.NewQuery(ctx.RequestID, table).
+	q := pack.NewQuery(ctx.RequestID).
+		WithTable(table).
 		WithFields(srcNames...).
 		WithOrder(args.Order).
 		AndRange("time", args.From.Time(), args.To.Time())
@@ -262,9 +261,9 @@ func (s *FlowSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Q
 			continue
 
 		case "address", "counterparty":
-			field := "A" // account
+			field := "address_id" // account
 			if prefix == "counterparty" {
-				field = "R"
+				field = "counterparty_id"
 			}
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
@@ -275,24 +274,14 @@ func (s *FlowSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Q
 				}
 				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 				if err != nil && err != index.ErrNoAccountEntry {
-					panic(err)
+					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				// Note: when not found we insert an always false condition
 				if acc == nil || acc.RowId == 0 {
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find(field), // account id
-						Mode:  mode,
-						Value: uint64(math.MaxUint64),
-						Raw:   "account not found", // debugging aid
-					})
+					q = q.And(field, mode, uint64(math.MaxUint64))
 				} else {
 					// add id as extra condition
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find(field), // account id
-						Mode:  mode,
-						Value: acc.RowId,
-						Raw:   val[0], // debugging aid
-					})
+					q = q.And(field, mode, acc.RowId)
 				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup and compile condition
@@ -304,7 +293,7 @@ func (s *FlowSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Q
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account
 					if acc == nil || acc.RowId == 0 {
@@ -315,12 +304,7 @@ func (s *FlowSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Q
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find(field), // account id
-					Mode:  mode,
-					Value: ids,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, ids)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -370,7 +354,7 @@ func (s *FlowSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Q
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions.AddAndCondition(&cond)
+					q = q.AndCondition(cond)
 				}
 			}
 		}

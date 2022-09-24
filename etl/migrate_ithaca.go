@@ -72,7 +72,8 @@ func (b *Builder) MigrateIthaca(ctx context.Context, oldparams, params *tezos.Pa
             return fmt.Errorf("cannot open snapshot table: %v", err)
         }
         upd := make([]pack.Item, 0)
-        err = pack.NewQuery("snapshot.update", snap).
+        err = pack.NewQuery("snapshot.update").
+            WithTable(snap).
             WithoutCache().
             AndEqual("cycle", extraSnap.Base).
             AndEqual("index", extraSnap.Index).
@@ -151,7 +152,8 @@ func (b *Builder) RebuildIthacaSnapshotsRightsAndIncome(ctx context.Context, par
 
     log.Infof("Migrate v%03d: removing deprecated past snapshots", params.Version)
     for cycle := startCycle; cycle <= endCycle; cycle++ {
-        _, _ = pack.NewQuery("migrate.snapshot.delete", snaps).
+        _, _ = pack.NewQuery("migrate.snapshot.delete").
+            WithTable(snaps).
             AndEqual("cycle", cycle-params.PreservedCycles-1).
             Delete(ctx)
     }
@@ -245,7 +247,8 @@ func (b *Builder) RebuildIthacaSnapshotsRightsAndIncome(ctx context.Context, par
                 DelegatedSince   int64           `pack:"delegated_since"`
             }
             a := &XAccount{}
-            err = pack.NewQuery("snapshot_delegators", accounts).
+            err = pack.NewQuery("snapshot_delegators").
+                WithTable(accounts).
                 WithoutCache().
                 WithFields("row_id", "baker_id", "spendable_balance", "delegated_since").
                 AndIn("baker_id", rollOwners).

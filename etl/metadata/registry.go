@@ -62,7 +62,7 @@ func (r Registry) Get(name string) (Schema, bool) {
 
 func (r Registry) ListSchemas() []string {
 	l := make([]string, 0)
-	for n, _ := range r.schemas {
+	for n := range r.schemas {
 		l = append(l, n)
 	}
 	sort.Strings(l)

@@ -25,7 +25,6 @@ import (
 var (
 	noindex   bool
 	nomonitor bool
-	nopublish bool
 	unsafe    bool
 	norpc     bool
 	noapi     bool

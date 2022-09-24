@@ -280,7 +280,7 @@ func (idx *AccountIndex) DisconnectBlock(ctx context.Context, block *model.Block
 	}
 	if len(bkrdel) > 0 {
 		// remove duplicates and sort; returns new slice
-		accdel = vec.UniqueUint64Slice(bkrdel)
+		bkrdel = vec.UniqueUint64Slice(bkrdel)
 		// log.Debugf("Rollback removing accounts %#v", del)
 		if err := idx.bakers.DeleteIds(ctx, bkrdel); err != nil {
 			return err
@@ -308,13 +308,15 @@ func (idx *AccountIndex) DisconnectBlock(ctx context.Context, block *model.Block
 
 func (idx *AccountIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting accounts at height %d", height)
-	_, err := pack.NewQuery("etl.account.delete", idx.accounts).
+	_, err := pack.NewQuery("etl.account.delete").
+		WithTable(idx.accounts).
 		AndEqual("first_seen", height).
 		Delete(ctx)
 	if err != nil {
 		return err
 	}
-	_, err = pack.NewQuery("etl.baker.delete", idx.bakers).
+	_, err = pack.NewQuery("etl.baker.delete").
+		WithTable(idx.bakers).
 		AndEqual("baker_since", height).
 		Delete(ctx)
 	return err

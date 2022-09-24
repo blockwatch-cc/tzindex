@@ -74,7 +74,8 @@ func (c *AddressCache) Build(ctx context.Context, table *pack.Table) error {
 	}
 	a := XAccount{}
 	c.stats.CountUpdates(1)
-	return pack.NewQuery("init_cache", table).
+	return pack.NewQuery("init_cache").
+		WithTable(table).
 		WithoutCache().
 		WithFields("row_id", "address").
 		Stream(ctx, func(r pack.Row) error {

@@ -408,7 +408,7 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 			// register genesis protocol
 			genesis.Params.StartHeight = 0
 			genesis.Params.Version = -1
-			c.indexer.ConnectProtocol(ctx, genesis.Params)
+			_ = c.indexer.ConnectProtocol(ctx, genesis.Params, nil)
 
 			// add to all indexes
 			if err := c.indexer.ConnectBlock(ctx, genesis, c.builder); err != nil {
@@ -579,7 +579,7 @@ func (c *Crawler) runMonitor(next chan<- tezos.BlockHash) {
 		}
 
 		// in any case, update blockchain info, ignore error
-		c.fetchBlockchainInfo(c.ctx)
+		_ = c.fetchBlockchainInfo(c.ctx)
 
 		// check for shutdown again
 		select {
@@ -632,7 +632,7 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 			return
 		case <-tick.C:
 			// log.Debugf("Tick %s", c.useMonitor)
-			state, useMon = c.getState()
+			_, useMon = c.getState()
 			if !useMon {
 				// this helps survive a broken monitoring channel
 				if err := c.fetchBlockchainInfo(c.ctx); err != nil {
@@ -1079,11 +1079,6 @@ func (c *Crawler) fetchParamsForBlock(ctx context.Context, block *rpc.Block) (*t
 	params, _ := c.indexer.reg.GetParams(block.Metadata.Protocol)
 	needUpdate := params == nil || params.IsCycleStart(height)
 	if needUpdate {
-		// save deployment start height
-		start := height
-		if params != nil {
-			start = params.StartHeight
-		}
 		// fetch params from chain
 		if height > 0 {
 			cons, err := c.rpc.GetConstants(ctx, rpc.BlockLevel(height))
@@ -1100,11 +1095,14 @@ func (c *Crawler) fetchParamsForBlock(ctx context.Context, block *rpc.Block) (*t
 			ForProtocol(block.Metadata.Protocol).
 			ForHeight(height)
 		params.Deployment = block.Header.Proto
-		params.StartHeight = start
 		// adjust deployment number for genesis & bootstrap blocks
 		if height <= 1 {
 			params.Deployment--
 		}
+		if params.StartHeight < 0 {
+			params.StartHeight = height
+		}
+		_ = c.indexer.reg.Register(params)
 	}
 	return params, nil
 }

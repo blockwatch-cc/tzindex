@@ -22,7 +22,7 @@ func print(val interface{}) {
 		raw := make(map[string]interface{})
 		dec := json.NewDecoder(bytes.NewBuffer(body))
 		dec.UseNumber()
-		dec.Decode(&raw)
+		_ = dec.Decode(&raw)
 		printJSON(1, raw, false)
 	}
 }

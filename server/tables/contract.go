@@ -4,7 +4,6 @@
 package tables
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -27,8 +26,6 @@ import (
 var (
 	// long -> short form
 	contractSourceNames map[string]string
-	// short -> long form
-	contractAliasNames map[string]string
 	// all aliases as list
 	contractAllAliases []string
 )
@@ -105,16 +102,10 @@ func (c *Contract) MarshalJSONVerbose() ([]byte, error) {
 		CallStats:     hex.EncodeToString(c.CallStats),
 		Features:      c.Features.String(),
 		Interfaces:    c.Interfaces.String(),
+		InterfaceHash: util.U64String(c.InterfaceHash).Hex(),
+		CodeHash:      util.U64String(c.CodeHash).Hex(),
+		StorageHash:   util.U64String(c.StorageHash).Hex(),
 	}
-
-	var tmp [8]byte
-	binary.BigEndian.PutUint64(tmp[:], c.InterfaceHash)
-	cc.InterfaceHash = hex.EncodeToString(tmp[:])
-	binary.BigEndian.PutUint64(tmp[:], c.CodeHash)
-	cc.CodeHash = hex.EncodeToString(tmp[:])
-	binary.BigEndian.PutUint64(tmp[:], c.StorageHash)
-	cc.StorageHash = hex.EncodeToString(tmp[:])
-
 	return json.Marshal(cc)
 }
 
@@ -162,29 +153,11 @@ func (c *Contract) MarshalJSONBrief() ([]byte, error) {
 				buf = append(buf, null...)
 			}
 		case "iface_hash":
-			if c.InterfaceHash != 0 {
-				var tmp [8]byte
-				binary.BigEndian.PutUint64(tmp[:], c.InterfaceHash)
-				buf = strconv.AppendQuote(buf, hex.EncodeToString(tmp[:]))
-			} else {
-				buf = append(buf, null...)
-			}
+			buf = strconv.AppendQuote(buf, util.U64String(c.InterfaceHash).Hex())
 		case "code_hash":
-			if c.CodeHash != 0 {
-				var tmp [8]byte
-				binary.BigEndian.PutUint64(tmp[:], c.CodeHash)
-				buf = strconv.AppendQuote(buf, hex.EncodeToString(tmp[:]))
-			} else {
-				buf = append(buf, null...)
-			}
+			buf = strconv.AppendQuote(buf, util.U64String(c.CodeHash).Hex())
 		case "storage_hash":
-			if c.StorageHash != 0 {
-				var tmp [8]byte
-				binary.BigEndian.PutUint64(tmp[:], c.StorageHash)
-				buf = strconv.AppendQuote(buf, hex.EncodeToString(tmp[:]))
-			} else {
-				buf = append(buf, null...)
-			}
+			buf = strconv.AppendQuote(buf, util.U64String(c.StorageHash).Hex())
 		case "call_stats":
 			buf = strconv.AppendQuote(buf, hex.EncodeToString(c.CallStats))
 		case "features":
@@ -235,17 +208,11 @@ func (c *Contract) MarshalCSV() ([]string, error) {
 		case "storage":
 			res[i] = strconv.Quote(hex.EncodeToString(c.Storage))
 		case "iface_hash":
-			var tmp [8]byte
-			binary.BigEndian.PutUint64(tmp[:], c.InterfaceHash)
-			res[i] = strconv.Quote(hex.EncodeToString(tmp[:]))
+			res[i] = strconv.Quote(util.U64String(c.InterfaceHash).Hex())
 		case "code_hash":
-			var tmp [8]byte
-			binary.BigEndian.PutUint64(tmp[:], c.CodeHash)
-			res[i] = strconv.Quote(hex.EncodeToString(tmp[:]))
+			res[i] = strconv.Quote(util.U64String(c.CodeHash).Hex())
 		case "storage_hash":
-			var tmp [8]byte
-			binary.BigEndian.PutUint64(tmp[:], c.StorageHash)
-			res[i] = strconv.Quote(hex.EncodeToString(tmp[:]))
+			res[i] = strconv.Quote(util.U64String(c.StorageHash).Hex())
 		case "call_stats":
 			res[i] = strconv.Quote(hex.EncodeToString(c.CallStats))
 		case "features":
@@ -297,7 +264,8 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 	}
 
 	// build table query
-	q := pack.NewQuery(ctx.RequestID, table).
+	q := pack.NewQuery(ctx.RequestID).
+		WithTable(table).
 		WithFields(srcNames...).
 		WithLimit(int(args.Limit)).
 		WithOrder(args.Order)
@@ -327,12 +295,7 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Pk(),
-				Mode:  cursorMode,
-				Value: id,
-				Raw:   val[0], // debugging aid
-			})
+			q = q.And("I", cursorMode, id)
 		case "address":
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
@@ -344,12 +307,7 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 				if addr.Type != tezos.AddressTypeContract {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid contract address '%s'", val[0]), err))
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find("H"),
-					Mode:  mode,
-					Value: addr.Bytes22(),
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, addr.Bytes22())
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup (Note: does not check for address type so may
 				// return duplicates)
@@ -364,12 +322,7 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					}
 					hashes = append(hashes, addr.Bytes22())
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find("H"),
-					Mode:  mode,
-					Value: hashes,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, hashes)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -405,13 +358,7 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					nDiff := int64(to.Sub(bestTime) / params.BlockTime())
 					toBlock = bestHeight + nDiff
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find(field),
-					Mode:  cond.Mode,
-					From:  fromBlock,
-					To:    toBlock,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.AndRange(field, fromBlock, toBlock)
 			default:
 				// cond.Value is time.Time
 				valueTime := cond.Value.(time.Time)
@@ -422,12 +369,7 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					nDiff := int64(valueTime.Sub(bestTime) / params.BlockTime())
 					valueBlock = bestHeight + nDiff
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find(field),
-					Mode:  cond.Mode,
-					Value: valueBlock,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, cond.Mode, valueBlock)
 			}
 
 		case "creator":
@@ -445,24 +387,14 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 				}
 				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 				if err != nil && err != index.ErrNoAccountEntry {
-					panic(err)
+					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				// Note: when not found we insert an always false condition
 				if acc == nil || acc.RowId == 0 {
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find(field), // creator account id
-						Mode:  mode,
-						Value: uint64(math.MaxUint64),
-						Raw:   "account not found", // debugging aid
-					})
+					q = q.And(field, mode, uint64(math.MaxUint64))
 				} else {
 					// add id as extra condition
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find(field), // creator account id
-						Mode:  mode,
-						Value: acc.RowId,
-						Raw:   val[0], // debugging aid
-					})
+					q = q.And(field, mode, acc.RowId)
 				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup and compile condition
@@ -474,7 +406,7 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account
 					if acc == nil || acc.RowId == 0 {
@@ -485,44 +417,29 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find(contractSourceNames[prefix]), // creator account id
-					Mode:  mode,
-					Value: ids,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(contractSourceNames[prefix], mode, ids)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
 		case "iface_hash", "code_hash", "storage_hash":
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
-				buf, err := hex.DecodeString(val[0])
-				if err != nil || len(buf) != 8 {
+				u, err := util.DecodeU64String(val[0])
+				if err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid hash '%s'", val[0]), err))
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find(field),
-					Mode:  mode,
-					Value: binary.BigEndian.Uint64(buf[:8]),
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, u)
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-hash lookup
 				hashes := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					buf, err := hex.DecodeString(v)
-					if err != nil || len(buf) != 8 {
+					u, err := util.DecodeU64String(v)
+					if err != nil {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid hash '%s'", v), err))
 					}
-					hashes = append(hashes, binary.BigEndian.Uint64(buf[:8]))
+					hashes = append(hashes, u.U64())
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find(field),
-					Mode:  mode,
-					Value: hashes,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, hashes)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -538,8 +455,7 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 			// the same field name may appear multiple times, in which case conditions
 			// are combined like any other condition with logical AND
 			for _, v := range val {
-				switch prefix {
-				case "storage_burn":
+				if prefix == "storage_burn" {
 					fvals := make([]string, 0)
 					for _, vv := range strings.Split(v, ",") {
 						fval, err := strconv.ParseFloat(vv, 64)
@@ -553,7 +469,7 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions.AddAndCondition(&cond)
+					q = q.AndCondition(cond)
 				}
 			}
 		}
@@ -581,7 +497,7 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 	// prepare return type marshalling
 	contract := &Contract{
 		verbose: args.Verbose,
-		columns: util.StringList(args.Columns),
+		columns: args.Columns,
 		params:  params,
 		ctx:     ctx,
 	}
@@ -596,11 +512,11 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 		enc.SetEscapeHTML(false)
 
 		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
+		_, _ = io.WriteString(ctx.ResponseWriter, "[")
 		// close JSON array on panic
 		defer func() {
 			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
+				_, _ = io.WriteString(ctx.ResponseWriter, "]")
 				panic(e)
 			}
 		}()
@@ -609,7 +525,7 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 		var needComma bool
 		err = res.Walk(func(r pack.Row) error {
 			if needComma {
-				io.WriteString(ctx.ResponseWriter, ",")
+				_, _ = io.WriteString(ctx.ResponseWriter, ",")
 			} else {
 				needComma = true
 			}
@@ -628,7 +544,7 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 			return nil
 		})
 		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
+		_, _ = io.WriteString(ctx.ResponseWriter, "]")
 		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":

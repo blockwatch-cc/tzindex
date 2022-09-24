@@ -23,8 +23,6 @@ import (
 var (
 	// long -> short form
 	constantSourceNames map[string]string
-	// short -> long form
-	constantAliasNames map[string]string
 	// all aliases as list
 	constantAllAliases []string
 )
@@ -99,7 +97,7 @@ func (c *Constant) MarshalJSONBrief() ([]byte, error) {
 			if c.Value != nil {
 				buf = strconv.AppendQuote(buf, hex.EncodeToString(c.Value))
 			} else {
-				buf = append(buf, "null"...)
+				buf = append(buf, null...)
 			}
 		case "height":
 			buf = strconv.AppendInt(buf, c.Height, 10)
@@ -178,17 +176,17 @@ func StreamConstantTable(ctx *server.Context, args *TableRequest) (interface{}, 
 	}
 
 	// build table query
-	q := pack.Query{
-		Name:   ctx.RequestID,
-		Fields: table.Fields().Select(srcNames...),
-		Limit:  int(args.Limit),
-		Order:  args.Order,
-	}
+	q := pack.NewQuery(ctx.RequestID).
+		WithTable(table).
+		WithFields(srcNames...).
+		WithLimit(int(args.Limit)).
+		WithOrder(args.Order)
 
 	// build dynamic filter conditions from query (will panic on error)
 	for key, val := range ctx.Request.URL.Query() {
 		keys := strings.Split(key, ".")
 		prefix := keys[0]
+		field := constantSourceNames[prefix]
 		mode := pack.FilterModeEqual
 		if len(keys) > 1 {
 			mode = pack.ParseFilterMode(keys[1])
@@ -209,12 +207,7 @@ func StreamConstantTable(ctx *server.Context, args *TableRequest) (interface{}, 
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Pk(),
-				Mode:  cursorMode,
-				Value: id,
-				Raw:   val[0], // debugging aid
-			})
+			q = q.And("I", cursorMode, id)
 		case "creator":
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
@@ -223,12 +216,7 @@ func StreamConstantTable(ctx *server.Context, args *TableRequest) (interface{}, 
 				if err != nil || !addr.IsValid() {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find("C"),
-					Mode:  mode,
-					Value: addr.Bytes22(),
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, addr.Bytes22())
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup (Note: does not check for address type so may
 				// return duplicates)
@@ -240,12 +228,7 @@ func StreamConstantTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					}
 					hashes = append(hashes, addr.Bytes22())
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find("C"),
-					Mode:  mode,
-					Value: hashes,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, hashes)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -257,12 +240,7 @@ func StreamConstantTable(ctx *server.Context, args *TableRequest) (interface{}, 
 				if err != nil || !hash.IsValid() {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid exprhash '%s'", val[0]), err))
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find("H"),
-					Mode:  mode,
-					Value: hash.Bytes(),
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, hash.Bytes())
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-hash lookup
 				hashes := make([][]byte, 0)
@@ -273,12 +251,7 @@ func StreamConstantTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					}
 					hashes = append(hashes, addr.Bytes())
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find("H"),
-					Mode:  mode,
-					Value: hashes,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, hashes)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -293,17 +266,14 @@ func StreamConstantTable(ctx *server.Context, args *TableRequest) (interface{}, 
 			// the same field name may appear multiple times, in which case conditions
 			// are combined like any other condition with logical AND
 			for _, v := range val {
-				switch prefix {
-				case "cycle":
-					if v == "head" {
-						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
-						v = strconv.FormatInt(int64(currentCycle), 10)
-					}
+				if prefix == "cycle" && v == "head" {
+					currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
+					v = strconv.FormatInt(currentCycle, 10)
 				}
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions.AddAndCondition(&cond)
+					q = q.AndCondition(cond)
 				}
 			}
 		}
@@ -323,7 +293,7 @@ func StreamConstantTable(ctx *server.Context, args *TableRequest) (interface{}, 
 	// prepare return type marshalling
 	val := &Constant{
 		verbose: args.Verbose,
-		columns: util.StringList(args.Columns),
+		columns: args.Columns,
 		ctx:     ctx,
 	}
 
@@ -337,11 +307,11 @@ func StreamConstantTable(ctx *server.Context, args *TableRequest) (interface{}, 
 		enc.SetEscapeHTML(false)
 
 		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
+		_, _ = io.WriteString(ctx.ResponseWriter, "[")
 		// close JSON array on panic
 		defer func() {
 			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
+				_, _ = io.WriteString(ctx.ResponseWriter, "]")
 				panic(e)
 			}
 		}()
@@ -350,7 +320,7 @@ func StreamConstantTable(ctx *server.Context, args *TableRequest) (interface{}, 
 		var needComma bool
 		err = table.Stream(ctx, q, func(r pack.Row) error {
 			if needComma {
-				io.WriteString(ctx.ResponseWriter, ",")
+				_, _ = io.WriteString(ctx.ResponseWriter, ",")
 			} else {
 				needComma = true
 			}
@@ -368,7 +338,7 @@ func StreamConstantTable(ctx *server.Context, args *TableRequest) (interface{}, 
 			return nil
 		})
 		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
+		_, _ = io.WriteString(ctx.ResponseWriter, "]")
 		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":

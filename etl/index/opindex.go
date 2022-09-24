@@ -181,7 +181,8 @@ func (idx *OpIndex) ConnectBlock(ctx context.Context, block *model.Block, b mode
 				model.OpTypeDeposit,
 				model.OpTypeBonus,
 				model.OpTypeReward,
-				model.OpTypeDepositsLimit:
+				model.OpTypeDepositsLimit,
+				model.OpTypeVdfRevelation:
 				continue
 			}
 		}
@@ -217,13 +218,15 @@ func (idx *OpIndex) DisconnectBlock(ctx context.Context, block *model.Block, _ m
 
 func (idx *OpIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting ops at height %d", height)
-	_, err := pack.NewQuery("etl.op.delete", idx.table).
+	_, err := pack.NewQuery("etl.op.delete").
+		WithTable(idx.table).
 		AndEqual("height", height).
 		Delete(ctx)
 	if err != nil {
 		return err
 	}
-	_, err = pack.NewQuery("etl.endorse.delete", idx.endorse).
+	_, err = pack.NewQuery("etl.endorse.delete").
+		WithTable(idx.endorse).
 		AndEqual("height", height).
 		Delete(ctx)
 	return err
@@ -236,7 +239,8 @@ func (idx *OpIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 		Height int64 `pack:"height"`
 	}
 	var xb XBlock
-	err := pack.NewQuery("etl.op.scan", idx.table).
+	err := pack.NewQuery("etl.op.scan").
+		WithTable(idx.table).
 		AndEqual("cycle", cycle).
 		Stream(ctx, func(r pack.Row) error {
 			if err := r.Decode(&xb); err != nil {
@@ -251,14 +255,16 @@ func (idx *OpIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 	if err != nil {
 		return err
 	}
-	_, err = pack.NewQuery("etl.op.delete", idx.table).
+	_, err = pack.NewQuery("etl.op.delete").
+		WithTable(idx.table).
 		AndEqual("cycle", cycle).
 		Delete(ctx)
 	if err != nil {
 		return err
 	}
 	if first > 0 && last >= first {
-		_, err = pack.NewQuery("etl.endorse.delete", idx.endorse).
+		_, err = pack.NewQuery("etl.endorse.delete").
+			WithTable(idx.endorse).
 			AndRange("height", first, last).
 			Delete(ctx)
 	}

@@ -209,19 +209,19 @@ func loadBigmap(ctx *server.Context) *model.BigmapAlloc {
 	}
 }
 
-func parseBigmapKey(ctx *server.Context, typ micheline.OpCode) (micheline.Key, tezos.ExprHash) {
+func parseBigmapKey(ctx *server.Context, typ micheline.OpCode) tezos.ExprHash {
 	if k, ok := mux.Vars(ctx.Request)["key"]; !ok || k == "" {
 		panic(server.EBadRequest(server.EC_RESOURCE_ID_MISSING, "missing bigmap key", nil))
 	} else {
 		expr, err := tezos.ParseExprHash(k)
 		if err == nil {
-			return micheline.Key{}, expr
+			return expr
 		}
 		key, err := micheline.ParseKey(typ, k)
 		if err != nil {
 			panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, "invalid bigmap key", err))
 		}
-		return key, key.Hash()
+		return key.Hash()
 	}
 }
 
@@ -385,7 +385,7 @@ func ReadBigmapValue(ctx *server.Context) (interface{}, int) {
 	// support key and key_hash
 	alloc := loadBigmap(ctx)
 	keyType, valType := alloc.GetKeyType(), alloc.GetValueType()
-	_, expr := parseBigmapKey(ctx, keyType.OpCode)
+	expr := parseBigmapKey(ctx, keyType.OpCode)
 
 	r := etl.ListRequest{
 		BigmapId:  alloc.BigmapId,
@@ -564,10 +564,11 @@ func ListBigmapUpdates(ctx *server.Context) (interface{}, int) {
 			}
 		}
 		if args.WithMeta() {
+			tm := v.Timestamp
 			upd.BigmapValue.Meta = &BigmapMeta{
 				Contract:     contract,
 				BigmapId:     alloc.BigmapId,
-				UpdateTime:   &v.Timestamp,
+				UpdateTime:   &tm,
 				UpdateHeight: v.Height,
 			}
 			if op, ok := opCache[v.OpId]; ok {
@@ -595,7 +596,7 @@ func ListBigmapKeyUpdates(ctx *server.Context) (interface{}, int) {
 
 	alloc := loadBigmap(ctx)
 	keyType, valType := alloc.GetKeyType(), alloc.GetValueType()
-	_, expr := parseBigmapKey(ctx, keyType.OpCode)
+	expr := parseBigmapKey(ctx, keyType.OpCode)
 
 	r := etl.ListRequest{
 		BigmapId:  alloc.BigmapId,

@@ -81,7 +81,8 @@ func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *tezos.Params) (
 	// find eligible KT1 contracts where we need to check the manager
 	managers := make([]uint64, 0)
 	acc := &model.Account{}
-	err = pack.NewQuery("etl.addr.babylon_airdrop_eligible", table).
+	err = pack.NewQuery("etl.addr.babylon_airdrop_eligible").
+		WithTable(table).
 		AndEqual("address_type", tezos.AddressTypeContract).
 		Stream(ctx, func(r pack.Row) error {
 			if err := r.Decode(acc); err != nil {
@@ -103,7 +104,8 @@ func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *tezos.Params) (
 
 	// find unfunded managers who are not reqistered as delegates
 	var count int
-	err = pack.NewQuery("etl.addr.babylon_airdrop", table).
+	err = pack.NewQuery("etl.addr.babylon_airdrop").
+		WithTable(table).
 		AndEqual("is_funded", false).
 		AndEqual("is_baker", false).
 		AndIn("I", vec.UniqueUint64Slice(managers)). // make list unique
@@ -144,7 +146,8 @@ func (b *Builder) RunBabylonUpgrade(ctx context.Context, params *tezos.Params, n
 	// Note: these are KT1 accounts distinct from the tz1/2/3 airdrop
 	// accounts above
 	var count int
-	err = pack.NewQuery("etl.account.babylon_upgrade", table).
+	err = pack.NewQuery("etl.account.babylon_upgrade").
+		WithTable(table).
 		WithoutCache().
 		AndEqual("address_type", tezos.AddressTypeContract).
 		AndEqual("is_contract", false).
@@ -194,7 +197,8 @@ func (b *Builder) RunBabylonUpgrade(ctx context.Context, params *tezos.Params, n
 	// find eligible smart KT1 contracts to upgrade
 	var smart int
 	acc := &model.Account{}
-	err = pack.NewQuery("etl.contract.babylon_upgrade", table).
+	err = pack.NewQuery("etl.contract.babylon_upgrade").
+		WithTable(table).
 		WithoutCache().
 		AndEqual("address_type", tezos.AddressTypeContract).
 		AndEqual("is_contract", true).

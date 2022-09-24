@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"blockwatch.cc/packdb/pack"
+	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/index"
@@ -191,7 +192,7 @@ func (b Account) RegisterDirectRoutes(r *mux.Router) error {
 
 func (b Account) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/{ident}", server.C(ReadAccount)).Methods("GET").Name("account")
-	r.HandleFunc("/{ident}/contracts", server.C(ReadManagedAccounts)).Methods("GET")
+	r.HandleFunc("/{ident}/contracts", server.C(ReadDeployedContracts)).Methods("GET")
 	r.HandleFunc("/{ident}/operations", server.C(ListAccountOperations)).Methods("GET")
 	r.HandleFunc("/{ident}/metadata", server.C(ReadMetadata)).Methods("GET")
 
@@ -252,18 +253,39 @@ func ReadAccount(ctx *server.Context) (interface{}, int) {
 	return NewAccount(ctx, loadAccount(ctx), args), http.StatusOK
 }
 
-func ReadManagedAccounts(ctx *server.Context) (interface{}, int) {
+func ReadDeployedContracts(ctx *server.Context) (interface{}, int) {
 	args := &AccountRequest{}
 	ctx.ParseRequestArgs(args)
 	acc := loadAccount(ctx)
 
-	m, err := ctx.Indexer.ListManaged(ctx, acc.RowId, args.Limit, args.Offset, args.Cursor, args.Order)
+	ccs, err := ctx.Indexer.ListContracts(ctx, etl.ListRequest{
+		Account: acc,
+		Offset:  args.Offset,
+		Limit:   args.Limit,
+		Cursor:  args.Cursor,
+		Order:   args.Order,
+	})
 	if err != nil {
-		panic(server.EInternal(server.EC_DATABASE, "cannot read managed accounts", err))
+		panic(server.EInternal(server.EC_DATABASE, "cannot read deployed contracts", err))
 	}
-	resp := make([]*Account, 0, len(m))
-	for _, v := range m {
-		resp = append(resp, NewAccount(ctx, v, args))
+
+	// we also need the account data for contracts
+	ids := make([]uint64, 0, len(ccs))
+	for _, v := range ccs {
+		ids = append(ids, v.AccountId.Value())
+	}
+	ids = vec.UniqueUint64Slice(ids)
+	accs, err := ctx.Indexer.LookupAccountIds(ctx.Context, ids)
+	if err != nil {
+		panic(server.EInternal(server.EC_DATABASE, "cannot read contract accounts", err))
+	}
+	accMap := make(map[model.AccountID]*model.Account)
+	for _, v := range accs {
+		accMap[v.RowId] = v
+	}
+	resp := make([]*Contract, 0, len(ccs))
+	for _, v := range ccs {
+		resp = append(resp, NewContract(ctx, v, accMap[v.AccountId], args))
 	}
 	return resp, http.StatusOK
 }

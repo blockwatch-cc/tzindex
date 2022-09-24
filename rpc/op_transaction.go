@@ -19,6 +19,56 @@ type Transaction struct {
 	Parameters  micheline.Parameters `json:"parameters"`
 }
 
+func (t Transaction) FindEmbeddedAddresses(addrs *tezos.AddressSet) {
+	if !t.Destination.IsContract() {
+		return
+	}
+	collect := func(p micheline.Prim) error {
+		switch {
+		case len(p.String) == 36 || len(p.String) == 37:
+			if a, err := tezos.ParseAddress(p.String); err == nil {
+				addrs.AddUnique(a)
+			}
+			return micheline.PrimSkip
+		case tezos.IsAddressBytes(p.Bytes):
+			a := tezos.Address{}
+			if err := a.UnmarshalBinary(p.Bytes); err == nil {
+				addrs.AddUnique(a)
+			}
+			return micheline.PrimSkip
+		default:
+			return nil
+		}
+	}
+
+	// from storage
+	_ = t.Metadata.Result.Storage.Walk(collect)
+
+	// from bigmap updates
+	for _, v := range t.Metadata.Result.BigmapEvents() {
+		if v.Action != micheline.DiffActionUpdate {
+			continue
+		}
+		_ = v.Key.Walk(collect)
+		_ = v.Value.Walk(collect)
+	}
+
+	// from internal results
+	for _, it := range t.Metadata.InternalResults {
+		if it.Script != nil {
+			_ = it.Script.Storage.Walk(collect)
+		}
+		_ = it.Result.Storage.Walk(collect)
+		for _, v := range it.Result.BigmapEvents() {
+			if v.Action != micheline.DiffActionUpdate {
+				continue
+			}
+			_ = v.Key.Walk(collect)
+			_ = v.Value.Walk(collect)
+		}
+	}
+}
+
 type InternalResult struct {
 	Kind        tezos.OpType         `json:"kind"`
 	Source      tezos.Address        `json:"source"`
@@ -30,6 +80,9 @@ type InternalResult struct {
 	Amount      int64                `json:"amount,string"`  // transaction
 	Balance     int64                `json:"balance,string"` // origination
 	Script      *micheline.Script    `json:"script"`         // origination
+	Type        micheline.Prim       `json:"type"`           // event
+	Payload     micheline.Prim       `json:"payload"`        // event
+	Tag         string               `json:"tag"`            // event
 }
 
 // found in block metadata from v010+

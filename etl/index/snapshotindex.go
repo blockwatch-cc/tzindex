@@ -224,7 +224,8 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 		DelegatedSince   int64           `pack:"delegated_since"`
 	}
 	a := &XAccount{}
-	err = pack.NewQuery("snapshot.delegators", accounts).
+	err = pack.NewQuery("snapshot.delegators").
+		WithTable(accounts).
 		WithoutCache().
 		WithFields("row_id", "baker_id", "spendable_balance", "frozen_bond", "delegated_since").
 		AndIn("baker_id", rollOwners).
@@ -281,7 +282,8 @@ func (idx *SnapshotIndex) DisconnectBlock(ctx context.Context, block *model.Bloc
 
 func (idx *SnapshotIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting snapshots at height %d", height)
-	_, err := pack.NewQuery("etl.snapshot.delete", idx.table).
+	_, err := pack.NewQuery("etl.snapshot.delete").
+		WithTable(idx.table).
 		AndEqual("height", height).
 		Delete(ctx)
 	return err
@@ -289,7 +291,8 @@ func (idx *SnapshotIndex) DeleteBlock(ctx context.Context, height int64) error {
 
 func (idx *SnapshotIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 	// log.Debugf("Rollback deleting snapshots for cycle %d", cycle)
-	_, err := pack.NewQuery("etl.snapshot.delete", idx.table).
+	_, err := pack.NewQuery("etl.snapshot.delete").
+		WithTable(idx.table).
 		AndEqual("cycle", cycle).
 		Delete(ctx)
 	return err
@@ -310,7 +313,8 @@ func (idx *SnapshotIndex) updateCycleSnapshot(ctx context.Context, block *model.
 	// 	snap.Index, snap.Base, block.Height, block.Cycle)
 
 	upd := make([]pack.Item, 0)
-	err := pack.NewQuery("snapshot.update", idx.table).
+	err := pack.NewQuery("snapshot.update").
+		WithTable(idx.table).
 		WithoutCache().
 		AndEqual("cycle", snap.Base).
 		AndEqual("index", snap.Index).
@@ -336,7 +340,8 @@ func (idx *SnapshotIndex) updateCycleSnapshot(ctx context.Context, block *model.
 	}
 
 	// delete non-selected snapshots
-	_, err = pack.NewQuery("snapshot.delete", idx.table).
+	_, err = pack.NewQuery("snapshot.delete").
+		WithTable(idx.table).
 		WithoutCache().
 		AndEqual("cycle", snap.Base).
 		AndEqual("is_selected", false).

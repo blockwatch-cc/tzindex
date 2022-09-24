@@ -1,6 +1,7 @@
 // Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
+//nolint:unused,deadcode
 package rpc
 
 import logpkg "github.com/echa/log"

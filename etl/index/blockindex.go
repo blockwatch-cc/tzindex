@@ -149,7 +149,8 @@ func (idx *BlockIndex) ConnectBlock(ctx context.Context, block *model.Block, b m
 		log.Debugf("Marking block %d [%d] index %d as roll snapshot for cycle %d",
 			snapHeight, block.Params.CycleFromHeight(snapHeight), snap.Index, snap.Cycle)
 		snapBlock := &model.Block{}
-		err := pack.NewQuery("block_height.search", idx.table).
+		err := pack.NewQuery("block_height.search").
+			WithTable(idx.table).
 			WithoutCache().
 			WithLimit(1).
 			AndEqual("height", snapHeight).
@@ -178,7 +179,8 @@ func (idx *BlockIndex) DisconnectBlock(ctx context.Context, block *model.Block, 
 
 func (idx *BlockIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting block at height %d", height)
-	_, err := pack.NewQuery("etl.block.delete", idx.table).
+	_, err := pack.NewQuery("etl.block.delete").
+		WithTable(idx.table).
 		AndEqual("height", height).
 		Delete(ctx)
 	return err
@@ -186,7 +188,8 @@ func (idx *BlockIndex) DeleteBlock(ctx context.Context, height int64) error {
 
 func (idx *BlockIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 	// log.Debugf("Rollback deleting block cycle %d", cycle)
-	_, err := pack.NewQuery("etl.block.delete", idx.table).
+	_, err := pack.NewQuery("etl.block.delete").
+		WithTable(idx.table).
 		AndEqual("cycle", cycle).
 		Delete(ctx)
 	return err

@@ -150,7 +150,8 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 				// seed nonces are injected by the current block's baker, but may be sent
 				// by another baker, rights are from cycle - 1 !!
 				right = &model.Right{}
-				err := pack.NewQuery("rights.search_seed", idx.table).
+				err := pack.NewQuery("rights.search_seed").
+					WithTable(idx.table).
 					AndEqual("cycle", block.Cycle-1).
 					AndEqual("account_id", op.CreatorId).
 					Execute(ctx, right)
@@ -213,7 +214,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 		start := param.CycleStartHeight(cycle)
 		pos := int(block.Height-start) - 1
 		upd := make([]pack.Item, 0)
-		for id, _ := range endorsers {
+		for id := range endorsers {
 			right, err := idx.loadRight(ctx, cycle, id)
 			if err != nil {
 				// on protocol upgrades we may see extra endorsers, create rights here
@@ -323,7 +324,8 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 				return err
 			}
 			s := &model.Snapshot{}
-			err = pack.NewQuery("snapshot.create_rights", snap).
+			err = pack.NewQuery("snapshot.create_rights").
+				WithTable(snap).
 				WithoutCache().
 				AndEqual("cycle", sn.Base).  // source snapshot cycle
 				AndEqual("index", sn.Index). // selected index
@@ -371,7 +373,8 @@ func (idx *RightsIndex) DisconnectBlock(ctx context.Context, block *model.Block,
 	// and entire last future cycle
 	if block.Params.IsCycleStart(block.Height) && block.Parent != nil {
 		prevBlocksPerCycle := block.Parent.Params.BlocksPerCycle
-		err := pack.NewQuery("rights.disconnect_start_of_cycle", idx.table).
+		err := pack.NewQuery("rights.disconnect_start_of_cycle").
+			WithTable(idx.table).
 			AndRange("cycle", cycle-1, cycle).
 			Stream(ctx, func(row pack.Row) error {
 				right := &model.Right{}
@@ -403,7 +406,8 @@ func (idx *RightsIndex) DisconnectBlock(ctx context.Context, block *model.Block,
 		if p.IsSeedRequired(block.Height) {
 			seedPos = int((block.Height - start) / p.BlocksPerCommitment)
 		}
-		err := pack.NewQuery("rights.disconnect_mid_cycle", idx.table).
+		err := pack.NewQuery("rights.disconnect_mid_cycle").
+			WithTable(idx.table).
 			AndEqual("cycle", cycle).
 			Stream(ctx, func(row pack.Row) error {
 				right := &model.Right{}
@@ -431,7 +435,8 @@ func (idx *RightsIndex) DeleteBlock(ctx context.Context, height int64) error {
 
 func (idx *RightsIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 	// log.Debugf("Rollback deleting rights for cycle %d", cycle)
-	_, err := pack.NewQuery("etl.rights.delete", idx.table).
+	_, err := pack.NewQuery("etl.rights.delete").
+		WithTable(idx.table).
 		AndEqual("cycle", cycle).
 		Delete(ctx)
 	return err
@@ -452,7 +457,8 @@ func (idx *RightsIndex) loadRight(ctx context.Context, cycle int64, id model.Acc
 		return right, nil
 	}
 	right = &model.Right{}
-	err := pack.NewQuery("rights.search_bake", idx.table).
+	err := pack.NewQuery("rights.search_bake").
+		WithTable(idx.table).
 		AndEqual("cycle", cycle).
 		AndEqual("account_id", id).
 		Execute(ctx, right)

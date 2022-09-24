@@ -1,6 +1,5 @@
 // Copyright (c) 2021 Blockwatch Data Inc.
 // Authors: abdul@blockwatch.cc, alex@blockwatch.cc
-//
 package main
 
 import (
@@ -32,7 +31,7 @@ var (
 
 	version string = "v0.1"
 	commit  string = "dev"
-	appDesc string = "Blockwatch tztop - ©2021 Blockwatch Data Inc, All rights reserved."
+	appDesc string = "Blockwatch tztop - ©2022 Blockwatch Data Inc, All rights reserved."
 )
 
 func main() {
@@ -92,7 +91,7 @@ func run() error {
 	log.Infof("Go version: %s\n", runtime.Version())
 
 	// set logging level
-	switch true {
+	switch {
 	case quiet:
 		config.Set("logging.level", "error")
 	case trace:

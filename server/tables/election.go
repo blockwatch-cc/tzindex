@@ -25,8 +25,6 @@ import (
 var (
 	// long -> short form
 	electionSourceNames map[string]string
-	// short -> long form
-	electionAliasNames map[string]string
 	// all aliases as list
 	electionAllAliases []string
 )
@@ -286,17 +284,17 @@ func StreamElectionTable(ctx *server.Context, args *TableRequest) (interface{}, 
 	}
 
 	// build table query
-	q := pack.Query{
-		Name:   ctx.RequestID,
-		Fields: table.Fields().Select(srcNames...),
-		Limit:  int(args.Limit),
-		Order:  args.Order,
-	}
+	q := pack.NewQuery(ctx.RequestID).
+		WithTable(table).
+		WithFields(srcNames...).
+		WithLimit(int(args.Limit)).
+		WithOrder(args.Order)
 
 	// build dynamic filter conditions from query (will panic on error)
 	for key, val := range ctx.Request.URL.Query() {
 		keys := strings.Split(key, ".")
 		prefix := keys[0]
+		field := proposalSourceNames[prefix]
 		mode := pack.FilterModeEqual
 		if len(keys) > 1 {
 			mode = pack.ParseFilterMode(keys[1])
@@ -317,12 +315,7 @@ func StreamElectionTable(ctx *server.Context, args *TableRequest) (interface{}, 
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Pk(),
-				Mode:  cursorMode,
-				Value: id,
-				Raw:   val[0], // debugging aid
-			})
+			q = q.And("I", cursorMode, id)
 		case "proposal":
 			// parse proposal hash and lookup id
 			// valid filter modes: eq, in
@@ -332,12 +325,7 @@ func StreamElectionTable(ctx *server.Context, args *TableRequest) (interface{}, 
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty hash matches id 0 (== missing proposal)
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find("P"), // proposal id
-						Mode:  mode,
-						Value: 0,
-						Raw:   val[0], // debugging aid
-					})
+					q = q.And(field, mode, 0)
 				} else {
 					// single-proposal lookup and compile condition
 					h, err := tezos.ParseProtocolHash(val[0])
@@ -346,24 +334,14 @@ func StreamElectionTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					}
 					prop, err := ctx.Indexer.LookupProposal(ctx, h)
 					if err != nil && err != index.ErrNoProposalEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", val[0]), err))
 					}
 					// Note: when not found we insert an always false condition
 					if prop == nil || prop.RowId == 0 {
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find("P"), // proposal id
-							Mode:  mode,
-							Value: uint64(math.MaxUint64),
-							Raw:   "proposal not found", // debugging aid
-						})
+						q = q.And(field, mode, uint64(math.MaxUint64))
 					} else {
 						// add proto id as extra condition
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find("P"), // proposal id
-							Mode:  mode,
-							Value: prop.RowId,
-							Raw:   val[0], // debugging aid
-						})
+						q = q.And(field, mode, prop.RowId)
 					}
 				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
@@ -376,7 +354,7 @@ func StreamElectionTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					}
 					prop, err := ctx.Indexer.LookupProposal(ctx, h)
 					if err != nil && err != index.ErrNoProposalEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", v), err))
 					}
 					// skip not found proposal
 					if prop == nil || prop.RowId == 0 {
@@ -387,12 +365,7 @@ func StreamElectionTable(ctx *server.Context, args *TableRequest) (interface{}, 
 				}
 				// Note: when list is empty (no proposal was found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find("P"), // proposal id
-					Mode:  mode,
-					Value: ids,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, ids)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -402,12 +375,7 @@ func StreamElectionTable(ctx *server.Context, args *TableRequest) (interface{}, 
 			if !period.IsValid() {
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid voting period '%s'", val[0]), nil))
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Find("n"), // num periods
-				Mode:  mode,
-				Value: period.Num(),
-				Raw:   val[0], // debugging aid
-			})
+			q = q.And(field, mode, period.Num())
 		default:
 			// translate long column name used in query to short column name used in packs
 			if short, ok := electionSourceNames[prefix]; !ok {
@@ -422,7 +390,7 @@ func StreamElectionTable(ctx *server.Context, args *TableRequest) (interface{}, 
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions.AddAndCondition(&cond)
+					q = q.AndCondition(cond)
 				}
 			}
 		}
@@ -442,7 +410,7 @@ func StreamElectionTable(ctx *server.Context, args *TableRequest) (interface{}, 
 	// prepare return type marshalling
 	election := &Election{
 		verbose: args.Verbose,
-		columns: util.StringList(args.Columns),
+		columns: args.Columns,
 		ctx:     ctx,
 	}
 
@@ -456,11 +424,11 @@ func StreamElectionTable(ctx *server.Context, args *TableRequest) (interface{}, 
 		enc.SetEscapeHTML(false)
 
 		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
+		_, _ = io.WriteString(ctx.ResponseWriter, "[")
 		// close JSON array on panic
 		defer func() {
 			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
+				_, _ = io.WriteString(ctx.ResponseWriter, "]")
 				ctx.Log.Errorf("%w", e)
 				panic(e)
 			}
@@ -470,7 +438,7 @@ func StreamElectionTable(ctx *server.Context, args *TableRequest) (interface{}, 
 		var needComma bool
 		err = table.Stream(ctx, q, func(r pack.Row) error {
 			if needComma {
-				io.WriteString(ctx.ResponseWriter, ",")
+				_, _ = io.WriteString(ctx.ResponseWriter, ",")
 			} else {
 				needComma = true
 			}
@@ -489,7 +457,7 @@ func StreamElectionTable(ctx *server.Context, args *TableRequest) (interface{}, 
 		})
 
 		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
+		_, _ = io.WriteString(ctx.ResponseWriter, "]")
 		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":

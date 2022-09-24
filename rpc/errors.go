@@ -1,3 +1,4 @@
+// Copyright (c) 2018 ECAD Labs Inc. MIT License
 // Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 

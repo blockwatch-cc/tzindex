@@ -1,6 +1,5 @@
 // Copyright (c) 2021 Blockwatch Data Inc.
 // Authors: abdul@blockwatch.cc, alex@blockwatch.cc
-//
 package main
 
 import (
@@ -72,6 +71,9 @@ func AlignSlash(t string, n int) string {
 		return AlignCenter(t, n)
 	}
 	lpad := n/2 - idx
+	if lpad < 0 {
+		lpad = 0
+	}
 	rpad := n - slen - lpad
 	if rpad < 0 {
 		return AlignRight(t, n)

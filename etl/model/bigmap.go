@@ -192,7 +192,7 @@ func (b *BigmapKV) GetKey(typ micheline.Type) (micheline.Key, error) {
 
 func (b *BigmapKV) GetValue(typ micheline.Type) micheline.Value {
 	prim := micheline.Prim{}
-	prim.UnmarshalBinary(b.Value)
+	_ = prim.UnmarshalBinary(b.Value)
 	return micheline.NewValue(typ, prim)
 }
 
@@ -300,7 +300,7 @@ func (b *BigmapUpdate) GetKeyHash() tezos.ExprHash {
 
 func (b *BigmapUpdate) GetValue(typ micheline.Type) micheline.Value {
 	prim := micheline.Prim{}
-	prim.UnmarshalBinary(b.Value)
+	_ = prim.UnmarshalBinary(b.Value)
 	return micheline.NewValue(typ, prim)
 }
 
@@ -371,18 +371,18 @@ func (b *BigmapUpdate) ToEvent() micheline.BigmapEvent {
 	}
 	switch b.Action {
 	case micheline.DiffActionAlloc:
-		ev.KeyType.UnmarshalBinary(b.Key)
-		ev.ValueType.UnmarshalBinary(b.Value)
+		_ = ev.KeyType.UnmarshalBinary(b.Key)
+		_ = ev.ValueType.UnmarshalBinary(b.Value)
 	case micheline.DiffActionUpdate:
-		ev.Key.UnmarshalBinary(b.Key)
-		ev.Value.UnmarshalBinary(b.Value)
+		_ = ev.Key.UnmarshalBinary(b.Key)
+		_ = ev.Value.UnmarshalBinary(b.Value)
 		ev.KeyHash = micheline.KeyHash(b.Key)
 	case micheline.DiffActionCopy:
 		ev.DestId = b.BigmapId
 		ev.SourceId = int64(b.KeyId)
 	case micheline.DiffActionRemove:
 		if len(b.Key) > 0 {
-			ev.Key.UnmarshalBinary(b.Key)
+			_ = ev.Key.UnmarshalBinary(b.Key)
 		}
 	}
 	return ev

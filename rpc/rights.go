@@ -303,12 +303,21 @@ func (c *Client) FetchRightsByCycle(ctx context.Context, height, cycle int64, bu
 	}
 	snap, err := c.GetSnapshotIndexCycle(ctx, level, cycle, bundle.Params)
 	if err != nil {
-		return err
+		// FIXME: kathmandunet does not know c4 snapshot at block 4097, but should
+		log.Errorf("Fetching cycle index for c%d at block %d: %v", cycle, height, err)
+		// return err
+		snap = &SnapshotIndex{
+			Cycle: cycle,
+			Base:  bundle.Params.SnapshotBaseCycle(cycle),
+			Index: 0, // guess, just return something
+		}
 	}
 	bundle.Snapshot = snap
 	info, err := c.GetSnapshotInfoCycle(ctx, level, cycle)
 	if err != nil {
-		return err
+		// FIXME: kathmandunet does not know c4 snapshot at block 4097, but should
+		log.Error(err)
+		// return err
 	}
 	bundle.SnapInfo = info
 

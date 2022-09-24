@@ -11,6 +11,7 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/store"
+	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/cache"
 	"blockwatch.cc/tzindex/etl/model"
@@ -131,7 +132,7 @@ func (m *Indexer) Init(ctx context.Context, tip *model.ChainTip, mode Mode) erro
 			return err
 		}
 		for _, v := range deps {
-			m.reg.Register(v)
+			_ = m.reg.Register(v)
 		}
 		return nil
 	})
@@ -287,21 +288,23 @@ func (m *Indexer) Close() error {
 	return nil
 }
 
-func (m *Indexer) ConnectProtocol(ctx context.Context, params *tezos.Params) error {
-	prev := m.reg.GetParamsLatest()
+func (m *Indexer) ConnectProtocol(ctx context.Context, next, prev *tezos.Params) error {
 	err := m.statedb.Update(func(dbTx store.Tx) error {
 		if prev != nil {
-			prev.EndHeight = params.StartHeight - 1
+			if prev.EndHeight < 0 {
+				prev.EndHeight = util.Max64(0, next.StartHeight-1)
+			}
 			if err := dbStoreDeployment(dbTx, prev); err != nil {
 				return err
 			}
+			_ = m.reg.Register(prev)
 		}
-		return dbStoreDeployment(dbTx, params)
+		return dbStoreDeployment(dbTx, next)
 	})
 	if err != nil {
 		return err
 	}
-	return m.reg.Register(params)
+	return m.reg.Register(next)
 }
 
 func (m *Indexer) ConnectBlock(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {

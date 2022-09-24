@@ -93,6 +93,15 @@ func (b Block) IsProtocolUpgrade() bool {
 	return !b.Metadata.Protocol.Equal(b.Metadata.NextProtocol)
 }
 
+func (b Block) Invoice() (upd BalanceUpdate, ok bool) {
+	list := b.Metadata.BalanceUpdates
+	if len(list) > 1 && list[0].Category == "invoice" {
+		upd = list[1]
+		ok = true
+	}
+	return
+}
+
 // InvalidBlock represents invalid block hash along with the errors that led to it being declared invalid
 type InvalidBlock struct {
 	Block tezos.BlockHash `json:"block"`
@@ -135,7 +144,7 @@ type BlockContent struct {
 type LevelInfo struct {
 	Level int64 `json:"level"`
 	Cycle int64 `json:"cycle"`
-	// deprecated in v008
+	// <v008
 	VotingPeriod int64 `json:"voting_period"`
 }
 
@@ -156,18 +165,19 @@ type BlockMetadata struct {
 	Baker            tezos.Address      `json:"baker"`
 	Proposer         tezos.Address      `json:"proposer"`
 	ConsumedGas      int64              `json:"consumed_gas,string"`
+	ConsumedMilliGas int64              `json:"consumed_milli_gas,string"`
 	Deactivated      []tezos.Address    `json:"deactivated"`
 	BalanceUpdates   BalanceUpdates     `json:"balance_updates"`
 
-	// deprecated in v008
+	// <v008
 	Level            *LevelInfo              `json:"level"`
 	VotingPeriodKind *tezos.VotingPeriodKind `json:"voting_period_kind"`
 
-	// v008
+	// v008+
 	LevelInfo        *LevelInfo        `json:"level_info"`
 	VotingPeriodInfo *VotingPeriodInfo `json:"voting_period_info"`
 
-	// v010
+	// v010+
 	ImplicitOperationsResults []ImplicitResult `json:"implicit_operations_results"`
 	LiquidityBakingEscapeEma  int64            `json:"liquidity_baking_escape_ema"`
 }
@@ -179,11 +189,25 @@ func (m *BlockMetadata) GetLevel() int64 {
 	return m.Level.Level
 }
 
+func (m BlockMetadata) Gas() int64 {
+	if m.ConsumedMilliGas > 0 {
+		return m.ConsumedMilliGas / 1000
+	}
+	return m.ConsumedGas
+}
+
+func (m BlockMetadata) MilliGas() int64 {
+	if m.ConsumedMilliGas > 0 {
+		return m.ConsumedMilliGas
+	}
+	return m.ConsumedGas * 1000
+}
+
 // GetBlock returns information about a Tezos block
 // https://tezos.gitlab.io/mainnet/api/rpc.html#get-block-id
 func (c *Client) GetBlock(ctx context.Context, id BlockID) (*Block, error) {
 	var block Block
-	u := fmt.Sprintf("chains/main/blocks/%s", id)
+	u := fmt.Sprintf("chains/main/blocks/%s?metadata=always", id)
 	if err := c.Get(ctx, u, &block); err != nil {
 		return nil, err
 	}
@@ -205,7 +229,7 @@ func (c *Client) GetBlockHeader(ctx context.Context, id BlockID) (*BlockHeader, 
 // https://tezos.gitlab.io/mainnet/api/rpc.html#chains-chain-id-blocks
 func (c *Client) GetBlockMetadata(ctx context.Context, id BlockID) (*BlockMetadata, error) {
 	var meta BlockMetadata
-	u := fmt.Sprintf("chains/main/blocks/%s/metadata", id)
+	u := fmt.Sprintf("chains/main/blocks/%s/metadata?metadata=always", id)
 	if err := c.Get(ctx, u, &meta); err != nil {
 		return nil, err
 	}
@@ -236,7 +260,7 @@ func (c *Client) GetTips(ctx context.Context, depth int, head tezos.BlockHash) (
 // https://tezos.gitlab.io/mainnet/api/rpc.html#chains-chain-id-blocks
 func (c *Client) GetTipHeader(ctx context.Context) (*BlockHeader, error) {
 	var head BlockHeader
-	u := fmt.Sprintf("chains/main/blocks/head/header")
+	u := "chains/main/blocks/head/header"
 	if err := c.Get(ctx, u, &head); err != nil {
 		return nil, err
 	}

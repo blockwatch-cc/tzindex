@@ -1,6 +1,5 @@
 // Copyright (c) 2021 Blockwatch Data Inc.
 // Authors: abdul@blockwatch.cc, alex@blockwatch.cc
-//
 package main
 
 import (

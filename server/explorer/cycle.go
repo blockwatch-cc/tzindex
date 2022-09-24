@@ -166,7 +166,7 @@ func NewCycle(ctx *server.Context, id int64) *Cycle {
 		SnapshotHeight:     -1,
 		SnapshotIndex:      -1,
 		WorstBakedBlock:    -1, // when all are qual
-		WorstEndorsedBlock: -1, //when all are equal
+		WorstEndorsedBlock: -1, // when all are equal
 	}
 
 	// set times
@@ -216,7 +216,8 @@ func NewCycle(ctx *server.Context, id int64) *Cycle {
 			log.Errorf("cycle: block table: %v", err)
 		}
 		b := &model.Block{}
-		err = pack.NewQuery("cycle.blocks", blocks).
+		err = pack.NewQuery("cycle.blocks").
+			WithTable(blocks).
 			WithFields("is_cycle_snapshot",
 				"height",
 				"baker_id",
@@ -296,7 +297,8 @@ func NewCycle(ctx *server.Context, id int64) *Cycle {
 			return ec
 		}
 		e := &model.Endorsement{}
-		err = pack.NewQuery("cycle.endorse_ops", ends).
+		err = pack.NewQuery("cycle.endorse_ops").
+			WithTable(ends).
 			WithFields("sender_id").
 			AndRange(
 				"height",
@@ -324,7 +326,8 @@ func NewCycle(ctx *server.Context, id int64) *Cycle {
 			return ec
 		}
 		op := &model.Op{}
-		seeds, err := pack.NewQuery("cycle.seeds", ops).
+		seeds, err := pack.NewQuery("cycle.seeds").
+			WithTable(ops).
 			AndRange("height", start, end).
 			AndEqual("type", model.OpTypeNonceRevelation).
 			Count(ctx.Context)
@@ -339,7 +342,8 @@ func NewCycle(ctx *server.Context, id int64) *Cycle {
 		// count unique double bake and endorse events
 		bake2 := make(map[int64]struct{})    // height
 		endorse2 := make(map[int64]struct{}) // height
-		err = pack.NewQuery("cycle.penalty_ops", ops).
+		err = pack.NewQuery("cycle.penalty_ops").
+			WithTable(ops).
 			WithFields("type", "data").
 			AndEqual("cycle", id).
 			AndIn("type", []uint8{
@@ -440,7 +444,7 @@ func parseCycle(ctx *server.Context) int64 {
 	if id, ok := mux.Vars(ctx.Request)["cycle"]; !ok || id == "" {
 		panic(server.EBadRequest(server.EC_RESOURCE_ID_MISSING, "missing cycle identifier", nil))
 	} else {
-		switch true {
+		switch {
 		case id == "head":
 			p := ctx.Params
 			return p.CycleFromHeight(ctx.Tip.BestHeight)
@@ -459,7 +463,7 @@ func ReadCycle(ctx *server.Context) (interface{}, int) {
 	p := ctx.Params
 	tiptime := ctx.Tip.BestTime
 
-	// compose cycle data from N, N-7 and N+7 (or +-6 for Ithaca+)
+	// compose cycle data from N, N-7 and N+7
 	cycle := lookupOrBuildCycle(ctx, id)
 	p = p.ForCycle(id)
 

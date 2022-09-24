@@ -10,6 +10,8 @@ import (
 	"strconv"
 )
 
+const CONTRACT = "contract"
+
 // BlockID is an interface to abstract different kinds of block addressing modes
 type BlockID interface {
 	fmt.Stringer
@@ -65,7 +67,7 @@ func (o BlockOffset) String() string {
 	if o.Offset > 0 {
 		ref += "+" + strconv.FormatInt(o.Offset, 10)
 	} else if o.Offset < 0 {
-		ref += strconv.FormatInt(o.Offset, 10)
+		ref += "~" + strconv.FormatInt(-o.Offset, 10)
 	}
 	return ref
 }

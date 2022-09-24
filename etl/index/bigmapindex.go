@@ -198,8 +198,8 @@ type InMemoryBigmap struct {
 	Live    []*model.BigmapKV
 }
 
-func NewInMemoryBigmap(alloc *model.BigmapAlloc) InMemoryBigmap {
-	return InMemoryBigmap{
+func NewInMemoryBigmap(alloc *model.BigmapAlloc) *InMemoryBigmap {
+	return &InMemoryBigmap{
 		Alloc:   alloc,
 		Updates: make([]*model.BigmapUpdate, 0),
 		Live:    make([]*model.BigmapKV, 0),
@@ -212,7 +212,8 @@ func (idx *BigmapIndex) loadAlloc(ctx context.Context, id int64) (*model.BigmapA
 		return cachedAlloc.(*model.BigmapAlloc), nil
 	}
 	alloc := &model.BigmapAlloc{}
-	err := pack.NewQuery("etl.bigmap.find_alloc", idx.allocTable).
+	err := pack.NewQuery("etl.bigmap.find_alloc").
+		WithTable(idx.allocTable).
 		AndEqual("bigmap_id", id).
 		Execute(ctx, alloc)
 	if err != nil {
@@ -224,7 +225,7 @@ func (idx *BigmapIndex) loadAlloc(ctx context.Context, id int64) (*model.BigmapA
 
 // assumes op ids are already set (must run after OpIndex)
 func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
-	tmp := make(map[int64]InMemoryBigmap)
+	tmp := make(map[int64]*InMemoryBigmap)
 	for _, op := range block.Ops {
 		// skip non-bigmap ops
 		if len(op.BigmapEvents) == 0 || !op.IsSuccess {
@@ -264,7 +265,7 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 
 			case micheline.DiffActionCopy:
 				// copy the alloc
-				// copy and all live keys
+				// copy all live keys
 				// generate updates for inserting all live keys
 				var (
 					alloc   *model.BigmapAlloc
@@ -306,7 +307,8 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 					updates = append(updates, alloc.ToUpdateCopy(op, diff.SourceId))
 
 					// load all currently live bigmap entries from source
-					err = pack.NewQuery("etl.bigmap.copy", idx.valueTable).
+					err = pack.NewQuery("etl.bigmap.copy").
+						WithTable(idx.valueTable).
 						AndEqual("bigmap_id", diff.SourceId).
 						Stream(ctx, func(r pack.Row) error {
 							source := &model.BigmapKV{}
@@ -379,7 +381,8 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 					// list all live keys and schedule for deletion
 					ids := make([]uint64, 0, 1024)
 					updates := make([]pack.Item, 0, 1024)
-					err = pack.NewQuery("etl.bigmap.empty", idx.valueTable).
+					err = pack.NewQuery("etl.bigmap.empty").
+						WithTable(idx.valueTable).
 						AndEqual("bigmap_id", diff.Id).
 						Stream(ctx, func(r pack.Row) error {
 							source := &model.BigmapKV{}
@@ -466,7 +469,8 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 
 				// find the previous entry, key should exist
 				var prev *model.BigmapKV
-				err = pack.NewQuery("etl.bigmap.remove", idx.valueTable).
+				err = pack.NewQuery("etl.bigmap.remove").
+					WithTable(idx.valueTable).
 					AndEqual("key_id", model.GetKeyId(diff.Id, diff.KeyHash)).
 					WithDesc().
 					Stream(ctx, func(r pack.Row) error {
@@ -539,7 +543,7 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 
 					// insert to update table
 					if err := idx.updateTable.Insert(ctx, bm.Updates[len(bm.Updates)-1]); err != nil {
-						return fmt.Errorf("etl.bigmap.empty: %v", err)
+						return fmt.Errorf("etl.bigmap.update: %v", err)
 					}
 
 					// done, next bigmap diff
@@ -554,7 +558,9 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 
 				// find the previous entry, key should exist
 				var prev *model.BigmapKV
-				err = pack.NewQuery("etl.bigmap.update", idx.valueTable).
+				err = pack.NewQuery("etl.bigmap.update").
+					WithTable(idx.valueTable).
+					AndEqual("bigmap_id", diff.Id).
 					AndEqual("key_id", model.GetKeyId(diff.Id, diff.KeyHash)).
 					WithDesc().
 					Stream(ctx, func(r pack.Row) error {
@@ -611,7 +617,8 @@ func (idx *BigmapIndex) DisconnectBlock(ctx context.Context, block *model.Block,
 func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// reconstruct live keys by rolling back updates
 	updates := make([]*model.BigmapUpdate, 0)
-	err := pack.NewQuery("etl.bigmap.delete_scan", idx.updateTable).
+	err := pack.NewQuery("etl.bigmap.delete_scan").
+		WithTable(idx.updateTable).
 		WithDesc().
 		AndEqual("height", height).
 		Execute(ctx, &updates)
@@ -643,7 +650,8 @@ func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 			prev *model.BigmapUpdate
 			live *model.BigmapKV
 		)
-		err = pack.NewQuery("etl.bigmap.rollback", idx.updateTable).
+		err = pack.NewQuery("etl.bigmap.rollback").
+			WithTable(idx.updateTable).
 			AndEqual("bigmap_id", v.BigmapId).
 			AndEqual("key_id", key).
 			AndLt("I", v.RowId).            // exclude self
@@ -693,7 +701,8 @@ func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 
 		case micheline.DiffActionUpdate, micheline.DiffActionCopy:
 			// load current live key, may not exist
-			err = pack.NewQuery("etl.bigmap.rollback", idx.valueTable).
+			err = pack.NewQuery("etl.bigmap.rollback").
+				WithTable(idx.valueTable).
 				AndEqual("bigmap_id", v.BigmapId).
 				AndEqual("key_id", key).
 				Stream(ctx, func(r pack.Row) error {
@@ -761,7 +770,8 @@ func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 	}
 
 	// delete all updates at height
-	_, err = pack.NewQuery("etl.bigmap.delete", idx.updateTable).
+	_, err = pack.NewQuery("etl.bigmap.delete").
+		WithTable(idx.updateTable).
 		AndEqual("height", height).
 		Delete(ctx)
 	if err != nil {
@@ -781,7 +791,8 @@ func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 	}
 
 	// delete all allocs from this block
-	_, err = pack.NewQuery("etl.bigmap.delete", idx.allocTable).
+	_, err = pack.NewQuery("etl.bigmap.delete").
+		WithTable(idx.allocTable).
 		AndEqual("h", height). // alloc height
 		Delete(ctx)
 	if err != nil {

@@ -271,13 +271,15 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *model.Blo
 // passed best block is the new end of the main chain. The lists will be empty if the
 // passed tip is not on a side chain.
 //
-//             to detach
-//           |-------------|
-//           [ ] - [ ] - [ ] <- tip
-//          /
+//	   to detach
+//	 |-------------|
+//	 [ ] - [ ] - [ ] <- tip
+//	/
+//
 // [ ] - [ ] - [ ] - [ ] - [ ] - [ ]  <-best
-//        |    |-------------------|
-//  fork point        to attach (Note: all but last may exist from previous reorg)
+//
+//	      |    |-------------------|
+//	fork point        to attach (Note: all but last may exist from previous reorg)
 //
 // This function MUST be called with the chain state lock held (for reads).
 func (c *Crawler) getReorganizeBlocks(ctx context.Context, tip *model.Block, best *model.Block, rollbackOnly bool) (*model.Block, *list.List, *list.List, error) {

@@ -26,8 +26,6 @@ import (
 var (
 	// long -> short form
 	accSourceNames map[string]string
-	// short -> long form
-	accAliasNames map[string]string
 	// all aliases as list
 	accAllAliases []string
 )
@@ -42,7 +40,7 @@ func init() {
 
 	// add extra translations for accounts
 	accSourceNames["baker"] = "D"
-	accSourceNames["creator"] = "M"
+	accSourceNames["creator"] = "C"
 	accSourceNames["first_seen_time"] = "0"
 	accSourceNames["first_seen_time"] = "0"
 	accSourceNames["last_seen_time"] = "l"
@@ -458,7 +456,8 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 	}
 
 	// build table query
-	q := pack.NewQuery(ctx.RequestID, table).
+	q := pack.NewQuery(ctx.RequestID).
+		WithTable(table).
 		WithFields(srcNames...).
 		WithLimit(int(args.Limit)).
 		WithOrder(args.Order)
@@ -488,12 +487,7 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Pk(),
-				Mode:  cursorMode,
-				Value: id,
-				Raw:   val[0], // debugging aid
-			})
+			q = q.And("I", cursorMode, id)
 		case "address":
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
@@ -503,24 +497,14 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 				}
 				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 				if err != nil && err != index.ErrNoAccountEntry {
-					panic(err)
+					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				// Note: when not found we insert an always false condition
 				if acc == nil || acc.RowId == 0 {
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find("I"), // account id
-						Mode:  mode,
-						Value: uint64(math.MaxUint64),
-						Raw:   "account not found", // debugging aid
-					})
+					q = q.And("I", mode, uint64(math.MaxUint64))
 				} else {
 					// add id as extra condition
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find("I"), // account id
-						Mode:  mode,
-						Value: acc.RowId,
-						Raw:   val[0], // debugging aid
-					})
+					q = q.And("I", mode, acc.RowId)
 				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup (Note: does not check for address type so may
@@ -533,12 +517,7 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 					}
 					hashes = append(hashes, addr.Bytes22())
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find("H"),
-					Mode:  mode,
-					Value: hashes,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And("H", mode, hashes)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -551,12 +530,7 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 			if err != nil {
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid pubkey hash '%s'", val), err))
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Find(field),
-				Mode:  pack.FilterModeEqual,
-				Value: k.Data,
-				Raw:   val[0], // debugging aid
-			})
+			q = q.AndEqual(field, k.Data)
 
 		case "baker", "creator":
 			// parse address and lookup id
@@ -568,12 +542,7 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty address matches id 0 (== no delegate/manager set)
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find(field), // account id
-						Mode:  mode,
-						Value: 0,
-						Raw:   val[0], // debugging aid
-					})
+					q = q.And(field, mode, 0)
 				} else {
 					// single-account lookup and compile condition
 					addr, err := tezos.ParseAddress(val[0])
@@ -582,24 +551,14 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					// Note: when not found we insert an always false condition
 					if acc == nil || acc.RowId == 0 {
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find(field), // account id
-							Mode:  mode,
-							Value: uint64(math.MaxUint64),
-							Raw:   "account not found", // debugging aid
-						})
+						q = q.And(field, mode, uint64(math.MaxUint64))
 					} else {
 						// add id as extra condition
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find(field), // account id
-							Mode:  mode,
-							Value: acc.RowId,
-							Raw:   val[0], // debugging aid
-						})
+						q = q.And(field, mode, acc.RowId)
 					}
 				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
@@ -612,7 +571,7 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account
 					if acc == nil || acc.RowId == 0 {
@@ -623,12 +582,7 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find(field), // account id
-					Mode:  mode,
-					Value: ids,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, ids)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -676,7 +630,7 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions.AddAndCondition(&cond)
+					q = q.AndCondition(cond)
 				}
 			}
 		}
@@ -704,7 +658,7 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 	// prepare return type marshalling
 	acc := &Account{
 		verbose: args.Verbose,
-		columns: util.StringList(args.Columns),
+		columns: args.Columns,
 		params:  params,
 		ctx:     ctx,
 	}
@@ -719,11 +673,11 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 		enc.SetEscapeHTML(false)
 
 		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
+		_, _ = io.WriteString(ctx.ResponseWriter, "[")
 		// close JSON array on panic
 		defer func() {
 			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
+				_, _ = io.WriteString(ctx.ResponseWriter, "]")
 				panic(e)
 			}
 		}()
@@ -732,7 +686,7 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 		var needComma bool
 		err = res.Walk(func(r pack.Row) error {
 			if needComma {
-				io.WriteString(ctx.ResponseWriter, ",")
+				_, _ = io.WriteString(ctx.ResponseWriter, ",")
 			} else {
 				needComma = true
 			}
@@ -750,7 +704,7 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 			return nil
 		})
 		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
+		_, _ = io.WriteString(ctx.ResponseWriter, "]")
 		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":

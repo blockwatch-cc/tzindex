@@ -1,6 +1,5 @@
 // Copyright (c) 2021 Blockwatch Data Inc.
 // Authors: abdul@blockwatch.cc, alex@blockwatch.cc
-//
 package main
 
 import (
@@ -8,8 +7,9 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
+	"os"
 )
 
 type Config struct {
@@ -36,11 +36,10 @@ func NewClient(cfg Config) (*Client, error) {
 			return nil, fmt.Errorf("Could not load TLS client cert or key %s] %v", cfg.Cert, err)
 		}
 		tlsConfig.Certificates = []tls.Certificate{cert}
-		tlsConfig.BuildNameToCertificate()
 	}
 	if len(cfg.Ca) > 0 {
 		// load from file
-		caCert, err := ioutil.ReadFile(cfg.Ca)
+		caCert, err := os.ReadFile(cfg.Ca)
 		if err != nil {
 			return nil, fmt.Errorf("Could not load TLS CA file %s: %v", cfg.Ca, err)
 		}
@@ -74,11 +73,12 @@ func (c *Client) get(path string, result interface{}) error {
 		log.Debugf("query %s: failed with error:  %v", req.URL.String(), err)
 		return err
 	}
+	defer res.Body.Close()
 	if res.StatusCode/100 != 2 {
 		log.Debugf("query %s: failed with status code %d", req.URL.String(), res.StatusCode)
 		return err
 	}
-	buf, err := ioutil.ReadAll(res.Body)
+	buf, err := io.ReadAll(res.Body)
 	if err != nil {
 		log.Debugf("reading failed: %v", err)
 		return err

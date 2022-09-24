@@ -4,9 +4,6 @@
 package explorer
 
 import (
-	"encoding/binary"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"github.com/gorilla/mux"
 	"net/http"
@@ -16,6 +13,7 @@ import (
 	"time"
 
 	"blockwatch.cc/packdb/pack"
+	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
@@ -69,20 +67,14 @@ func NewContract(ctx *server.Context, c *model.Contract, a *model.Account, args 
 		LastSeen:      a.LastSeen,
 		NCallsSuccess: a.NOps - a.NOpsFailed,
 		NCallsFailed:  a.NOpsFailed,
+		InterfaceHash: util.U64String(c.InterfaceHash).Hex(),
+		CodeHash:      util.U64String(c.CodeHash).Hex(),
+		StorageHash:   util.U64String(c.StorageHash).Hex(),
 		CallStats:     c.ListCallStats(),
 		Features:      c.Features,
 		Interfaces:    c.Interfaces,
 		expires:       ctx.Tip.BestTime.Add(p.BlockTime()),
 	}
-
-	// hashes
-	var tmp [8]byte
-	binary.BigEndian.PutUint64(tmp[:], c.InterfaceHash)
-	cc.InterfaceHash = hex.EncodeToString(tmp[:])
-	binary.BigEndian.PutUint64(tmp[:], c.CodeHash)
-	cc.CodeHash = hex.EncodeToString(tmp[:])
-	binary.BigEndian.PutUint64(tmp[:], c.StorageHash)
-	cc.StorageHash = hex.EncodeToString(tmp[:])
 
 	// resolve block times
 	cc.FirstSeenTime = ctx.Indexer.LookupBlockTime(ctx.Context, a.FirstSeen)
@@ -155,16 +147,6 @@ func (b Contract) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/{ident}/storage", server.C(ReadContractStorage)).Methods("GET")
 	return nil
 
-}
-
-// params
-type ExplorerParameters struct {
-	Entrypoint string           `json:"entrypoint,omitempty"` // contract
-	Value      *micheline.Value `json:"value,omitempty"`      // contract
-	Prim       *micheline.Prim  `json:"prim,omitempty"`       // contract
-	L2Address  *tezos.Address   `json:"l2_address,omitempty"` // rollup
-	Method     string           `json:"method,omitempty"`     // rollup
-	Arguments  json.RawMessage  `json:"arguments,omitempty"`  // rollup
 }
 
 type ContractRequest struct {
@@ -309,6 +291,11 @@ func ReadContract(ctx *server.Context) (interface{}, int) {
 	return NewContract(ctx, cc, acc, args), http.StatusOK
 }
 
+var (
+	branchRE = regexp.MustCompile(`^[RL/]+$`)
+	numRE    = regexp.MustCompile(`^[\d]+$`)
+)
+
 // list incoming transaction with data
 func ReadContractCalls(ctx *server.Context) (interface{}, int) {
 	args := &ContractRequest{}
@@ -362,31 +349,25 @@ func ReadContractCalls(ctx *server.Context) (interface{}, int) {
 		// parse entrypoint list
 		for _, v := range strings.Split(args.EntrypointCond, ",") {
 			// ignore matching errors
-			isBranch, _ := regexp.MatchString(`^[RL/]+$`, v)
-			isNum, _ := regexp.MatchString(`^[\d]+$`, v)
-			switch true {
-			case isNum:
+			switch {
+			case numRE.MatchString(v):
 				ep, err := strconv.Atoi(v)
 				if err != nil {
 					panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, fmt.Sprintf("invalid entrypoint id %s", v), err))
 				}
 				r.Entrypoints = append(r.Entrypoints, int64(ep))
-			case isBranch:
-				fallthrough
-			default:
-				if isBranch {
-					e, ok := scriptEntrypoints.FindBranch(v)
-					if !ok {
-						panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, fmt.Sprintf("missing entrypoint branch %s", v), err))
-					}
-					r.Entrypoints = append(r.Entrypoints, int64(e.Id))
-				} else {
-					e, ok := scriptEntrypoints[v]
-					if !ok {
-						panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, fmt.Sprintf("missing entrypoint %s", v), err))
-					}
-					r.Entrypoints = append(r.Entrypoints, int64(e.Id))
+			case branchRE.MatchString(v):
+				e, ok := scriptEntrypoints.FindBranch(v)
+				if !ok {
+					panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, fmt.Sprintf("missing entrypoint branch %s", v), err))
 				}
+				r.Entrypoints = append(r.Entrypoints, int64(e.Id))
+			default:
+				e, ok := scriptEntrypoints[v]
+				if !ok {
+					panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, fmt.Sprintf("missing entrypoint %s", v), err))
+				}
+				r.Entrypoints = append(r.Entrypoints, int64(e.Id))
 			}
 		}
 	}
@@ -436,7 +417,7 @@ func ReadContractScript(ctx *server.Context) (interface{}, int) {
 		panic(server.EInternal(server.EC_SERVER, "script unmarshal failed", err))
 	}
 
-	// empty script before babylon is OK
+	// empty script before babylon and for rollups is OK
 	if script == nil {
 		return nil, http.StatusNoContent
 	}
@@ -481,19 +462,6 @@ func ReadContractScript(ctx *server.Context) (interface{}, int) {
 	return resp, http.StatusOK
 }
 
-// storage
-type StorageValue struct {
-	Value    interface{}     `json:"value,omitempty"`
-	Prim     *micheline.Prim `json:"prim,omitempty"`
-	modified time.Time       `json:"-"`
-	expires  time.Time       `json:"-"`
-}
-
-func (t StorageValue) LastModified() time.Time { return t.modified }
-func (t StorageValue) Expires() time.Time      { return t.expires }
-
-var _ server.Resource = (*StorageValue)(nil)
-
 func ReadContractStorage(ctx *server.Context) (interface{}, int) {
 	args := &ContractRequest{}
 	ctx.ParseRequestArgs(args)
@@ -513,22 +481,25 @@ func ReadContractStorage(ctx *server.Context) (interface{}, int) {
 		panic(server.EInternal(server.EC_SERVER, "script unmarshal failed", err))
 	}
 
+	// empty script before babylon and for rollups is OK
+	if script == nil {
+		return nil, http.StatusNoContent
+	}
+
 	// type is always the most recently upgraded type stored in contract table
 	var (
 		typ  micheline.Type = script.StorageType()
-		prim micheline.Prim
-		ts   time.Time
+		data []byte
+		mod  time.Time
 		// patchBigmaps bool
 	)
 
 	if args.BlockHeight == 0 || args.BlockHeight >= cc.LastSeen {
+		mod = ctx.Indexer.LookupBlockTime(ctx.Context, cc.LastSeen)
 		// most recent storage is now stored in contract table!
-		if err := prim.UnmarshalBinary(cc.Storage); err != nil {
-			log.Errorf("explorer: storage unmarshal from %s: %v", cc, err)
-		}
+		data = cc.Storage
 		// when data is loaded from origination, we must patch bigmap pointers
 		// patchBigmaps = cc.FirstSeen == cc.LastSeen && bytes.Count(cc.CallStats, []byte{0}) == len(cc.CallStats)
-		ts = ctx.Indexer.LookupBlockTime(ctx.Context, cc.LastSeen)
 	} else {
 		// find earlier incoming call before height
 		op, err := ctx.Indexer.FindLastCall(
@@ -546,14 +517,12 @@ func ReadContractStorage(ctx *server.Context) (interface{}, int) {
 			if err != nil {
 				panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
 			}
-			if err := prim.UnmarshalBinary(store.Storage); err != nil {
-				log.Errorf("explorer: storage unmarshal from store for %s: %v", cc, err)
-			}
-			ts = op.Timestamp
+			mod = op.Timestamp
+			data = store.Storage
 		} else {
 			// when no most recent call exists, load from origination
-			prim = script.Storage
-			ts = ctx.Indexer.LookupBlockTime(ctx.Context, cc.FirstSeen)
+			data, _ = script.Storage.MarshalBinary()
+			mod = ctx.Indexer.LookupBlockTime(ctx.Context, cc.FirstSeen)
 			// patchBigmaps = true
 		}
 	}
@@ -576,27 +545,6 @@ func ReadContractStorage(ctx *server.Context) (interface{}, int) {
 	// 		return nil
 	// 	})
 	// }
-	resp := &StorageValue{
-		modified: ts,
-		expires:  ctx.Tip.BestTime.Add(ctx.Params.BlockTime()),
-	}
 
-	if args.WithUnpack() && prim.IsPackedAny() {
-		if up, err := prim.UnpackAll(); err == nil {
-			prim = up
-		}
-	}
-
-	val := micheline.NewValue(typ, prim)
-	if m, err := val.Map(); err == nil {
-		resp.Value = m
-	} else {
-		resp.Prim = &prim
-	}
-
-	if args.WithPrim() {
-		resp.Prim = &prim
-	}
-
-	return resp, http.StatusOK
+	return NewStorage(ctx, data, typ, mod, args), http.StatusOK
 }

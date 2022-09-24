@@ -34,6 +34,7 @@ func init() {
 // configurable marshalling helper
 type ChainSeries struct {
 	model.Chain
+	bucketTime time.Time
 
 	columns util.StringList // cond. cols & order when brief
 	params  *tezos.Params   // blockchain amount conversion
@@ -50,7 +51,7 @@ func (s *ChainSeries) Init(params *tezos.Params, columns []string, verbose bool)
 }
 
 func (s *ChainSeries) IsEmpty() bool {
-	return s.Chain.Height == 0 || s.Chain.Timestamp.IsZero()
+	return s.Chain.RowId == 0
 }
 
 func (s *ChainSeries) Add(m SeriesModel) {
@@ -58,36 +59,37 @@ func (s *ChainSeries) Add(m SeriesModel) {
 	s.Chain = *o
 }
 
-func (c *ChainSeries) Reset() {
-	c.Chain.Timestamp = time.Time{}
-	c.null = false
+func (s *ChainSeries) Reset() {
+	s.bucketTime = time.Time{}
+	s.null = false
 }
 
-func (c *ChainSeries) Null(ts time.Time) SeriesBucket {
-	c.Reset()
-	c.Timestamp = ts
-	c.null = true
-	return c
+func (s *ChainSeries) Null(ts time.Time) SeriesBucket {
+	s.Reset()
+	s.bucketTime = ts
+	s.null = true
+	return s
 }
 
 func (s *ChainSeries) Zero(ts time.Time) SeriesBucket {
 	s.Reset()
-	s.Timestamp = ts
+	s.bucketTime = ts
 	return s
 }
 
 func (s *ChainSeries) SetTime(ts time.Time) SeriesBucket {
-	s.Timestamp = ts
+	s.bucketTime = ts
 	return s
 }
 
 func (s *ChainSeries) Time() time.Time {
-	return s.Timestamp
+	return s.bucketTime
 }
 
 func (s *ChainSeries) Clone() SeriesBucket {
 	c := &ChainSeries{
-		Chain: s.Chain,
+		Chain:      s.Chain,
+		bucketTime: s.bucketTime,
 	}
 	c.columns = s.columns
 	c.params = s.params
@@ -111,53 +113,54 @@ func (c *ChainSeries) MarshalJSON() ([]byte, error) {
 
 func (c *ChainSeries) MarshalJSONVerbose() ([]byte, error) {
 	ch := struct {
-		Height               int64 `json:"height"`
-		Cycle                int64 `json:"cycle"`
-		Timestamp            int64 `json:"time"`
-		Count                int   `json:"count"`
-		TotalAccounts        int64 `json:"total_accounts"`
-		TotalContracts       int64 `json:"total_contracts"`
-		TotalRollups         int64 `json:"total_rollups"`
-		TotalOps             int64 `json:"total_ops"`
-		TotalOpsFailed       int64 `json:"total_ops_failed"`
-		TotalContractOps     int64 `json:"total_contract_ops"`
-		TotalContractCalls   int64 `json:"total_contract_calls"`
-		TotalRollupCalls     int64 `json:"total_rollup_calls"`
-		TotalActivations     int64 `json:"total_activations"`
-		TotalSeedNonces      int64 `json:"total_nonce_revelations"`
-		TotalEndorsements    int64 `json:"total_endorsements"`
-		TotalPreendorsements int64 `json:"total_preendorsements"`
-		TotalDoubleBake      int64 `json:"total_double_bakings"`
-		TotalDoubleEndorse   int64 `json:"total_double_endorsements"`
-		TotalDelegations     int64 `json:"total_delegations"`
-		TotalReveals         int64 `json:"total_reveals"`
-		TotalOriginations    int64 `json:"total_originations"`
-		TotalTransactions    int64 `json:"total_transactions"`
-		TotalProposals       int64 `json:"total_proposals"`
-		TotalBallots         int64 `json:"total_ballots"`
-		TotalConstants       int64 `json:"total_constants"`
-		TotalSetLimits       int64 `json:"total_set_limits"`
-		TotalStorageBytes    int64 `json:"total_storage_bytes"`
-		FundedAccounts       int64 `json:"funded_accounts"`
-		DustAccounts         int64 `json:"dust_accounts"`
-		UnclaimedAccounts    int64 `json:"unclaimed_accounts"`
-		TotalDelegators      int64 `json:"total_delegators"`
-		DustDelegators       int64 `json:"dust_delegators"`
-		ActiveDelegators     int64 `json:"active_delegators"`
-		InactiveDelegators   int64 `json:"inactive_delegators"`
-		TotalBakers          int64 `json:"total_bakers"`
-		ActiveBakers         int64 `json:"active_bakers"`
-		InactiveBakers       int64 `json:"inactive_bakers"`
-		ZeroBakers           int64 `json:"zero_bakers"`
-		SelfBakers           int64 `json:"self_bakers"`
-		SingleBakers         int64 `json:"single_bakers"`
-		MultiBakers          int64 `json:"multi_bakers"`
-		Rolls                int64 `json:"rolls"`
-		RollOwners           int64 `json:"roll_owners"`
+		Height               int64     `json:"height"`
+		Cycle                int64     `json:"cycle"`
+		Timestamp            time.Time `json:"time"`
+		Count                int       `json:"count"`
+		TotalAccounts        int64     `json:"total_accounts"`
+		TotalContracts       int64     `json:"total_contracts"`
+		TotalRollups         int64     `json:"total_rollups"`
+		TotalOps             int64     `json:"total_ops"`
+		TotalOpsFailed       int64     `json:"total_ops_failed"`
+		TotalContractOps     int64     `json:"total_contract_ops"`
+		TotalContractCalls   int64     `json:"total_contract_calls"`
+		TotalRollupCalls     int64     `json:"total_rollup_calls"`
+		TotalActivations     int64     `json:"total_activations"`
+		TotalSeedNonces      int64     `json:"total_nonce_revelations"`
+		TotalEndorsements    int64     `json:"total_endorsements"`
+		TotalPreendorsements int64     `json:"total_preendorsements"`
+		TotalDoubleBake      int64     `json:"total_double_bakings"`
+		TotalDoubleEndorse   int64     `json:"total_double_endorsements"`
+		TotalDelegations     int64     `json:"total_delegations"`
+		TotalReveals         int64     `json:"total_reveals"`
+		TotalOriginations    int64     `json:"total_originations"`
+		TotalTransactions    int64     `json:"total_transactions"`
+		TotalProposals       int64     `json:"total_proposals"`
+		TotalBallots         int64     `json:"total_ballots"`
+		TotalConstants       int64     `json:"total_constants"`
+		TotalSetLimits       int64     `json:"total_set_limits"`
+		TotalStorageBytes    int64     `json:"total_storage_bytes"`
+		FundedAccounts       int64     `json:"funded_accounts"`
+		DustAccounts         int64     `json:"dust_accounts"`
+		GhostAccounts        int64     `json:"ghost_accounts"`
+		UnclaimedAccounts    int64     `json:"unclaimed_accounts"`
+		TotalDelegators      int64     `json:"total_delegators"`
+		DustDelegators       int64     `json:"dust_delegators"`
+		ActiveDelegators     int64     `json:"active_delegators"`
+		InactiveDelegators   int64     `json:"inactive_delegators"`
+		TotalBakers          int64     `json:"total_bakers"`
+		ActiveBakers         int64     `json:"active_bakers"`
+		InactiveBakers       int64     `json:"inactive_bakers"`
+		ZeroBakers           int64     `json:"zero_bakers"`
+		SelfBakers           int64     `json:"self_bakers"`
+		SingleBakers         int64     `json:"single_bakers"`
+		MultiBakers          int64     `json:"multi_bakers"`
+		Rolls                int64     `json:"rolls"`
+		RollOwners           int64     `json:"roll_owners"`
 	}{
 		Height:               c.Height,
 		Cycle:                c.Cycle,
-		Timestamp:            util.UnixMilliNonZero(c.Timestamp),
+		Timestamp:            c.bucketTime,
 		Count:                1,
 		TotalAccounts:        c.TotalAccounts,
 		TotalContracts:       c.TotalContracts,
@@ -184,6 +187,7 @@ func (c *ChainSeries) MarshalJSONVerbose() ([]byte, error) {
 		TotalStorageBytes:    c.TotalStorageBytes,
 		FundedAccounts:       c.FundedAccounts,
 		DustAccounts:         c.DustAccounts,
+		GhostAccounts:        c.GhostAccounts,
 		UnclaimedAccounts:    c.UnclaimedAccounts,
 		TotalDelegators:      c.TotalDelegators,
 		DustDelegators:       c.DustDelegators,
@@ -209,7 +213,7 @@ func (c *ChainSeries) MarshalJSONBrief() ([]byte, error) {
 		if c.null {
 			switch v {
 			case "time":
-				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(c.Timestamp), 10)
+				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(c.bucketTime), 10)
 			default:
 				buf = append(buf, null...)
 			}
@@ -220,7 +224,7 @@ func (c *ChainSeries) MarshalJSONBrief() ([]byte, error) {
 			case "cycle":
 				buf = strconv.AppendInt(buf, c.Cycle, 10)
 			case "time":
-				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(c.Timestamp), 10)
+				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(c.bucketTime), 10)
 			case "count":
 				buf = strconv.AppendInt(buf, 1, 10)
 			case "total_accounts":
@@ -273,6 +277,8 @@ func (c *ChainSeries) MarshalJSONBrief() ([]byte, error) {
 				buf = strconv.AppendInt(buf, c.FundedAccounts, 10)
 			case "dust_accounts":
 				buf = strconv.AppendInt(buf, c.DustAccounts, 10)
+			case "ghost_accounts":
+				buf = strconv.AppendInt(buf, c.GhostAccounts, 10)
 			case "unclaimed_accounts":
 				buf = strconv.AppendInt(buf, c.UnclaimedAccounts, 10)
 			case "total_delegators":
@@ -319,7 +325,7 @@ func (c *ChainSeries) MarshalCSV() ([]string, error) {
 		if c.null {
 			switch v {
 			case "time":
-				res[i] = strconv.Quote(c.Timestamp.Format(time.RFC3339))
+				res[i] = strconv.Quote(c.bucketTime.Format(time.RFC3339))
 			default:
 				continue
 			}
@@ -330,7 +336,7 @@ func (c *ChainSeries) MarshalCSV() ([]string, error) {
 		case "cycle":
 			res[i] = strconv.FormatInt(c.Cycle, 10)
 		case "time":
-			res[i] = strconv.Quote(c.Timestamp.Format(time.RFC3339))
+			res[i] = strconv.Quote(c.bucketTime.Format(time.RFC3339))
 		case "count":
 			res[i] = strconv.FormatInt(1, 10)
 		case "total_accounts":
@@ -383,6 +389,8 @@ func (c *ChainSeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(c.FundedAccounts, 10)
 		case "dust_accounts":
 			res[i] = strconv.FormatInt(c.DustAccounts, 10)
+		case "ghost_accounts":
+			res[i] = strconv.FormatInt(c.GhostAccounts, 10)
 		case "unclaimed_accounts":
 			res[i] = strconv.FormatInt(c.UnclaimedAccounts, 10)
 		case "total_delegators":
@@ -425,15 +433,13 @@ func (s *ChainSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.
 		panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", args.Series), err))
 	}
 
-	// translate long column names to short names used in pack tables
-	var srcNames []string
 	// time is auto-added from parser
 	if len(args.Columns) == 1 {
 		// use all series columns
 		args.Columns = chainSeriesNames
 	}
 	// resolve short column names
-	srcNames = make([]string, 0, len(args.Columns))
+	srcNames := make([]string, 0, len(args.Columns))
 	for _, v := range args.Columns {
 		// ignore count column
 		if v == "count" {
@@ -447,7 +453,8 @@ func (s *ChainSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.
 	}
 
 	// build table query, no dynamic filter conditions
-	return pack.NewQuery(ctx.RequestID, table).
+	return pack.NewQuery(ctx.RequestID).
+		WithTable(table).
 		WithFields(srcNames...).
 		WithOrder(args.Order).
 		AndRange("time", args.From.Time(), args.To.Time())

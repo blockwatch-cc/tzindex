@@ -175,7 +175,8 @@ func (idx *ConstantIndex) DisconnectBlock(ctx context.Context, block *model.Bloc
 
 func (idx *ConstantIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting contracts at height %d", height)
-	_, err := pack.NewQuery("etl.constant.delete", idx.table).
+	_, err := pack.NewQuery("etl.constant.delete").
+		WithTable(idx.table).
 		AndEqual("height", height).
 		Delete(ctx)
 	return err

@@ -20,6 +20,43 @@ type Operation struct {
 	Metadata string           `json:"metadata,omitempty"` // contains `too large` when stripped, this is BAD!!
 }
 
+// // Url returns the Tezos RPC url path to this operation group.
+// func (o Operation) Url() string {
+// 	return fmt.Sprintf("/chains/main/blocks/%d/operations/%d/%d",
+// 		o.Block,
+// 		o.Contents[0].Kind().ListId(),
+// 		o.Index,
+// 	)
+// }
+
+// Addresses lists all Tezos addresses that appear in this operation group. This does
+// not include addresses used in contract call parameters and storage updates.
+func (o Operation) Addresses() *tezos.AddressSet {
+	set := tezos.NewAddressSet()
+	for _, v := range o.Contents {
+		switch v.Kind() {
+		case tezos.OpTypeTransaction:
+			tx := v.(*Transaction)
+			set.AddUnique(tx.Source)
+			set.AddUnique(tx.Destination)
+			for _, vv := range tx.Meta().InternalResults {
+				set.AddUnique(vv.Source)
+				set.AddUnique(vv.Destination)
+			}
+		case tezos.OpTypeOrigination:
+			tx := v.(*Origination)
+			set.AddUnique(tx.Source)
+			for _, vv := range tx.Result().OriginatedContracts {
+				set.AddUnique(vv)
+			}
+		default:
+			// skip
+			continue
+		}
+	}
+	return set
+}
+
 // TypedOperation must be implemented by all operations
 type TypedOperation interface {
 	Kind() tezos.OpType
@@ -116,6 +153,10 @@ func (r OperationResult) BigmapEvents() micheline.BigmapEvents {
 
 func (r OperationResult) Balances() BalanceUpdates {
 	return r.BalanceUpdates
+}
+
+func (r OperationResult) IsSuccess() bool {
+	return r.Status == tezos.OpStatusApplied
 }
 
 func (r OperationResult) Gas() int64 {
@@ -246,6 +287,10 @@ func (e *OperationList) UnmarshalJSON(data []byte) error {
 			op = &ConstantRegistration{}
 		case tezos.OpTypeSetDepositsLimit:
 			op = &SetDepositsLimit{}
+		case tezos.OpTypeIncreasePaidStorage:
+			op = &IncreasePaidStorage{}
+		case tezos.OpTypeVdfRevelation:
+			op = &VdfRevelation{}
 
 			// rollup operations
 		case tezos.OpTypeTransferTicket,
@@ -257,10 +302,17 @@ func (e *OperationList) UnmarshalJSON(data []byte) error {
 			tezos.OpTypeToruRemoveCommitment,
 			tezos.OpTypeToruRejection,
 			tezos.OpTypeToruDispatchTickets,
-			tezos.OpTypeScruOriginate,
-			tezos.OpTypeScruAddMessages,
-			tezos.OpTypeScruCement,
-			tezos.OpTypeScruPublish:
+			tezos.OpTypeScRollupOriginate,
+			tezos.OpTypeScRollupAddMessages,
+			tezos.OpTypeScRollupCement,
+			tezos.OpTypeScRollupPublish,
+			tezos.OpTypeScRollupRefute,
+			tezos.OpTypeScRollupTimeout,
+			tezos.OpTypeScRollupExecuteOutboxMessage,
+			tezos.OpTypeScRollupRecoverBond,
+			tezos.OpTypeScRollupDalSlotSubscribe,
+			tezos.OpTypeDalSlotAvailability,
+			tezos.OpTypeDalPublishSlotHeader:
 			op = &Rollup{}
 
 		default:

@@ -6,6 +6,7 @@ package explorer
 import (
 	"encoding/json"
 	"fmt"
+	"math/bits"
 	"net/http"
 	"sort"
 	"strconv"
@@ -56,12 +57,13 @@ func purgeMetadataStore() {
 	payoutByBakerMapStore.Store(make(payoutByBakerMap))
 }
 
-func ensureMetdataIsLoaded(ctx *server.Context) {
-	if len(metaByIdStore.Load().(metaByIdMap)) == 0 {
-		_ = loadMetadata(ctx)
-	}
-}
+// func ensureMetdataIsLoaded(ctx *server.Context) {
+// 	if len(metaByIdStore.Load().(metaByIdMap)) == 0 {
+// 		_ = loadMetadata(ctx)
+// 	}
+// }
 
+//nolint:unparam
 func lookupMetadataById(ctx *server.Context, id model.AccountID, assetId int64, useAssetId bool) (*Metadata, bool) {
 	if id == 0 || assetId < 0 {
 		return nil, false
@@ -97,6 +99,7 @@ func lookupMetadataByAddress(ctx *server.Context, addr tezos.Address, asset int6
 		key += "/" + strconv.FormatInt(asset, 10)
 	}
 	m, ok := metaMap[key]
+	// don't fail when name/alias is empty (!)
 	return m, ok
 }
 
@@ -166,8 +169,7 @@ func cacheSingleMetadata(ctx *server.Context, meta *Metadata, remove bool) {
 		for _, v := range meta.ListBakerIds(ctx) {
 			// v = the baker
 			// ids = its payout address ids
-			ids, _ := p2[v]
-			p2[v] = append(ids, meta.AccountId.Value())
+			p2[v] = append(p2[v], meta.AccountId.Value())
 		}
 	}
 
@@ -214,8 +216,7 @@ func cacheMultiMetadata(ctx *server.Context, meta []*Metadata) {
 		for _, b := range v.ListBakerIds(ctx) {
 			// b = the baker
 			// ids = its payout address ids
-			ids, _ := p2[b]
-			p2[b] = append(ids, v.AccountId.Value())
+			p2[b] = append(p2[b], v.AccountId.Value())
 		}
 	}
 
@@ -236,23 +237,27 @@ func loadMetadata(ctx *server.Context) error {
 	if err != nil {
 		return fmt.Errorf("metadata: %w", err)
 	}
+	if table.Stats()[0].TupleCount == 0 {
+		return nil
+	}
 
 	md := &model.Metadata{}
-	err = table.Stream(ctx.Context, pack.Query{}, func(r pack.Row) error {
-		if err := r.Decode(md); err != nil {
-			return err
-		}
-		meta := NewMetadata(md)
-		addrMap[meta.StringKey()] = meta
-		idMap[meta.Uint64Key()] = meta
-		for _, v := range meta.ListBakerIds(ctx) {
-			// v = the baker
-			// ids = its payout address ids
-			ids, _ := payMap[v]
-			payMap[v] = append(ids, meta.AccountId.Value())
-		}
-		return nil
-	})
+	err = pack.NewQuery("metadata.load").
+		WithTable(table).
+		Stream(ctx.Context, func(r pack.Row) error {
+			if err := r.Decode(md); err != nil {
+				return err
+			}
+			meta := NewMetadata(md)
+			addrMap[meta.StringKey()] = meta
+			idMap[meta.Uint64Key()] = meta
+			for _, v := range meta.ListBakerIds(ctx) {
+				// v = the baker
+				// ids = its payout address ids
+				payMap[v] = append(payMap[v], meta.AccountId.Value())
+			}
+			return nil
+		})
 	if err != nil {
 		return fmt.Errorf("loading metadata: %w", err)
 	}
@@ -284,6 +289,7 @@ type Metadata struct {
 	Name           string
 	Description    string
 	Logo           string
+	IsSponsored    bool
 	IsValidator    bool
 	Country        iso.Country
 	Kind           string
@@ -301,7 +307,7 @@ func (m Metadata) Id() uint64 {
 	return m.RowId
 }
 
-func (m *Metadata) Equal(x *Metadata) bool {
+func (m Metadata) Equal(x *Metadata) bool {
 	if !m.Address.Equal(x.Address) {
 		return false
 	}
@@ -340,10 +346,8 @@ func (m Metadata) ListBakerIds(ctx *server.Context) []uint64 {
 	if err != nil {
 		return nil
 	}
-	var (
-		pay metadata.Payout
-		ids []uint64
-	)
+	var pay metadata.Payout
+	ids := make([]uint64, 0, len(pay.From))
 	_ = c.Unmarshal("payout", &pay)
 	for _, v := range pay.From {
 		a, err := ctx.Indexer.LookupAccount(ctx.Context, v)
@@ -357,6 +361,7 @@ func (m Metadata) ListBakerIds(ctx *server.Context) []uint64 {
 
 func NewMetadata(m *model.Metadata) *Metadata {
 	md := &Metadata{
+		RowId:     m.RowId,
 		Address:   m.Address.Clone(),
 		AccountId: m.AccountId,
 	}
@@ -377,6 +382,7 @@ func NewMetadata(m *model.Metadata) *Metadata {
 			md.Country = iso.Country(c.GetString("location.country"))
 			md.Kind = c.GetString("alias.kind")
 			md.IsValidator = md.Kind == "validator"
+			md.IsSponsored = c.GetBool("baker.sponsored")
 			md.Status = c.GetString("baker.status")
 			md.Symbol = c.GetString("asset.symbol")
 			md.Standard = c.GetString("asset.standard")
@@ -531,6 +537,9 @@ func (a Metadata) RegisterDirectRoutes(r *mux.Router) error {
 }
 
 func (b Metadata) RegisterRoutes(r *mux.Router) error {
+	r.HandleFunc("/sitemap", server.C(SitemapMetadata)).Methods("GET")
+	r.HandleFunc("/describe/{ident}", server.C(DescribeMetadata)).Methods("GET")
+	r.HandleFunc("/describe/{ident}/{num}", server.C(DescribeMetadata)).Methods("GET")
 	r.HandleFunc("/schemas", server.C(ListMetadataSchemas)).Methods("GET")
 	r.HandleFunc("/schemas/{schema}.json", server.C(ReadMetadataSchema)).Methods("GET")
 	r.HandleFunc("/schemas/{schema}", server.C(ReadMetadataSchema)).Methods("GET")
@@ -756,4 +765,480 @@ func PurgeMetadata(ctx *server.Context) (interface{}, int) {
 	}
 	purgeMetadataStore()
 	return nil, http.StatusNoContent
+}
+
+type MetadataDescriptor struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Image       string `json:"image"`
+}
+
+const metaDateTime = "2006-01-02 15:04:05"
+
+// Describes an on-chain object with title, description and image.
+//
+// # Supported identifiers
+//
+// :address      address, contract, token
+// :block        block hash or height
+// :op           operation hash
+// /event/:id    implicit operation
+// /cycle/:id    cycle number
+// /election/:id election number
+func DescribeMetadata(ctx *server.Context) (interface{}, int) {
+	ident, ok := mux.Vars(ctx.Request)["ident"]
+	if !ok || ident == "" {
+		panic(server.EBadRequest(server.EC_RESOURCE_ID_MISSING, "missing identifier", nil))
+	}
+	num := mux.Vars(ctx.Request)["num"]
+
+	var desc MetadataDescriptor
+
+	switch ident {
+	case "event":
+		ops, err := ctx.Indexer.LookupOp(ctx, num, etl.ListRequest{})
+		if err != nil {
+			switch err {
+			case index.ErrNoOpEntry:
+				panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no such operation", err))
+			case index.ErrInvalidOpID:
+				panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, "invalid event id", err))
+			default:
+				panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
+			}
+		}
+		desc = DescribeOp(ctx, ops)
+	case "cycle":
+		c, err := strconv.ParseInt(num, 10, 64)
+		if err != nil {
+			panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, "invalid cycle identifier", nil))
+		}
+		desc = DescribeCycle(ctx, c)
+	case "election":
+		c, err := strconv.ParseInt(num, 10, 64)
+		if err != nil {
+			panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, "invalid election identifier", nil))
+		}
+		desc = DescribeElection(ctx, c)
+	default:
+		// detect type
+		if a, err := tezos.ParseAddress(ident); err == nil {
+			desc = DescribeAddress(ctx, a)
+		} else if _, err := tezos.ParseBlockHash(ident); err == nil {
+			desc = DescribeBlock(ctx, ident)
+		} else if _, err := strconv.ParseInt(ident, 10, 64); err == nil {
+			desc = DescribeBlock(ctx, ident)
+		} else if _, err := tezos.ParseOpHash(ident); err == nil {
+			ops := loadOps(ctx, &OpsRequest{})
+			desc = DescribeOp(ctx, ops)
+		} else {
+			panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, "unsupported identifier", nil))
+		}
+	}
+
+	// add title suffix to everything
+	if s := config.GetString("metadata.describe.title_suffix"); s != "" {
+		desc.Title += " " + s
+	}
+
+	// image url prefix in config
+	if s := config.GetString("metadata.describe.image_url"); s != "" {
+		if !strings.HasPrefix(desc.Image, "http") {
+			if !strings.HasPrefix(desc.Image, "/") && !strings.HasSuffix(s, "/") {
+				s += "/"
+			}
+			desc.Image = s + desc.Image
+		}
+	}
+
+	return desc, http.StatusOK
+}
+
+func DescribeAddress(ctx *server.Context, addr tezos.Address) MetadataDescriptor {
+	d := MetadataDescriptor{
+		Title: addr.Short(),
+		Image: config.GetString("metadata.describe.logo"),
+	}
+	meta, ok := lookupMetadataByAddress(ctx, addr, 0, false)
+	if ok {
+		// baker, token, other
+		d.Title = meta.Name
+		d.Description = meta.Description
+		if meta.Logo != "" {
+			d.Image = meta.Logo
+		}
+		if d.Title == "" {
+			d.Title = addr.Short()
+		}
+		if d.Description == "" {
+			switch meta.Kind {
+			case "validator":
+				d.Description = fmt.Sprintf("%s Tezos baker. Address %s. View baking statistics, account activity and analytics.",
+					strings.ToTitle(meta.Status), addr)
+			case "token":
+				d.Description = fmt.Sprintf("%s (%s) token tracker. Address %s. View token activity, supply, numbers of holders and more details.",
+					meta.Name, meta.Symbol, addr)
+			default:
+				d.Description = fmt.Sprintf("Tezos address %s. View account balance, transactions and analytics.", addr)
+			}
+		}
+	} else {
+		if bkr, err := ctx.Indexer.LookupBaker(ctx, addr); err == nil {
+			if bkr.IsActive {
+				d.Description = fmt.Sprintf("Private Tezos baker. Address %s. View baking statistics, account activity and analytics.",
+					addr)
+			} else {
+				d.Description = fmt.Sprintf("Closed Tezos baker. Address %s. View baking statistics, account activity and analytics.",
+					addr)
+			}
+		}
+		// normal account fallback
+		if acc, err := ctx.Indexer.LookupAccount(ctx, addr); err == nil {
+			switch {
+			case acc.IsContract:
+				d.Description = fmt.Sprintf("Tezos smart contract. Address %s. View contract activity, code and analytics.",
+					addr)
+			case acc.IsBaker:
+				d.Description = fmt.Sprintf("Private Tezos baker. Address %s. View baking statistics, account activity and analytics.",
+					addr)
+			}
+		}
+		if d.Description == "" {
+			d.Description = fmt.Sprintf("Tezos address %s. View account balance, transactions and analytics.", addr)
+		}
+	}
+
+	return d
+}
+
+func DescribeBlock(ctx *server.Context, ident string) MetadataDescriptor {
+	block := loadBlock(ctx)
+	d := MetadataDescriptor{
+		Title: fmt.Sprintf("Tezos Block %s", util.PrettyInt64(block.Height)),
+		Image: config.GetString("metadata.describe.logo"),
+	}
+	bakerName := ctx.Indexer.LookupAddress(ctx, block.BakerId).String()
+	if meta, ok := lookupMetadataById(ctx, block.BakerId, 0, false); ok {
+		bakerName = meta.Name
+	}
+	d.Description = fmt.Sprintf("Tezos block %s – Baked by %s on %s. Hash: %s.",
+		util.PrettyInt64(block.Height),
+		bakerName,
+		block.Timestamp.Format(metaDateTime),
+		block.Hash,
+	)
+	return d
+}
+
+func DescribeOp(ctx *server.Context, ops []*model.Op) MetadataDescriptor {
+	d := MetadataDescriptor{
+		Image: config.GetString("metadata.describe.logo"),
+	}
+
+	// use the first op by default, unless its a batched reveal
+	op := ops[0]
+	if op.Type == model.OpTypeReveal && len(ops) > 1 {
+		ops = ops[1:]
+		op = ops[0]
+	}
+
+	sender := ctx.Indexer.LookupAddress(ctx, op.SenderId).Short()
+	if meta, ok := lookupMetadataById(ctx, op.SenderId, 0, false); ok {
+		sender = meta.Name
+		d.Image = meta.Logo
+	}
+	receiver := ctx.Indexer.LookupAddress(ctx, op.ReceiverId).Short()
+	if meta, ok := lookupMetadataById(ctx, op.ReceiverId, 0, false); ok {
+		receiver = meta.Name
+	}
+
+	switch op.Type {
+	case model.OpTypeActivation:
+		d.Title = fmt.Sprintf("Tezos Account %s Activation",
+			sender,
+		)
+		d.Description = fmt.Sprintf("%s XTZ activated on %s (block %s in cycle %s).",
+			util.PrettyFloat64(ctx.Params.ConvertValue(op.Volume)),
+			op.Timestamp.Format(metaDateTime),
+			util.PrettyInt64(op.Height),
+			util.PrettyInt64(op.Cycle),
+		)
+
+	case model.OpTypeDoubleBaking:
+		d.Title = fmt.Sprintf("Tezos Double Baking Evidence %s", op.Hash.Short())
+		d.Description = fmt.Sprintf("Evidence of double baking in block %s on %s. Offender: %s. Lost %s XTZ.",
+			util.PrettyInt64(op.Height),
+			op.Timestamp.Format(metaDateTime),
+			ctx.Indexer.LookupAddress(ctx, op.ReceiverId),
+			util.PrettyFloat64(ctx.Params.ConvertValue(op.Burned+op.Volume)),
+		)
+
+	case model.OpTypeDoubleEndorsement:
+		d.Title = fmt.Sprintf("Tezos Double Endorsement Evidence %s", op.Hash.Short())
+		d.Description = fmt.Sprintf("Evidence of double endorsing in block %s on %s. Offender: %s. Lost %s XTZ.",
+			util.PrettyInt64(op.Height),
+			op.Timestamp.Format(metaDateTime),
+			ctx.Indexer.LookupAddress(ctx, op.ReceiverId),
+			util.PrettyFloat64(ctx.Params.ConvertValue(op.Burned+op.Volume)),
+		)
+
+	case model.OpTypeDoublePreendorsement:
+		d.Title = fmt.Sprintf("Tezos Double Preendorsement Evidence %s", op.Hash.Short())
+		d.Description = fmt.Sprintf("Evidence of double preendorsing in block %s on %s. Offender: %s. Lost %s XTZ.",
+			util.PrettyInt64(op.Height),
+			op.Timestamp.Format(metaDateTime),
+			ctx.Indexer.LookupAddress(ctx, op.ReceiverId),
+			util.PrettyFloat64(ctx.Params.ConvertValue(op.Burned+op.Volume)),
+		)
+
+	case model.OpTypeNonceRevelation:
+		d.Title = fmt.Sprintf("Tezos Seed-Nonce Revelation %s", op.Hash.Short())
+		d.Description = fmt.Sprintf("Seed nonce revealed by %s on %s (block %s in cycle %s). Baked by %s, reward: %s XTZ.",
+			receiver,
+			op.Timestamp.Format(metaDateTime),
+			util.PrettyInt64(op.Height),
+			util.PrettyInt64(op.Cycle),
+			sender,
+			util.PrettyFloat64(ctx.Params.ConvertValue(op.Reward)),
+		)
+
+	case model.OpTypeTransaction:
+		switch {
+		case op.IsContract:
+			d.Title = fmt.Sprintf("Tezos Contract Call %s", op.Hash.Short())
+			d.Description = fmt.Sprintf("Called %s in contract %s on %s. Status: %s.",
+				op.Data,
+				receiver,
+				op.Timestamp.Format(metaDateTime),
+				op.Status,
+			)
+		case len(ops) > 1:
+			var sum int64
+			for _, v := range ops {
+				sum += v.Volume
+			}
+			d.Title = fmt.Sprintf("Tezos Batch Operation %s", op.Hash.Short())
+			d.Description = fmt.Sprintf("Batch-sent %s XTZ from %s on %s. Status: %s.",
+				util.PrettyFloat64(ctx.Params.ConvertValue(sum)),
+				sender,
+				op.Timestamp.Format(metaDateTime),
+				op.Status,
+			)
+		default:
+			d.Title = fmt.Sprintf("Tezos Transaction %s", op.Hash.Short())
+			d.Description = fmt.Sprintf("Sent %s XTZ from %s to %s on %s. Status: %s.",
+				util.PrettyFloat64(ctx.Params.ConvertValue(op.Volume)),
+				sender,
+				receiver,
+				op.Timestamp.Format(metaDateTime),
+				op.Status,
+			)
+		}
+
+	case model.OpTypeOrigination:
+		d.Title = fmt.Sprintf("Tezos Origination %s", op.Hash.Short())
+		d.Description = fmt.Sprintf("Sender: %s. Contract: %s. Time %s. Status %s.",
+			sender,
+			receiver,
+			op.Timestamp.Format(metaDateTime),
+			op.Status,
+		)
+
+	case model.OpTypeDelegation:
+		switch {
+		case op.SenderId == op.BakerId:
+			d.Title = fmt.Sprintf("Tezos Baker Registration %s", op.Hash.Short())
+			d.Description = fmt.Sprintf("New baker %s registered on %s (cycle %s). Status: %s.",
+				sender,
+				op.Timestamp.Format(metaDateTime),
+				util.PrettyInt64(op.Cycle),
+				op.Status,
+			)
+		case op.BakerId == 0:
+			d.Title = fmt.Sprintf("Tezos Delegation Removal %s", op.Hash.Short())
+			d.Description = fmt.Sprintf("Delegator %s left %s on %s (cycle %s). Status: %s.",
+				sender,
+				receiver,
+				op.Timestamp.Format(metaDateTime),
+				util.PrettyInt64(op.Cycle),
+				op.Status,
+			)
+		default:
+			baker := ctx.Indexer.LookupAddress(ctx, op.BakerId).Short()
+			if meta, ok := lookupMetadataById(ctx, op.BakerId, 0, false); ok {
+				baker = meta.Name
+			}
+			d.Title = fmt.Sprintf("Tezos Delegation %s", op.Hash.Short())
+			d.Description = fmt.Sprintf("Delegation from %s to %s on %s (cycle %s). Status: %s.",
+				sender,
+				baker,
+				op.Timestamp.Format(metaDateTime),
+				util.PrettyInt64(op.Cycle),
+				op.Status,
+			)
+		}
+
+	case model.OpTypeReveal:
+		d.Title = fmt.Sprintf("Tezos Public Key Revelation %s", op.Hash.Short())
+		d.Description = fmt.Sprintf("Public key revealed by %s on %s (block %s). Key: %s.",
+			sender,
+			op.Timestamp.Format(metaDateTime),
+			util.PrettyInt64(op.Height),
+			op.Data,
+		)
+
+	case model.OpTypeEndorsement:
+		mask, _ := strconv.ParseUint(op.Data, 10, 64)
+		d.Title = fmt.Sprintf("Tezos Endorsement %s", op.Hash.Short())
+		d.Description = fmt.Sprintf("%s endorsed %d slots in block %s on %s. Deposit: %s XTZ. Reward: %s XTZ.",
+			sender,
+			bits.OnesCount64(mask),
+			util.PrettyInt64(op.Height-1),
+			op.Timestamp.Format(metaDateTime),
+			util.PrettyFloat64(ctx.Params.ConvertValue(op.Deposit)),
+			util.PrettyFloat64(ctx.Params.ConvertValue(op.Reward)),
+		)
+
+	case model.OpTypeProposal:
+		d.Title = fmt.Sprintf("Tezos Proposal Vote %s", op.Hash.Short())
+		d.Description = fmt.Sprintf("%s upvoted %s on %s.",
+			sender,
+			op.Data,
+			op.Timestamp.Format(metaDateTime),
+		)
+
+	case model.OpTypeBallot:
+		data := strings.Split(op.Data, ",")
+		d.Title = fmt.Sprintf("Tezos Ballot %s", op.Hash.Short())
+		d.Description = fmt.Sprintf("%s voted %s for %s on %s.",
+			sender,
+			data[1],
+			data[0],
+			op.Timestamp.Format(metaDateTime),
+		)
+
+	// events
+	case model.OpTypeBake:
+		d.Title = "Tezos Baking Event"
+		d.Description = fmt.Sprintf("Baker %s baked block %s on %s.",
+			sender,
+			util.PrettyInt64(op.Height),
+			op.Timestamp.Format(metaDateTime),
+		)
+	case model.OpTypeUnfreeze:
+		d.Title = "Tezos Unfreeze Event"
+		d.Description = fmt.Sprintf("Unfrozen: %.06f XTZ deposits, %.06f XTZ rewards, and %.06f XTZ fees for %s in cycle %s.",
+			ctx.Params.ConvertValue(op.Deposit),
+			ctx.Params.ConvertValue(op.Reward),
+			ctx.Params.ConvertValue(op.Fee),
+			sender,
+			util.PrettyInt64(op.Cycle),
+		)
+	case model.OpTypeInvoice:
+		d.Title = "Tezos Invoice Event"
+		d.Description = fmt.Sprintf("%s received %s XTZ for their contributions to a Tezos protocol upgrade.",
+			receiver,
+			util.PrettyFloat64(ctx.Params.ConvertValue(op.Volume)),
+		)
+	case model.OpTypeAirdrop:
+		d.Title = "Tezos Airdrop Event"
+		d.Description = fmt.Sprintf("%s protocol migration airdrop of %s XTZ to %s.",
+			"", // TODO
+			util.PrettyFloat64(ctx.Params.ConvertValue(op.Volume)),
+			receiver,
+		)
+	case model.OpTypeSeedSlash:
+		d.Title = "Tezos Seed Slash Event"
+		d.Description = fmt.Sprintf("%s lost %s XTZ rewards and %s XTZ fees in cycle %s.",
+			receiver,
+			util.PrettyFloat64(ctx.Params.ConvertValue(op.Reward)),
+			util.PrettyFloat64(ctx.Params.ConvertValue(op.Fee)),
+			util.PrettyInt64(op.Cycle),
+		)
+	case model.OpTypeMigration:
+		d.Title = "Tezos Migration Event"
+		d.Description = fmt.Sprintf("Contract %s migrated on block %s.",
+			receiver,
+			util.PrettyInt64(op.Height),
+		)
+	}
+	return d
+}
+
+func DescribeCycle(ctx *server.Context, cycle int64) MetadataDescriptor {
+	c := lookupOrBuildCycle(ctx, cycle)
+	d := MetadataDescriptor{
+		Title: fmt.Sprintf("Tezos Cycle %s on TzStats", util.PrettyInt64(cycle)),
+		Image: config.GetString("metadata.describe.logo"),
+		Description: fmt.Sprintf("Tezos Cycle %s – Running from %s to %s.",
+			util.PrettyInt64(cycle),
+			c.StartTime.Format(metaDateTime),
+			c.EndTime.Format(metaDateTime),
+		),
+	}
+	return d
+}
+
+func DescribeElection(ctx *server.Context, id int64) MetadataDescriptor {
+	election, err := ctx.Indexer.ElectionById(ctx.Context, model.ElectionID(id))
+	if err != nil {
+		switch err {
+		case etl.ErrNoTable:
+			panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "cannot access election table", err))
+		case index.ErrNoElectionEntry:
+			panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no election", err))
+		default:
+			panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
+		}
+	}
+	proposals, err := ctx.Indexer.ProposalsByElection(ctx, election.RowId)
+	if err != nil {
+		switch err {
+		case etl.ErrNoTable:
+			panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "cannot access proposal table", err))
+		default:
+			panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
+		}
+	}
+	var winner *model.Proposal
+	if election.ProposalId > 0 {
+		for _, v := range proposals {
+			if v.RowId == election.ProposalId {
+				winner = v
+				break
+			}
+		}
+	} else if len(proposals) > 0 {
+		winner = proposals[0]
+	}
+
+	if winner == nil {
+		return MetadataDescriptor{
+			Title: "Tezos Election on TzStats",
+			Image: config.GetString("metadata.describe.logo"),
+			Description: fmt.Sprintf("Tezos Election – From %s to %s.",
+				election.StartTime.Format(metaDateTime),
+				election.EndTime.Format(metaDateTime),
+			),
+		}
+	} else {
+		return MetadataDescriptor{
+			Title: fmt.Sprintf("Tezos Election %s on TzStats", winner.Hash.String()[:8]),
+			Image: config.GetString("metadata.describe.logo"),
+			Description: fmt.Sprintf("Tezos Election %s – From %s to %s.",
+				winner.Hash.String(),
+				election.StartTime.Format(metaDateTime),
+				election.EndTime.Format(metaDateTime),
+			),
+		}
+	}
+}
+
+func SitemapMetadata(ctx *server.Context) (interface{}, int) {
+	m := allMetadataByAddress(ctx)
+	addrs := make([]string, 0, len(m))
+	for n := range m {
+		addrs = append(addrs, n)
+	}
+	return addrs, http.StatusOK
 }

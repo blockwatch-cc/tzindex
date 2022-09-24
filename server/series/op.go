@@ -136,6 +136,11 @@ func (s *OpSeries) Interpolate(m SeriesBucket, ts time.Time) SeriesBucket {
 	if math.IsInf(weight, 1) {
 		weight = 1
 	}
+	// log.Infof("INTERPOLATE %s -> %s %f = %d .. %s / %s", o.Timestamp, ts, weight,
+	// 	s.Volume+int64(weight*float64(o.Volume-s.Volume)),
+	// 	ts.Sub(s.Timestamp),
+	// 	o.Timestamp, //.Truncate(window).Sub(s.Timestamp),
+	// )
 	switch weight {
 	case 0:
 		return s
@@ -177,7 +182,6 @@ func (o *OpSeries) MarshalJSONVerbose() ([]byte, error) {
 		Reward      float64   `json:"reward"`
 		Deposit     float64   `json:"deposit"`
 		Burned      float64   `json:"burned"`
-		TDD         float64   `json:"days_destroyed"`
 	}{
 		Timestamp:   o.Timestamp,
 		Count:       o.Count,
@@ -284,15 +288,13 @@ func (s *OpSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Que
 		panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", args.Series), err))
 	}
 
-	// translate long column names to short names used in pack tables
-	var srcNames []string
 	// time is auto-added from parser
 	if len(args.Columns) == 1 {
 		// use all series columns
 		args.Columns = opSeriesNames
 	}
 	// resolve short column names
-	srcNames = make([]string, 0, len(args.Columns))
+	srcNames := make([]string, 0, len(args.Columns))
 	for _, v := range args.Columns {
 		// ignore count column
 		if v == "count" {
@@ -306,7 +308,8 @@ func (s *OpSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Que
 	}
 
 	// build table query
-	q := pack.NewQuery(ctx.RequestID, table).
+	q := pack.NewQuery(ctx.RequestID).
+		WithTable(table).
 		WithFields(srcNames...).
 		WithOrder(args.Order).
 		AndRange("time", args.From.Time(), args.To.Time())
@@ -335,12 +338,7 @@ func (s *OpSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Que
 				if !typ.IsValid() {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid operation type '%s'", val[0]), nil))
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find("t"),
-					Mode:  mode,
-					Value: typ,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And("type", mode, typ)
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				typs := make([]uint8, 0)
 				for _, t := range strings.Split(val[0], ",") {
@@ -350,12 +348,7 @@ func (s *OpSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Que
 					}
 					typs = append(typs, uint8(typ))
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find("t"),
-					Mode:  mode,
-					Value: typs,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And("type", mode, typs)
 
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
@@ -366,20 +359,15 @@ func (s *OpSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Que
 			// 1 resolve account_id from account table
 			// 2 add eq/in cond: account_id
 			// 3 cache result in map (for output)
-			field := "S" // sender
+			field := "sender_id"
 			if prefix == "receiver" {
-				field = "R"
+				field = "receiver_id"
 			}
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty address matches id 0 (== missing baker)
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find(field), // account id
-						Mode:  pack.FilterModeEqual,
-						Value: 0,
-						Raw:   val[0], // debugging aid
-					})
+					q = q.AndEqual(field, 0)
 				} else {
 					// single-address lookup and compile condition
 					addr, err := tezos.ParseAddress(val[0])
@@ -388,24 +376,14 @@ func (s *OpSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Que
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					// Note: when not found we insert an always false condition
 					if acc == nil || acc.RowId == 0 {
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find(field), // account id
-							Mode:  mode,
-							Value: uint64(math.MaxUint64),
-							Raw:   "account not found", // debugging aid
-						})
+						q = q.And(field, mode, uint64(math.MaxUint64))
 					} else {
 						// add id as extra condition
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find(field), // account id
-							Mode:  mode,
-							Value: acc.RowId,
-							Raw:   val[0], // debugging aid
-						})
+						q = q.And(field, mode, acc.RowId)
 					}
 				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
@@ -418,7 +396,7 @@ func (s *OpSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Que
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account
 					if acc == nil || acc.RowId == 0 {
@@ -429,12 +407,7 @@ func (s *OpSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Que
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find(field), // account id
-					Mode:  mode,
-					Value: ids,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, ids)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -454,7 +427,7 @@ func (s *OpSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Que
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions.AddAndCondition(&cond)
+					q = q.AndCondition(cond)
 				}
 			}
 		}

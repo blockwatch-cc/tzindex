@@ -23,8 +23,6 @@ import (
 var (
 	// long -> short form
 	chainSourceNames map[string]string
-	// short -> long form
-	chainAliasNames map[string]string
 	// all aliases as list
 	chainAllAliases []string
 )
@@ -85,6 +83,7 @@ func (c *Chain) MarshalJSONVerbose() ([]byte, error) {
 		TotalStorageBytes    int64  `json:"total_storage_bytes"`
 		FundedAccounts       int64  `json:"funded_accounts"`
 		DustAccounts         int64  `json:"dust_accounts"`
+		GhostAccounts        int64  `json:"ghost_accounts"`
 		UnclaimedAccounts    int64  `json:"unclaimed_accounts"`
 		TotalDelegators      int64  `json:"total_delegators"`
 		ActiveDelegators     int64  `json:"active_delegators"`
@@ -129,6 +128,7 @@ func (c *Chain) MarshalJSONVerbose() ([]byte, error) {
 		TotalStorageBytes:    c.TotalStorageBytes,
 		FundedAccounts:       c.FundedAccounts,
 		DustAccounts:         c.DustAccounts,
+		GhostAccounts:        c.GhostAccounts,
 		UnclaimedAccounts:    c.UnclaimedAccounts,
 		TotalDelegators:      c.TotalDelegators,
 		DustDelegators:       c.DustDelegators,
@@ -210,6 +210,8 @@ func (c *Chain) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, c.FundedAccounts, 10)
 		case "dust_accounts":
 			buf = strconv.AppendInt(buf, c.DustAccounts, 10)
+		case "ghost_accounts":
+			buf = strconv.AppendInt(buf, c.GhostAccounts, 10)
 		case "unclaimed_accounts":
 			buf = strconv.AppendInt(buf, c.UnclaimedAccounts, 10)
 		case "total_delegators":
@@ -311,6 +313,8 @@ func (c *Chain) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(c.FundedAccounts, 10)
 		case "dust_accounts":
 			res[i] = strconv.FormatInt(c.DustAccounts, 10)
+		case "ghost_accounts":
+			res[i] = strconv.FormatInt(c.GhostAccounts, 10)
 		case "unclaimed_accounts":
 			res[i] = strconv.FormatInt(c.UnclaimedAccounts, 10)
 		case "total_delegators":
@@ -375,7 +379,8 @@ func StreamChainTable(ctx *server.Context, args *TableRequest) (interface{}, int
 	}
 
 	// build table query
-	q := pack.NewQuery(ctx.RequestID, table).
+	q := pack.NewQuery(ctx.RequestID).
+		WithTable(table).
 		WithFields(srcNames...).
 		WithLimit(int(args.Limit)).
 		WithOrder(args.Order)
@@ -404,12 +409,7 @@ func StreamChainTable(ctx *server.Context, args *TableRequest) (interface{}, int
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Pk(),
-				Mode:  cursorMode,
-				Value: id,
-				Raw:   val[0], // debugging aid
-			})
+			q = q.And("I", cursorMode, id)
 		default:
 			// translate long column name used in query to short column name used in packs
 			if short, ok := chainSourceNames[prefix]; !ok {
@@ -421,17 +421,14 @@ func StreamChainTable(ctx *server.Context, args *TableRequest) (interface{}, int
 			// the same field name may appear multiple times, in which case conditions
 			// are combined like any other condition with logical AND
 			for _, v := range val {
-				switch prefix {
-				case "cycle":
-					if v == "head" {
-						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
-						v = strconv.FormatInt(int64(currentCycle), 10)
-					}
+				if prefix == "cycle" && v == "head" {
+					currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
+					v = strconv.FormatInt(currentCycle, 10)
 				}
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions.AddAndCondition(&cond)
+					q = q.AndCondition(cond)
 				}
 			}
 		}
@@ -451,7 +448,7 @@ func StreamChainTable(ctx *server.Context, args *TableRequest) (interface{}, int
 	// prepare return type marshalling
 	ch := &Chain{
 		verbose: args.Verbose,
-		columns: util.StringList(args.Columns),
+		columns: args.Columns,
 		params:  params,
 	}
 
@@ -465,11 +462,11 @@ func StreamChainTable(ctx *server.Context, args *TableRequest) (interface{}, int
 		enc.SetEscapeHTML(false)
 
 		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
+		_, _ = io.WriteString(ctx.ResponseWriter, "[")
 		// close JSON array on panic
 		defer func() {
 			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
+				_, _ = io.WriteString(ctx.ResponseWriter, "]")
 				panic(e)
 			}
 		}()
@@ -478,7 +475,7 @@ func StreamChainTable(ctx *server.Context, args *TableRequest) (interface{}, int
 		var needComma bool
 		err = table.Stream(ctx, q, func(r pack.Row) error {
 			if needComma {
-				io.WriteString(ctx.ResponseWriter, ",")
+				_, _ = io.WriteString(ctx.ResponseWriter, ",")
 			} else {
 				needComma = true
 			}
@@ -496,7 +493,7 @@ func StreamChainTable(ctx *server.Context, args *TableRequest) (interface{}, int
 			return nil
 		})
 		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
+		_, _ = io.WriteString(ctx.ResponseWriter, "]")
 		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":

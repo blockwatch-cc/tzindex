@@ -4,8 +4,6 @@
 package explorer
 
 import (
-	"encoding/binary"
-	"encoding/hex"
 	"github.com/gorilla/mux"
 	"net/http"
 	"sort"
@@ -129,8 +127,6 @@ func NewBlock(ctx *server.Context, block *model.Block, args server.Options) *Blo
 	if !p.ContainsHeight(block.Height) {
 		p = ctx.Crawler.ParamsByHeight(block.Height)
 	}
-	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], block.Nonce)
 	b := &Block{
 		Hash:             block.Hash,
 		Baker:            ctx.Indexer.LookupAddress(ctx, block.BakerId),
@@ -142,7 +138,7 @@ func NewBlock(ctx *server.Context, block *model.Block, args server.Options) *Blo
 		Solvetime:        block.Solvetime,
 		Version:          block.Version,
 		Round:            block.Round,
-		Nonce:            hex.EncodeToString(buf[:]),
+		Nonce:            util.U64String(block.Nonce).Hex(),
 		VotingPeriodKind: block.VotingPeriodKind,
 		NSlotsEndorsed:   block.NSlotsEndorsed,
 		NOps:             model.Int16Correct(block.NOpsApplied),
@@ -225,15 +221,16 @@ func NewBlock(ctx *server.Context, block *model.Block, args server.Options) *Blo
 		}
 	}
 
-	if b.Height == nowHeight {
+	switch {
+	case b.Height == nowHeight:
 		// cache most recent block only until next block and endorsements are due
 		b.expires = b.Timestamp.Add(p.BlockTime())
 		b.lastmod = b.Timestamp
-	} else if b.Height+p.MaxOperationsTTL >= nowHeight {
+	case b.Height+p.MaxOperationsTTL >= nowHeight:
 		// cache blocks in the reorg safety zone only until next block is expected
 		b.expires = ctx.Tip.BestTime.Add(p.BlockTime())
 		b.lastmod = b.Timestamp.Add(p.BlockTime())
-	} else {
+	default:
 		b.expires = b.Timestamp.Add(ctx.Cfg.Http.CacheMaxExpires)
 		b.lastmod = b.Timestamp
 	}
@@ -331,12 +328,13 @@ func listBlockOps(ctx *server.Context) OpList {
 
 	// don't use offset/limit because we mix in endorsements
 	r := etl.ListRequest{
-		Mode:   args.TypeMode,
-		Typs:   args.TypeList,
-		Since:  block.Height,
-		Until:  block.Height,
-		Cursor: args.Cursor,
-		Order:  args.Order,
+		Mode:        args.TypeMode,
+		Typs:        args.TypeList,
+		Since:       block.Height,
+		Until:       block.Height,
+		Cursor:      args.Cursor,
+		Order:       args.Order,
+		WithStorage: args.WithStorage(),
 	}
 
 	if args.Sender.IsValid() {

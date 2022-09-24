@@ -23,7 +23,7 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 
 	// register new protocol (will save as new deployment)
 	b.block.Params.StartHeight = b.block.Height
-	b.idx.ConnectProtocol(ctx, b.block.Params)
+	_ = b.idx.ConnectProtocol(ctx, b.block.Params, nil)
 
 	accounts := make([]pack.Item, 0)
 	contracts := make([]pack.Item, 0)
@@ -55,7 +55,7 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 			acc.IsBaker = true
 			acc.BakerId = acc.RowId
 			bkr := b.RegisterBaker(acc, true)
-			b.AppendMagicBakerRegistrationOp(ctx, bkr, i)
+			_ = b.AppendMagicBakerRegistrationOp(ctx, bkr, i)
 
 			// update supply counters
 			b.block.Supply.ActiveStaking += v.Value

@@ -51,7 +51,6 @@ func init() {
 	explorer.UseLogger(srvrLog)
 	tables.UseLogger(srvrLog)
 	series.UseLogger(srvrLog)
-	system.UseLogger(srvrLog)
 	micheline.UseLogger(michLog)
 }
 
@@ -104,7 +103,6 @@ func initLogging() {
 	explorer.UseLogger(srvrLog)
 	tables.UseLogger(srvrLog)
 	server.UseLogger(srvrLog)
-	system.UseLogger(srvrLog)
 	micheline.UseLogger(michLog)
 
 	// store loggers in map

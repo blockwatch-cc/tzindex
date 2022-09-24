@@ -27,8 +27,6 @@ import (
 var (
 	// long -> short form
 	flowSourceNames map[string]string
-	// short -> long form
-	flowAliasNames map[string]string
 	// all aliases as list
 	flowAllAliases []string
 )
@@ -293,7 +291,8 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 	}
 
 	// build table query
-	q := pack.NewQuery(ctx.RequestID, table).
+	q := pack.NewQuery(ctx.RequestID).
+		WithTable(table).
 		WithFields(srcNames...).
 		WithLimit(int(args.Limit)).
 		WithOrder(args.Order)
@@ -302,6 +301,7 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 	for key, val := range ctx.Request.URL.Query() {
 		keys := strings.Split(key, ".")
 		prefix := keys[0]
+		field := flowSourceNames[prefix]
 		mode := pack.FilterModeEqual
 		if len(keys) > 1 {
 			mode = pack.ParseFilterMode(keys[1])
@@ -322,18 +322,9 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Pk(),
-				Mode:  cursorMode,
-				Value: id,
-				Raw:   val[0], // debugging aid
-			})
+			q = q.And("I", cursorMode, id)
 
 		case "address", "counterparty":
-			field := "A" // account
-			if prefix == "counterparty" {
-				field = "R"
-			}
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				// single-address lookup and compile condition
@@ -343,24 +334,14 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 				}
 				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 				if err != nil && err != index.ErrNoAccountEntry {
-					panic(err)
+					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				// Note: when not found we insert an always false condition
 				if acc == nil || acc.RowId == 0 {
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find(field), // account id
-						Mode:  mode,
-						Value: uint64(math.MaxUint64),
-						Raw:   "account not found", // debugging aid
-					})
+					q = q.And(field, mode, uint64(math.MaxUint64))
 				} else {
 					// add id as extra condition
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find(field), // account id
-						Mode:  mode,
-						Value: acc.RowId,
-						Raw:   val[0], // debugging aid
-					})
+					q = q.And(field, mode, acc.RowId)
 				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup and compile condition
@@ -372,7 +353,7 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account
 					if acc == nil || acc.RowId == 0 {
@@ -383,12 +364,7 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find(field), // account id
-					Mode:  mode,
-					Value: ids,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, ids)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -402,7 +378,7 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 				if val[0] != "" {
 					// single-op lookup and compile condition
 					// ignore endorsements
-					ops, err := ctx.Indexer.LookupOp(ctx, val[0])
+					ops, err := ctx.Indexer.LookupOp(ctx, val[0], etl.ListRequest{})
 					if err != nil {
 						switch err {
 						case index.ErrNoOpEntry:
@@ -410,7 +386,7 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 						case etl.ErrInvalidHash:
 							panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid op hash '%s'", val[0]), err))
 						default:
-							panic(err)
+							panic(server.EInternal(server.EC_DATABASE, fmt.Sprintf("cannot lookup op hash '%s'", val[0]), err))
 						}
 					}
 					height := ops[0].Height
@@ -418,26 +394,11 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 					for _, v := range ops {
 						opns = append(opns, v.OpN)
 					}
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find("h"), // height
-						Mode:  pack.FilterModeEqual,
-						Value: height,
-						Raw:   val[0], // debugging aid
-					})
+					q = q.AndEqual("h", height)
 					if len(opns) == 1 {
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find("1"), // op_n
-							Mode:  pack.FilterModeEqual,
-							Value: opns[0],
-							Raw:   val[0], // debugging aid
-						})
+						q = q.AndEqual("1", opns[0])
 					} else {
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find("1"), // op_n
-							Mode:  pack.FilterModeIn,
-							Value: opns,
-							Raw:   val[0], // debugging aid
-						})
+						q = q.AndIn("1", opns)
 					}
 				}
 			default:
@@ -459,7 +420,7 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 				case "cycle":
 					if v == "head" {
 						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
-						v = strconv.FormatInt(int64(currentCycle), 10)
+						v = strconv.FormatInt(currentCycle, 10)
 					}
 				case "amount_in", "amount_out":
 					fvals := make([]string, 0)
@@ -520,7 +481,7 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions.AddAndCondition(&cond)
+					q = q.AndCondition(cond)
 				}
 			}
 		}
@@ -534,7 +495,7 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 	// prepare return type marshalling
 	flow := &Flow{
 		verbose: args.Verbose,
-		columns: util.StringList(args.Columns),
+		columns: args.Columns,
 		params:  params,
 		ctx:     ctx,
 	}
@@ -549,11 +510,11 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 		enc.SetEscapeHTML(false)
 
 		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
+		_, _ = io.WriteString(ctx.ResponseWriter, "[")
 		// close JSON array on panic
 		defer func() {
 			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
+				_, _ = io.WriteString(ctx.ResponseWriter, "]")
 				panic(e)
 			}
 		}()
@@ -562,7 +523,7 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 		var needComma bool
 		err = table.Stream(ctx.Context, q, func(r pack.Row) error {
 			if needComma {
-				io.WriteString(ctx.ResponseWriter, ",")
+				_, _ = io.WriteString(ctx.ResponseWriter, ",")
 			} else {
 				needComma = true
 			}
@@ -580,7 +541,7 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 			return nil
 		})
 		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
+		_, _ = io.WriteString(ctx.ResponseWriter, "]")
 		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":

@@ -167,7 +167,7 @@ func (b *bootstrap) DecodeContracts() ([]*X1, error) {
 
 		// skip when this does not look like a vesting contract
 		isVesting := true
-		switch true {
+		switch {
 		case !c[i].Script.Storage.IsValid():
 			isVesting = false
 		case len(c[i].Script.Storage.Args) == 0:
@@ -239,7 +239,7 @@ func (b *bootstrap) DecodeAccounts() ([]*X0, error) {
 	for i, v := range b.Accounts {
 		acc[i] = &X0{}
 		pk := v[0]
-		switch true {
+		switch {
 		case tezos.HasKeyPrefix(pk):
 			key, err := tezos.ParseKey(pk)
 			if err != nil {

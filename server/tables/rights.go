@@ -25,8 +25,6 @@ import (
 var (
 	// long -> short form
 	rightSourceNames map[string]string
-	// short -> long form
-	rightAliasNames map[string]string
 	// all aliases as list
 	rightAllAliases []string
 )
@@ -195,7 +193,8 @@ func StreamRightsTable(ctx *server.Context, args *TableRequest) (interface{}, in
 	}
 
 	// build table query
-	q := pack.NewQuery(ctx.RequestID, table).
+	q := pack.NewQuery(ctx.RequestID).
+		WithTable(table).
 		WithFields(srcNames...).
 		WithLimit(int(args.Limit)).
 		WithOrder(args.Order)
@@ -204,6 +203,7 @@ func StreamRightsTable(ctx *server.Context, args *TableRequest) (interface{}, in
 	for key, val := range ctx.Request.URL.Query() {
 		keys := strings.Split(key, ".")
 		prefix := keys[0]
+		field := rightSourceNames[prefix]
 		mode := pack.FilterModeEqual
 		if len(keys) > 1 {
 			mode = pack.ParseFilterMode(keys[1])
@@ -224,12 +224,7 @@ func StreamRightsTable(ctx *server.Context, args *TableRequest) (interface{}, in
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Pk(),
-				Mode:  cursorMode,
-				Value: id,
-				Raw:   val[0], // debugging aid
-			})
+			q = q.And("I", cursorMode, id)
 
 		case "address":
 			// parse address and lookup id
@@ -246,24 +241,14 @@ func StreamRightsTable(ctx *server.Context, args *TableRequest) (interface{}, in
 				}
 				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 				if err != nil && err != index.ErrNoAccountEntry {
-					panic(err)
+					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				// Note: when not found we insert an always false condition
 				if acc == nil || acc.RowId == 0 {
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find("A"), // acc id
-						Mode:  mode,
-						Value: uint64(math.MaxUint64),
-						Raw:   "account not found", // debugging aid
-					})
+					q = q.And(field, mode, uint64(math.MaxUint64))
 				} else {
 					// add addr id as extra fund_flow condition
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find("A"), // acc id
-						Mode:  mode,
-						Value: acc.RowId,
-						Raw:   val[0], // debugging aid
-					})
+					q = q.And(field, mode, acc.RowId)
 				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup and compile condition
@@ -275,7 +260,7 @@ func StreamRightsTable(ctx *server.Context, args *TableRequest) (interface{}, in
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account
 					if acc == nil || acc.RowId == 0 {
@@ -286,12 +271,7 @@ func StreamRightsTable(ctx *server.Context, args *TableRequest) (interface{}, in
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find("A"), // acc id
-					Mode:  mode,
-					Value: ids,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, ids)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -306,17 +286,14 @@ func StreamRightsTable(ctx *server.Context, args *TableRequest) (interface{}, in
 			// the same field name may appear multiple times, in which case conditions
 			// are combined like any other condition with logical AND
 			for _, v := range val {
-				switch prefix {
-				case "cycle":
-					if v == "head" {
-						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
-						v = strconv.FormatInt(int64(currentCycle), 10)
-					}
+				if prefix == "cycle" && v == "head" {
+					currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
+					v = strconv.FormatInt(currentCycle, 10)
 				}
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions.AddAndCondition(&cond)
+					q = q.AndCondition(cond)
 				}
 			}
 		}
@@ -336,7 +313,7 @@ func StreamRightsTable(ctx *server.Context, args *TableRequest) (interface{}, in
 	// prepare return type marshalling
 	right := &Right{
 		verbose: args.Verbose,
-		columns: util.StringList(args.Columns),
+		columns: args.Columns,
 		ctx:     ctx,
 		params:  params,
 	}
@@ -351,11 +328,11 @@ func StreamRightsTable(ctx *server.Context, args *TableRequest) (interface{}, in
 		enc.SetEscapeHTML(false)
 
 		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
+		_, _ = io.WriteString(ctx.ResponseWriter, "[")
 		// close JSON array on panic
 		defer func() {
 			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
+				_, _ = io.WriteString(ctx.ResponseWriter, "]")
 				panic(e)
 			}
 		}()
@@ -364,7 +341,7 @@ func StreamRightsTable(ctx *server.Context, args *TableRequest) (interface{}, in
 		var needComma bool
 		err = table.Stream(ctx, q, func(r pack.Row) error {
 			if needComma {
-				io.WriteString(ctx.ResponseWriter, ",")
+				_, _ = io.WriteString(ctx.ResponseWriter, ",")
 			} else {
 				needComma = true
 			}
@@ -382,7 +359,7 @@ func StreamRightsTable(ctx *server.Context, args *TableRequest) (interface{}, in
 			return nil
 		})
 		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
+		_, _ = io.WriteString(ctx.ResponseWriter, "]")
 		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":

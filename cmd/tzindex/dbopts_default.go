@@ -49,13 +49,10 @@ var (
 
 func DBOpts(engine string, readOnly, noSync bool) interface{} {
 	if readOnly {
-		o, _ := dbReadOnlyOpts[engine]
-		return o
+		return dbReadOnlyOpts[engine]
 	}
 	if noSync {
-		o, _ := dbNoSyncOpts[engine]
-		return o
+		return dbNoSyncOpts[engine]
 	}
-	o, _ := dbOpts[engine]
-	return o
+	return dbOpts[engine]
 }

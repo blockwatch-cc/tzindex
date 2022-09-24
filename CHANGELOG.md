@@ -1,5 +1,31 @@
 # Changelog
 
+### v14.0.0 (v014-2022-09-06)
+
+Kathmandu upgrade
+
+Model changes
+
+- NEW event model
+  - store events emitted from smart contract calls
+- operation model
+  - add `vdf_revelation` and `increase_paid_storage` operations
+- account model
+  - store all ghost accounts (unfunded wallets that appear in smart contract storage)
+- chain model
+  - add `ghost_accounts` counter
+
+Other changes
+
+- ETL: fix bake+unfreeze split from block-level balance updates (edge case mainnet Polychain baker)
+- ETL: fix protocol invoice feature
+- API: don't return deleted bigmaps
+- API: strip unused info from on-chain constants
+- API: fix bigmap metadata timestamps
+- API: add `events` field to contract calls (off by default on lists, enable with `storage=1`)
+- API: fix time series fill
+- API: remove some exotic chain configuration constants from `/explorer/config`
+
 ### v13.0.1 (v013-2022-06-15)
 
 - fix Jakarta protocol detection on network migration

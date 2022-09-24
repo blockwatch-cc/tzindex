@@ -23,8 +23,6 @@ import (
 var (
 	// long -> short form
 	supplySourceNames map[string]string
-	// short -> long form
-	supplyAliasNames map[string]string
 	// all aliases as list
 	supplyAllAliases []string
 )
@@ -349,7 +347,8 @@ func StreamSupplyTable(ctx *server.Context, args *TableRequest) (interface{}, in
 	}
 
 	// build table query
-	q := pack.NewQuery(ctx.RequestID, table).
+	q := pack.NewQuery(ctx.RequestID).
+		WithTable(table).
 		WithFields(srcNames...).
 		WithLimit(int(args.Limit)).
 		WithOrder(args.Order)
@@ -378,12 +377,7 @@ func StreamSupplyTable(ctx *server.Context, args *TableRequest) (interface{}, in
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Pk(),
-				Mode:  cursorMode,
-				Value: id,
-				Raw:   val[0], // debugging aid
-			})
+			q = q.And("I", cursorMode, id)
 		default:
 			// translate long column name used in query to short column name used in packs
 			if short, ok := supplySourceNames[prefix]; !ok {
@@ -400,7 +394,7 @@ func StreamSupplyTable(ctx *server.Context, args *TableRequest) (interface{}, in
 				case "cycle":
 					if v == "head" {
 						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
-						v = strconv.FormatInt(int64(currentCycle), 10)
+						v = strconv.FormatInt(currentCycle, 10)
 					}
 				case "height", "time":
 					// need no conversion
@@ -419,7 +413,7 @@ func StreamSupplyTable(ctx *server.Context, args *TableRequest) (interface{}, in
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions.AddAndCondition(&cond)
+					q = q.AndCondition(cond)
 				}
 			}
 		}
@@ -439,7 +433,7 @@ func StreamSupplyTable(ctx *server.Context, args *TableRequest) (interface{}, in
 	// prepare return type marshalling
 	supply := &Supply{
 		verbose: args.Verbose,
-		columns: util.StringList(args.Columns),
+		columns: args.Columns,
 		params:  params,
 	}
 
@@ -453,11 +447,11 @@ func StreamSupplyTable(ctx *server.Context, args *TableRequest) (interface{}, in
 		enc.SetEscapeHTML(false)
 
 		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
+		_, _ = io.WriteString(ctx.ResponseWriter, "[")
 		// close JSON array on panic
 		defer func() {
 			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
+				_, _ = io.WriteString(ctx.ResponseWriter, "]")
 				panic(e)
 			}
 		}()
@@ -466,7 +460,7 @@ func StreamSupplyTable(ctx *server.Context, args *TableRequest) (interface{}, in
 		var needComma bool
 		err = table.Stream(ctx, q, func(r pack.Row) error {
 			if needComma {
-				io.WriteString(ctx.ResponseWriter, ",")
+				_, _ = io.WriteString(ctx.ResponseWriter, ",")
 			} else {
 				needComma = true
 			}
@@ -484,7 +478,7 @@ func StreamSupplyTable(ctx *server.Context, args *TableRequest) (interface{}, in
 			return nil
 		})
 		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
+		_, _ = io.WriteString(ctx.ResponseWriter, "]")
 		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":

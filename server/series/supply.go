@@ -34,6 +34,7 @@ func init() {
 // configurable marshalling helper
 type SupplySeries struct {
 	model.Supply
+	bucketTime time.Time
 
 	columns util.StringList // cond. cols & order when brief
 	params  *tezos.Params   // blockchain amount conversion
@@ -50,7 +51,7 @@ func (s *SupplySeries) Init(params *tezos.Params, columns []string, verbose bool
 }
 
 func (s *SupplySeries) IsEmpty() bool {
-	return s.Supply.Height == 0 || s.Supply.Timestamp.IsZero()
+	return s.Supply.RowId == 0
 }
 
 func (s *SupplySeries) Add(m SeriesModel) {
@@ -59,35 +60,36 @@ func (s *SupplySeries) Add(m SeriesModel) {
 }
 
 func (s *SupplySeries) Reset() {
-	s.Supply.Timestamp = time.Time{}
+	s.bucketTime = time.Time{}
 	s.null = false
 }
 
 func (s *SupplySeries) Null(ts time.Time) SeriesBucket {
 	s.Reset()
-	s.Timestamp = ts
+	s.bucketTime = ts
 	s.null = true
 	return s
 }
 
 func (s *SupplySeries) Zero(ts time.Time) SeriesBucket {
 	s.Reset()
-	s.Timestamp = ts
+	s.bucketTime = ts
 	return s
 }
 
 func (s *SupplySeries) SetTime(ts time.Time) SeriesBucket {
-	s.Timestamp = ts
+	s.bucketTime = ts
 	return s
 }
 
 func (s *SupplySeries) Time() time.Time {
-	return s.Timestamp
+	return s.bucketTime
 }
 
 func (s *SupplySeries) Clone() SeriesBucket {
 	c := &SupplySeries{
-		Supply: s.Supply,
+		Supply:     s.Supply,
+		bucketTime: s.bucketTime,
 	}
 	c.columns = s.columns
 	c.params = s.params
@@ -152,7 +154,7 @@ func (s *SupplySeries) MarshalJSONVerbose() ([]byte, error) {
 	}{
 		Height:              s.Height,
 		Cycle:               s.Cycle,
-		Timestamp:           s.Timestamp,
+		Timestamp:           s.bucketTime,
 		Count:               1,
 		Total:               s.params.ConvertValue(s.Total),
 		Activated:           s.params.ConvertValue(s.Activated),
@@ -200,7 +202,7 @@ func (s *SupplySeries) MarshalJSONBrief() ([]byte, error) {
 		if s.null {
 			switch v {
 			case "time":
-				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(s.Timestamp), 10)
+				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(s.bucketTime), 10)
 			default:
 				buf = append(buf, null...)
 			}
@@ -211,7 +213,7 @@ func (s *SupplySeries) MarshalJSONBrief() ([]byte, error) {
 			case "cycle":
 				buf = strconv.AppendInt(buf, s.Cycle, 10)
 			case "time":
-				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(s.Timestamp), 10)
+				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(s.bucketTime), 10)
 			case "count":
 				buf = strconv.AppendInt(buf, 1, 10)
 			case "total":
@@ -301,7 +303,7 @@ func (s *SupplySeries) MarshalCSV() ([]string, error) {
 		if s.null {
 			switch v {
 			case "time":
-				res[i] = strconv.Quote(s.Timestamp.Format(time.RFC3339))
+				res[i] = strconv.Quote(s.bucketTime.Format(time.RFC3339))
 			default:
 				continue
 			}
@@ -312,7 +314,7 @@ func (s *SupplySeries) MarshalCSV() ([]string, error) {
 		case "cycle":
 			res[i] = strconv.FormatInt(s.Cycle, 10)
 		case "time":
-			res[i] = strconv.Quote(s.Timestamp.Format(time.RFC3339))
+			res[i] = strconv.Quote(s.bucketTime.Format(time.RFC3339))
 		case "count":
 			res[i] = strconv.FormatInt(1, 10)
 		case "total":
@@ -397,15 +399,13 @@ func (s *SupplySeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack
 		panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", args.Series), err))
 	}
 
-	// translate long column names to short names used in pack tables
-	var srcNames []string
 	// time is auto-added from parser
 	if len(args.Columns) == 1 {
 		// use all series columns
 		args.Columns = supplySeriesNames
 	}
 	// resolve short column names
-	srcNames = make([]string, 0, len(args.Columns))
+	srcNames := make([]string, 0, len(args.Columns))
 	for _, v := range args.Columns {
 		// ignore count column
 		if v == "count" {
@@ -419,7 +419,8 @@ func (s *SupplySeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack
 	}
 
 	// build table query, no dynamic filter conditions
-	return pack.NewQuery(ctx.RequestID, table).
+	return pack.NewQuery(ctx.RequestID).
+		WithTable(table).
 		WithFields(srcNames...).
 		WithOrder(args.Order).
 		AndRange("time", args.From.Time(), args.To.Time())

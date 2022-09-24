@@ -127,8 +127,8 @@ func GcDatabases(ctx *server.Context) (interface{}, int) {
 }
 
 func UpdateLog(ctx *server.Context) (interface{}, int) {
-	sub, _ := mux.Vars(ctx.Request)["subsystem"]
-	level, _ := mux.Vars(ctx.Request)["level"]
+	sub := mux.Vars(ctx.Request)["subsystem"]
+	level := mux.Vars(ctx.Request)["level"]
 	lvl := logpkg.ParseLevel(level)
 	if lvl == logpkg.LevelInvalid {
 		panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("undefined log level '%s'", level), nil))
@@ -160,8 +160,8 @@ func UpdateLog(ctx *server.Context) (interface{}, int) {
 }
 
 func DumpTable(ctx *server.Context) (interface{}, int) {
-	tname, _ := mux.Vars(ctx.Request)["table"]
-	pname, _ := mux.Vars(ctx.Request)["part"]
+	tname := mux.Vars(ctx.Request)["table"]
+	pname := mux.Vars(ctx.Request)["part"]
 	table, err := ctx.Indexer.Table(tname)
 	if err != nil {
 		panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no such table", nil))

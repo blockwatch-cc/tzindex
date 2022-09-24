@@ -4,7 +4,6 @@
 package tables
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -29,17 +28,10 @@ import (
 var (
 	// long -> short form
 	opSourceNames map[string]string
-	// short -> long form
-	opAliasNames map[string]string
 	// all aliases as list
 	opAllAliases []string
-
 	// long -> short form
 	endSourceNames map[string]string
-	// short -> long form
-	endAliasNames map[string]string
-	// all aliases as list
-	endAllAliases []string
 )
 
 func init() {
@@ -55,7 +47,6 @@ func init() {
 		log.Fatalf("endorsement field type error: %v\n", err)
 	}
 	endSourceNames = fields.NameMapReverse()
-	endAllAliases = fields.Aliases()
 
 	// add extra translations for related accounts
 	opSourceNames["sender"] = "S"
@@ -67,10 +58,8 @@ func init() {
 	opSourceNames["entrypoint"] = "a"    // stored in data field
 	opSourceNames["entrypoint_id"] = "-" // ignore, internal
 	opSourceNames["address"] = "-"       // any address
-	opSourceNames["id"] = "-"            // height + op_p
-	opSourceNames["row_id"] = "-"        // suppress, internal only
+	opSourceNames["id"] = "h"            //
 	opAllAliases = append(opAllAliases,
-		"id",
 		"sender",
 		"receiver",
 		"creator",
@@ -185,20 +174,12 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		BakerId:      o.BakerId.Value(),
 		Baker:        o.ctx.Indexer.LookupAddress(o.ctx, o.BakerId).String(),
 		Data:         o.Data,
-		Parameters:   "",
-		Errors:       nil,
+		Parameters:   hex.EncodeToString(o.Parameters),
+		StorageHash:  util.U64String(o.StorageHash).Hex(),
+		Errors:       json.RawMessage(o.Errors),
 	}
 	if o.Type.ListId() >= 0 {
 		op.Hash = o.Hash.String()
-	}
-	if len(o.Parameters) > 0 {
-		op.Parameters = hex.EncodeToString(o.Parameters)
-	}
-	var tmp [8]byte
-	binary.BigEndian.PutUint64(tmp[:], o.StorageHash)
-	op.StorageHash = hex.EncodeToString(tmp[:])
-	if o.Errors != nil {
-		op.Errors = json.RawMessage(o.Errors)
 	}
 	if o.IsContract {
 		op.Entrypoint = o.Data
@@ -208,7 +189,10 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		buf, _ := o.BigmapEvents.MarshalBinary()
 		op.BigmapEvents = tezos.HexBytes(buf)
 	}
-
+	// fill endorsement time from block
+	if o.Timestamp.IsZero() {
+		op.Timestamp = o.ctx.Indexer.LookupBlockTimeMs(o.ctx, o.Height)
+	}
 	return json.Marshal(op)
 }
 
@@ -218,7 +202,7 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 	buf = append(buf, '[')
 	for i, v := range o.columns {
 		switch v {
-		case "id":
+		case "row_id", "id":
 			buf = strconv.AppendUint(buf, o.Id(), 10)
 		case "type":
 			buf = strconv.AppendQuote(buf, o.Type.String())
@@ -235,7 +219,12 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 		case "cycle":
 			buf = strconv.AppendInt(buf, o.Cycle, 10)
 		case "time":
-			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(o.Timestamp), 10)
+			// fill endorsement time from block
+			if o.Timestamp.IsZero() {
+				buf = strconv.AppendInt(buf, o.ctx.Indexer.LookupBlockTimeMs(o.ctx, o.Height), 10)
+			} else {
+				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(o.Timestamp), 10)
+			}
 		case "op_n":
 			buf = strconv.AppendInt(buf, int64(o.OpN), 10)
 		case "op_p":
@@ -334,13 +323,7 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 				buf = append(buf, null...)
 			}
 		case "storage_hash":
-			if o.StorageHash != 0 {
-				var tmp [8]byte
-				binary.BigEndian.PutUint64(tmp[:], o.StorageHash)
-				buf = strconv.AppendQuote(buf, hex.EncodeToString(tmp[:]))
-			} else {
-				buf = append(buf, null...)
-			}
+			buf = strconv.AppendQuote(buf, util.U64String(o.StorageHash).Hex())
 		case "big_map_diff":
 			if len(o.BigmapEvents) > 0 {
 				b, _ := o.BigmapEvents.MarshalBinary()
@@ -377,7 +360,7 @@ func (o *Op) MarshalCSV() ([]string, error) {
 	res := make([]string, len(o.columns))
 	for i, v := range o.columns {
 		switch v {
-		case "id":
+		case "row_id", "id":
 			res[i] = strconv.FormatUint(o.Id(), 10)
 		case "type":
 			res[i] = strconv.Quote(o.Type.String())
@@ -394,7 +377,12 @@ func (o *Op) MarshalCSV() ([]string, error) {
 		case "cycle":
 			res[i] = strconv.FormatInt(o.Cycle, 10)
 		case "time":
-			res[i] = strconv.Quote(o.Timestamp.Format(time.RFC3339))
+			// fill endorsement time from block
+			if o.Timestamp.IsZero() {
+				res[i] = strconv.Quote(o.ctx.Indexer.LookupBlockTime(o.ctx, o.Height).Format(time.RFC3339))
+			} else {
+				res[i] = strconv.Quote(o.Timestamp.Format(time.RFC3339))
+			}
 		case "op_n":
 			res[i] = strconv.FormatInt(int64(o.OpN), 10)
 		case "op_p":
@@ -456,9 +444,7 @@ func (o *Op) MarshalCSV() ([]string, error) {
 		case "parameters":
 			res[i] = strconv.Quote(hex.EncodeToString(o.Parameters))
 		case "storage_hash":
-			var tmp [8]byte
-			binary.BigEndian.PutUint64(tmp[:], o.StorageHash)
-			res[i] = strconv.Quote(hex.EncodeToString(tmp[:]))
+			res[i] = strconv.Quote(util.U64String(o.StorageHash).Hex())
 		case "big_map_diff":
 			if len(o.BigmapEvents) > 0 {
 				b, _ := o.BigmapEvents.MarshalBinary()
@@ -524,7 +510,8 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 	}
 
 	// build table query
-	q := pack.NewQuery(ctx.RequestID, table).
+	q := pack.NewQuery(ctx.RequestID).
+		WithTable(table).
 		WithFields(srcNames...).
 		WithLimit(int(args.Limit)).
 		WithOrder(args.Order)
@@ -533,6 +520,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 	for key, val := range ctx.Request.URL.Query() {
 		keys := strings.Split(key, ".")
 		prefix := keys[0]
+		field := opSourceNames[prefix]
 		mode := pack.FilterModeEqual
 		if len(keys) > 1 {
 			mode = pack.ParseFilterMode(keys[1])
@@ -551,7 +539,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 			height := int64(id >> 16)
 			opn := int64(id & 0xFFFF)
 			if args.Order == pack.OrderDesc {
-				q = q.Or(
+				q = q.OrCondition(
 					pack.Lt("height", height),
 					pack.And(
 						pack.Equal("height", height),
@@ -559,7 +547,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 					),
 				)
 			} else {
-				q = q.Or(
+				q = q.OrCondition(
 					pack.Gt("height", height),
 					pack.And(
 						pack.Equal("height", height),
@@ -567,7 +555,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 					),
 				)
 			}
-		case "id":
+		case "row_id", "id":
 			switch mode {
 			case pack.FilterModeEqual:
 				id, err := strconv.ParseUint(val[0], 10, 64)
@@ -576,7 +564,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				}
 				height := int64(id >> 16)
 				opn := int64(id & 0xFFFF)
-				q = q.AndCondition("height", mode, height).AndCondition("op_n", mode, opn)
+				q = q.And("height", mode, height).And("op_n", mode, opn)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -592,9 +580,9 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				hashes[i] = h.Hash.Hash
 			}
 			if len(hashes) == 1 {
-				q = q.AndEqual("hash", hashes[0])
+				q = q.AndEqual(field, hashes[0])
 			} else {
-				q = q.AndIn("hash", hashes)
+				q = q.AndIn(field, hashes)
 			}
 		case "block":
 			// special hash type to []byte conversion
@@ -607,9 +595,9 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				heights[i] = b.Height
 			}
 			if len(heights) == 1 {
-				q = q.AndEqual("height", heights[0])
+				q = q.AndEqual(field, heights[0])
 			} else {
-				q = q.AndIn("height", heights)
+				q = q.AndIn(field, heights)
 			}
 		case "type":
 			// parse only the first value
@@ -619,7 +607,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				if !typ.IsValid() {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid operation type '%s'", val[0]), nil))
 				}
-				q = q.AndCondition("type", mode, typ)
+				q = q.And(field, mode, typ)
 				needEndorse = typ == model.OpTypeEndorsement || typ == model.OpTypePreendorsement
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				needEndorse = false
@@ -634,7 +622,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 						needEndorse = needEndorse || typ == model.OpTypeEndorsement || typ == model.OpTypePreendorsement
 					}
 				}
-				q = q.AndCondition("type", mode, typs)
+				q = q.And(field, mode, typs)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -646,7 +634,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				if !stat.IsValid() {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid operation status '%s'", val[0]), nil))
 				}
-				q = q.AndCondition("status", mode, stat)
+				q = q.And(field, mode, stat)
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				stats := make([]uint8, 0)
 				for _, t := range strings.Split(val[0], ",") {
@@ -656,7 +644,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 					}
 					stats = append(stats, uint8(stat))
 				}
-				q = q.AndCondition("status", mode, stats)
+				q = q.And(field, mode, stats)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -671,7 +659,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				}
 				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 				if err != nil && err != index.ErrNoAccountEntry {
-					panic(err)
+					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 				}
 				if err == nil && acc.RowId > 0 {
 					addrs = append(addrs, acc.RowId)
@@ -681,7 +669,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 			switch mode {
 			case pack.FilterModeEqual: // OR
 				if len(addrs) == 1 {
-					q = q.Or(
+					q = q.OrCondition(
 						pack.Equal("sender_id", addrs[0]),
 						pack.Equal("receiver_id", addrs[0]),
 						pack.Equal("baker_id", addrs[0]),
@@ -692,7 +680,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 
 			case pack.FilterModeIn: // OR
 				if len(addrs) > 1 {
-					q = q.Or(
+					q = q.OrCondition(
 						pack.In("sender_id", addrs),
 						pack.In("receiver_id", addrs),
 						pack.In("baker_id", addrs),
@@ -702,7 +690,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 
 			case pack.FilterModeNotEqual: // AND
 				if len(addrs) == 1 {
-					q = q.And(
+					q = q.AndCondition(
 						pack.NotEqual("sender_id", addrs[0]),
 						pack.NotEqual("receiver_id", addrs[0]),
 						pack.NotEqual("baker_id", addrs[0]),
@@ -713,7 +701,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 
 			case pack.FilterModeNotIn: // AND
 				if len(addrs) > 1 {
-					q = q.And(
+					q = q.AndCondition(
 						pack.NotIn("sender_id", addrs),
 						pack.NotIn("receiver_id", addrs),
 						pack.NotIn("baker_id", addrs),
@@ -745,14 +733,14 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					// Note: when not found we insert an always false condition
 					if acc == nil || acc.RowId == 0 {
-						q = q.AndCondition(field, mode, uint64(math.MaxUint64))
+						q = q.And(field, mode, uint64(math.MaxUint64))
 					} else {
 						// add id as extra condition
-						q = q.AndCondition(field, mode, acc.RowId)
+						q = q.And(field, mode, acc.RowId)
 					}
 				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
@@ -765,7 +753,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					// skip not found account
 					if acc == nil || acc.RowId == 0 {
@@ -776,7 +764,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q = q.AndCondition(field, mode, ids)
+				q = q.And(field, mode, ids)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -796,7 +784,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				case "cycle":
 					if v == "head" {
 						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
-						v = strconv.FormatInt(int64(currentCycle), 10)
+						v = strconv.FormatInt(currentCycle, 10)
 					}
 				case "volume", "reward", "fee", "deposit", "burned":
 					fvals := make([]string, 0)
@@ -812,7 +800,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions.AddAndCondition(&cond)
+					q = q.AndCondition(cond)
 				}
 			}
 		}
@@ -824,9 +812,9 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 		panic(server.EInternal(server.EC_DATABASE, "cannot read ops", err))
 	}
 	ops := make([]*model.Op, 0, res.Rows())
-	res.Walk(func(r pack.Row) error {
+	_ = res.Walk(func(r pack.Row) error {
 		o := model.AllocOp()
-		r.Decode(o)
+		_ = r.Decode(o)
 		ops = append(ops, o)
 		return nil
 	})
@@ -848,7 +836,8 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 			lastidx            int
 			nEvents, nAssigned int
 		)
-		err = pack.NewQuery(ctx.RequestID, bigmaps).
+		err = pack.NewQuery(ctx.RequestID).
+			WithTable(bigmaps).
 			WithFields("bigmap_id", "action", "op_id", "key", "value", "key_id").
 			AndIn("op_id", ids).
 			WithOrder(args.Order).
@@ -888,7 +877,8 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 		if err != nil {
 			panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", index.EndorseOpTableKey), err))
 		}
-		q = pack.NewQuery(ctx.RequestID, endorse).
+		q = pack.NewQuery(ctx.RequestID).
+			WithTable(endorse).
 			WithLimit(int(args.Limit)).
 			WithOrder(args.Order)
 
@@ -922,7 +912,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				height := int64(id >> 16)
 				opn := int64(id & 0xFFFF)
 				if args.Order == pack.OrderDesc {
-					q = q.Or(
+					q = q.OrCondition(
 						pack.Lt("height", height),
 						pack.And(
 							pack.Equal("height", height),
@@ -930,7 +920,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 						),
 					)
 				} else {
-					q = q.Or(
+					q = q.OrCondition(
 						pack.Gt("height", height),
 						pack.And(
 							pack.Equal("height", height),
@@ -938,7 +928,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 						),
 					)
 				}
-			case "id":
+			case "row_id", "id":
 				switch mode {
 				case pack.FilterModeEqual:
 					id, err := strconv.ParseUint(val[0], 10, 64)
@@ -947,7 +937,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 					}
 					height := int64(id >> 16)
 					opn := int64(id & 0xFFFF)
-					q = q.AndCondition("height", mode, height).AndCondition("op_n", mode, opn)
+					q = q.And("height", mode, height).And("op_n", mode, opn)
 				default:
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 				}
@@ -994,12 +984,12 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				}
 				switch mode {
 				case pack.FilterModeIn, pack.FilterModeNotIn, pack.FilterModeRange:
-					q = q.AndCondition("height", mode, heights)
+					q = q.And("height", mode, heights)
 				default:
 					if len(heights) > 0 {
-						q = q.AndCondition("height", mode, heights[0])
+						q = q.And("height", mode, heights[0])
 					} else {
-						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid empty filter for column '%s'", mode, prefix), nil))
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid empty filter for column '%s'", prefix), nil))
 					}
 				}
 
@@ -1014,7 +1004,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					if err == nil && acc.RowId > 0 {
 						addrs = append(addrs, acc.RowId)
@@ -1075,7 +1065,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 					if cond, err := pack.ParseCondition(key, v, endorse.Fields()); err != nil {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 					} else {
-						q.Conditions.AddAndCondition(&cond)
+						q = q.AndCondition(cond)
 					}
 				}
 			}
@@ -1086,15 +1076,15 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				panic(server.EInternal(server.EC_DATABASE, "cannot read endorsements", err))
 			}
 			// merge results
-			res2.Walk(func(r pack.Row) error {
+			_ = res2.Walk(func(r pack.Row) error {
 				e := &model.Endorsement{}
-				r.Decode(e)
+				_ = r.Decode(e)
 				ops = append(ops, e.ToOp())
 				return nil
 			})
 			res2.Close()
 			if q.Order == pack.OrderDesc {
-				sort.Reverse(OpSorter(ops))
+				sort.Sort(sort.Reverse(OpSorter(ops)))
 			} else {
 				sort.Sort(OpSorter(ops))
 			}
@@ -1114,7 +1104,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 	// prepare return type marshalling
 	op := &Op{
 		verbose: args.Verbose,
-		columns: util.StringList(args.Columns),
+		columns: args.Columns,
 		params:  params,
 		ctx:     ctx,
 	}
@@ -1129,11 +1119,11 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 		enc.SetEscapeHTML(false)
 
 		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
+		_, _ = io.WriteString(ctx.ResponseWriter, "[")
 		// close JSON array on panic
 		defer func() {
 			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
+				_, _ = io.WriteString(ctx.ResponseWriter, "]")
 				panic(e)
 			}
 		}()
@@ -1142,7 +1132,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 		var needComma bool
 		for _, v := range ops {
 			if needComma {
-				io.WriteString(ctx.ResponseWriter, ",")
+				_, _ = io.WriteString(ctx.ResponseWriter, ",")
 			} else {
 				needComma = true
 			}
@@ -1158,7 +1148,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 			}
 		}
 		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
+		_, _ = io.WriteString(ctx.ResponseWriter, "]")
 		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":

@@ -39,6 +39,7 @@ type Chain struct {
 	TotalStorageBytes    int64     `pack:"S,snappy"      json:"total_storage_bytes"`       //
 	FundedAccounts       int64     `pack:"f,snappy"      json:"funded_accounts"`           // total number of accounts qith non-zero balance
 	DustAccounts         int64     `pack:"d,snappy"      json:"dust_accounts"`             // accounts with a balance < 1 tez
+	GhostAccounts        int64     `pack:"H,snappy"      json:"ghost_accounts"`            // unfunded L2 accounts (who own tokens, but cannot move them)
 	UnclaimedAccounts    int64     `pack:"u,snappy"      json:"unclaimed_accounts"`        // fundraiser accounts unclaimed
 	TotalDelegators      int64     `pack:"2,snappy"      json:"total_delegators"`          // count of all non-zero balance delegators
 	ActiveDelegators     int64     `pack:"3,snappy"      json:"active_delegators"`         // KT1 delegating to active delegates
@@ -82,7 +83,7 @@ func (c *Chain) Update(b *Block, accounts map[AccountID]*Account, bakers map[Acc
 	c.TotalOpsFailed += int64(b.NOpsFailed)
 	c.TotalContractCalls += int64(b.NContractCalls)
 	c.TotalRollupCalls += int64(b.NRollupCalls)
-	c.TotalStorageBytes += int64(b.StoragePaid)
+	c.TotalStorageBytes += b.StoragePaid
 	c.FundedAccounts += int64(b.FundedAccounts - b.ClearedAccounts)
 
 	for _, op := range b.Ops {
@@ -159,6 +160,16 @@ func (c *Chain) Update(b *Block, accounts map[AccountID]*Account, bakers map[Acc
 				if acc.IsDelegated {
 					c.DustDelegators++
 				}
+			}
+		}
+
+		// count ghosts
+		if acc.Address.IsEOA() {
+			if acc.IsNew && !acc.IsFunded {
+				c.GhostAccounts++
+			}
+			if !acc.IsNew && !acc.IsActivated && acc.IsFunded && !acc.WasFunded && acc.FirstIn == b.Height {
+				c.GhostAccounts--
 			}
 		}
 	}

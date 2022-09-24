@@ -1,10 +1,11 @@
 // Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
+//nolint:unused,deadcode
 package tables
 
 import (
-    logpkg "github.com/echa/log"
+	logpkg "github.com/echa/log"
 )
 
 // log is a logger that is initialized with no output filters.  This
@@ -14,18 +15,18 @@ var log logpkg.Logger = logpkg.Log
 
 // The default amount of logging is none.
 func init() {
-    DisableLog()
+	DisableLog()
 }
 
 // DisableLog disables all library log output.  Logging output is disabled
 // by default until UseLogger is called.
 func DisableLog() {
-    log = logpkg.Disabled
+	log = logpkg.Disabled
 }
 
 // UseLogger uses a specified Logger to output package logging info.
 func UseLogger(logger logpkg.Logger) {
-    log = logger
+	log = logger
 }
 
 // LogClosure is a closure that can be printed with %v to be used to
@@ -35,12 +36,12 @@ type logClosure func() string
 
 // String invokes the log closure and returns the results string.
 func (c logClosure) String() string {
-    return c()
+	return c()
 }
 
 // newLogClosure returns a new closure over the passed function which allows
 // it to be used as a parameter in a logging function that is only invoked when
 // the logging level is such that the message will actually be logged.
 func newLogClosure(c func() string) logClosure {
-    return logClosure(c)
+	return logClosure(c)
 }

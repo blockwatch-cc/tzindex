@@ -211,7 +211,8 @@ func (idx *IncomeIndex) DeleteBlock(ctx context.Context, height int64) error {
 
 func (idx *IncomeIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 	// log.Debugf("Rollback deleting income for cycle %d", cycle)
-	_, err := pack.NewQuery("etl.income.delete", idx.table).
+	_, err := pack.NewQuery("etl.income.delete").
+		WithTable(idx.table).
 		AndEqual("cycle", cycle).
 		Delete(ctx)
 	return err
@@ -255,15 +256,7 @@ func (idx *IncomeIndex) bootstrapIncome(ctx context.Context, block *model.Block,
 		// 	cycle, len(incomeMap))
 
 		// pre-calculate deposit and reward amounts
-		blockDeposit, endorseDeposit := p.BlockSecurityDeposit, p.EndorsementSecurityDeposit
-		if cycle < p.SecurityDepositRampUpCycles-1 {
-			blockDeposit = blockDeposit * cycle / p.SecurityDepositRampUpCycles
-			endorseDeposit = endorseDeposit * cycle / p.SecurityDepositRampUpCycles
-		}
 		blockReward, endorseReward := p.BlockReward, p.EndorsementReward
-		if cycle < p.NoRewardCycles {
-			blockReward, endorseReward = 0, 0
-		}
 
 		// assign baking rights
 		cycleEndBlock := p.CycleEndHeight(cycle)
@@ -335,12 +328,12 @@ func (idx *IncomeIndex) bootstrapIncome(ctx context.Context, block *model.Block,
 			info := block.TZ.SnapInfo
 			endorseRewardCycle := big.NewInt(p.EndorsingRewardPerSlot * int64(p.ConsensusCommitteeSize) * p.BlocksPerCycle)
 			totalStake := big.NewInt(info.TotalStake)
+			stake := info.BakerStake
 			for _, bkr := range bkrs {
 				income, ok := incomeMap[bkr.AccountId]
 				if !ok {
 					continue
 				}
-				stake := info.BakerStake
 				for i := 0; i < len(stake); i++ {
 					// find baker in list
 					if stake[i].Baker.Equal(bkr.Address) {
@@ -391,17 +384,12 @@ func (idx *IncomeIndex) updateCycleIncome(ctx context.Context, block *model.Bloc
 	}
 
 	// check pre-conditon and pick cycles to update
-	var updateCycles []int64
-	switch true {
-	case block.Cycle <= 2*(p.PreservedCycles+2):
-		// during ramp-up cycles
-		// log.Debugf("Updating expected income for cycle %d during ramp-up.", block.Cycle)
-		updateCycles = []int64{block.Cycle}
-
-	default:
-		// no update required on
+	if block.Cycle > 2*(p.PreservedCycles+2) {
+		// no update required
 		return nil
 	}
+	// during ramp-up cycles
+	updateCycles := []int64{block.Cycle}
 
 	blockReward, endorseReward := p.BlockReward, p.EndorsementReward
 
@@ -410,7 +398,7 @@ func (idx *IncomeIndex) updateCycleIncome(ctx context.Context, block *model.Bloc
 		incomes := make([]*model.Income, 0)
 		var totalRolls int64
 		err := idx.table.Stream(ctx,
-			pack.NewQuery("etl.income.update", idx.table).AndEqual("cycle", v),
+			pack.NewQuery("etl.income.update").AndEqual("cycle", v),
 			func(r pack.Row) error {
 				in := &model.Income{}
 				if err := r.Decode(in); err != nil {
@@ -479,7 +467,8 @@ func (idx *IncomeIndex) createCycleIncome(ctx context.Context, block *model.Bloc
 			return err
 		}
 		s := &model.Snapshot{}
-		err = pack.NewQuery("snapshot.create_income", snap).
+		err = pack.NewQuery("snapshot.create_income").
+			WithTable(snap).
 			WithoutCache().
 			AndEqual("cycle", sn.Base).  // source snapshot cycle
 			AndEqual("index", sn.Index). // selected index
@@ -628,12 +617,12 @@ func (idx *IncomeIndex) createCycleIncome(ctx context.Context, block *model.Bloc
 		endorseRewardCycle := big.NewInt(p.EndorsingRewardPerSlot * int64(p.ConsensusCommitteeSize) * p.BlocksPerCycle)
 		totalStake := big.NewInt(info.TotalStake)
 		totalRolls = 0
+		stake := info.BakerStake
 		for _, bkr := range builder.Bakers() {
 			income, ok := incomeMap[bkr.AccountId]
 			if !ok {
 				continue
 			}
-			stake := info.BakerStake
 			for i := 0; i < len(stake); i++ {
 				// find baker in list
 				if stake[i].Baker.Equal(bkr.Address) {
@@ -1017,7 +1006,8 @@ func (idx *IncomeIndex) loadIncome(ctx context.Context, cycle int64, id model.Ac
 	}
 	// load from table
 	in = &model.Income{}
-	err := pack.NewQuery("etl.income.search", idx.table).
+	err := pack.NewQuery("etl.income.search").
+		WithTable(idx.table).
 		AndEqual("cycle", cycle).
 		AndEqual("account_id", id).
 		Execute(ctx, in)

@@ -129,7 +129,8 @@ func (h *RankCache) Build(ctx context.Context, accounts, ops *pack.Table) error 
 		SpendableBalance int64           `pack:"s"`
 	}
 	a := &XAcc{}
-	err := pack.NewQuery("build_ranks", accounts).
+	err := pack.NewQuery("build_ranks").
+		WithTable(accounts).
 		WithoutCache().
 		WithFields("I", "H", "s").
 		AndEqual("is_funded", true).
@@ -162,7 +163,8 @@ func (h *RankCache) Build(ctx context.Context, accounts, ops *pack.Table) error 
 		Volume     int64           `pack:"v"`
 	}
 	o := &XOp{}
-	err = pack.NewQuery("rank_ops_24h", ops).
+	err = pack.NewQuery("rank_ops_24h").
+		WithTable(ops).
 		WithoutCache().
 		WithFields("S", "R", "v").
 		AndGte("time", h.ts.Add(-24*time.Hour)).

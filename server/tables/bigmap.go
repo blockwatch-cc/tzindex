@@ -26,8 +26,6 @@ import (
 var (
 	// long -> short form
 	bigmapAllocSourceNames map[string]string
-	// short -> long form
-	bigmapAllocAliasNames map[string]string
 	// all aliases as list
 	bigmapAllocAllAliases []string
 )
@@ -238,11 +236,11 @@ func StreamBigmapAllocTable(ctx *server.Context, args *TableRequest) (interface{
 			case "update_time", "update_block":
 				srcNames = append(srcNames, "u") // updated
 				continue
-			case "alloc_time", "alloc_block":
-				srcNames = append(srcNames, "h") // height
-				continue
 			case "delete_time", "delete_block":
 				srcNames = append(srcNames, "D") // deleteed
+				continue
+			case "alloc_time", "alloc_block":
+				srcNames = append(srcNames, "h") // height
 				continue
 			case "contract":
 				srcNames = append(srcNames, "A") // account_id
@@ -260,12 +258,11 @@ func StreamBigmapAllocTable(ctx *server.Context, args *TableRequest) (interface{
 	}
 
 	// build table query
-	q := pack.Query{
-		Name:   ctx.RequestID,
-		Fields: table.Fields().Select(srcNames...),
-		Limit:  int(args.Limit),
-		Order:  args.Order,
-	}
+	q := pack.NewQuery(ctx.RequestID).
+		WithTable(table).
+		WithFields(srcNames...).
+		WithLimit(int(args.Limit)).
+		WithOrder(args.Order)
 
 	// build dynamic filter conditions from query (will panic on error)
 	for key, val := range ctx.Request.URL.Query() {
@@ -292,23 +289,13 @@ func StreamBigmapAllocTable(ctx *server.Context, args *TableRequest) (interface{
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Pk(),
-				Mode:  cursorMode,
-				Value: id,
-				Raw:   val[0], // debugging aid
-			})
+			q = q.And("I", cursorMode, id)
 		case "contract":
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty address matches id 0 (== missing baker)
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find(field), // account id
-						Mode:  pack.FilterModeEqual,
-						Value: 0,
-						Raw:   val[0], // debugging aid
-					})
+					q = q.AndEqual(field, 0)
 				} else {
 					// single-address lookup and compile condition
 					addr, err := tezos.ParseAddress(val[0])
@@ -317,24 +304,14 @@ func StreamBigmapAllocTable(ctx *server.Context, args *TableRequest) (interface{
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					// Note: when not found we insert an always false condition
 					if acc == nil || acc.RowId == 0 {
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find(field), // account id
-							Mode:  mode,
-							Value: uint64(math.MaxUint64),
-							Raw:   "account not found", // debugging aid
-						})
+						q = q.And(field, mode, uint64(math.MaxUint64))
 					} else {
 						// add id as extra condition
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find(field), // account id
-							Mode:  mode,
-							Value: acc.RowId,
-							Raw:   val[0], // debugging aid
-						})
+						q = q.And(field, mode, acc.RowId)
 					}
 				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
@@ -347,7 +324,7 @@ func StreamBigmapAllocTable(ctx *server.Context, args *TableRequest) (interface{
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account
 					if acc == nil || acc.RowId == 0 {
@@ -358,12 +335,7 @@ func StreamBigmapAllocTable(ctx *server.Context, args *TableRequest) (interface{
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find(field), // account id
-					Mode:  mode,
-					Value: ids,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, ids)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -382,7 +354,7 @@ func StreamBigmapAllocTable(ctx *server.Context, args *TableRequest) (interface{
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions.AddAndCondition(&cond)
+					q = q.AndCondition(cond)
 				}
 			}
 		}
@@ -402,7 +374,7 @@ func StreamBigmapAllocTable(ctx *server.Context, args *TableRequest) (interface{
 	// prepare return type marshalling
 	bigmap := &BigmapAllocItem{
 		verbose: args.Verbose,
-		columns: util.StringList(args.Columns),
+		columns: args.Columns,
 		ctx:     ctx,
 	}
 
@@ -416,11 +388,11 @@ func StreamBigmapAllocTable(ctx *server.Context, args *TableRequest) (interface{
 		enc.SetEscapeHTML(false)
 
 		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
+		_, _ = io.WriteString(ctx.ResponseWriter, "[")
 		// close JSON array on panic
 		defer func() {
 			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
+				_, _ = io.WriteString(ctx.ResponseWriter, "]")
 				panic(e)
 			}
 		}()
@@ -429,7 +401,7 @@ func StreamBigmapAllocTable(ctx *server.Context, args *TableRequest) (interface{
 		var needComma bool
 		err = table.Stream(ctx, q, func(r pack.Row) error {
 			if needComma {
-				io.WriteString(ctx.ResponseWriter, ",")
+				_, _ = io.WriteString(ctx.ResponseWriter, ",")
 			} else {
 				needComma = true
 			}
@@ -447,7 +419,7 @@ func StreamBigmapAllocTable(ctx *server.Context, args *TableRequest) (interface{
 			return nil
 		})
 		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
+		_, _ = io.WriteString(ctx.ResponseWriter, "]")
 		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":

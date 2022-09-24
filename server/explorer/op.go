@@ -167,26 +167,29 @@ type Op struct {
 	Burned        float64                   `json:"burned,omitempty"`
 	Data          json.RawMessage           `json:"data,omitempty"`
 	Errors        json.RawMessage           `json:"errors,omitempty"`
-	Parameters    *ExplorerParameters       `json:"parameters,omitempty"`
-	Value         *micheline.Prim           `json:"value,omitempty"`
-	Storage       *StorageValue             `json:"storage,omitempty"`
+	Parameters    *Parameters               `json:"parameters,omitempty"`
+	Storage       *Storage                  `json:"storage,omitempty"`
 	BigmapDiff    *BigmapUpdateList         `json:"big_map_diff,omitempty"`
+	Value         *micheline.Prim           `json:"value,omitempty"`
 	Sender        *tezos.Address            `json:"sender,omitempty"`
 	Receiver      *tezos.Address            `json:"receiver,omitempty"`
 	Creator       *tezos.Address            `json:"creator,omitempty"`
 	Baker         *tezos.Address            `json:"baker,omitempty"`
 	OldBaker      *tezos.Address            `json:"previous_baker,omitempty"`
 	Source        *tezos.Address            `json:"source,omitempty"`
-	Accuser       *tezos.Address            `json:"offender,omitempty"`
-	Offender      *tezos.Address            `json:"accuser,omitempty"`
+	Accuser       *tezos.Address            `json:"accuser,omitempty"`
+	Offender      *tezos.Address            `json:"offender,omitempty"`
 	Power         int64                     `json:"power,omitempty"`
 	Level         *int64                    `json:"level,omitempty"`
 	Limit         *NullMoney                `json:"limit,omitempty"`
+	Solution      tezos.HexBytes            `json:"solution,omitempty"`
+	Proof         tezos.HexBytes            `json:"proof,omitempty"`
 	Confirmations int64                     `json:"confirmations"`
 	NOps          int                       `json:"n_ops,omitempty"`
 	Batch         []*Op                     `json:"batch,omitempty"`
 	Internal      []*Op                     `json:"internal,omitempty"`
 	Metadata      map[string]*ShortMetadata `json:"metadata,omitempty"`
+	Events        []*Event                  `json:"events,omitempty"`
 
 	expires time.Time `json:"-"`
 }
@@ -384,6 +387,11 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 		nm := NullMoney(limit)
 		o.Limit = &nm
 		o.Data = nil
+	case model.OpTypeVdfRevelation:
+		if l := len(op.Parameters); l > 0 {
+			o.Solution = tezos.HexBytes(op.Parameters[:l/2])
+			o.Proof = tezos.HexBytes(op.Parameters[l/2:])
+		}
 	default:
 		if op.Data != "" && !(op.IsContract || op.IsRollup) {
 			o.Data = json.RawMessage(strconv.Quote(op.Data))
@@ -404,7 +412,7 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 
 	// special treatment for rollup ops (params behave differently)
 	if op.IsRollup && op.Type != model.OpTypeRollupOrigination {
-		o.Parameters = &ExplorerParameters{
+		o.Parameters = &Parameters{
 			Method: op.Data,
 		}
 
@@ -449,6 +457,9 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 			if reject, err := rpc.DecodeRollupRejection(op.Parameters); err == nil {
 				o.Parameters.Arguments, _ = reject.MarshalJSON()
 			}
+			if o.Creator != nil {
+				o.Offender, o.Creator = o.Creator, nil
+			}
 		case "tx_rollup_dispatch_tickets":
 			if dispatch, err := rpc.DecodeRollupDispatch(op.Parameters); err == nil {
 				o.Parameters.Arguments, _ = dispatch.MarshalJSON()
@@ -463,87 +474,31 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 	if o.IsContract {
 		pTyp, sTyp, err := ctx.Indexer.LookupContractType(ctx.Context, op.ReceiverId)
 		if err != nil {
-			log.Errorf("explorer: loading contract type: %v", err)
+			log.Errorf("explorer: loading contract type for %s: %v", o.Receiver, err)
 		}
 
 		// set params
 		if len(op.Parameters) > 0 && pTyp.IsValid() {
-			callParams := &micheline.Parameters{}
-			if err := callParams.UnmarshalBinary(op.Parameters); err != nil {
-				log.Errorf("explorer op: unmarshal %s params: %v", op.Type, err)
-			}
-			// log.Infof("explorer op: %s entrypoint: %s params: %s", o.Hash, callParams.Entrypoint, callParams.Value.Dump())
-			// log.Infof("explorer op: script: %s", script.Code.Param.Dump())
-
-			// find entrypoint
-			ep, prim, err := callParams.MapEntrypoint(pTyp)
-			if err != nil {
-				log.Errorf("explorer op: %s: %v", o.Hash, err)
-				ps, _ := json.Marshal(callParams)
-				log.Errorf("params: %s", ps)
-			} else {
-				// log.Infof("explorer op: using entrypoint: %s params: %s", ep.Call, ep.Prim.Dump())
-				typ := ep.Type()
-				// strip entrypoint name annot
-				typ.Prim.Anno = nil
-				o.Parameters = &ExplorerParameters{
-					// Entrypoint: callParams.Entrypoint, // from params, e.g. "default"
-					Entrypoint: ep.Name, // from real entrypoint
-					Value:      micheline.NewValuePtr(typ, prim),
-				}
-				// only render params when type check did not fail / fix type
-				if op.Status == tezos.OpStatusFailed {
-					if _, err := json.Marshal(o.Parameters.Value); err != nil {
-						// log.Infof("Ignoring param render error on failed call %s: %v", op.Hash, err)
-						o.Parameters.Prim = &prim
-						o.Parameters.Value.FixType()
-					}
-				}
-				if args.WithPrim() {
-					o.Parameters.Prim = &prim
-				}
-				if args.WithUnpack() && o.Parameters.Value.IsPackedAny() {
-					if up, err := o.Parameters.Value.UnpackAll(); err == nil {
-						o.Parameters.Value = &up
-					}
-				}
-			}
+			o.Parameters = NewParameters(ctx, op.Parameters, pTyp, op.Hash, args)
 		}
 
 		// handle storage
 		if args.WithStorage() && len(op.Storage) > 0 && sTyp.IsValid() {
-			prim := micheline.Prim{}
-			if err := prim.UnmarshalBinary(op.Storage); err != nil {
-				log.Errorf("explorer op: unmarshal %s storage: %v", op.Type, err)
-			}
-
+			data := op.Storage
 			if cc != nil {
 				// storage type is patched post-Babylon, but pre-Babylon ops are unpatched,
 				// we always output post-babylon storage
 				if etl.NeedsBabylonUpgradeContract(cc, ctx.Params) && ctx.Params.IsPreBabylonHeight(op.Height) {
 					if acc, err := ctx.Indexer.LookupAccountId(ctx, cc.CreatorId); err == nil {
-						prim = prim.MigrateToBabylonStorage(acc.Address.Bytes())
+						prim := micheline.Prim{}
+						if err := prim.UnmarshalBinary(op.Storage); err == nil {
+							prim = prim.MigrateToBabylonStorage(acc.Address.Bytes())
+						}
+						data, _ = prim.MarshalBinary()
 					}
 				}
 			}
-
-			if args.WithUnpack() && prim.IsPackedAny() {
-				if up, err := prim.UnpackAll(); err == nil {
-					prim = up
-				}
-			}
-
-			o.Storage = &StorageValue{}
-			val := micheline.NewValue(sTyp, prim)
-			if m, err := val.Map(); err == nil {
-				o.Storage.Value = m
-			} else {
-				o.Storage.Prim = &prim
-			}
-
-			if args.WithPrim() {
-				o.Storage.Prim = &prim
-			}
+			o.Storage = NewStorage(ctx, data, sTyp, op.Timestamp, args)
 		}
 
 		// handle bigmap diffs
@@ -553,10 +508,6 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 				keyType, valType micheline.Type
 				err              error
 			)
-			// bmd := make(micheline.BigmapEvents, 0)
-			// if err := bmd.UnmarshalBinary(op.Diff); err != nil {
-			// 	log.Errorf("%s: unmarshal %s bigmap: %v", op.Hash, op.Type, err)
-			// }
 			o.BigmapDiff = &BigmapUpdateList{
 				diff: make([]BigmapUpdate, 0),
 			}
@@ -572,7 +523,11 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 							cache[lookupId] = v.ToAlloc()
 						}
 					case micheline.DiffActionCopy:
-						lookupId = int64(v.KeyId)
+						if sourceId := int64(v.KeyId); sourceId < 0 {
+							cache[sourceId] = v.ToAlloc()
+						} else {
+							lookupId = sourceId
+						}
 					}
 					a, ok := cache[lookupId]
 					if ok {
@@ -611,24 +566,21 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 					// FIXME: IS THIS NECESSARY?
 					if !keyType.IsValid() {
 						var prim micheline.Prim
-						prim.UnmarshalBinary(v.Key)
+						_ = prim.UnmarshalBinary(v.Key)
 						keyType = prim.BuildType()
 					}
 					if !valType.IsValid() {
 						var prim micheline.Prim
-						prim.UnmarshalBinary(v.Value)
+						_ = prim.UnmarshalBinary(v.Value)
 						valType = prim.BuildType()
 					}
 					// regular bigmap updates
 					k, _ := v.GetKey(keyType)
 					upd.Key = &k
-					// upd.Key = v.GetKeyPtr(keyType)
-					// kh := v.KeyHash.Clone()
 					kh := v.GetKeyHash()
 					upd.KeyHash = &kh
 					val := v.GetValue(valType)
 					upd.Value = &val
-					// upd.Value = micheline.NewValuePtr(valType, v.Value)
 					if args.WithPrim() {
 						upd.KeyPrim = upd.Key.PrimPtr()
 						upd.ValuePrim = &upd.Value.Value
@@ -648,9 +600,8 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 
 				case micheline.DiffActionRemove:
 					// remove may be a bigmap removal without key
-					// if v.Key.OpCode != micheline.I_EMPTY_BIG_MAP {
 					var keyprim micheline.Prim
-					keyprim.UnmarshalBinary(v.Key)
+					_ = keyprim.UnmarshalBinary(v.Key)
 					if keyprim.IsValid() {
 						// temporary bigmap updates lack type info
 						if !keyType.IsValid() {
@@ -699,6 +650,15 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 					}
 				}
 				o.BigmapDiff.diff = append(o.BigmapDiff.diff, upd)
+			}
+		}
+
+		// handle events (must use external op id as filter)
+		if args.WithStorage() && op.IsContract && op.IsSuccess {
+			if events, err := ctx.Indexer.ListOpEvents(ctx, op.Id(), op.ReceiverId); err == nil {
+				for _, ev := range events {
+					o.Events = append(o.Events, NewEvent(ctx, ev, args))
+				}
 			}
 		}
 	}
@@ -857,8 +817,11 @@ func loadOps(ctx *server.Context, args server.Options) []*model.Op {
 	if opIdent, ok := mux.Vars(ctx.Request)["ident"]; !ok || opIdent == "" {
 		panic(server.EBadRequest(server.EC_RESOURCE_ID_MISSING, "missing operation hash", nil))
 	} else {
+		r := etl.ListRequest{
+			WithStorage: args.WithStorage(),
+		}
 		var err2 error
-		ops, err := ctx.Indexer.LookupOp(ctx.Context, opIdent)
+		ops, err := ctx.Indexer.LookupOp(ctx, opIdent, r)
 		if err == index.ErrNoOpEntry {
 			// also try loading an endorsement
 			ops, err2 = ctx.Indexer.LookupEndorsement(ctx, opIdent)

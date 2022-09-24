@@ -27,8 +27,6 @@ import (
 var (
 	// long -> short form
 	ballotSourceNames map[string]string
-	// short -> long form
-	ballotAliasNames map[string]string
 	// all aliases as list
 	ballotAllAliases []string
 )
@@ -233,7 +231,8 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 	}
 
 	// build table query
-	q := pack.NewQuery(ctx.RequestID, table).
+	q := pack.NewQuery(ctx.RequestID).
+		WithTable(table).
 		WithFields(srcNames...).
 		WithLimit(int(args.Limit)).
 		WithOrder(args.Order)
@@ -244,6 +243,7 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 	for key, val := range ctx.Request.URL.Query() {
 		keys := strings.Split(key, ".")
 		prefix := keys[0]
+		field := ballotSourceNames[prefix]
 		mode := pack.FilterModeEqual
 		if len(keys) > 1 {
 			mode = pack.ParseFilterMode(keys[1])
@@ -264,12 +264,7 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Pk(),
-				Mode:  cursorMode,
-				Value: id,
-				Raw:   val[0], // debugging aid
-			})
+			q = q.And("I", cursorMode, id)
 		case "ballot":
 			switch mode {
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
@@ -277,12 +272,7 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 				if !ballot.IsValid() {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid ballot vote '%s'", val[0]), nil))
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find("b"), // ballot
-					Mode:  mode,
-					Value: ballot,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, ballot)
 
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				ballots := make([]int64, 0)
@@ -293,12 +283,7 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 					}
 					ballots = append(ballots, int64(ballot))
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find("b"), // ballot
-					Mode:  mode,
-					Value: ballots,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, ballots)
 			}
 		case "source":
 			// parse source/baker address and lookup id
@@ -310,12 +295,7 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty address matches id 0 (== missing baker)
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find("S"), // source id
-						Mode:  mode,
-						Value: 0,
-						Raw:   val[0], // debugging aid
-					})
+					q = q.And(field, mode, 0)
 				} else {
 					// single-address lookup and compile condition
 					addr, err := tezos.ParseAddress(val[0])
@@ -324,25 +304,15 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					// Note: when not found we insert an always false condition
 					if acc == nil || acc.RowId == 0 {
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find("S"), // source id
-							Mode:  mode,
-							Value: uint64(math.MaxUint64),
-							Raw:   "account not found", // debugging aid
-						})
+						q = q.And(field, mode, uint64(math.MaxUint64))
 					} else {
 						// keep for output
 						accMap[acc.RowId] = acc.Address.Clone()
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find("S"), // source id
-							Mode:  mode,
-							Value: acc.RowId,
-							Raw:   val[0], // debugging aid
-						})
+						q = q.And(field, mode, acc.RowId)
 					}
 				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
@@ -355,7 +325,7 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account
 					if acc == nil || acc.RowId == 0 {
@@ -368,12 +338,7 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find("S"), // source id
-					Mode:  mode,
-					Value: ids,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, ids)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -387,15 +352,10 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty op matches id 0 (== missing baker)
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find("O"), // op id
-						Mode:  mode,
-						Value: 0,
-						Raw:   val[0], // debugging aid
-					})
+					q = q.And(field, mode, 0)
 				} else {
 					// single-op lookup and compile condition
-					op, err := ctx.Indexer.LookupOp(ctx, val[0])
+					op, err := ctx.Indexer.LookupOp(ctx, val[0], etl.ListRequest{})
 					if err != nil {
 						switch err {
 						case index.ErrNoOpEntry:
@@ -405,32 +365,22 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 						case index.ErrInvalidOpID:
 							panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid op id '%s'", val[0]), err))
 						default:
-							panic(err)
+							panic(server.EInternal(server.EC_DATABASE, fmt.Sprintf("cannot lookup op id '%s'", val[0]), err))
 						}
 					}
 					// Note: when not found we insert an always false condition
-					if op == nil || len(op) == 0 {
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find("O"), // op id
-							Mode:  mode,
-							Value: uint64(math.MaxUint64),
-							Raw:   "op not found", // debugging aid
-						})
+					if len(op) == 0 {
+						q = q.And(field, mode, uint64(math.MaxUint64))
 					} else {
 						opMap[op[0].RowId] = op[0].Hash.Clone()
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find("O"), // op id
-							Mode:  mode,
-							Value: op[0].RowId, // op slice may contain internal ops
-							Raw:   val[0],      // debugging aid
-						})
+						q = q.And(field, mode, op[0].RowId)
 					}
 				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-op lookup and compile condition
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					op, err := ctx.Indexer.LookupOp(ctx, v)
+					op, err := ctx.Indexer.LookupOp(ctx, v, etl.ListRequest{})
 					if err != nil {
 						switch err {
 						case index.ErrNoOpEntry:
@@ -440,11 +390,11 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 						case index.ErrInvalidOpID:
 							panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid op id '%s'", val[0]), err))
 						default:
-							panic(err)
+							panic(server.EInternal(server.EC_DATABASE, fmt.Sprintf("cannot lookup op id '%s'", val[0]), err))
 						}
 					}
 					// skip not found ops
-					if op == nil || len(op) == 0 {
+					if len(op) == 0 {
 						continue
 					}
 					// collect list of op ids (use first slice balue only since
@@ -454,12 +404,7 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 				}
 				// Note: when list is empty (no ops were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find("O"), // op id
-					Mode:  mode,
-					Value: ids,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, ids)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -499,7 +444,7 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions.AddAndCondition(&cond)
+					q = q.AndCondition(cond)
 				}
 			}
 		}
@@ -548,7 +493,8 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 				Hash tezos.OpHash `pack:"H"`
 			}
 			op := &XOp{}
-			err = pack.NewQuery(ctx.RequestID+".ballot_op_lookup", opT).
+			err = pack.NewQuery(ctx.RequestID+".ballot_op_lookup").
+				WithTable(opT).
 				WithFields("I", "H").
 				AndIn("I", find).
 				Stream(ctx, func(r pack.Row) error {
@@ -568,7 +514,7 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 	// prepare return type marshalling
 	ballot := &Ballot{
 		verbose: args.Verbose,
-		columns: util.StringList(args.Columns),
+		columns: args.Columns,
 		ctx:     ctx,
 		ops:     opMap,
 	}
@@ -583,11 +529,11 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 		enc.SetEscapeHTML(false)
 
 		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
+		_, _ = io.WriteString(ctx.ResponseWriter, "[")
 		// close JSON array on panic
 		defer func() {
 			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
+				_, _ = io.WriteString(ctx.ResponseWriter, "]")
 				panic(e)
 			}
 		}()
@@ -596,7 +542,7 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 		var needComma bool
 		err = res.Walk(func(r pack.Row) error {
 			if needComma {
-				io.WriteString(ctx.ResponseWriter, ",")
+				_, _ = io.WriteString(ctx.ResponseWriter, ",")
 			} else {
 				needComma = true
 			}
@@ -615,7 +561,7 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 		})
 
 		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
+		_, _ = io.WriteString(ctx.ResponseWriter, "]")
 		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":

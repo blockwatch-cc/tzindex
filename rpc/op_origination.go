@@ -30,6 +30,41 @@ func (o Origination) ManagerAddress() tezos.Address {
 	return o.ManagerPubkey
 }
 
+func (o Origination) FindEmbeddedAddresses(addrs *tezos.AddressSet) {
+	if o.Script == nil || !o.Script.Storage.IsValid() {
+		return
+	}
+	collect := func(p micheline.Prim) error {
+		switch {
+		case len(p.String) == 36 || len(p.String) == 37:
+			if a, err := tezos.ParseAddress(p.String); err == nil {
+				addrs.AddUnique(a)
+			}
+			return micheline.PrimSkip
+		case tezos.IsAddressBytes(p.Bytes):
+			a := tezos.Address{}
+			if err := a.UnmarshalBinary(p.Bytes); err == nil {
+				addrs.AddUnique(a)
+			}
+			return micheline.PrimSkip
+		default:
+			return nil
+		}
+	}
+
+	// from storage
+	_ = o.Script.Storage.Walk(collect)
+
+	// from bigmap updates
+	for _, v := range o.Metadata.Result.BigmapEvents() {
+		if v.Action != micheline.DiffActionUpdate {
+			continue
+		}
+		_ = v.Key.Walk(collect)
+		_ = v.Value.Walk(collect)
+	}
+}
+
 type BabylonFlags byte
 
 const (

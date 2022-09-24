@@ -25,8 +25,6 @@ import (
 var (
 	// long -> short form
 	incomeSourceNames map[string]string
-	// short -> long form
-	incomeAliasNames map[string]string
 	// all aliases as list
 	incomeAllAliases []string
 )
@@ -377,7 +375,8 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 	}
 
 	// build table query
-	q := pack.NewQuery(ctx.RequestID, table).
+	q := pack.NewQuery(ctx.RequestID).
+		WithTable(table).
 		WithFields(srcNames...).
 		WithLimit(int(args.Limit)).
 		WithOrder(args.Order)
@@ -407,12 +406,7 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Pk(),
-				Mode:  cursorMode,
-				Value: id,
-				Raw:   val[0], // debugging aid
-			})
+			q = q.And("I", cursorMode, id)
 		case "address":
 			// parse address and lookup id
 			// valid filter modes: eq, in
@@ -428,24 +422,14 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 				}
 				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 				if err != nil && err != index.ErrNoAccountEntry {
-					panic(err)
+					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				// Note: when not found we insert an always false condition
 				if acc == nil || acc.RowId == 0 {
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find("A"), // account id
-						Mode:  mode,
-						Value: uint64(math.MaxUint64),
-						Raw:   "account not found", // debugging aid
-					})
+					q = q.And(field, mode, uint64(math.MaxUint64))
 				} else {
 					// add addr id as extra fund_flow condition
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find("A"), // account id
-						Mode:  mode,
-						Value: acc.RowId,
-						Raw:   val[0], // debugging aid
-					})
+					q = q.And(field, mode, acc.RowId)
 				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup and compile condition
@@ -457,7 +441,7 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account
 					if acc == nil || acc.RowId == 0 {
@@ -468,12 +452,7 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find("A"), // account id
-					Mode:  mode,
-					Value: ids,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, ids)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -509,13 +488,7 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 					nDiff := int64(to.Sub(bestTime) / params.BlockTime())
 					toBlock = bestHeight + nDiff
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find(field),
-					Mode:  cond.Mode,
-					From:  params.CycleFromHeight(fromBlock),
-					To:    params.CycleFromHeight(toBlock),
-					Raw:   val[0], // debugging aid
-				})
+				q = q.AndRange(field, params.CycleFromHeight(fromBlock), params.CycleFromHeight(toBlock))
 			default:
 				// cond.Value is time.Time
 				valueTime := cond.Value.(time.Time)
@@ -527,12 +500,7 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 					nDiff := int64(valueTime.Sub(bestTime) / params.BlockTime())
 					valueCycle = params.CycleFromHeight(bestHeight + nDiff)
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find(field),
-					Mode:  cond.Mode,
-					Value: valueCycle,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, cond.Mode, valueCycle)
 			}
 
 		default:
@@ -551,7 +519,7 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 				case "cycle":
 					if v == "head" {
 						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
-						v = strconv.FormatInt(int64(currentCycle), 10)
+						v = strconv.FormatInt(currentCycle, 10)
 					}
 
 				case "start_time", "end_time":
@@ -567,12 +535,7 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 					if prefix == "start_time" {
 						cmode = pack.FilterModeGte
 					}
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find("c"), // cycle
-						Mode:  cmode,
-						Value: params.CycleFromHeight(ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, tm.Time())),
-						Raw:   v,
-					})
+					q = q.And("c", cmode, params.CycleFromHeight(ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, tm.Time())))
 					// skip further parsing
 					continue
 
@@ -588,7 +551,7 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 					v = strings.Join(fvals, ",")
 
 				case "luck", "balance", "delegated", "active_stake", "expected_income",
-					"total_income", "total_bonds", "baking_income", "endorsing_income",
+					"total_income", "total_deposits", "baking_income", "endorsing_income",
 					"accusation_income", "seed_income", "fees_income",
 					"total_loss", "accusation_loss", "seed_loss", "endorsing_loss",
 					"lost_accusation_fees", "lost_accusation_rewards", "lost_accusation_deposits",
@@ -606,7 +569,7 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions.AddAndCondition(&cond)
+					q = q.AndCondition(cond)
 				}
 			}
 		}
@@ -626,7 +589,7 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 	// prepare return type marshalling
 	inc := &Income{
 		verbose: args.Verbose,
-		columns: util.StringList(args.Columns),
+		columns: args.Columns,
 		params:  params,
 		ctx:     ctx,
 	}
@@ -641,11 +604,11 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 		enc.SetEscapeHTML(false)
 
 		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
+		_, _ = io.WriteString(ctx.ResponseWriter, "[")
 		// close JSON array on panic
 		defer func() {
 			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
+				_, _ = io.WriteString(ctx.ResponseWriter, "]")
 				panic(e)
 			}
 		}()
@@ -654,7 +617,7 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 		var needComma bool
 		err = table.Stream(ctx, q, func(r pack.Row) error {
 			if needComma {
-				io.WriteString(ctx.ResponseWriter, ",")
+				_, _ = io.WriteString(ctx.ResponseWriter, ",")
 			} else {
 				needComma = true
 			}
@@ -672,7 +635,7 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 			return nil
 		})
 		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
+		_, _ = io.WriteString(ctx.ResponseWriter, "]")
 		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":

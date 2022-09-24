@@ -81,12 +81,10 @@ func (t *TableRequest) Parse(ctx *server.Context) {
 	}
 
 	// read table code from URL
-	t.Table, _ = mux.Vars(ctx.Request)["table"]
-	t.Table = strings.ToLower(t.Table)
+	t.Table = strings.ToLower(mux.Vars(ctx.Request)["table"])
 
 	// read format from URL
-	t.Format, _ = mux.Vars(ctx.Request)["format"]
-	t.Format = strings.ToLower(t.Format)
+	t.Format = strings.ToLower(mux.Vars(ctx.Request)["format"])
 	if t.Format == "" {
 		t.Format = "json"
 	}
@@ -139,6 +137,8 @@ func StreamTable(ctx *server.Context) (interface{}, int) {
 		return StreamConstantTable(ctx, args)
 	case "balance":
 		return StreamBalanceTable(ctx, args)
+	case "event":
+		return StreamEventTable(ctx, args)
 	default:
 		panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("no such table '%s'", args.Table), nil))
 	}

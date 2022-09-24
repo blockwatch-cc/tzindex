@@ -93,6 +93,7 @@ type Op struct {
 	IsStorageUpdate bool                   `pack:"-"  json:"-"` // true when contract storage changed
 	Contract        *Contract              `pack:"-"  json:"-"` // cached contract
 	BigmapUpdates   []BigmapUpdate         `pack:"-"  json:"-"` // cached query result
+	Events          []*Event               `pack:"-"  json:"-"` // cached query result
 }
 
 // Ensure Op implements the pack.Item interface.

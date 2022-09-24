@@ -84,17 +84,15 @@ func (d *Dispatcher) Run() {
 
 func (d *Dispatcher) dispatch() {
 	for {
-		select {
-		case api := <-jobQueue:
-			// try to obtain a worker job channel that is available.
-			// will block until a worker is idle or pool is closed
-			workerChannel := <-d.pool
+		api := <-jobQueue
+		// try to obtain a worker job channel that is available.
+		// will block until a worker is idle or pool is closed
+		workerChannel := <-d.pool
 
-			// dispatch the job to the worker job channel
-			if workerChannel != nil {
-				workerChannel <- api
-			}
-			// api.Logf("%s dispatched\n", api.RequestID)
+		// dispatch the job to the worker job channel
+		if workerChannel != nil {
+			workerChannel <- api
 		}
+		// api.Logf("%s dispatched\n", api.RequestID)
 	}
 }

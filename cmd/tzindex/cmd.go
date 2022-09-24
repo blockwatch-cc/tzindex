@@ -156,13 +156,9 @@ func initConfig() {
 	debug.SetGCPercent(gogc)
 }
 
-func print(val interface{}) error {
-	buf, err := json.MarshalIndent(val, "", "  ")
-	if err != nil {
-		return fmt.Errorf("output error: %v", err)
-	}
+func print(val interface{}) {
+	buf, _ := json.MarshalIndent(val, "", "  ")
 	fmt.Printf("%s\n", string(buf))
-	return nil
 }
 
 func StartProfiling() {
@@ -172,7 +168,7 @@ func StartProfiling() {
 			log.Errorf("cannot write cpu profile: %v", err)
 		} else {
 			log.Info("Profiling CPU usage.")
-			pprof.StartCPUProfile(f)
+			_ = pprof.StartCPUProfile(f)
 		}
 	}
 }
@@ -190,7 +186,7 @@ func StopProfiling() {
 			if err != nil {
 				log.Errorf("cannot write blocking profile: %v", err)
 			} else {
-				b.WriteTo(f, 1)
+				_ = b.WriteTo(f, 1)
 				log.Infof("Lock blocking profile written to %s", blockprof)
 			}
 		}
@@ -203,7 +199,7 @@ func StopProfiling() {
 			if err != nil {
 				log.Errorf("cannot write mutex contention profile: %v", err)
 			} else {
-				b.WriteTo(f, 1)
+				_ = b.WriteTo(f, 1)
 				log.Infof("Mutex contention profile written to %s", mutexprof)
 			}
 		}

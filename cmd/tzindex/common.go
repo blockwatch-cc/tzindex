@@ -4,36 +4,22 @@
 package main
 
 import (
-	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"strings"
-	"time"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/store"
-	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
 	"github.com/echa/config"
 )
 
-const (
-	timeFormat = "2006-01-02 15:04:05"
-	dateFormat = "2006-01-02"
-)
-
 // common command-line options
 var (
-	start string // time
-	end   string // time
-
 	// rpc-specific options
 	rpcurl   string
 	rpcuser  string
@@ -44,13 +30,6 @@ var (
 	// index options
 	lightIndex bool
 	fullIndex  bool
-)
-
-var (
-	statedb store.DB
-	indexer *etl.Indexer
-	cancel  context.CancelFunc
-	ctx     context.Context
 )
 
 func tableOptions(name string) pack.Options {
@@ -71,88 +50,6 @@ func indexOptions(name string) pack.Options {
 		CacheSize:       config.GetInt(pre + "cache_size"),
 		FillLevel:       config.GetInt(pre + "fill_level"),
 	}
-}
-
-func openReadOnlyBlockchain() (*etl.Crawler, error) {
-	engine := config.GetString("database.engine")
-	pathname := config.GetString("database.path")
-	log.Infof("Using %s database %s", engine, pathname)
-	var err error
-
-	statedb, err = store.Open(engine, filepath.Join(pathname, etl.StateDBName), DBOpts(engine, true, unsafe))
-	if err != nil {
-		return nil, fmt.Errorf("error opening %s database: %v", etl.StateDBName, err)
-	}
-
-	// enabled storage tables
-	indexer = etl.NewIndexer(etl.IndexerConfig{
-		DBPath:    pathname,
-		DBOpts:    DBOpts(engine, true, false),
-		StateDB:   statedb,
-		Indexes:   enabledIndexes(),
-		LightMode: lightIndex,
-	})
-
-	bc := etl.NewCrawler(etl.CrawlerConfig{
-		DB:      statedb,
-		Indexer: indexer,
-		Client:  nil,
-	})
-
-	ctx, cancel = context.WithCancel(context.Background())
-	if err := bc.Init(ctx, etl.MODE_INFO); err != nil {
-		return nil, fmt.Errorf("error initializing blockchain: %v", err)
-	}
-	return bc, nil
-}
-
-func openReadWriteBlockchain() (*etl.Crawler, error) {
-	engine := config.GetString("database.engine")
-	pathname := config.GetString("database.path")
-	log.Infof("Using %s database %s", engine, pathname)
-	var err error
-
-	statedb, err = store.Open(engine, filepath.Join(pathname, etl.StateDBName), DBOpts(engine, false, unsafe))
-	if err != nil {
-		return nil, fmt.Errorf("error opening %s database: %v", etl.StateDBName, err)
-	}
-
-	// enabled storage tables
-	indexer = etl.NewIndexer(etl.IndexerConfig{
-		DBPath:    pathname,
-		DBOpts:    DBOpts(engine, false, false),
-		StateDB:   statedb,
-		Indexes:   enabledIndexes(),
-		LightMode: lightIndex,
-	})
-
-	bc := etl.NewCrawler(etl.CrawlerConfig{
-		DB:      statedb,
-		Indexer: indexer,
-		Client:  nil,
-	})
-	ctx, cancel = context.WithCancel(context.Background())
-	if err := bc.Init(ctx, etl.MODE_INFO); err != nil {
-		return nil, fmt.Errorf("error initializing blockchain: %v", err)
-	}
-	return bc, nil
-}
-
-func timeRange() (from, to time.Time, err error) {
-	var f, t util.Time
-	f, err = util.ParseTime(start)
-	if err != nil {
-		return
-	}
-	t, err = util.ParseTime(end)
-	if err != nil {
-		return
-	}
-	if !f.IsZero() && !t.IsZero() && f.After(t) {
-		err = fmt.Errorf("time range mismatch (start>end)")
-	}
-	from, to = f.Time(), t.Time()
-	return
 }
 
 func newHTTPClient() (*http.Client, error) {
@@ -282,6 +179,7 @@ func enabledIndexes() []model.BlockIndexer {
 			index.NewConstantIndex(tableOptions("constant"), indexOptions("constant")),
 			index.NewBlockIndex(tableOptions("block")),
 			index.NewOpIndex(tableOptions("op")),
+			index.NewEventIndex(tableOptions("event")),
 			index.NewFlowIndex(tableOptions("flow")),
 			index.NewChainIndex(tableOptions("chain")),
 			index.NewSupplyIndex(tableOptions("supply")),
@@ -297,6 +195,7 @@ func enabledIndexes() []model.BlockIndexer {
 			index.NewConstantIndex(tableOptions("constant"), indexOptions("constant")),
 			index.NewBlockIndex(tableOptions("block")),
 			index.NewOpIndex(tableOptions("op")),
+			index.NewEventIndex(tableOptions("event")),
 			index.NewFlowIndex(tableOptions("flow")),
 			index.NewChainIndex(tableOptions("chain")),
 			index.NewSupplyIndex(tableOptions("supply")),

@@ -8,9 +8,9 @@ For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](h
 
 **Core Features**
 
+- supports protocols up to Kathmandu (v014)
 - indexes and cross-checks full on-chain state
 - feature-rich [REST API](https://tzstats.com/docs/api/index.html) with objects, bulk tables and time-series
-- supports protocols up to Jakarta (v013)
 - auto-detects and locks Tezos network (never mixes data from different networks)
 - indexes all accounts and smart-contracts (including genesis data)
 - follows chain reorgs as they are resolved
@@ -41,8 +41,7 @@ For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](h
 - **metadata**: standardized and custom account/token metadata
 - **constants**: global constants (e.g. smart contract code/type macros to lower contract size and reuse common features)
 - **storage**: separate smart contract storage updates to decrease operation table cache pressure
-
-Starting v12 we are no longer supporting baker `rights`, `snapshots`, `income` and `governance` data as well as `flows` (use balances instead).
+- **event**: emitted smart contract events
 
 **Operation modes**
 
@@ -57,7 +56,7 @@ Starting v12 we are no longer supporting baker `rights`, `snapshots`, `income` a
 
 ### Requirements
 
-- Storage: 38GB (full Mainnet index, June 2022), 32G (light mode)
+- Storage: 43GB (full Mainnet index, Sep 2022), 38G (light mode)
 - RAM:  8-64GB (configurable, use more memory for better query latency)
 - CPU:  2+ cores (configurable, use more for better query parallelism)
 - Tezos node in archive mode

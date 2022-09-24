@@ -145,7 +145,8 @@ func (idx *StorageIndex) DisconnectBlock(ctx context.Context, block *model.Block
 }
 
 func (idx *StorageIndex) DeleteBlock(ctx context.Context, height int64) error {
-    _, err := pack.NewQuery("etl.op.delete", idx.storages).
+    _, err := pack.NewQuery("etl.op.delete").
+        WithTable(idx.storages).
         AndEqual("height", height).
         Delete(ctx)
     return err

@@ -16,6 +16,7 @@ import (
 	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
+
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/server"
@@ -120,7 +121,7 @@ func (c Collapse) Truncate(t time.Time) time.Time {
 
 		// round down to n weeks
 		_, w := t.ISOWeek()
-		w = w % c.Value
+		w %= c.Value
 		yy, mm, dd := t.AddDate(0, 0, int(-t.Weekday())-w*7).Date()
 		return time.Date(yy, mm, dd, 0, 0, 0, 0, time.UTC)
 
@@ -129,7 +130,7 @@ func (c Collapse) Truncate(t time.Time) time.Time {
 		yy, mm, _ := t.Date()
 		val := yy*12 + int(mm) - 1
 		if c.Value > 1 {
-			val = val - (val % c.Value)
+			val -= (val % c.Value)
 		}
 		yy = val / 12
 		mm = time.Month(val%12 + 1)
@@ -139,7 +140,7 @@ func (c Collapse) Truncate(t time.Time) time.Time {
 		// truncate to midnight on first day of year
 		yy := t.Year()
 		if c.Value > 1 {
-			yy = yy - (yy % c.Value)
+			yy -= (yy % c.Value)
 		}
 		return time.Date(yy, time.January, 1, 0, 0, 0, 0, time.UTC)
 	}
@@ -321,12 +322,10 @@ func (r *SeriesRequest) Parse(ctx *server.Context) {
 	r.Columns.AddUniqueFront("time")
 
 	// read series code from URL
-	r.Series, _ = mux.Vars(ctx.Request)["series"]
-	r.Series = strings.ToLower(r.Series)
+	r.Series = strings.ToLower(mux.Vars(ctx.Request)["series"])
 
 	// read format from URL
-	r.Format, _ = mux.Vars(ctx.Request)["format"]
-	r.Format = strings.ToLower(r.Format)
+	r.Format = strings.ToLower(mux.Vars(ctx.Request)["format"])
 	if r.Format == "" {
 		r.Format = "json"
 	}
@@ -336,7 +335,7 @@ func (r *SeriesRequest) Parse(ctx *server.Context) {
 		panic(server.EBadRequest(server.EC_CONTENTTYPE_UNSUPPORTED, fmt.Sprintf("unsupported format '%s'", r.Format), nil))
 	}
 
-	switch true {
+	switch {
 	case !r.To.IsZero() && !r.From.IsZero():
 		// flip start and end when unordered
 		if r.To.Before(r.From) {
@@ -452,11 +451,11 @@ func (args *SeriesRequest) StreamJSON(ctx *server.Context) error {
 	enc.SetEscapeHTML(false)
 
 	// open JSON array
-	io.WriteString(ctx.ResponseWriter, "[")
+	_, _ = io.WriteString(ctx.ResponseWriter, "[")
 	// close JSON array on panic
 	defer func() {
 		if e := recover(); e != nil {
-			io.WriteString(ctx.ResponseWriter, "]")
+			_, _ = io.WriteString(ctx.ResponseWriter, "]")
 			panic(e)
 		}
 	}()
@@ -470,50 +469,43 @@ func (args *SeriesRequest) StreamJSON(ctx *server.Context) error {
 			return err
 		}
 
-		prevTime := args.prevBucket.Time()
-		bucketTime := args.bucket.Time()
 		modelTime := args.model.Time()
 
 		// output series value when the next model time has crossed boundary
-		if modelTime.Before(args.nextBucketTime) != (args.sign == 1) {
-			if args.FillMode != FillModeNone {
-				// fill when gap is detected
-				if bucketTime.Sub(prevTime)*args.sign > args.window {
-					// log.Infof("FILL PRE VALUE GAP %s -> %s", prevTime, bucketTime)
-					err = args.Fill(prevTime, bucketTime, func(fill SeriesBucket) error {
-						if needComma {
-							io.WriteString(ctx.ResponseWriter, ",")
-						} else {
-							needComma = true
-						}
-						return enc.Encode(fill)
-					})
-					if err != nil {
-						return err
+		if !modelTime.Before(args.nextBucketTime) {
+			// fill when gap is detected
+			if args.bucket.IsEmpty() {
+				gapStart := args.prevBucket.Time()
+				gapEnd := args.Collapse.Truncate(modelTime)
+				err = args.Fill(gapStart, gapEnd, func(fill SeriesBucket) error {
+					if needComma {
+						_, _ = io.WriteString(ctx.ResponseWriter, ",")
+					} else {
+						needComma = true
 					}
+					return enc.Encode(fill)
+				})
+				if err != nil {
+					return err
 				}
-			}
-
-			// output accumulated data
-			// log.Infof("WRITE %s", args.bucket.Time())
-			if needComma {
-				io.WriteString(ctx.ResponseWriter, ",")
+				args.prevBucket = args.bucket.Clone().SetTime(gapEnd)
 			} else {
-				needComma = true
-				// on first write, check if bucket is empty and apply fill mode
-				if args.bucket.IsEmpty() && args.FillMode == FillModeNull {
-					args.bucket.Null(args.bucket.Time())
+				// output accumulated data
+				if needComma {
+					_, _ = io.WriteString(ctx.ResponseWriter, ",")
+				} else {
+					needComma = true
 				}
-			}
-			if err := enc.Encode(args.bucket); err != nil {
-				return err
-			}
-			args.count++
-			if args.Limit > 0 && args.count == int(args.Limit) {
-				return io.EOF
-			}
 
-			args.prevBucket = args.bucket.Clone()
+				if err := enc.Encode(args.bucket); err != nil {
+					return err
+				}
+				args.count++
+				if args.Limit > 0 && args.count == int(args.Limit) {
+					return io.EOF
+				}
+				args.prevBucket = args.bucket.Clone()
+			}
 			args.bucket.Reset()
 		}
 
@@ -521,7 +513,6 @@ func (args *SeriesRequest) StreamJSON(ctx *server.Context) error {
 		if args.bucket.Time().IsZero() {
 			args.bucket.SetTime(args.Collapse.Truncate(modelTime))
 			args.nextBucketTime = args.Collapse.Next(args.bucket.Time(), int(args.sign))
-			// log.Infof("NEXT %s -> %s", args.bucket.Time(), args.nextBucketTime)
 		}
 
 		// accumulate data
@@ -531,68 +522,52 @@ func (args *SeriesRequest) StreamJSON(ctx *server.Context) error {
 
 	// don't handle error here, will be picked up by trailer
 	if err == nil {
-		// fill gap before last element
-		prevTime := args.prevBucket.Time()
-		bucketTime := args.bucket.Time()
-
-		if args.FillMode != FillModeNone {
-			if bucketTime.Sub(prevTime)*args.sign > args.window {
-				// log.Infof("FILL PRE END GAP %s -> %s", prevTime, bucketTime)
-				err = args.Fill(prevTime, bucketTime, func(fill SeriesBucket) error {
-					if needComma {
-						io.WriteString(ctx.ResponseWriter, ",")
-					} else {
-						needComma = true
-					}
-					return enc.Encode(fill)
-				})
-			}
-		}
-
-		// output last series element
-		// log.Infof("WRITE LAST %s", args.bucket.Time())
-		if needComma {
-			io.WriteString(ctx.ResponseWriter, ",")
+		if args.bucket.IsEmpty() {
+			// fill gap before last element
+			gapStart := args.prevBucket.Time()
+			gapEnd := args.Collapse.Truncate(args.model.Time())
+			err = args.Fill(gapStart, gapEnd, func(fill SeriesBucket) error {
+				if needComma {
+					_, _ = io.WriteString(ctx.ResponseWriter, ",")
+				} else {
+					needComma = true
+				}
+				return enc.Encode(fill)
+			})
 		} else {
-			// on first write, check if bucket is empty and apply fill mode
-			if args.bucket.IsEmpty() && args.FillMode == FillModeNull {
-				args.bucket.Null(args.bucket.Time())
+			// output last series element
+			if needComma {
+				_, _ = io.WriteString(ctx.ResponseWriter, ",")
+			} else {
+				needComma = true
 			}
-			needComma = true
-		}
-		err = enc.Encode(args.bucket)
-		if err == nil {
-			args.count++
-		}
-		args.prevBucket = args.bucket.Clone()
-
-		// fill end gap
-		if args.FillMode != FillModeNone {
-			if args.To.Time().Sub(bucketTime)*args.sign > args.window {
-				// log.Infof("FILL POST END GAP %s -> %s", bucketTime, args.To)
-				err = args.Fill(bucketTime, args.To.Time(), func(fill SeriesBucket) error {
-					if needComma {
-						io.WriteString(ctx.ResponseWriter, ",")
-					} else {
-						needComma = true
-					}
-					return enc.Encode(fill)
-				})
+			err = enc.Encode(args.bucket)
+			if err == nil {
+				args.count++
 			}
 		}
 	}
 
+	if err == nil {
+		// fill end gap
+		err = args.Fill(args.bucket.Time(), args.To.Time(), func(fill SeriesBucket) error {
+			if needComma {
+				_, _ = io.WriteString(ctx.ResponseWriter, ",")
+			} else {
+				needComma = true
+			}
+			return enc.Encode(fill)
+		})
+	}
+
 	// close JSON bracket
-	io.WriteString(ctx.ResponseWriter, "]")
+	_, _ = io.WriteString(ctx.ResponseWriter, "]")
 	// ctx.Log.Tracef("JSON encoded %d rows", count)
 	return err
 }
 
 func (args *SeriesRequest) StreamCSV(ctx *server.Context) error {
 	var err error
-
-	// keep output status
-	isFirst := true
 
 	enc := csv.NewEncoder(ctx.ResponseWriter)
 	// use custom header columns and order
@@ -608,98 +583,68 @@ func (args *SeriesRequest) StreamCSV(ctx *server.Context) error {
 		if err := r.Decode(args.model); err != nil {
 			return err
 		}
-		// log.Infof("MODEL AT %s", args.model.Time())
 
-		prevTime := args.prevBucket.Time()
-		bucketTime := args.bucket.Time()
 		modelTime := args.model.Time()
 
 		// output series value when the next model time has crossed boundary
-		if modelTime.Before(args.nextBucketTime) != (args.sign == 1) {
-			if args.FillMode != FillModeNone {
-				// fill when gap is detected
-				if bucketTime.Sub(prevTime)*args.sign > args.window {
-					// log.Infof("FILL PRE VALUE GAP %s -> %s", prevTime, bucketTime)
-					err = args.Fill(prevTime, bucketTime, func(fill SeriesBucket) error {
-						return enc.EncodeRecord(fill)
-					})
-					if err != nil {
-						return err
-					}
+		if !modelTime.Before(args.nextBucketTime) {
+			if args.bucket.IsEmpty() {
+				gapStart := args.prevBucket.Time()
+				gapEnd := args.Collapse.Truncate(modelTime)
+				err = args.Fill(gapStart, gapEnd, func(fill SeriesBucket) error {
+					return enc.EncodeRecord(fill)
+				})
+				if err != nil {
+					return err
 				}
-			}
-
-			// output accumulated data
-			// log.Infof("WRITE %s", args.bucket.Time())
-			if isFirst {
-				// on first write, check if bucket is empty and apply fill mode
-				if args.bucket.IsEmpty() && args.FillMode == FillModeNull {
-					args.bucket.Null(args.bucket.Time())
+				args.prevBucket = args.bucket.Clone().SetTime(gapEnd)
+			} else {
+				// output accumulated data
+				if err := enc.EncodeRecord(args.bucket); err != nil {
+					return err
 				}
-				isFirst = false
+				args.count++
+				if args.Limit > 0 && args.count == int(args.Limit) {
+					return io.EOF
+				}
+				args.prevBucket = args.bucket.Clone()
 			}
-			if err := enc.EncodeRecord(args.bucket); err != nil {
-				return err
-			}
-			args.count++
-			if args.Limit > 0 && args.count == int(args.Limit) {
-				return io.EOF
-			}
-
-			args.prevBucket = args.bucket.Clone()
 			args.bucket.Reset()
 		}
 
 		// init next time window from data
 		if args.bucket.Time().IsZero() {
-			// prepare for next accumulation window
 			args.bucket.SetTime(args.Collapse.Truncate(modelTime))
 			args.nextBucketTime = args.Collapse.Next(args.bucket.Time(), int(args.sign))
-			// log.Infof("NEXT %s -> %s", args.bucket.Time(), args.nextBucketTime)
 		}
 
 		// accumulate data
 		args.bucket.Add(args.model)
 		return nil
 	})
+
 	if err == nil {
-		// fill gap before last element
-		prevTime := args.prevBucket.Time()
-		bucketTime := args.bucket.Time()
-
-		if args.FillMode != FillModeNone {
-			if bucketTime.Sub(prevTime)*args.sign > args.window {
-				// log.Infof("FILL PRE END GAP %s -> %s", prevTime, bucketTime)
-				err = args.Fill(prevTime, bucketTime, func(fill SeriesBucket) error {
-					return enc.EncodeRecord(fill)
-				})
+		if args.bucket.IsEmpty() {
+			// fill gap before last element
+			gapStart := args.prevBucket.Time()
+			gapEnd := args.Collapse.Truncate(args.model.Time())
+			err = args.Fill(gapStart, gapEnd, func(fill SeriesBucket) error {
+				return enc.EncodeRecord(fill)
+			})
+		} else {
+			// output last series element
+			err = enc.EncodeRecord(args.bucket)
+			if err == nil {
+				args.count++
 			}
 		}
+	}
 
-		// output last series element
-		// log.Infof("WRITE LAST %s", args.bucket.Time())
-		if isFirst {
-			// on first write, check if bucket is empty and apply fill mode
-			if args.bucket.IsEmpty() && args.FillMode == FillModeNull {
-				args.bucket.Null(args.bucket.Time())
-			}
-			isFirst = false
-		}
-		err = enc.EncodeRecord(args.bucket)
-		if err == nil {
-			args.count++
-		}
-		args.prevBucket = args.bucket.Clone()
-
+	if err == nil {
 		// fill end gap
-		if args.FillMode != FillModeNone {
-			if args.To.Time().Sub(bucketTime)*args.sign > args.window {
-				// log.Infof("FILL POST END GAP %s -> %s", bucketTime, args.To)
-				err = args.Fill(bucketTime, args.To.Time(), func(fill SeriesBucket) error {
-					return enc.EncodeRecord(fill)
-				})
-			}
-		}
+		err = args.Fill(args.bucket.Time(), args.To.Time(), func(fill SeriesBucket) error {
+			return enc.Encode(fill)
+		})
 	}
 
 	// ctx.Log.Tracef("CSV Encoded %d rows", count)
@@ -713,6 +658,8 @@ func (args *SeriesRequest) Fill(from, to time.Time, fillFunc func(SeriesBucket) 
 		}
 		var filled SeriesBucket
 		switch args.FillMode {
+		case FillModeNone:
+			return nil
 		case FillModeZero:
 			filled = args.bucket.Clone().Zero(ts)
 		case FillModeNull:

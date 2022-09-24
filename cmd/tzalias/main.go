@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"sort"
 	"strconv"
@@ -18,7 +17,7 @@ import (
 	"github.com/qri-io/jsonschema"
 
 	"blockwatch.cc/tzgo/tezos"
-	"blockwatch.cc/tzpro-go"
+	"blockwatch.cc/tzpro-go/tzpro"
 	"github.com/echa/config"
 	"github.com/echa/log"
 )
@@ -235,7 +234,7 @@ func importAliases(ctx context.Context, c *tzpro.Client) error {
 		return fmt.Errorf("missing filename")
 	}
 	fname := flags.Arg(1)
-	buf, err := ioutil.ReadFile(fname)
+	buf, err := os.ReadFile(fname)
 	if err != nil {
 		return fmt.Errorf("%s: %v", fname, err)
 	}
@@ -454,7 +453,7 @@ func validateAliases(ctx context.Context, c *tzpro.Client) error {
 		return fmt.Errorf("missing filename")
 	}
 	fname := flags.Arg(1)
-	buf, err := ioutil.ReadFile(fname)
+	buf, err := os.ReadFile(fname)
 	if err != nil {
 		return fmt.Errorf("%s: %w", fname, err)
 	}

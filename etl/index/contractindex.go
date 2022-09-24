@@ -93,10 +93,7 @@ func (idx *ContractIndex) Create(path, label string, opts interface{}) error {
 			CacheSize:       util.NonZero(idx.iopts.CacheSize, ContractIndexCacheSize),
 			FillLevel:       util.NonZero(idx.iopts.FillLevel, ContractIndexFillLevel),
 		})
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 func (idx *ContractIndex) Init(path, label string, opts interface{}) error {
@@ -217,7 +214,8 @@ func (idx *ContractIndex) DisconnectBlock(ctx context.Context, block *model.Bloc
 
 func (idx *ContractIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting contracts at height %d", height)
-	_, err := pack.NewQuery("etl.contract.delete", idx.contracts).
+	_, err := pack.NewQuery("etl.contract.delete").
+		WithTable(idx.contracts).
 		AndEqual("first_seen", height).
 		Delete(ctx)
 	return err

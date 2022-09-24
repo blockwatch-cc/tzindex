@@ -129,7 +129,8 @@ func (idx *FlowIndex) DisconnectBlock(ctx context.Context, block *model.Block, _
 
 func (idx *FlowIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting flows at height %d", height)
-	_, err := pack.NewQuery("etl.flow.delete", idx.table).
+	_, err := pack.NewQuery("etl.flow.delete").
+		WithTable(idx.table).
 		AndEqual("height", height).
 		Delete(ctx)
 	return err
@@ -137,7 +138,8 @@ func (idx *FlowIndex) DeleteBlock(ctx context.Context, height int64) error {
 
 func (idx *FlowIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 	// log.Debugf("Rollback deleting flow cycle %d", cycle)
-	_, err := pack.NewQuery("etl.flow.delete", idx.table).
+	_, err := pack.NewQuery("etl.flow.delete").
+		WithTable(idx.table).
 		AndEqual("cycle", cycle).
 		Delete(ctx)
 	return err

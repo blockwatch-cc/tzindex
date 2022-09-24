@@ -15,8 +15,8 @@ var (
 	orgUrl            = "blockwatch.cc"
 	orgName           = "Blockwatch"
 	appName           = "tzindex"
-	apiVersion        = "v013-2022-06-15"
-	version    string = "v13.0"
+	apiVersion        = "v014-2022-09-06"
+	version    string = "v14.0"
 	commit     string = "dev"
 	envprefix         = "TZ"
 )

@@ -19,9 +19,9 @@ import (
 // Changelog published on Slack at 20-07-2018 15:45:31 (block 26,579 cycle 6)
 // https://log.tezos.link/index.php?date=20-07-2018
 //
-// - Fixed a bug in delegations, where contracts could delegate to unregistered
-//   delegates. This will be enforced from now on, and the existing unregistered
-//   delegates will be automatically registered (except for two empty addresses).
+//   - Fixed a bug in delegations, where contracts could delegate to unregistered
+//     delegates. This will be enforced from now on, and the existing unregistered
+//     delegates will be automatically registered (except for two empty addresses).
 //
 // Note: we register self-delegation on origination bakers right away, but track them
 // explicitly (account.baker_id == 0 and account.is_baker = true). During migration
@@ -29,7 +29,6 @@ import (
 //
 // Correctly registered bakers (via self delegation) are not affected since their
 // baker_id is set.
-//
 func (b *Builder) FixOriginationBug(ctx context.Context, params *tezos.Params) error {
 	var count int
 	var err error
@@ -40,7 +39,7 @@ func (b *Builder) FixOriginationBug(ctx context.Context, params *tezos.Params) e
 		if bkr.ActiveDelegations > 0 {
 			if bkr.Account.BakerId == 0 {
 				bkr.Account.BakerId = bkr.Account.RowId
-				b.AppendMagicBakerRegistrationOp(ctx, bkr, 0)
+				_ = b.AppendMagicBakerRegistrationOp(ctx, bkr, 0)
 			}
 			bkr.InitGracePeriod(b.block.Cycle, b.block.Params)
 			count++
@@ -111,10 +110,10 @@ func (b *Builder) FixOriginationBug(ctx context.Context, params *tezos.Params) e
 			}
 		}
 		log.Infof("Audit: %d missing, %d illegal bakers", len(missing), len(illegal))
-		for n, _ := range missing {
+		for n := range missing {
 			log.Infof("Audit: missing baker %s", n)
 		}
-		for n, _ := range illegal {
+		for n := range illegal {
 			log.Infof("Audit: illegal baker %s", n)
 		}
 	}

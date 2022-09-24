@@ -1,6 +1,7 @@
 // Copyright (c) 2021 Blockwatch Data Inc.
 // Authors: abdul@blockwatch.cc, alex@blockwatch.cc
-//
+
+//nolint:unused,deadcode
 package main
 
 import (
@@ -107,13 +108,13 @@ func FormatPretty(val interface{}) string {
 	case int32:
 		return PrettyInt64(int64(v))
 	case int64:
-		return PrettyInt64(int64(v))
+		return PrettyInt64(v)
 	case uint:
 		return PrettyUint64(uint64(v))
 	case uint32:
 		return PrettyUint64(uint64(v))
 	case uint64:
-		return PrettyUint64(uint64(v))
+		return PrettyUint64(v)
 	case float32:
 		return PrettyFloat64(float64(v))
 	case float64:
@@ -134,8 +135,6 @@ func PrettyString(s string) string {
 		if i > -1 {
 			rem = s[i:]
 			s = s[:i]
-		} else {
-			i = 0
 		}
 		l = len(s)
 		p := s[:l%3]

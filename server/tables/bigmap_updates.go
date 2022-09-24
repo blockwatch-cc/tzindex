@@ -29,8 +29,6 @@ import (
 var (
 	// long -> short form
 	bigmapUpdateSourceNames map[string]string
-	// short -> long form
-	bigmapUpdateAliasNames map[string]string
 	// all aliases as list
 	bigmapUpdateAllAliases []string
 )
@@ -195,8 +193,7 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 			if n != "-" {
 				srcNames = append(srcNames, n)
 			}
-			switch v {
-			case "op":
+			if v == "op" {
 				needOpT = true
 			}
 			if args.Verbose {
@@ -216,12 +213,12 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 
 	// pre-parse bigmap ids required for hash lookups
 	// this only works for EQ/IN, panic on other conditions
-	for key, _ := range ctx.Request.URL.Query() {
+	for key := range ctx.Request.URL.Query() {
 		keys := strings.Split(key, ".")
-		switch keys[0] {
-		case "hash":
-			// hash requires bigmap_id(s) to genrate key_id(s)
+		// hash requires bigmap_id(s) to genrate key_id(s)
+		if keys[0] == "hash" {
 			needBigmapId = true
+			break
 		}
 	}
 	if needBigmapId {
@@ -256,17 +253,16 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 			}
 		}
 		if len(bigmapIds) == 0 {
-			panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("bigmap_id.[eq|in] required for hash query"), nil))
+			panic(server.EBadRequest(server.EC_PARAM_INVALID, "bigmap_id.[eq|in] required for hash query", nil))
 		}
 	}
 
 	// build table query
-	q := pack.Query{
-		Name:   ctx.RequestID,
-		Fields: table.Fields().Select(srcNames...),
-		Limit:  int(args.Limit),
-		Order:  args.Order,
-	}
+	q := pack.NewQuery(ctx.RequestID).
+		WithTable(table).
+		WithFields(srcNames...).
+		WithLimit(int(args.Limit)).
+		WithOrder(args.Order)
 
 	// build dynamic filter conditions from query (will panic on error)
 	for key, val := range ctx.Request.URL.Query() {
@@ -293,12 +289,7 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Pk(),
-				Mode:  cursorMode,
-				Value: id,
-				Raw:   val[0], // debugging aid
-			})
+			q = q.And("I", cursorMode, id)
 
 		case "op":
 			// parse op hash and lookup id
@@ -310,15 +301,10 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty op matches id 0 (== missing baker)
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find(field), // op id
-						Mode:  mode,
-						Value: 0,
-						Raw:   val[0], // debugging aid
-					})
+					q = q.And(field, mode, 0)
 				} else {
 					// single-op lookup and compile condition
-					op, err := ctx.Indexer.LookupOp(ctx, val[0])
+					op, err := ctx.Indexer.LookupOp(ctx, val[0], etl.ListRequest{})
 					if err != nil {
 						switch err {
 						case index.ErrNoOpEntry:
@@ -326,26 +312,16 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 						case etl.ErrInvalidHash:
 							panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid op hash '%s'", val[0]), err))
 						default:
-							panic(err)
+							panic(server.EInternal(server.EC_DATABASE, fmt.Sprintf("cannot lookup op hash '%s'", val[0]), err))
 						}
 					}
 					// Note: when not found we insert an always false condition
-					if op == nil || len(op) == 0 {
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find(field), // op id
-							Mode:  mode,
-							Value: uint64(math.MaxUint64),
-							Raw:   "op not found", // debugging aid
-						})
+					if len(op) == 0 {
+						q = q.And(field, mode, uint64(math.MaxUint64))
 					} else {
 						// add op id as extra condition
 						opMap[op[0].RowId] = op[0].Hash.Clone()
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find(field), // op id
-							Mode:  mode,
-							Value: op[0].RowId, // op slice may contain internal ops
-							Raw:   val[0],      // debugging aid
-						})
+						q = q.And(field, mode, op[0].RowId)
 						if mode == pack.FilterModeEqual {
 							needOpT = false
 							opMap[op[0].RowId] = op[0].Hash.Clone()
@@ -356,7 +332,7 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 				// multi-address lookup and compile condition
 				ids := make([]uint64, 0)
 				for _, v := range strings.Split(val[0], ",") {
-					op, err := ctx.Indexer.LookupOp(ctx, v)
+					op, err := ctx.Indexer.LookupOp(ctx, v, etl.ListRequest{})
 					if err != nil {
 						switch err {
 						case index.ErrNoOpEntry:
@@ -364,11 +340,11 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 						case etl.ErrInvalidHash:
 							panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid op hash '%s'", v), err))
 						default:
-							panic(err)
+							panic(server.EInternal(server.EC_DATABASE, fmt.Sprintf("cannot lookup op hash '%s'", v), err))
 						}
 					}
 					// skip not found ops
-					if op == nil || len(op) == 0 {
+					if len(op) == 0 {
 						continue
 					}
 					// collect list of op ids (use first slice value only)
@@ -380,12 +356,7 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 				}
 				// Note: when list is empty (no ops were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find(field), // op id
-					Mode:  mode,
-					Value: ids,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, ids)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -398,12 +369,7 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 				if err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid action '%s'", val[0]), err))
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find(field),
-					Mode:  mode,
-					Value: action,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, action)
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-action
 				actions := make([]int, 0)
@@ -414,12 +380,7 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 					}
 					actions = append(actions, int(action))
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find(field),
-					Mode:  mode,
-					Value: actions,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, actions)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -436,12 +397,7 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 				}
 				if len(bigmapIds) == 1 {
 					// single bigmap
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find("key_id"),
-						Mode:  mode,
-						Value: model.GetKeyId(bigmapIds[0], h),
-						Raw:   val[0], // debugging aid
-					})
+					q = q.And("key_id", mode, model.GetKeyId(bigmapIds[0], h))
 				} else {
 					// multiple bigmaps
 					if mode == pack.FilterModeEqual {
@@ -453,12 +409,7 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 					for _, bi := range bigmapIds {
 						keyIds = append(keyIds, model.GetKeyId(bi, h))
 					}
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: table.Fields().Find("key_id"),
-						Mode:  mode,
-						Value: keyIds,
-						Raw:   val[0], // debugging aid
-					})
+					q = q.And("key_id", mode, keyIds)
 				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-hash lookup
@@ -477,12 +428,7 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 						keyIds = append(keyIds, model.GetKeyId(bi, hh))
 					}
 				}
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find(field),
-					Mode:  mode,
-					Value: keyIds,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, keyIds)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -501,7 +447,7 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions.AddAndCondition(&cond)
+					q = q.AndCondition(cond)
 				}
 			}
 		}
@@ -539,7 +485,8 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 			Hash tezos.OpHash `pack:"H"`
 		}
 		op := &XOp{}
-		err = pack.NewQuery(ctx.RequestID+".bigmap_lookup", opT).
+		err = pack.NewQuery(ctx.RequestID+".bigmap_lookup").
+			WithTable(opT).
 			WithFields("I", "H").
 			AndIn("I", find).
 			Stream(ctx, func(r pack.Row) error {
@@ -558,7 +505,7 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 	// prepare return type marshalling
 	bigmap := &BigmapUpdateItem{
 		verbose: args.Verbose,
-		columns: util.StringList(args.Columns),
+		columns: args.Columns,
 		ops:     opMap,
 		ctx:     ctx,
 	}
@@ -573,11 +520,11 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 		enc.SetEscapeHTML(false)
 
 		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
+		_, _ = io.WriteString(ctx.ResponseWriter, "[")
 		// close JSON array on panic
 		defer func() {
 			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
+				_, _ = io.WriteString(ctx.ResponseWriter, "]")
 				panic(e)
 			}
 		}()
@@ -586,7 +533,7 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 		var needComma bool
 		err = res.Walk(func(r pack.Row) error {
 			if needComma {
-				io.WriteString(ctx.ResponseWriter, ",")
+				_, _ = io.WriteString(ctx.ResponseWriter, ",")
 			} else {
 				needComma = true
 			}
@@ -604,7 +551,7 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 			return nil
 		})
 		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
+		_, _ = io.WriteString(ctx.ResponseWriter, "]")
 		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":

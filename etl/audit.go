@@ -319,7 +319,8 @@ bloop:
 	// Note: we're at the end of a block here and the account database has not been updated
 	seen := make(map[uint64]*model.Account)
 	table, _ := b.idx.Table(index.AccountTableKey)
-	err := pack.NewQuery("validate.accounts", table).
+	err := pack.NewQuery("validate.accounts").
+		WithTable(table).
 		WithoutCache().
 		WithFields("I", "H", "t", "k", "s").
 		Stream(ctx, func(r pack.Row) error {

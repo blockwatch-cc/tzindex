@@ -217,7 +217,8 @@ func (c *BigmapHistoryCache) Build(ctx context.Context, updates *pack.Table, id,
 	kvStore := make(map[uint64]*model.BigmapKV)
 	upd := &model.BigmapUpdate{}
 	var count int
-	err := pack.NewQuery("build_history_cache", updates).
+	err := pack.NewQuery("build_history_cache").
+		WithTable(updates).
 		WithFields("a", "K", "k", "v").
 		AndEqual("bigmap_id", id).
 		AndLte("height", height).
@@ -287,7 +288,8 @@ func (c *BigmapHistoryCache) Update(ctx context.Context, hist *BigmapHistory, up
 	// apply updates between hist.Height+1 and request height
 	upd := &model.BigmapUpdate{}
 	var count int
-	err := pack.NewQuery("update_history_cache", updates).
+	err := pack.NewQuery("update_history_cache").
+		WithTable(updates).
 		WithFields("a", "k", "v").
 		AndEqual("bigmap_id", hist.BigmapId).
 		AndGt("height", hist.Height).

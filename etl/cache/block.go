@@ -118,7 +118,8 @@ func (c *BlockCache) Build(ctx context.Context, table *pack.Table) error {
 	}
 	c.stats.CountUpdates(1)
 	b := XBlock{}
-	return pack.NewQuery("init_cache", table).
+	return pack.NewQuery("init_cache").
+		WithTable(table).
 		WithoutCache().
 		WithFields("time", "hash").
 		Stream(ctx, func(r pack.Row) error {

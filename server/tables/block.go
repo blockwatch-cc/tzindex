@@ -4,8 +4,6 @@
 package tables
 
 import (
-	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,8 +25,6 @@ import (
 var (
 	// long -> short form
 	blockSourceNames map[string]string
-	// short -> long form
-	blockAliasNames map[string]string
 	// all aliases as list
 	blockAllAliases []string
 )
@@ -47,9 +43,11 @@ func init() {
 	blockSourceNames["proposer"] = "X"
 	blockSourceNames["predecessor"] = "P" // pred hash, requires parent_id
 	blockSourceNames["protocol"] = "-"
+	blockSourceNames["creator"] = "-" // baker or proposer
 
 	blockAllAliases = append(blockAllAliases,
 		"pct_account_reuse",
+		"creator",
 		"baker",
 		"proposer",
 		"protocol",
@@ -135,7 +133,7 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		Solvetime:        b.Solvetime,
 		Version:          b.Version,
 		Round:            b.Round,
-		Nonce:            "",
+		Nonce:            util.U64String(b.Nonce).Hex(),
 		VotingPeriodKind: b.VotingPeriodKind,
 		BakerId:          b.BakerId.Value(),
 		Baker:            b.ctx.Indexer.LookupAddress(b.ctx, b.BakerId).String(),
@@ -167,9 +165,6 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		LbEscapeEma:      b.LbEscapeEma,
 		Protocol:         b.params.Protocol,
 	}
-	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], b.Nonce)
-	block.Nonce = hex.EncodeToString(buf[:])
 	if b.SeenAccounts > 0 {
 		block.PctAccountsReused = float64(b.SeenAccounts-b.NewAccounts) / float64(b.SeenAccounts) * 100
 	}
@@ -212,9 +207,7 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 		case "round":
 			buf = strconv.AppendInt(buf, int64(b.Round), 10)
 		case "nonce":
-			var nonce [8]byte
-			binary.BigEndian.PutUint64(nonce[:], b.Nonce)
-			buf = strconv.AppendQuote(buf, hex.EncodeToString(nonce[:]))
+			buf = strconv.AppendQuote(buf, util.U64String(b.Nonce).Hex())
 		case "voting_period_kind":
 			buf = strconv.AppendQuote(buf, b.VotingPeriodKind.String())
 		case "baker_id":
@@ -278,7 +271,7 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 		case "lb_esc_vote":
 			buf = strconv.AppendQuote(buf, b.LbEscapeVote.String())
 		case "lb_esc_ema":
-			buf = strconv.AppendInt(buf, int64(b.LbEscapeEma), 10)
+			buf = strconv.AppendInt(buf, b.LbEscapeEma, 10)
 		case "protocol":
 			buf = strconv.AppendQuote(buf, b.params.Protocol.String())
 		default:
@@ -323,9 +316,7 @@ func (b *Block) MarshalCSV() ([]string, error) {
 		case "round":
 			res[i] = strconv.FormatInt(int64(b.Round), 10)
 		case "nonce":
-			var nonce [8]byte
-			binary.BigEndian.PutUint64(nonce[:], b.Nonce)
-			res[i] = strconv.Quote(hex.EncodeToString(nonce[:]))
+			res[i] = strconv.Quote(util.U64String(b.Nonce).Hex())
 		case "voting_period_kind":
 			res[i] = strconv.Quote(b.VotingPeriodKind.String())
 		case "baker_id":
@@ -425,8 +416,15 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 			if n != "-" {
 				srcNames = append(srcNames, n)
 			}
-			if v == "predecessor" {
+			switch v {
+			case "predecessor":
 				needJoin = true
+			case "creator":
+				srcNames = append(srcNames, "baker_id", "proposer_id")
+			case "baker":
+				srcNames = append(srcNames, "baker_id")
+			case "proposer":
+				srcNames = append(srcNames, "proposer_id")
 			}
 		}
 	} else {
@@ -437,7 +435,8 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 	}
 
 	// build table query
-	q := pack.NewQuery(ctx.RequestID, table).
+	q := pack.NewQuery(ctx.RequestID).
+		WithTable(table).
 		WithFields(srcNames...).
 		WithLimit(int(args.Limit)).
 		WithOrder(args.Order)
@@ -446,6 +445,7 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 	for key, val := range ctx.Request.URL.Query() {
 		keys := strings.Split(key, ".")
 		prefix := keys[0]
+		field := blockSourceNames[prefix]
 		mode := pack.FilterModeEqual
 		if len(keys) > 1 {
 			mode = pack.ParseFilterMode(keys[1])
@@ -466,12 +466,7 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 			if args.Order == pack.OrderDesc {
 				cursorMode = pack.FilterModeLt
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Pk(),
-				Mode:  cursorMode,
-				Value: id,
-				Raw:   val[0], // debugging aid
-			})
+			q = q.And("I", cursorMode, id)
 		case "hash":
 			// special hash type to []byte conversion
 			hashes := make([][]byte, len(val))
@@ -483,25 +478,62 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 				hashes[i] = h.Hash.Hash
 			}
 			if len(hashes) == 1 {
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find("H"),
-					Mode:  pack.FilterModeEqual,
-					Value: hashes[0],
-					Raw:   strings.Join(val, ","), // debugging aid
-				})
+				q = q.AndEqual(field, hashes[0])
 			} else {
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: table.Fields().Find("H"),
-					Mode:  pack.FilterModeIn,
-					Value: hashes,
-					Raw:   strings.Join(val, ","), // debugging aid
-				})
+				q = q.AndIn(field, hashes)
 			}
+		case "creator":
+			addrs := make([]model.AccountID, 0)
+			for _, v := range strings.Split(val[0], ",") {
+				addr, err := tezos.ParseAddress(v)
+				if err != nil || !addr.IsValid() {
+					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
+				}
+				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
+				if err != nil && err != index.ErrNoAccountEntry {
+					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
+				}
+				if err == nil && acc.RowId > 0 {
+					addrs = append(addrs, acc.RowId)
+				}
+			}
+
+			switch mode {
+			case pack.FilterModeEqual:
+				if len(addrs) == 1 {
+					q = q.OrCondition(
+						pack.Equal("baker_id", addrs[0]),
+						pack.Equal("proposer_id", addrs[0]),
+					)
+				}
+				fallthrough
+			case pack.FilterModeIn:
+				if len(addrs) > 1 {
+					q = q.OrCondition(
+						pack.In("baker_id", addrs),
+						pack.In("proposer_id", addrs),
+					)
+				}
+			case pack.FilterModeNotEqual:
+				if len(addrs) == 1 {
+					q = q.OrCondition(
+						pack.NotEqual("baker_id", addrs[0]),
+						pack.NotEqual("proposer_id", addrs[0]),
+					)
+				}
+				fallthrough
+			case pack.FilterModeNotIn:
+				if len(addrs) > 1 {
+					q = q.OrCondition(
+						pack.NotIn("baker_id", addrs),
+						pack.NotIn("proposer_id", addrs),
+					)
+				}
+			default:
+				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
+			}
+
 		case "baker", "proposer":
-			field := table.Fields().Find("B") // baker id
-			if prefix == "proposer" {
-				field = table.Fields().Find("X") // proposer id
-			}
 			// parse baker address and lookup id
 			// valid filter modes: eq, in
 			// 1 resolve account_id from account table
@@ -511,12 +543,7 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty address matches id 0 (== missing baker)
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: field,
-						Mode:  mode,
-						Value: 0,
-						Raw:   val[0], // debugging aid
-					})
+					q = q.And(field, mode, 0)
 				} else {
 					// single-address lookup and compile condition
 					addr, err := tezos.ParseAddress(val[0])
@@ -525,24 +552,13 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					// Note: when not found we insert an always false condition
 					if acc == nil || acc.RowId == 0 {
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: field,
-							Mode:  mode,
-							Value: uint64(math.MaxUint64),
-							Raw:   "account not found", // debugging aid
-						})
+						q = q.And(field, mode, uint64(math.MaxUint64))
 					} else {
-						// add addr id as extra fund_flow condition
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: table.Fields().Find("B"), // baker id
-							Mode:  mode,
-							Value: acc.RowId,
-							Raw:   val[0], // debugging aid
-						})
+						q = q.And(field, mode, acc.RowId)
 					}
 				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
@@ -555,7 +571,7 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account
 					if acc == nil || acc.RowId == 0 {
@@ -566,12 +582,7 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: field,
-					Mode:  mode,
-					Value: ids,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, ids)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -581,12 +592,7 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 			if !period.IsValid() {
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid voting period '%s'", val[0]), nil))
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Find("k"),
-				Mode:  mode,
-				Value: period,
-				Raw:   val[0], // debugging aid
-			})
+			q = q.And(field, mode, period)
 		case "pct_account_reuse":
 			panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("cannot filter by columns '%s'", prefix), nil))
 		default:
@@ -605,7 +611,7 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 				case "cycle":
 					if v == "head" {
 						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
-						v = strconv.FormatInt(int64(currentCycle), 10)
+						v = strconv.FormatInt(currentCycle, 10)
 					}
 				case "volume", "reward", "fee", "deposit",
 					"minted_supply", "burned_supply", "activated_supply":
@@ -622,7 +628,7 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions.AddAndCondition(&cond)
+					q = q.AndCondition(cond)
 				}
 			}
 		}
@@ -648,24 +654,24 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 				Mode:  pack.FilterModeEqual,
 			},
 			Left: pack.JoinTable{
-				Table:    table,                                    // block table
-				Where:    q.Conditions,                             // use original query conds
-				Fields:   table.Fields().Select(joinFieldNames...), // use user-defined fields (i.e. short names)
-				FieldsAs: joinFieldNames,                           // keep field names (i.e. short names)
-				Limit:    q.Limit,                                  // use original limit
+				Table:  table,          // block table
+				Where:  q.Conditions,   // use original query conds
+				Cols:   joinFieldNames, // use user-defined fields (i.e. short names)
+				ColsAs: joinFieldNames, // keep field names (i.e. short names)
+				Limit:  q.Limit,        // use original limit
 			},
 			Right: pack.JoinTable{
-				Table:    table,                         // block table, no extra conditions
-				Fields:   table.Fields().Select("hash"), // field
-				FieldsAs: []string{"predecessor"},       // target name
+				Table:  table,                   // block table, no extra conditions
+				Cols:   []string{"hash"},        // field
+				ColsAs: []string{"predecessor"}, // target name
 			},
 		}
 
 		// clear query conditions
-		q.Conditions = pack.ConditionTreeNode{}
+		q.Conditions = pack.UnboundCondition{}
 		// log.Info(join.Dump())
 		// run join query, order is not yet supported
-		res, err = join.Query(ctx, pack.NewQuery("join", table).WithLimit(q.Limit).WithOrder(q.Order))
+		res, err = join.Query(ctx, pack.NewQuery("join").WithTable(table).WithLimit(q.Limit).WithOrder(q.Order))
 		if err != nil {
 			panic(server.EInternal(server.EC_DATABASE, "block table join failed", err))
 		}
@@ -681,7 +687,7 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 	// prepare return type marshalling
 	block := &Block{
 		verbose: args.Verbose,
-		columns: util.StringList(args.Columns),
+		columns: args.Columns,
 		params:  params,
 		ctx:     ctx,
 	}
@@ -696,11 +702,11 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 		enc.SetEscapeHTML(false)
 
 		// open JSON array
-		io.WriteString(ctx.ResponseWriter, "[")
+		_, _ = io.WriteString(ctx.ResponseWriter, "[")
 		// close JSON array on panic
 		defer func() {
 			if e := recover(); e != nil {
-				io.WriteString(ctx.ResponseWriter, "]")
+				_, _ = io.WriteString(ctx.ResponseWriter, "]")
 				panic(e)
 			}
 		}()
@@ -709,7 +715,7 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 		var needComma bool
 		process := func(r pack.Row) error {
 			if needComma {
-				io.WriteString(ctx.ResponseWriter, ",")
+				_, _ = io.WriteString(ctx.ResponseWriter, ",")
 			} else {
 				needComma = true
 			}
@@ -734,7 +740,7 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 		}
 
 		// close JSON bracket
-		io.WriteString(ctx.ResponseWriter, "]")
+		_, _ = io.WriteString(ctx.ResponseWriter, "]")
 		// ctx.Log.Tracef("JSON encoded %d rows", count)
 
 	case "csv":

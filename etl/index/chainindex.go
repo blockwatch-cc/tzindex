@@ -127,7 +127,8 @@ func (idx *ChainIndex) DisconnectBlock(ctx context.Context, block *model.Block, 
 
 func (idx *ChainIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting chain state at height %d", height)
-	_, err := pack.NewQuery("etl.chain.delete", idx.table).
+	_, err := pack.NewQuery("etl.chain.delete").
+		WithTable(idx.table).
 		AndEqual("height", height).
 		Delete(ctx)
 	return err
@@ -135,7 +136,8 @@ func (idx *ChainIndex) DeleteBlock(ctx context.Context, height int64) error {
 
 func (idx *ChainIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 	// log.Debugf("Rollback deleting chain cycle %d", cycle)
-	_, err := pack.NewQuery("etl.chain.delete", idx.table).
+	_, err := pack.NewQuery("etl.chain.delete").
+		WithTable(idx.table).
 		AndEqual("cycle", cycle).
 		Delete(ctx)
 	return err

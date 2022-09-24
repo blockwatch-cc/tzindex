@@ -127,7 +127,8 @@ func (idx *SupplyIndex) DisconnectBlock(ctx context.Context, block *model.Block,
 
 func (idx *SupplyIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting supply state at height %d", height)
-	_, err := pack.NewQuery("etl.supply.delete", idx.table).
+	_, err := pack.NewQuery("etl.supply.delete").
+		WithTable(idx.table).
 		AndEqual("height", height).
 		Delete(ctx)
 	return err
@@ -135,7 +136,8 @@ func (idx *SupplyIndex) DeleteBlock(ctx context.Context, height int64) error {
 
 func (idx *SupplyIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 	// log.Debugf("Rollback deleting supply for cycle %d", cycle)
-	_, err := pack.NewQuery("etl.supply.delete", idx.table).
+	_, err := pack.NewQuery("etl.supply.delete").
+		WithTable(idx.table).
 		AndEqual("cycle", cycle).
 		Delete(ctx)
 	return err

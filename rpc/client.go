@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -52,8 +51,12 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	key := u.Query().Get("X-Api-Key")
-	u.Query().Del("X-Api-Key")
+	q := u.Query()
+	key := q.Get("X-Api-Key")
+	if key != "" {
+		q.Del("X-Api-Key")
+		u.RawQuery = q.Encode()
+	}
 	c := &Client{
 		client:    httpClient,
 		BaseURL:   u,
@@ -143,7 +146,7 @@ func (c *Client) NewRequest(ctx context.Context, method, urlStr string, body int
 	return req, nil
 }
 
-func (c *Client) handleResponse(ctx context.Context, resp *http.Response, v interface{}) error {
+func (c *Client) handleResponse(resp *http.Response, v interface{}) error {
 	return json.NewDecoder(resp.Body).Decode(v)
 }
 
@@ -153,7 +156,7 @@ func (c *Client) handleResponseMonitor(ctx context.Context, resp *http.Response,
 
 	// close body when stream stopped
 	defer func() {
-		io.Copy(ioutil.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 	}()
 
@@ -194,7 +197,7 @@ func (c *Client) Do(req *http.Request, v interface{}) error {
 	mustClear := true
 	defer func() {
 		if mustClear {
-			io.Copy(ioutil.Discard, resp.Body)
+			_, _ = io.Copy(io.Discard, resp.Body)
 		}
 		resp.Body.Close()
 	}()
@@ -213,7 +216,7 @@ func (c *Client) Do(req *http.Request, v interface{}) error {
 		if v == nil {
 			return nil
 		}
-		err = c.handleResponse(req.Context(), resp, v)
+		err = c.handleResponse(resp, v)
 		if err != nil {
 			return err
 		}
@@ -227,6 +230,7 @@ func (c *Client) Do(req *http.Request, v interface{}) error {
 
 // DoAsync retrieves values from the API and sends responses using the provided monitor.
 func (c *Client) DoAsync(req *http.Request, mon Monitor) error {
+	//nolint:bodyclose
 	resp, err := c.client.Do(req)
 	if err != nil {
 		if e, ok := err.(*url.Error); ok {
@@ -236,7 +240,7 @@ func (c *Client) DoAsync(req *http.Request, mon Monitor) error {
 	}
 
 	if resp.StatusCode == http.StatusNoContent {
-		io.Copy(ioutil.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 		return nil
 	}
@@ -252,13 +256,13 @@ func (c *Client) DoAsync(req *http.Request, mon Monitor) error {
 	} else {
 		return handleError(resp)
 	}
-	io.Copy(ioutil.Discard, resp.Body)
+	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	return nil
 }
 
 func handleError(resp *http.Response) error {
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}

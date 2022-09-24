@@ -11,13 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/server"
+
+	"blockwatch.cc/packdb/util"
+	"blockwatch.cc/packdb/vec"
 )
 
 func init() {
@@ -280,7 +281,7 @@ func loadElection(ctx *server.Context) *model.Election {
 			err      error
 			election *model.Election
 		)
-		switch true {
+		switch {
 		case id == "head":
 			election, err = ctx.Indexer.ElectionByHeight(ctx.Context, ctx.Tip.BestHeight)
 		case strings.HasPrefix(id, tezos.HashTypeProtocol.Prefix()):
@@ -329,13 +330,15 @@ func loadStage(ctx *server.Context, election *model.Election, maxPeriods int) in
 	if s, ok := mux.Vars(ctx.Request)["stage"]; !ok || s == "" {
 		panic(server.EBadRequest(server.EC_RESOURCE_ID_MISSING, "missing voting period identifier", nil))
 	} else {
-		if i, err := strconv.Atoi(s); err != nil {
+		i, err := strconv.Atoi(s)
+		switch {
+		case err != nil:
 			panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, "invalid voting period identifier", err))
-		} else if i < 1 || i > maxPeriods {
+		case i < 1 || i > maxPeriods:
 			panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, "invalid voting period identifier", err))
-		} else if i > election.NumPeriods {
+		case i > election.NumPeriods:
 			panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "voting period does not exist", nil))
-		} else {
+		default:
 			stage = i
 		}
 	}
@@ -541,8 +544,7 @@ func ListBallots(ctx *server.Context) (interface{}, int) {
 	}
 
 	for _, v := range ballots {
-		o, _ := opMap[v.OpId]
-		b := NewBallot(ctx, v, ctx.Indexer.LookupProposalHash(ctx, v.ProposalId), o)
+		b := NewBallot(ctx, v, ctx.Indexer.LookupProposalHash(ctx, v.ProposalId), opMap[v.OpId])
 		resp.list = append(resp.list, b)
 		resp.modified = util.MaxTime(resp.modified, v.Time)
 	}

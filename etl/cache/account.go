@@ -5,7 +5,6 @@ package cache
 
 import (
 	"encoding/binary"
-	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -58,7 +57,6 @@ func (c *AccountCache) hashKey(typ tezos.AddressType, h []byte) uint64 {
 	buf[0] = byte(typ)
 	copy(buf[1:], h)
 	sum := xxhash.Sum64(buf)
-	buf = buf[:0]
 	hashKeyPool.Put(bufIf)
 	return sum
 }
@@ -102,7 +100,7 @@ func (c *AccountCache) GetAddress(addr tezos.Address) (uint64, *model.Account, b
 		return key, nil, false
 	}
 	acc := model.AllocAccount()
-	acc.UnmarshalBinary(val.([]byte))
+	_ = acc.UnmarshalBinary(val.([]byte))
 	// cross-check for hash collisions
 	if acc.RowId == 0 || !acc.Address.Equal(addr) {
 		acc.Free()
@@ -126,7 +124,7 @@ func (c *AccountCache) GetId(id model.AccountID) (uint64, *model.Account, bool) 
 		return key, nil, false
 	}
 	acc := model.AllocAccount()
-	acc.UnmarshalBinary(val.([]byte))
+	_ = acc.UnmarshalBinary(val.([]byte))
 	// cross-check for hash collisions
 	if acc.RowId != id {
 		acc.Free()
@@ -160,7 +158,7 @@ func (c *AccountCache) Walk(fn func(key uint64, acc *model.Account) error) error
 	for _, key := range c.cache.Keys() {
 		val, ok := c.cache.Peek(key)
 		if !ok {
-			return fmt.Errorf("missing cache key %w", key)
+			continue
 		}
 		if err := acc.UnmarshalBinary(val.([]byte)); err != nil {
 			return err

@@ -165,7 +165,8 @@ func (idx *BalanceIndex) DisconnectBlock(ctx context.Context, block *model.Block
 }
 
 func (idx *BalanceIndex) DeleteBlock(ctx context.Context, height int64) error {
-    _, err := pack.NewQuery("etl.balance.delete", idx.table).
+    _, err := pack.NewQuery("etl.balance.delete").
+        WithTable(idx.table).
         AndEqual("valid_until", height).
         Delete(ctx)
     return err

@@ -16,3 +16,12 @@ type SeedNonce struct {
 	Level int64          `json:"level"`
 	Nonce tezos.HexBytes `json:"nonce"`
 }
+
+// Ensure VdfRevelation implements the TypedOperation interface.
+var _ TypedOperation = (*VdfRevelation)(nil)
+
+// VdfRevelation represents a vdf_revelation operation
+type VdfRevelation struct {
+	Generic
+	Solution []tezos.HexBytes `json:"solution"`
+}

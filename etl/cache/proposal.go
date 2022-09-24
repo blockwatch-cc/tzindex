@@ -55,7 +55,8 @@ func (c *ProposalCache) Build(ctx context.Context, table *pack.Table) error {
     }
     c.stats.CountUpdates(1)
     p := XProposal{}
-    return pack.NewQuery("init_cache", table).
+    return pack.NewQuery("init_cache").
+        WithTable(table).
         WithoutCache().
         WithFields("row_id", "hash").
         Stream(ctx, func(r pack.Row) error {

@@ -1,6 +1,5 @@
 // Copyright (c) 2021 Blockwatch Data Inc.
 // Authors: abdul@blockwatch.cc, alex@blockwatch.cc
-//
 package main
 
 import (
@@ -21,7 +20,7 @@ func NewView(n string, x1, y1, x2, y2 int, g *gocui.Gui, fn func(v *gocui.View, 
 	if !errors.Is(err, gocui.ErrUnknownView) {
 		return nil, err
 	}
-	fn(v, Model{})
+	_ = fn(v, Model{})
 	return &View{
 		Name: n,
 		v:    v,

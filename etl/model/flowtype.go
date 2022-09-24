@@ -86,6 +86,7 @@ const (
 	FlowTypeRollupTransaction                 // 19 - Jakarta+
 	FlowTypeRollupReward                      // 20 - Jakarta+
 	FlowTypeRollupPenalty                     // 21 - Jakarta+
+	FlowTypePayStorage                        // 22 - Kathmandu+
 	FlowTypeInvalid           = 255
 )
 
@@ -113,6 +114,7 @@ var (
 		FlowTypeRollupTransaction: "rollup_transaction",
 		FlowTypeRollupReward:      "rollup_reward",
 		FlowTypeRollupPenalty:     "rollup_penalty",
+		FlowTypePayStorage:        "pay_storage",
 		FlowTypeInvalid:           "invalid",
 	}
 	flowTypeReverseStrings = make(map[string]FlowType)
@@ -172,7 +174,7 @@ func MapFlowType(typ OpType) FlowType {
 	case OpTypeEndorsement,
 		OpTypePreendorsement:
 		return FlowTypeEndorsement
-	case OpTypeNonceRevelation:
+	case OpTypeNonceRevelation, OpTypeVdfRevelation:
 		return FlowTypeNonceRevelation
 	case OpTypeInvoice:
 		return FlowTypeInvoice
@@ -186,6 +188,8 @@ func MapFlowType(typ OpType) FlowType {
 		return FlowTypeRollupOrigination
 	case OpTypeRollupTransaction:
 		return FlowTypeRollupTransaction
+	case OpTypeIncreasePaidStorage:
+		return FlowTypePayStorage
 	default:
 		return FlowTypeInvalid
 	}

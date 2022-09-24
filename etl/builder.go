@@ -75,7 +75,7 @@ func (b *Builder) CacheStats() map[string]interface{} {
 	return stats
 }
 
-func (b *Builder) RegisterBaker(acc *model.Account, activate bool) *model.Baker {
+func (b *Builder) RegisterBaker(acc *model.Account, enable bool) *model.Baker {
 	// update state for already registered bakers
 	baker, ok := b.bakerMap[acc.RowId]
 	if ok {
@@ -103,10 +103,11 @@ func (b *Builder) RegisterBaker(acc *model.Account, activate bool) *model.Baker 
 	baker.InitGracePeriod(b.block.Cycle, b.block.Params)
 	baker.IsDirty = true
 
-	// only activate when explicitly requested, this ensures we can
-	// track origination bug bakers through protocol v001 until v002 migration
-	if activate {
-		b.ActivateBaker(baker)
+	// track active but non-enabled bakers when explicitly requested,
+	// this ensures we know origination bug bakers from protocol v001
+	// and can handle them during v002 migration
+	b.ActivateBaker(baker)
+	if enable {
 		acc.BakerId = acc.RowId
 	}
 
@@ -358,16 +359,16 @@ func (b *Builder) Clean() {
 	}
 
 	// clear build state, keep allocated maps around
-	for n, _ := range b.accHashMap {
+	for n := range b.accHashMap {
 		delete(b.accHashMap, n)
 	}
-	for n, _ := range b.accMap {
+	for n := range b.accMap {
 		delete(b.accMap, n)
 	}
 	for _, v := range b.conMap {
 		v.IsDirty = false
 	}
-	for n, _ := range b.absentEndorsers {
+	for n := range b.absentEndorsers {
 		delete(b.absentEndorsers, n)
 	}
 	// for n, _ := range b.conMap {
@@ -476,25 +477,25 @@ func (b *Builder) CleanReorg() {
 	}
 
 	// clear build state
-	for n, _ := range b.accHashMap {
+	for n := range b.accHashMap {
 		delete(b.accHashMap, n)
 	}
-	for n, _ := range b.accMap {
+	for n := range b.accMap {
 		delete(b.accMap, n)
 	}
-	for n, _ := range b.conMap {
+	for n := range b.conMap {
 		delete(b.conMap, n)
 	}
 	b.constDict = nil
 
 	// clear rights
-	for n, _ := range b.bakeRights {
+	for n := range b.bakeRights {
 		delete(b.bakeRights, n)
 	}
-	for n, _ := range b.endorseRights {
+	for n := range b.endorseRights {
 		delete(b.endorseRights, n)
 	}
-	for n, _ := range b.absentEndorsers {
+	for n := range b.absentEndorsers {
 		delete(b.absentEndorsers, n)
 	}
 
@@ -528,7 +529,6 @@ func (b *Builder) CleanReorg() {
 //
 // The code below takes care of this fact and matches by both type+hash. In the
 // worst case we fetch an undesired address more, but we'll never use it.
-//
 func (b *Builder) InitAccounts(ctx context.Context) error {
 	// collect unique accounts/addresses
 	addresses := tezos.NewAddressSet()
@@ -541,8 +541,14 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 		}
 	}
 
+	// collect from block-level balance updates if invoice is found
+	block := b.block.TZ.Block
+	if inv, ok := block.Invoice(); ok {
+		addUnique(inv.Address())
+	}
+
 	// collect from ops
-	for _, oll := range b.block.TZ.Block.Operations {
+	for _, oll := range block.Operations {
 		for _, oh := range oll {
 			// check for pruned metadata
 			if len(oh.Metadata) > 0 {
@@ -577,6 +583,11 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 						addresses.AddUnique(v)
 					}
 
+					// add addresses found in storage and bigmap updates
+					// most of these when not exist are ghost accounts
+					// that receive L2 tokens
+					orig.FindEmbeddedAddresses(addresses)
+
 				case tezos.OpTypeReveal:
 					addUnique(op.(*rpc.Reveal).Source)
 
@@ -591,6 +602,7 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 							addresses.AddUnique(v)
 						}
 					}
+					tx.FindEmbeddedAddresses(addresses)
 
 				case tezos.OpTypeRegisterConstant:
 					addUnique(op.(*rpc.ConstantRegistration).Source)
@@ -603,6 +615,7 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 					// case tezos.OpTypeDoubleEndorsementEvidence:
 					// case tezos.OpTypeDoublePreendorsementEvidence:
 					// case tezos.OpTypeEndorsement, tezos.OpTypeEndorsementWithSlot:
+					// case tezos.OpTypeVdfRevelation:
 				case tezos.OpTypeSetDepositsLimit:
 					// successful ops have a baker, but failed ops may use
 					// a non-baker account
@@ -610,6 +623,10 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 					if !dop.Result().Status.IsSuccess() {
 						addUnique(dop.Source)
 					}
+				case tezos.OpTypeIncreasePaidStorage:
+					tx := op.(*rpc.IncreasePaidStorage)
+					addUnique(tx.Source)
+					addUnique(tx.Destination)
 
 				case tezos.OpTypeTransferTicket,
 					tezos.OpTypeToruOrigination,
@@ -619,7 +636,17 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 					tezos.OpTypeToruFinalizeCommitment,
 					tezos.OpTypeToruRemoveCommitment,
 					tezos.OpTypeToruRejection,
-					tezos.OpTypeToruDispatchTickets:
+					tezos.OpTypeToruDispatchTickets,
+					tezos.OpTypeScRollupAddMessages,
+					tezos.OpTypeScRollupCement,
+					tezos.OpTypeScRollupPublish,
+					tezos.OpTypeScRollupRefute,
+					tezos.OpTypeScRollupTimeout,
+					tezos.OpTypeScRollupExecuteOutboxMessage,
+					tezos.OpTypeScRollupRecoverBond,
+					tezos.OpTypeScRollupDalSlotSubscribe,
+					tezos.OpTypeDalSlotAvailability,
+					tezos.OpTypeDalPublishSlotHeader:
 
 					tx := op.(*rpc.Rollup)
 					addUnique(tx.Source)
@@ -628,18 +655,14 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 					if bal := tx.Metadata.Result.BalanceUpdates; len(bal) > 0 {
 						addUnique(bal[0].Address()) // offender
 					}
-					// log.Infof("Found %s in block %d", kind, b.block.Height)
-					// case tezos.OpTypeScruOriginate,
-					// 	tezos.OpTypeScruAdd_messages,
-					// 	tezos.OpTypeScruCement,
-					// 	tezos.OpTypeScruPublish:
+					log.Debugf("Found %s in block %d", kind, b.block.Height)
 				}
 			}
 		}
 	}
 
 	// collect from implicit block ops
-	for i, op := range b.block.TZ.Block.Metadata.ImplicitOperationsResults {
+	for i, op := range block.Metadata.ImplicitOperationsResults {
 		switch op.Kind {
 		case tezos.OpTypeOrigination:
 			for _, v := range op.OriginatedContracts {
@@ -706,7 +729,8 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 		return err
 	}
 	if len(lookup) > 0 {
-		err = pack.NewQuery("etl.addr_hash.search", table).
+		err = pack.NewQuery("etl.addr_hash.search").
+			WithTable(table).
 			AndIn("address", lookup).
 			Stream(ctx, func(r pack.Row) error {
 				acc := model.AllocAccount()
@@ -862,10 +886,10 @@ func (b *Builder) LoadAbsentRightsHolders(ctx context.Context) error {
 		}
 
 		// 2 drop past cycle rights
-		for n, _ := range b.bakeRights {
+		for n := range b.bakeRights {
 			delete(b.bakeRights, n)
 		}
-		for n, _ := range b.endorseRights {
+		for n := range b.endorseRights {
 			delete(b.endorseRights, n)
 		}
 
@@ -874,7 +898,8 @@ func (b *Builder) LoadAbsentRightsHolders(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		err = pack.NewQuery("load_cycle_rights", rights).
+		err = pack.NewQuery("load_cycle_rights").
+			WithTable(rights).
 			WithFields("account_id", "baking_rights", "endorsing_rights").
 			AndEqual("cycle", b.block.Cycle).
 			Stream(ctx, func(r pack.Row) error {
@@ -908,7 +933,7 @@ func (b *Builder) LoadAbsentRightsHolders(ctx context.Context) error {
 	// produce absentee list in block
 	if l := len(b.absentEndorsers); l > 0 {
 		b.block.AbsentEndorsers = make([]model.AccountID, 0, l)
-		for n, _ := range b.absentEndorsers {
+		for n := range b.absentEndorsers {
 			b.block.AbsentEndorsers = append(b.block.AbsentEndorsers, n)
 		}
 	}
@@ -967,27 +992,27 @@ func (b *Builder) OnUpgrade(ctx context.Context, rollback bool) error {
 	parentProtocol := b.parent.TZ.Block.Metadata.Protocol
 	blockProtocol := b.block.TZ.Block.Metadata.Protocol
 	if !parentProtocol.Equal(blockProtocol) {
+		prev, err := b.idx.ParamsByProtocol(parentProtocol)
+		if err != nil {
+			return err
+		}
+
 		if !rollback {
 			// register new protocol (will save as new deployment)
 			log.Infof("New protocol %s detected at %d", blockProtocol, b.block.Height)
-			b.block.Params.StartHeight = b.block.Height
-			if err := b.idx.ConnectProtocol(ctx, b.block.Params); err != nil {
+			if err := b.idx.ConnectProtocol(ctx, b.block.Params, prev); err != nil {
 				return err
 			}
 		}
 
-		prevparams, err := b.idx.ParamsByProtocol(parentProtocol)
-		if err != nil {
-			return err
-		}
-		nextparams, err := b.idx.ParamsByProtocol(blockProtocol)
+		next, err := b.idx.ParamsByProtocol(blockProtocol)
 		if err != nil {
 			return err
 		}
 
 		// special actions on protocol upgrades
 		if !rollback {
-			err := b.MigrateProtocol(ctx, prevparams, nextparams)
+			err := b.MigrateProtocol(ctx, prev, next)
 			if err != nil {
 				return err
 			}
@@ -995,7 +1020,7 @@ func (b *Builder) OnUpgrade(ctx context.Context, rollback bool) error {
 
 	} else if b.block.Params != nil && b.block.Params.IsCycleStart(b.block.Height) {
 		// update params at start of cycle (to capture early ramp up data)
-		b.idx.reg.Register(b.block.Params)
+		_ = b.idx.reg.Register(b.block.Params)
 	}
 	return nil
 }

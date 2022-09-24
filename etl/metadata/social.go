@@ -27,6 +27,10 @@ const (
   		},
 		"github": {
 		  "type": "string"
+  		},
+  		"website": {
+  			"type": "string",
+  			"format": "uri-reference"
   		}
 	}
 }`
@@ -37,6 +41,7 @@ type Social struct {
 	Instagram string `json:"instagram,omitempty"`
 	Reddit    string `json:"reddit,omitempty"`
 	Github    string `json:"github,omitempty"`
+	Website   string `json:"website,omitempty"`
 }
 
 func (d Social) Namespace() string {

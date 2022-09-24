@@ -6,6 +6,7 @@ package model
 import (
 	"time"
 
+	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
 )
 
@@ -34,7 +35,7 @@ type Deployment struct {
 func (t *ChainTip) AddDeployment(p *tezos.Params) {
 	// set end height for previous deployment
 	if l := len(t.Deployments); l > 0 {
-		t.Deployments[l-1].EndHeight = p.StartHeight - 1
+		t.Deployments[l-1].EndHeight = util.Max64(0, p.StartHeight-1)
 	}
 	t.Deployments = append(t.Deployments, Deployment{
 		Protocol:    p.Protocol,

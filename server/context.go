@@ -230,7 +230,7 @@ func (api *Context) handleError(e error) {
 			}
 		}
 	}
-	re.SetScope(api.name)
+	_ = re.SetScope(api.name)
 	re.RequestId = api.RequestID
 	re.Reason = "" // clear internal error
 	api.err = re
@@ -298,7 +298,7 @@ func (api *Context) sendResponse() {
 		// return error response when connection is still alive
 		if err.Cause == nil || err.Cause != context.Canceled {
 			api.writeResponseHeaders("", "")
-			api.ResponseWriter.Write(err.MarshalIndent())
+			_, _ = api.ResponseWriter.Write(err.MarshalIndent())
 		}
 	}
 }
@@ -450,11 +450,11 @@ func (api *Context) writeResponseBody() {
 	if api.result != nil {
 		switch t := api.result.(type) {
 		case string:
-			api.ResponseWriter.Write([]byte(t))
+			_, _ = api.ResponseWriter.Write([]byte(t))
 		case *string:
-			api.ResponseWriter.Write([]byte(*t))
+			_, _ = api.ResponseWriter.Write([]byte(*t))
 		case []byte:
-			api.ResponseWriter.Write(t)
+			_, _ = api.ResponseWriter.Write(t)
 		default:
 			// marshal and write the result to the HTTP body
 			if b, err := json.Marshal(api.result); err != nil {
@@ -465,14 +465,14 @@ func (api *Context) writeResponseBody() {
 				}, " ")
 				api.Log.Errorf("Response Error %s: %v in struct %T", path, err, api.result)
 				e := EInternal(EC_MARSHAL_FAILED, "cannot marshal response", err).(*Error)
-				e.SetScope(api.name)
+				_ = e.SetScope(api.name)
 				if api.isStreamed {
 					api.ResponseWriter.Header().Set(trailerError, e.String())
 				} else {
-					api.ResponseWriter.Write(e.Marshal())
+					_, _ = api.ResponseWriter.Write(e.Marshal())
 				}
 			} else {
-				api.ResponseWriter.Write(append(b, '\n'))
+				_, _ = api.ResponseWriter.Write(append(b, '\n'))
 			}
 		}
 	}

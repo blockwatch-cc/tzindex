@@ -367,10 +367,10 @@ func (m *Indexer) updateAddrs(ctx context.Context, accounts map[model.AccountID]
 	return nil
 }
 
-func (m *Indexer) reloadAddrs(ctx context.Context) error {
-	m.addrs.Store(nil)
-	return m.updateAddrs(ctx, nil)
-}
+// func (m *Indexer) reloadAddrs(ctx context.Context) error {
+// 	m.addrs.Store(nil)
+// 	return m.updateAddrs(ctx, nil)
+// }
 
 func (m *Indexer) getProposals(ctx context.Context) (*cache.ProposalCache, error) {
 	if m.lightMode {

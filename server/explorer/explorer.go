@@ -247,66 +247,53 @@ type BlockchainConfig struct {
 	EndHeight   int64              `json:"end_height"`
 	Decimals    int                `json:"decimals"`
 	Token       int64              `json:"units"`
-	// extra
-	NumVotingPeriods int   `json:"num_voting_periods"`
-	MaxOperationsTTL int64 `json:"max_operations_ttl"`
 
-	// may change with protocol updates
-	BlockReward                       float64     `json:"block_reward"`
-	BlockSecurityDeposit              float64     `json:"block_security_deposit,omitempty"`
-	BlocksPerCommitment               int64       `json:"blocks_per_commitment"`
-	BlocksPerCycle                    int64       `json:"blocks_per_cycle"`
-	BlocksPerSnapshot                 int64       `json:"blocks_per_snapshot,omitempty"`
-	BlocksPerVotingPeriod             int64       `json:"blocks_per_voting_period"`
-	CostPerByte                       int64       `json:"cost_per_byte"`
-	EndorsementReward                 float64     `json:"endorsement_reward"`
-	EndorsementSecurityDeposit        float64     `json:"endorsement_security_deposit,omitempty"`
-	EndorsersPerBlock                 int         `json:"endorsers_per_block,omitempty"`
-	HardGasLimitPerBlock              int64       `json:"hard_gas_limit_per_block"`
-	HardGasLimitPerOperation          int64       `json:"hard_gas_limit_per_operation"`
-	HardStorageLimitPerOperation      int64       `json:"hard_storage_limit_per_operation"`
-	MaxOperationDataLength            int         `json:"max_operation_data_length"`
-	MaxProposalsPerDelegate           int         `json:"max_proposals_per_delegate"`
-	MaxRevelationsPerBlock            int         `json:"max_revelations_per_block,omitempty"`
-	MichelsonMaximumTypeSize          int         `json:"michelson_maximum_type_size"`
-	NonceLength                       int         `json:"nonce_length"`
-	OriginationBurn                   float64     `json:"origination_burn,omitempty"`
-	OriginationSize                   int64       `json:"origination_size,omitempty"`
-	PreservedCycles                   int64       `json:"preserved_cycles"`
-	ProofOfWorkNonceSize              int         `json:"proof_of_work_nonce_size"`
-	ProofOfWorkThreshold              int64       `json:"proof_of_work_threshold"`
-	SeedNonceRevelationTip            float64     `json:"seed_nonce_revelation_tip"`
-	TimeBetweenBlocks                 *[2]int     `json:"time_between_blocks,omitempty"`
-	TokensPerRoll                     float64     `json:"tokens_per_roll"`
-	TestChainDuration                 int64       `json:"test_chain_duration,omitempty"`
-	MinProposalQuorum                 int64       `json:"min_proposal_quorum,omitempty"`
-	QuorumMin                         int64       `json:"quorum_min,omitempty"`
-	QuorumMax                         int64       `json:"quorum_max,omitempty"`
-	BlockRewardV6                     *[2]float64 `json:"block_rewards_v6,omitempty"`
-	EndorsementRewardV6               *[2]float64 `json:"endorsement_rewards_v6,omitempty"`
-	MaxAnonOpsPerBlock                int         `json:"max_anon_ops_per_block,omitempty"`
-	LiquidityBakingEscapeEmaThreshold int64       `json:"liquidity_baking_escape_ema_threshold,omitempty"`
-	LiquidityBakingSubsidy            int64       `json:"liquidity_baking_subsidy,omitempty"`
-	LiquidityBakingSunsetLevel        int64       `json:"liquidity_baking_sunset_level,omitempty"`
-	MinimalBlockDelay                 int         `json:"minimal_block_delay"`
+	TokensPerRoll       float64 `json:"tokens_per_roll"`
+	PreservedCycles     int64   `json:"preserved_cycles"`
+	BlocksPerCommitment int64   `json:"blocks_per_commitment"`
+	BlocksPerCycle      int64   `json:"blocks_per_cycle"`
+	BlocksPerSnapshot   int64   `json:"blocks_per_snapshot,omitempty"`
 
-	// New in Hangzhou v011
-	MaxMichelineNodeCount          int `json:"max_micheline_node_count,omitempty"`
-	MaxMichelineBytesLimit         int `json:"max_micheline_bytes_limit,omitempty"`
-	MaxAllowedGlobalConstantsDepth int `json:"max_allowed_global_constants_depth,omitempty"`
+	// timing
+	TimeBetweenBlocks      *[2]int `json:"time_between_blocks,omitempty"`
+	MinimalBlockDelay      int     `json:"minimal_block_delay"`
+	DelayIncrementPerRound int     `json:"delay_increment_per_round,omitempty"`
 
-	// New in Ithaca v012
-	BakingRewardFixedPortion                         int64        `json:"baking_reward_fixed_portion,omitempty"`
-	BakingRewardBonusPerSlot                         int64        `json:"baking_reward_bonus_per_slot,omitempty"`
-	EndorsingRewardPerSlot                           int64        `json:"endorsing_reward_per_slot,omitempty"`
-	DelayIncrementPerRound                           int          `json:"delay_increment_per_round,omitempty"`
-	ConsensusCommitteeSize                           int          `json:"consensus_committee_size,omitempty"`
-	ConsensusThreshold                               int          `json:"consensus_threshold,omitempty"`
-	MinimalParticipationRatio                        *tezos.Ratio `json:"minimal_participation_ratio,omitempty"`
-	MaxSlashingPeriod                                int64        `json:"max_slashing_period,omitempty"`
-	FrozenDepositsPercentage                         int          `json:"frozen_deposits_percentage,omitempty"`
-	DoubleBakingPunishment                           int64        `json:"double_baking_punishment,omitempty"`
-	RatioOfFrozenDepositsSlashedPerDoubleEndorsement *tezos.Ratio `json:"ratio_of_frozen_deposits_slashed_per_double_endorsement,omitempty"`
+	// rewards
+	BlockReward              float64     `json:"block_reward"`
+	EndorsementReward        float64     `json:"endorsement_reward"`
+	BlockRewardV6            *[2]float64 `json:"block_rewards_v6,omitempty"`
+	EndorsementRewardV6      *[2]float64 `json:"endorsement_rewards_v6,omitempty"`
+	SeedNonceRevelationTip   float64     `json:"seed_nonce_revelation_tip"`
+	BakingRewardFixedPortion int64       `json:"baking_reward_fixed_portion,omitempty"`
+	BakingRewardBonusPerSlot int64       `json:"baking_reward_bonus_per_slot,omitempty"`
+	EndorsingRewardPerSlot   int64       `json:"endorsing_reward_per_slot,omitempty"`
+
+	// costs
+	OriginationBurn            float64 `json:"origination_burn,omitempty"`
+	OriginationSize            int64   `json:"origination_size,omitempty"`
+	CostPerByte                int64   `json:"cost_per_byte"`
+	BlockSecurityDeposit       float64 `json:"block_security_deposit,omitempty"`
+	EndorsementSecurityDeposit float64 `json:"endorsement_security_deposit,omitempty"`
+	FrozenDepositsPercentage   int     `json:"frozen_deposits_percentage,omitempty"`
+
+	// limits
+	MichelsonMaximumTypeSize     int   `json:"michelson_maximum_type_size"`
+	EndorsersPerBlock            int   `json:"endorsers_per_block,omitempty"`
+	HardGasLimitPerBlock         int64 `json:"hard_gas_limit_per_block"`
+	HardGasLimitPerOperation     int64 `json:"hard_gas_limit_per_operation"`
+	HardStorageLimitPerOperation int64 `json:"hard_storage_limit_per_operation"`
+	MaxOperationDataLength       int   `json:"max_operation_data_length"`
+	MaxOperationsTTL             int64 `json:"max_operations_ttl"`
+	ConsensusCommitteeSize       int   `json:"consensus_committee_size,omitempty"`
+	ConsensusThreshold           int   `json:"consensus_threshold,omitempty"`
+
+	// voting
+	NumVotingPeriods      int   `json:"num_voting_periods"`
+	BlocksPerVotingPeriod int64 `json:"blocks_per_voting_period"`
+	MinProposalQuorum     int64 `json:"min_proposal_quorum,omitempty"`
+	QuorumMin             int64 `json:"quorum_min,omitempty"`
+	QuorumMax             int64 `json:"quorum_max,omitempty"`
 
 	timestamp time.Time `json:"-"`
 	expires   time.Time `json:"-"`
@@ -324,65 +311,62 @@ func GetBlockchainConfig(ctx *server.Context) (interface{}, int) {
 	b := loadBlock(ctx)
 	p := ctx.Crawler.ParamsByHeight(b.Height)
 	cfg := BlockchainConfig{
-		Name:                              p.Name,
-		Network:                           p.Network,
-		Symbol:                            p.Symbol,
-		ChainId:                           p.ChainId,
-		Deployment:                        p.Deployment,
-		Version:                           p.Version,
-		Protocol:                          p.Protocol,
-		StartHeight:                       p.StartHeight,
-		EndHeight:                         p.EndHeight,
-		Decimals:                          p.Decimals,
-		Token:                             p.Token,
-		NumVotingPeriods:                  p.NumVotingPeriods,
-		MaxOperationsTTL:                  p.MaxOperationsTTL,
-		BlockReward:                       p.ConvertValue(p.BlockReward),
-		BlockSecurityDeposit:              p.ConvertValue(p.BlockSecurityDeposit),
-		BlocksPerCommitment:               p.BlocksPerCommitment,
-		BlocksPerCycle:                    p.BlocksPerCycle,
-		BlocksPerSnapshot:                 p.SnapshotBlocks(),
-		BlocksPerVotingPeriod:             p.BlocksPerVotingPeriod,
-		CostPerByte:                       p.CostPerByte,
-		EndorsementReward:                 p.ConvertValue(p.EndorsementReward),
-		EndorsementSecurityDeposit:        p.ConvertValue(p.EndorsementSecurityDeposit),
-		EndorsersPerBlock:                 p.EndorsersPerBlock,
-		HardGasLimitPerBlock:              p.HardGasLimitPerBlock,
-		HardGasLimitPerOperation:          p.HardGasLimitPerOperation,
-		HardStorageLimitPerOperation:      p.HardStorageLimitPerOperation,
-		MaxOperationDataLength:            p.MaxOperationDataLength,
-		MaxProposalsPerDelegate:           p.MaxProposalsPerDelegate,
-		MaxRevelationsPerBlock:            p.MaxRevelationsPerBlock,
-		MichelsonMaximumTypeSize:          p.MichelsonMaximumTypeSize,
-		NonceLength:                       p.NonceLength,
-		OriginationBurn:                   p.ConvertValue(p.OriginationBurn),
-		OriginationSize:                   p.OriginationSize,
-		PreservedCycles:                   p.PreservedCycles,
-		ProofOfWorkNonceSize:              p.ProofOfWorkNonceSize,
-		ProofOfWorkThreshold:              p.ProofOfWorkThreshold,
-		SeedNonceRevelationTip:            p.ConvertValue(p.SeedNonceRevelationTip),
-		TokensPerRoll:                     p.ConvertValue(p.TokensPerRoll),
-		TestChainDuration:                 p.TestChainDuration,
-		MinProposalQuorum:                 p.MinProposalQuorum,
-		QuorumMin:                         p.QuorumMin,
-		QuorumMax:                         p.QuorumMax,
-		MaxAnonOpsPerBlock:                p.MaxAnonOpsPerBlock,
-		LiquidityBakingEscapeEmaThreshold: p.LiquidityBakingEscapeEmaThreshold,
-		LiquidityBakingSubsidy:            p.LiquidityBakingSubsidy,
-		LiquidityBakingSunsetLevel:        p.LiquidityBakingSunsetLevel,
-		MinimalBlockDelay:                 int(p.MinimalBlockDelay / time.Second),
-		MaxMichelineNodeCount:             p.MaxMichelineNodeCount,
-		MaxMichelineBytesLimit:            p.MaxMichelineBytesLimit,
-		MaxAllowedGlobalConstantsDepth:    p.MaxAllowedGlobalConstantsDepth,
-		BakingRewardFixedPortion:          p.BakingRewardFixedPortion,
-		BakingRewardBonusPerSlot:          p.BakingRewardBonusPerSlot,
-		EndorsingRewardPerSlot:            p.EndorsingRewardPerSlot,
-		DelayIncrementPerRound:            int(p.DelayIncrementPerRound / time.Second),
-		ConsensusCommitteeSize:            p.ConsensusCommitteeSize,
-		ConsensusThreshold:                p.ConsensusThreshold,
-		MaxSlashingPeriod:                 p.MaxSlashingPeriod,
-		FrozenDepositsPercentage:          p.FrozenDepositsPercentage,
-		DoubleBakingPunishment:            p.DoubleBakingPunishment,
+		Name:        p.Name,
+		Network:     p.Network,
+		Symbol:      p.Symbol,
+		ChainId:     p.ChainId,
+		Deployment:  p.Deployment,
+		Version:     p.Version,
+		Protocol:    p.Protocol,
+		StartHeight: p.StartHeight,
+		EndHeight:   p.EndHeight,
+		Decimals:    p.Decimals,
+		Token:       p.Token,
+
+		// main
+		TokensPerRoll:       p.ConvertValue(p.TokensPerRoll),
+		PreservedCycles:     p.PreservedCycles,
+		BlocksPerCommitment: p.BlocksPerCommitment,
+		BlocksPerCycle:      p.BlocksPerCycle,
+		BlocksPerSnapshot:   p.SnapshotBlocks(),
+
+		// timing
+		MinimalBlockDelay:      int(p.MinimalBlockDelay / time.Second),
+		DelayIncrementPerRound: int(p.DelayIncrementPerRound / time.Second),
+
+		// rewards
+		BlockReward:              p.ConvertValue(p.BlockReward),
+		EndorsementReward:        p.ConvertValue(p.EndorsementReward),
+		SeedNonceRevelationTip:   p.ConvertValue(p.SeedNonceRevelationTip),
+		BakingRewardFixedPortion: p.BakingRewardFixedPortion,
+		BakingRewardBonusPerSlot: p.BakingRewardBonusPerSlot,
+		EndorsingRewardPerSlot:   p.EndorsingRewardPerSlot,
+
+		// costs
+		CostPerByte:                p.CostPerByte,
+		OriginationBurn:            p.ConvertValue(p.OriginationBurn),
+		OriginationSize:            p.OriginationSize,
+		BlockSecurityDeposit:       p.ConvertValue(p.BlockSecurityDeposit),
+		EndorsementSecurityDeposit: p.ConvertValue(p.EndorsementSecurityDeposit),
+		FrozenDepositsPercentage:   p.FrozenDepositsPercentage,
+
+		// limits
+		MichelsonMaximumTypeSize:     p.MichelsonMaximumTypeSize,
+		EndorsersPerBlock:            p.EndorsersPerBlock,
+		HardGasLimitPerBlock:         p.HardGasLimitPerBlock,
+		HardGasLimitPerOperation:     p.HardGasLimitPerOperation,
+		HardStorageLimitPerOperation: p.HardStorageLimitPerOperation,
+		MaxOperationDataLength:       p.MaxOperationDataLength,
+		MaxOperationsTTL:             p.MaxOperationsTTL,
+		ConsensusCommitteeSize:       p.ConsensusCommitteeSize,
+		ConsensusThreshold:           p.ConsensusThreshold,
+
+		// voting
+		NumVotingPeriods:      p.NumVotingPeriods,
+		BlocksPerVotingPeriod: p.BlocksPerVotingPeriod,
+		MinProposalQuorum:     p.MinProposalQuorum,
+		QuorumMin:             p.QuorumMin,
+		QuorumMax:             p.QuorumMax,
 
 		timestamp: ctx.Tip.BestTime,
 		expires:   ctx.Tip.BestTime.Add(p.BlockTime()),
@@ -405,13 +389,6 @@ func GetBlockchainConfig(ctx *server.Context) (interface{}, int) {
 		}
 	}
 
-	if p.MinimalParticipationRatio.Float64() > 0 {
-		cfg.MinimalParticipationRatio = &p.MinimalParticipationRatio
-	}
-	if p.RatioOfFrozenDepositsSlashedPerDoubleEndorsement.Float64() > 0 {
-		cfg.RatioOfFrozenDepositsSlashedPerDoubleEndorsement = &p.RatioOfFrozenDepositsSlashedPerDoubleEndorsement
-	}
-
 	return cfg, http.StatusOK
 }
 
@@ -419,14 +396,13 @@ func GetBlockchainConfig(ctx *server.Context) (interface{}, int) {
 //
 // Result [0..100]
 //
-// Factor                  Penalty      Comment
+// # Factor                  Penalty      Comment
 //
 // missed priorities       2            also translates past due blocks into missed prio
 // missed endorsements     50/size
 // double-x                10           TODO
 //
 // Decay function: x^(1/n)
-//
 func estimateHealth(ctx *server.Context, height, history int64) int {
 	nowheight := ctx.Tip.BestHeight
 	params := ctx.Params
@@ -444,7 +420,8 @@ func estimateHealth(ctx *server.Context, height, history int64) int {
 		return 0
 	}
 	b := &model.Block{}
-	err = pack.NewQuery("health.blocks", blocks).
+	err = pack.NewQuery("health.blocks").
+		WithTable(blocks).
 		WithDesc().
 		WithLimit(int(history)).
 		AndGt("height", height-history).
@@ -462,10 +439,10 @@ func estimateHealth(ctx *server.Context, height, history int64) int {
 
 			// priority penalty
 			health -= float64(b.Round) * missedRoundPenalty * weight
-			if b.Round > 0 {
-				// log.Warnf("Health penalty %.3f due to %d missed priorities at block %d",
-				// 	float64(b.Priority)*missedRoundPenalty*weight, b.Priority, b.Height)
-			}
+			// if b.Round > 0 {
+			// log.Warnf("Health penalty %.3f due to %d missed priorities at block %d",
+			// 	float64(b.Priority)*missedRoundPenalty*weight, b.Priority, b.Height)
+			// }
 
 			// endorsement penalty, don't count endorsements for the most recent block
 			if b.Height < nowheight {

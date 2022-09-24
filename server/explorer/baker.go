@@ -236,10 +236,11 @@ func (b BakerList) RegisterRoutes(r *mux.Router) error {
 
 type BakerListRequest struct {
 	ListRequest
-	Active  bool           `schema:"active"`
-	Status  *string        `schema:"status"`
-	Country *iso.Country   `schema:"country"`
-	Suggest *tezos.Address `schema:"suggest"`
+	Active        bool           `schema:"active"`
+	Status        *string        `schema:"status"`
+	Country       *iso.Country   `schema:"country"`
+	Suggest       *tezos.Address `schema:"suggest"`
+	WithSponsored bool           `schema:"ads"`
 }
 
 type BakerList struct {
@@ -302,6 +303,7 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 	meta := allMetadataById(ctx)
 
 	// prepare response lists
+	ads := make([]Baker, 0)
 	bkr := make([]Baker, 0)
 
 	// filter bakers
@@ -422,16 +424,22 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 		// attach alias and append to lists
 		if hasAlias {
 			baker.Metadata = alias.Short()
-			bkr = append(bkr, baker)
+			if alias.IsSponsored && args.WithSponsored {
+				ads = append(ads, baker)
+			} else {
+				bkr = append(bkr, baker)
+			}
 		} else {
 			bkr = append(bkr, baker)
 		}
 
 		// apply limit only when not in suggest mode (need all results for randomization)
-		if suggest == nil && args.Limit > 0 && len(bkr) == int(args.Limit) {
+		if suggest == nil && args.Limit > 0 && len(ads)+len(bkr) == int(args.Limit) {
 			break
 		}
 	}
+
+	// log.Infof("Filtered %d + %d active bakers", len(ads), len(bkr))
 
 	// build result
 	resp := &BakerList{
@@ -447,15 +455,23 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 
 	// randomize suggestion: <=50% sponsored
 	if args.Limit > 0 && suggest != nil {
-		for args.Limit > 0 {
-			// draw random from other
-			idx := rand.Intn(len(bkr))
-			resp.list = append(resp.list, bkr[idx])
-			bkr = append(bkr[:idx], bkr[idx+1:]...)
+		for args.Limit > 0 && len(ads)+len(bkr) > 0 {
+			if len(resp.list) < int(args.Limit) && len(ads) > 0 {
+				// draw random from sponsored
+				idx := rand.Intn(len(ads))
+				resp.list = append(resp.list, ads[idx])
+				ads = append(ads[:idx], ads[idx+1:]...)
+			} else {
+				// draw random from other
+				idx := rand.Intn(len(bkr))
+				resp.list = append(resp.list, bkr[idx])
+				bkr = append(bkr[:idx], bkr[idx+1:]...)
+			}
 			args.Limit--
 		}
 	} else {
-		resp.list = bkr
+		resp.list = ads
+		resp.list = append(resp.list, bkr...)
 		if args.Limit > 0 {
 			resp.list = resp.list[:util.Min(int(args.Limit), len(resp.list))]
 		}
@@ -553,11 +569,9 @@ func ListBakerVotes(ctx *server.Context) (interface{}, int) {
 	for _, v := range ops {
 		opMap[v.RowId] = v.Hash
 	}
-	ops = nil
 	ebs := make([]*Ballot, len(ballots))
 	for i, v := range ballots {
-		o, _ := opMap[v.OpId]
-		ebs[i] = NewBallot(ctx, v, ctx.Indexer.LookupProposalHash(ctx, v.ProposalId), o)
+		ebs[i] = NewBallot(ctx, v, ctx.Indexer.LookupProposalHash(ctx, v.ProposalId), opMap[v.OpId])
 	}
 	return ebs, http.StatusOK
 }
@@ -667,7 +681,8 @@ func GetBakerRights(ctx *server.Context) (interface{}, int) {
 		panic(server.ENotFound(server.EC_DATABASE, "missing rights table", err))
 	}
 	var right model.Right
-	err = pack.NewQuery("get_baker_rights", table).
+	err = pack.NewQuery("get_baker_rights").
+		WithTable(table).
 		AndEqual("account_id", acc.AccountId).
 		AndEqual("cycle", cycle).
 		WithLimit(1).
@@ -741,7 +756,8 @@ func GetBakerIncome(ctx *server.Context) (interface{}, int) {
 		panic(server.ENotFound(server.EC_DATABASE, "missing income table", err))
 	}
 	var income model.Income
-	err = pack.NewQuery("get_baker_income", table).
+	err = pack.NewQuery("get_baker_income").
+		WithTable(table).
 		AndEqual("account_id", acc.AccountId).
 		AndEqual("cycle", cycle).
 		WithLimit(1).
@@ -845,7 +861,8 @@ func GetBakerSnapshot(ctx *server.Context) (interface{}, int) {
 
 	// get baker
 	var self model.Snapshot
-	err = pack.NewQuery("api.baker.snapshot", snapshotTable).
+	err = pack.NewQuery("api.baker.snapshot").
+		WithTable(snapshotTable).
 		AndEqual("account_id", acc.AccountId).
 		AndEqual("cycle", baseCycle).
 		AndEqual("is_selected", true).
@@ -864,7 +881,8 @@ func GetBakerSnapshot(ctx *server.Context) (interface{}, int) {
 		panic(server.ENotFound(server.EC_DATABASE, "missing income table", err))
 	}
 	var income model.Income
-	err = pack.NewQuery("api.baker.income", incomeTable).
+	err = pack.NewQuery("api.baker.income").
+		WithTable(incomeTable).
 		AndEqual("account_id", acc.AccountId).
 		AndEqual("cycle", cycle).
 		WithLimit(1).
@@ -878,13 +896,17 @@ func GetBakerSnapshot(ctx *server.Context) (interface{}, int) {
 
 	// list delegators
 	snaps := make([]model.Snapshot, 0)
-	err = pack.NewQuery("api.baker.delegators", snapshotTable).
+	err = pack.NewQuery("api.baker.delegators").
+		WithTable(snapshotTable).
 		AndEqual("baker_id", acc.AccountId).
 		AndEqual("cycle", baseCycle).
 		AndEqual("is_selected", true).
 		AndEqual("is_baker", false).
 		WithFields("account_id", "balance").
 		Execute(ctx.Context, &snaps)
+	if err != nil {
+		panic(server.EInternal(server.EC_DATABASE, "listing delegators", err))
+	}
 
 	// list funding state
 	ids := make([]uint64, len(snaps))
@@ -900,7 +922,8 @@ func GetBakerSnapshot(ctx *server.Context) (interface{}, int) {
 	if err != nil {
 		panic(server.ENotFound(server.EC_DATABASE, "missing account table", err))
 	}
-	err = pack.NewQuery("api.baker.delegator_status", accountTable).
+	err = pack.NewQuery("api.baker.delegator_status").
+		WithTable(accountTable).
 		AndIn("row_id", ids).
 		WithFields("row_id", "is_funded").
 		Execute(ctx.Context, &accs)

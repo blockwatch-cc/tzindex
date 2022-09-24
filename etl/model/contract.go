@@ -5,7 +5,7 @@ package model
 
 import (
 	"encoding/binary"
-	"fmt"
+	// "fmt"
 	"strconv"
 	"sync"
 
@@ -342,7 +342,7 @@ func (c *Contract) NamedBigmaps(m []*BigmapAlloc) map[string]int64 {
 	// this resolves ambiguities from different comb pair expressions
 	types := make([]micheline.Typedef, len(bigmaps))
 	for i, v := range bigmaps {
-		types[i] = micheline.Type{v}.Typedef("")
+		types[i] = micheline.Type{Prim: v}.Typedef("")
 	}
 
 	// match bigmap allocs to type annotations using type comparison
@@ -436,7 +436,7 @@ func (c *Contract) LoadScript() (*micheline.Script, error) {
 
 	// should not happen
 	if len(c.Script) == 0 {
-		return nil, fmt.Errorf("empty script on %s", c.String())
+		return nil, nil
 	}
 
 	// unmarshal script

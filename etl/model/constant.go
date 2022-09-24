@@ -25,8 +25,6 @@ type Constant struct {
 	Height      int64              `pack:"h,snappy"      json:"height"`
 	StorageSize int64              `pack:"z,snappy"      json:"storage_size"`
 	Features    micheline.Features `pack:"F,snappy"      json:"features"`
-
-	prim micheline.Prim `pack:"-" json:"-"` // cached decoded version
 }
 
 // Ensure Constant implements the pack.Item interface.

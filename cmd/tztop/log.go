@@ -1,6 +1,5 @@
 // Copyright (c) 2021 Blockwatch Data Inc.
 // Authors: abdul@blockwatch.cc, alex@blockwatch.cc
-//
 package main
 
 import (
@@ -21,10 +20,10 @@ func init() {
 	config.SetDefault("logging.level", "info")
 }
 
-// subsystemLoggers maps each subsystem identifier to its associated logger.
-var subsystemLoggers = map[string]logpkg.Logger{
-	"MAIN": log,
-}
+// // subsystemLoggers maps each subsystem identifier to its associated logger.
+// var subsystemLoggers = map[string]logpkg.Logger{
+// 	"MAIN": log,
+// }
 
 func initLogging() {
 	cfg := logpkg.NewConfig()
@@ -40,27 +39,27 @@ func initLogging() {
 
 	log = logpkg.NewLogger("MAIN") // command level
 	// store loggers in map
-	subsystemLoggers = map[string]logpkg.Logger{
-		"MAIN": log,
-	}
+	// subsystemLoggers = map[string]logpkg.Logger{
+	// 	"MAIN": log,
+	// }
 }
 
 // setLogLevel sets the logging level for provided subsystem.  Invalid
 // subsystems are ignored.
-func setLogLevel(subsystemID string, level logpkg.Level) {
-	// Ignore invalid subsystems.
-	logger, ok := subsystemLoggers[subsystemID]
-	if !ok {
-		return
-	}
+// func setLogLevel(subsystemID string, level logpkg.Level) {
+// 	// Ignore invalid subsystems.
+// 	logger, ok := subsystemLoggers[subsystemID]
+// 	if !ok {
+// 		return
+// 	}
 
-	logger.SetLevel(level)
-}
+// 	logger.SetLevel(level)
+// }
 
 // setLogLevels sets the log level for all subsystem loggers to the passed
 // level.
-func setLogLevels(level logpkg.Level) {
-	for subsystemID := range subsystemLoggers {
-		setLogLevel(subsystemID, level)
-	}
-}
+// func setLogLevels(level logpkg.Level) {
+// 	for subsystemID := range subsystemLoggers {
+// 		setLogLevel(subsystemID, level)
+// 	}
+// }

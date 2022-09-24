@@ -99,19 +99,19 @@ func (s *BlockSeries) Add(m SeriesModel) {
 	s.NRollupCalls += int64(model.Int16Correct(b.NRollupCalls))
 	s.NEvents += int64(model.Int16Correct(b.NEvents))
 	s.NTx += int64(model.Int16Correct(b.NTx))
-	s.Volume += int64(b.Volume)
-	s.Fee += int64(b.Fee)
-	s.Reward += int64(b.Reward)
-	s.Deposit += int64(b.Deposit)
-	s.ActivatedSupply += int64(b.ActivatedSupply)
-	s.MintedSupply += int64(b.MintedSupply)
-	s.BurnedSupply += int64(b.BurnedSupply)
+	s.Volume += b.Volume
+	s.Fee += b.Fee
+	s.Reward += b.Reward
+	s.Deposit += b.Deposit
+	s.ActivatedSupply += b.ActivatedSupply
+	s.MintedSupply += b.MintedSupply
+	s.BurnedSupply += b.BurnedSupply
 	s.NewAccounts += int64(model.Int16Correct(b.NewAccounts))
 	s.NewContracts += int64(model.Int16Correct(b.NewContracts))
 	s.ClearedAccounts += int64(model.Int16Correct(b.ClearedAccounts))
 	s.FundedAccounts += int64(model.Int16Correct(b.FundedAccounts))
-	s.GasUsed += int64(b.GasUsed)
-	s.StoragePaid += int64(b.StoragePaid)
+	s.GasUsed += b.GasUsed
+	s.StoragePaid += b.StoragePaid
 	s.Count++
 }
 
@@ -206,25 +206,25 @@ func (s *BlockSeries) Interpolate(m SeriesBucket, ts time.Time) SeriesBucket {
 	default:
 		return &BlockSeries{
 			Timestamp:       ts,
-			NSlotsEndorsed:  s.NSlotsEndorsed + int64(weight*float64(int64(b.NSlotsEndorsed)-s.NSlotsEndorsed)),
-			NOpsApplied:     s.NOpsApplied + int64(weight*float64(int64(b.NOpsApplied)-s.NOpsApplied)),
-			NOpsFailed:      s.NOpsFailed + int64(weight*float64(int64(b.NOpsFailed)-s.NOpsFailed)),
-			NContractCalls:  s.NContractCalls + int64(weight*float64(int64(b.NContractCalls)-s.NContractCalls)),
-			NRollupCalls:    s.NRollupCalls + int64(weight*float64(int64(b.NRollupCalls)-s.NRollupCalls)),
-			NTx:             s.NTx + int64(weight*float64(int64(b.NTx)-s.NTx)),
-			Volume:          s.Volume + int64(weight*float64(int64(b.Volume)-s.Volume)),
-			Fee:             s.Fee + int64(weight*float64(int64(b.Fee)-s.Fee)),
-			Reward:          s.Reward + int64(weight*float64(int64(b.Reward)-s.Reward)),
-			Deposit:         s.Deposit + int64(weight*float64(int64(b.Deposit)-s.Deposit)),
-			ActivatedSupply: s.ActivatedSupply + int64(weight*float64(int64(b.ActivatedSupply)-s.ActivatedSupply)),
-			MintedSupply:    s.MintedSupply + int64(weight*float64(int64(b.MintedSupply)-s.MintedSupply)),
-			BurnedSupply:    s.BurnedSupply + int64(weight*float64(int64(b.BurnedSupply)-s.BurnedSupply)),
-			NewAccounts:     s.NewAccounts + int64(weight*float64(int64(b.NewAccounts)-s.NewAccounts)),
-			NewContracts:    s.NewContracts + int64(weight*float64(int64(b.NewContracts)-s.NewContracts)),
-			ClearedAccounts: s.ClearedAccounts + int64(weight*float64(int64(b.ClearedAccounts)-s.ClearedAccounts)),
-			FundedAccounts:  s.FundedAccounts + int64(weight*float64(int64(b.FundedAccounts)-s.FundedAccounts)),
-			GasUsed:         s.GasUsed + int64(weight*float64(int64(b.GasUsed)-s.GasUsed)),
-			StoragePaid:     s.StoragePaid + int64(weight*float64(int64(b.StoragePaid)-s.StoragePaid)),
+			NSlotsEndorsed:  s.NSlotsEndorsed + int64(weight*float64(b.NSlotsEndorsed-s.NSlotsEndorsed)),
+			NOpsApplied:     s.NOpsApplied + int64(weight*float64(b.NOpsApplied-s.NOpsApplied)),
+			NOpsFailed:      s.NOpsFailed + int64(weight*float64(b.NOpsFailed-s.NOpsFailed)),
+			NContractCalls:  s.NContractCalls + int64(weight*float64(b.NContractCalls-s.NContractCalls)),
+			NRollupCalls:    s.NRollupCalls + int64(weight*float64(b.NRollupCalls-s.NRollupCalls)),
+			NTx:             s.NTx + int64(weight*float64(b.NTx-s.NTx)),
+			Volume:          s.Volume + int64(weight*float64(b.Volume-s.Volume)),
+			Fee:             s.Fee + int64(weight*float64(b.Fee-s.Fee)),
+			Reward:          s.Reward + int64(weight*float64(b.Reward-s.Reward)),
+			Deposit:         s.Deposit + int64(weight*float64(b.Deposit-s.Deposit)),
+			ActivatedSupply: s.ActivatedSupply + int64(weight*float64(b.ActivatedSupply-s.ActivatedSupply)),
+			MintedSupply:    s.MintedSupply + int64(weight*float64(b.MintedSupply-s.MintedSupply)),
+			BurnedSupply:    s.BurnedSupply + int64(weight*float64(b.BurnedSupply-s.BurnedSupply)),
+			NewAccounts:     s.NewAccounts + int64(weight*float64(b.NewAccounts-s.NewAccounts)),
+			NewContracts:    s.NewContracts + int64(weight*float64(b.NewContracts-s.NewContracts)),
+			ClearedAccounts: s.ClearedAccounts + int64(weight*float64(b.ClearedAccounts-s.ClearedAccounts)),
+			FundedAccounts:  s.FundedAccounts + int64(weight*float64(b.FundedAccounts-s.FundedAccounts)),
+			GasUsed:         s.GasUsed + int64(weight*float64(b.GasUsed-s.GasUsed)),
+			StoragePaid:     s.StoragePaid + int64(weight*float64(b.StoragePaid-s.StoragePaid)),
 			Count:           0,
 			columns:         s.columns,
 			params:          s.params,
@@ -312,19 +312,19 @@ func (b *BlockSeries) MarshalJSONBrief() ([]byte, error) {
 			case "count":
 				buf = strconv.AppendInt(buf, int64(b.Count), 10)
 			case "n_endorsed_slots":
-				buf = strconv.AppendInt(buf, int64(b.NSlotsEndorsed), 10)
+				buf = strconv.AppendInt(buf, b.NSlotsEndorsed, 10)
 			case "n_ops_applied":
-				buf = strconv.AppendInt(buf, int64(b.NOpsApplied), 10)
+				buf = strconv.AppendInt(buf, b.NOpsApplied, 10)
 			case "n_ops_failed":
-				buf = strconv.AppendInt(buf, int64(b.NOpsFailed), 10)
+				buf = strconv.AppendInt(buf, b.NOpsFailed, 10)
 			case "n_calls":
-				buf = strconv.AppendInt(buf, int64(b.NContractCalls), 10)
+				buf = strconv.AppendInt(buf, b.NContractCalls, 10)
 			case "n_rollup_calls":
-				buf = strconv.AppendInt(buf, int64(b.NRollupCalls), 10)
+				buf = strconv.AppendInt(buf, b.NRollupCalls, 10)
 			case "n_events":
-				buf = strconv.AppendInt(buf, int64(b.NEvents), 10)
+				buf = strconv.AppendInt(buf, b.NEvents, 10)
 			case "n_tx":
-				buf = strconv.AppendInt(buf, int64(b.NTx), 10)
+				buf = strconv.AppendInt(buf, b.NTx, 10)
 			case "volume":
 				buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Volume), 'f', dec, 64)
 			case "fee":
@@ -340,13 +340,13 @@ func (b *BlockSeries) MarshalJSONBrief() ([]byte, error) {
 			case "burned_supply":
 				buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.BurnedSupply), 'f', dec, 64)
 			case "n_new_accounts":
-				buf = strconv.AppendInt(buf, int64(b.NewAccounts), 10)
+				buf = strconv.AppendInt(buf, b.NewAccounts, 10)
 			case "n_new_contracts":
-				buf = strconv.AppendInt(buf, int64(b.NewContracts), 10)
+				buf = strconv.AppendInt(buf, b.NewContracts, 10)
 			case "n_cleared_accounts":
-				buf = strconv.AppendInt(buf, int64(b.ClearedAccounts), 10)
+				buf = strconv.AppendInt(buf, b.ClearedAccounts, 10)
 			case "n_funded_accounts":
-				buf = strconv.AppendInt(buf, int64(b.FundedAccounts), 10)
+				buf = strconv.AppendInt(buf, b.FundedAccounts, 10)
 			case "gas_used":
 				buf = strconv.AppendInt(buf, b.GasUsed, 10)
 			case "storage_paid":
@@ -379,21 +379,21 @@ func (b *BlockSeries) MarshalCSV() ([]string, error) {
 		case "time":
 			res[i] = strconv.Quote(b.Timestamp.Format(time.RFC3339))
 		case "count":
-			res[i] = strconv.FormatInt(int64(b.Count), 10)
+			res[i] = strconv.Itoa(b.Count)
 		case "n_endorsed_slots":
-			res[i] = strconv.FormatInt(int64(b.NSlotsEndorsed), 10)
+			res[i] = strconv.FormatInt(b.NSlotsEndorsed, 10)
 		case "n_ops_applied":
-			res[i] = strconv.FormatInt(int64(b.NOpsApplied), 10)
+			res[i] = strconv.FormatInt(b.NOpsApplied, 10)
 		case "n_ops_failed":
-			res[i] = strconv.FormatInt(int64(b.NOpsFailed), 10)
+			res[i] = strconv.FormatInt(b.NOpsFailed, 10)
 		case "n_calls":
-			res[i] = strconv.FormatInt(int64(b.NContractCalls), 10)
+			res[i] = strconv.FormatInt(b.NContractCalls, 10)
 		case "n_rollup_calls":
-			res[i] = strconv.FormatInt(int64(b.NRollupCalls), 10)
+			res[i] = strconv.FormatInt(b.NRollupCalls, 10)
 		case "n_events":
-			res[i] = strconv.FormatInt(int64(b.NEvents), 10)
+			res[i] = strconv.FormatInt(b.NEvents, 10)
 		case "n_tx":
-			res[i] = strconv.FormatInt(int64(b.NTx), 10)
+			res[i] = strconv.FormatInt(b.NTx, 10)
 		case "volume":
 			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Volume), 'f', dec, 64)
 		case "fee":
@@ -409,13 +409,13 @@ func (b *BlockSeries) MarshalCSV() ([]string, error) {
 		case "burned_supply":
 			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.BurnedSupply), 'f', dec, 64)
 		case "n_new_accounts":
-			res[i] = strconv.FormatInt(int64(b.NewAccounts), 10)
+			res[i] = strconv.FormatInt(b.NewAccounts, 10)
 		case "n_new_contracts":
-			res[i] = strconv.FormatInt(int64(b.NewContracts), 10)
+			res[i] = strconv.FormatInt(b.NewContracts, 10)
 		case "n_cleared_accounts":
-			res[i] = strconv.FormatInt(int64(b.ClearedAccounts), 10)
+			res[i] = strconv.FormatInt(b.ClearedAccounts, 10)
 		case "n_funded_accounts":
-			res[i] = strconv.FormatInt(int64(b.FundedAccounts), 10)
+			res[i] = strconv.FormatInt(b.FundedAccounts, 10)
 		case "gas_used":
 			res[i] = strconv.FormatInt(b.GasUsed, 10)
 		case "storage_paid":
@@ -437,15 +437,13 @@ func (s *BlockSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.
 		panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", args.Series), err))
 	}
 
-	// translate long column names to short names used in pack tables
-	var srcNames []string
 	// time is auto-added from parser
 	if len(args.Columns) == 1 {
 		// use all series columns
 		args.Columns = blockSeriesNames
 	}
 	// resolve short column names
-	srcNames = make([]string, 0, len(args.Columns))
+	srcNames := make([]string, 0, len(args.Columns))
 	for _, v := range args.Columns {
 		// ignore count column
 		if v == "count" {
@@ -459,7 +457,8 @@ func (s *BlockSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.
 	}
 
 	// build table query
-	q := pack.NewQuery(ctx.RequestID, table).
+	q := pack.NewQuery(ctx.RequestID).
+		WithTable(table).
 		WithFields(srcNames...).
 		WithOrder(args.Order).
 		AndRange("time", args.From.Time(), args.To.Time())
@@ -481,9 +480,9 @@ func (s *BlockSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.
 			continue
 
 		case "baker", "proposer":
-			field := table.Fields().Find("B") // baker id
+			field := "baker_id" // baker id
 			if prefix == "proposer" {
-				field = table.Fields().Find("X") // proposer id
+				field = "proposer_id" // proposer id
 			}
 			// parse baker/proposer address and lookup id
 			// valid filter modes: eq, in
@@ -494,12 +493,7 @@ func (s *BlockSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.
 			case pack.FilterModeEqual, pack.FilterModeNotEqual:
 				if val[0] == "" {
 					// empty address matches id 0 (== missing baker)
-					q.Conditions.AddAndCondition(&pack.Condition{
-						Field: field,
-						Mode:  mode,
-						Value: 0,
-						Raw:   val[0], // debugging aid
-					})
+					q = q.And(field, mode, 0)
 				} else {
 					// single-address lookup and compile condition
 					addr, err := tezos.ParseAddress(val[0])
@@ -508,24 +502,14 @@ func (s *BlockSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					// Note: when not found we insert an always false condition
 					if acc == nil || acc.RowId == 0 {
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: field,
-							Mode:  mode,
-							Value: uint64(math.MaxUint64),
-							Raw:   "account not found", // debugging aid
-						})
+						q = q.And(field, mode, uint64(math.MaxUint64))
 					} else {
 						// add addr id as extra fund_flow condition
-						q.Conditions.AddAndCondition(&pack.Condition{
-							Field: field,
-							Mode:  mode,
-							Value: acc.RowId,
-							Raw:   val[0], // debugging aid
-						})
+						q = q.And(field, mode, acc.RowId)
 					}
 				}
 			case pack.FilterModeIn, pack.FilterModeNotIn:
@@ -538,7 +522,7 @@ func (s *BlockSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 					if err != nil && err != index.ErrNoAccountEntry {
-						panic(err)
+						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					// skip not found account
 					if acc == nil || acc.RowId == 0 {
@@ -549,12 +533,7 @@ func (s *BlockSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
-				q.Conditions.AddAndCondition(&pack.Condition{
-					Field: field,
-					Mode:  mode,
-					Value: ids,
-					Raw:   val[0], // debugging aid
-				})
+				q = q.And(field, mode, ids)
 			default:
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
@@ -565,12 +544,7 @@ func (s *BlockSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.
 			if !period.IsValid() {
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid voting period '%s'", val[0]), nil))
 			}
-			q.Conditions.AddAndCondition(&pack.Condition{
-				Field: table.Fields().Find("p"),
-				Mode:  mode,
-				Value: period,
-				Raw:   val[0], // debugging aid
-			})
+			q = q.And("p", mode, period)
 		default:
 			// the same field name may appear multiple times, in which case conditions
 			// are combined like any other condition with logical AND
@@ -588,7 +562,7 @@ func (s *BlockSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {
-					q.Conditions.AddAndCondition(&cond)
+					q = q.AndCondition(cond)
 				}
 			}
 		}
