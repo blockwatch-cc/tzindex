@@ -5,7 +5,7 @@ go 1.19
 require (
 	blockwatch.cc/packdb v0.0.0-20220920122803-818cba89a292
 	blockwatch.cc/tzgo v1.14.1
-	blockwatch.cc/tzpro-go v0.14.0
+	blockwatch.cc/tzpro-go v0.14.1
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d
 	github.com/awesome-gocui/gocui v1.0.1
 	github.com/cespare/xxhash v1.1.0
@@ -16,7 +16,6 @@ require (
 	github.com/echa/goprocinfo v0.0.0-20210921162345-49464edb7812
 	github.com/echa/log v1.2.2
 	github.com/fatih/color v1.13.0
-	github.com/go-zeromq/zmq4 v0.13.0
 	github.com/gorilla/mux v1.8.0
 	github.com/gorilla/schema v1.2.0
 	github.com/qri-io/jsonschema v0.2.1
@@ -31,7 +30,6 @@ require (
 	github.com/ericlagergren/decimal v0.0.0-20211103172832-aca2edc11f73 // indirect
 	github.com/gdamore/encoding v1.0.0 // indirect
 	github.com/gdamore/tcell/v2 v2.0.0 // indirect
-	github.com/go-zeromq/goczmq/v4 v4.2.2 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/hashicorp/golang-lru v0.5.4 // indirect
 	github.com/inconshreveable/mousetrap v1.0.0 // indirect
@@ -44,7 +42,6 @@ require (
 	github.com/rogpeppe/go-internal v1.9.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	golang.org/x/crypto v0.0.0-20220722155217-630584e8d5aa // indirect
-	golang.org/x/sync v0.0.0-20190423024810-112230192c58 // indirect
 	golang.org/x/sys v0.0.0-20220919091848-fb04ddd9f9c8 // indirect
 	golang.org/x/text v0.3.6 // indirect
 )
