@@ -3,7 +3,7 @@ module blockwatch.cc/tzindex
 go 1.19
 
 require (
-	blockwatch.cc/packdb v0.0.0-20220920122803-818cba89a292
+	blockwatch.cc/packdb v0.0.0-20221021060950-3a22c9b42552
 	blockwatch.cc/tzgo v1.14.1
 	blockwatch.cc/tzpro-go v0.14.1
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d
@@ -42,6 +42,6 @@ require (
 	github.com/rogpeppe/go-internal v1.9.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	golang.org/x/crypto v0.0.0-20220722155217-630584e8d5aa // indirect
-	golang.org/x/sys v0.0.0-20220919091848-fb04ddd9f9c8 // indirect
+	golang.org/x/sys v0.1.0 // indirect
 	golang.org/x/text v0.3.6 // indirect
 )
