@@ -45,7 +45,7 @@ type Account struct {
 	RowId            AccountID         `pack:"I,pk" json:"row_id"`
 	Address          tezos.Address     `pack:"H"    json:"address"`
 	Type             tezos.AddressType `pack:"t"    json:"address_type"`
-	Pubkey           []byte            `pack:"k"    json:"pubkey"`
+	Pubkey           tezos.Key         `pack:"k"    json:"pubkey"`
 	Counter          int64             `pack:"j"    json:"counter"`
 	BakerId          AccountID         `pack:"D"    json:"baker_id"`
 	CreatorId        AccountID         `pack:"C"    json:"creator_id"`
@@ -60,6 +60,7 @@ type Account struct {
 	TotalSent        int64             `pack:"S"    json:"total_sent"`
 	TotalBurned      int64             `pack:"B"    json:"total_burned"`
 	TotalFeesPaid    int64             `pack:"F"    json:"total_fees_paid"`
+	TotalFeesUsed    int64             `pack:"u"    json:"total_fees_used"`
 	UnclaimedBalance int64             `pack:"U"    json:"unclaimed_balance"`
 	SpendableBalance int64             `pack:"s"    json:"spendable_balance"`
 	FrozenBond       int64             `pack:"L"    json:"frozen_bond"`
@@ -70,14 +71,10 @@ type Account struct {
 	IsRevealed       bool              `pack:"r"    json:"is_revealed"`
 	IsBaker          bool              `pack:"d"    json:"is_baker"`
 	IsContract       bool              `pack:"c"    json:"is_contract"`
-	NOps             int               `pack:"1"    json:"n_ops"`
-	NOpsFailed       int               `pack:"2"    json:"n_ops_failed"`
-	NTx              int               `pack:"3"    json:"n_tx"`
-	NDelegation      int               `pack:"4"    json:"n_delegation"`
-	NOrigination     int               `pack:"5"    json:"n_origination"`
-	NConstants       int               `pack:"6"    json:"n_constants"`
-	TokenGenMin      int64             `pack:"m"    json:"token_gen_min"`
-	TokenGenMax      int64             `pack:"M"    json:"token_gen_max"`
+	NTxSuccess       int               `pack:"1"    json:"n_tx_successs"`
+	NTxFailed        int               `pack:"2"    json:"n_tx_failed"`
+	NTxIn            int               `pack:"3"    json:"n_tx_in"`
+	NTxOut           int               `pack:"4"    json:"n_tx_out"`
 
 	// used during block processing, not stored in DB
 	IsNew       bool  `pack:"-" json:"-"` // first seen this block
@@ -86,7 +83,6 @@ type Account struct {
 	IsDirty     bool  `pack:"-" json:"-"` // indicates an update happened
 	MustDelete  bool  `pack:"-" json:"-"` // indicates the account should be deleted (during rollback)
 	PrevBalance int64 `pack:"-" json:"-"` // previous balance before update
-	PrevSeen    int64 `pack:"-" json:"-"` // previous balance height
 }
 
 // Ensure Account implements the pack.Item interface.
@@ -126,15 +122,6 @@ func (a Account) String() string {
 	return a.Address.String()
 }
 
-func (a Account) Key() tezos.Key {
-	key := tezos.Key{}
-	if len(a.Pubkey) == 0 {
-		return key
-	}
-	_ = key.UnmarshalBinary(a.Pubkey)
-	return key
-}
-
 func (a Account) IsDust() bool {
 	b := a.Balance()
 	return b > 0 && b < DustLimit
@@ -145,50 +132,7 @@ func (a Account) Balance() int64 {
 }
 
 func (a *Account) Reset() {
-	a.RowId = 0
-	a.Address = tezos.Address{}
-	a.Type = 0
-	a.Pubkey = nil
-	a.Counter = 0
-	a.BakerId = 0
-	a.CreatorId = 0
-	a.FirstIn = 0
-	a.FirstOut = 0
-	a.LastIn = 0
-	a.LastOut = 0
-	a.FirstSeen = 0
-	a.LastSeen = 0
-	a.DelegatedSince = 0
-	a.TotalReceived = 0
-	a.TotalSent = 0
-	a.TotalBurned = 0
-	a.TotalFeesPaid = 0
-	a.UnclaimedBalance = 0
-	a.SpendableBalance = 0
-	a.FrozenBond = 0
-	a.LostBond = 0
-	a.IsFunded = false
-	a.IsActivated = false
-	a.IsDelegated = false
-	a.IsRevealed = false
-	a.IsBaker = false
-	a.IsContract = false
-	a.NOps = 0
-	a.NOpsFailed = 0
-	a.NTx = 0
-	a.NDelegation = 0
-	a.NOrigination = 0
-	a.NConstants = 0
-	a.TokenGenMin = 1
-	a.TokenGenMax = 1
-
-	a.IsNew = false
-	a.WasFunded = false
-	a.WasDust = false
-	a.IsDirty = false
-	a.MustDelete = false
-	a.PrevBalance = 0
-	a.PrevSeen = 0
+	*a = Account{}
 }
 
 func (a *Account) UpdateBalanceN(flows []*Flow) error {
@@ -241,12 +185,6 @@ func (a *Account) UpdateBalance(f *Flow) error {
 		// for all types adjust spendable balance
 		a.SpendableBalance += f.AmountIn - f.AmountOut
 
-		// update token generation on in-flows only for non-rollup bonds
-		if f.AmountIn > 0 && f.Operation != FlowTypeRollupTransaction && f.Operation != FlowTypeRollupReward {
-			// add +1 more hop
-			a.TokenGenMin = util.Min64(a.TokenGenMin, f.TokenGenMin+1)
-			a.TokenGenMax = util.Max64(a.TokenGenMax, f.TokenGenMax+1)
-		}
 	case FlowCategoryBond:
 		if a.FrozenBond < f.AmountOut-f.AmountIn {
 			return fmt.Errorf("acc.update id %d %s frozen bond %d is smaller than "+
@@ -280,12 +218,8 @@ func (a *Account) UpdateBalance(f *Flow) error {
 	a.LastSeen = util.Max64N(a.LastSeen, f.Height)
 
 	// reset token generation
-	if !a.IsFunded {
-		if !a.IsBaker {
-			a.IsRevealed = false
-		}
-		a.TokenGenMin = 0
-		a.TokenGenMax = 0
+	if !a.IsFunded && !a.IsBaker {
+		a.IsRevealed = false
 	}
 
 	return nil
@@ -364,11 +298,11 @@ func (a Account) MarshalBinary() ([]byte, error) {
 	le := binary.LittleEndian
 	buf := bytes.NewBuffer(make([]byte, 0, 2048))
 	_ = binary.Write(buf, le, a.RowId)
-	_ = binary.Write(buf, le, int32(len(a.Address.Hash)))
-	buf.Write(a.Address.Hash)
-	_ = binary.Write(buf, le, a.Type)
-	_ = binary.Write(buf, le, int32(len(a.Pubkey)))
-	buf.Write(a.Pubkey)
+	b := a.Address.Bytes22()
+	_, _ = buf.Write(b)
+	b = a.Pubkey.Bytes()
+	_ = binary.Write(buf, le, int32(len(b)))
+	buf.Write(b)
 	_ = binary.Write(buf, le, a.Counter)
 	_ = binary.Write(buf, le, a.BakerId)
 	_ = binary.Write(buf, le, a.CreatorId)
@@ -383,6 +317,7 @@ func (a Account) MarshalBinary() ([]byte, error) {
 	_ = binary.Write(buf, le, a.TotalSent)
 	_ = binary.Write(buf, le, a.TotalBurned)
 	_ = binary.Write(buf, le, a.TotalFeesPaid)
+	_ = binary.Write(buf, le, a.TotalFeesUsed)
 	_ = binary.Write(buf, le, a.UnclaimedBalance)
 	_ = binary.Write(buf, le, a.SpendableBalance)
 	_ = binary.Write(buf, le, a.FrozenBond)
@@ -393,14 +328,10 @@ func (a Account) MarshalBinary() ([]byte, error) {
 	_ = binary.Write(buf, le, a.IsRevealed)
 	_ = binary.Write(buf, le, a.IsBaker)
 	_ = binary.Write(buf, le, a.IsContract)
-	_ = binary.Write(buf, le, int32(a.NOps))
-	_ = binary.Write(buf, le, int32(a.NOpsFailed))
-	_ = binary.Write(buf, le, int32(a.NTx))
-	_ = binary.Write(buf, le, int32(a.NDelegation))
-	_ = binary.Write(buf, le, int32(a.NOrigination))
-	_ = binary.Write(buf, le, int32(a.NConstants))
-	_ = binary.Write(buf, le, a.TokenGenMin)
-	_ = binary.Write(buf, le, a.TokenGenMax)
+	_ = binary.Write(buf, le, int32(a.NTxSuccess))
+	_ = binary.Write(buf, le, int32(a.NTxFailed))
+	_ = binary.Write(buf, le, int32(a.NTxIn))
+	_ = binary.Write(buf, le, int32(a.NTxOut))
 	return buf.Bytes(), nil
 }
 
@@ -408,22 +339,11 @@ func (a *Account) UnmarshalBinary(data []byte) error {
 	le := binary.LittleEndian
 	buf := bytes.NewBuffer(data)
 	_ = binary.Read(buf, le, &a.RowId)
+	_ = a.Address.UnmarshalBinary(buf.Next(22))
+	a.Type = a.Address.Type
 	var l int32
 	_ = binary.Read(buf, le, &l)
-	if l > 0 {
-		if cap(a.Address.Hash) < int(l) {
-			a.Address.Hash = make([]byte, int(l))
-		}
-		a.Address.Hash = a.Address.Hash[:int(l)]
-		_, _ = buf.Read(a.Address.Hash)
-	}
-	_ = binary.Read(buf, le, &a.Type)
-	a.Address.Type = a.Type
-	_ = binary.Read(buf, le, &l)
-	if l > 0 {
-		a.Pubkey = make([]byte, int(l))
-		_, _ = buf.Read(a.Pubkey)
-	}
+	_ = a.Pubkey.UnmarshalBinary(buf.Next(int(l)))
 	_ = binary.Read(buf, le, &a.Counter)
 	_ = binary.Read(buf, le, &a.BakerId)
 	_ = binary.Read(buf, le, &a.CreatorId)
@@ -438,6 +358,7 @@ func (a *Account) UnmarshalBinary(data []byte) error {
 	_ = binary.Read(buf, le, &a.TotalSent)
 	_ = binary.Read(buf, le, &a.TotalBurned)
 	_ = binary.Read(buf, le, &a.TotalFeesPaid)
+	_ = binary.Read(buf, le, &a.TotalFeesUsed)
 	_ = binary.Read(buf, le, &a.UnclaimedBalance)
 	_ = binary.Read(buf, le, &a.SpendableBalance)
 	_ = binary.Read(buf, le, &a.FrozenBond)
@@ -450,18 +371,13 @@ func (a *Account) UnmarshalBinary(data []byte) error {
 	_ = binary.Read(buf, le, &a.IsContract)
 	var n int32
 	_ = binary.Read(buf, le, &n)
-	a.NOps = int(n)
+	a.NTxSuccess = int(n)
 	_ = binary.Read(buf, le, &n)
-	a.NOpsFailed = int(n)
+	a.NTxFailed = int(n)
 	_ = binary.Read(buf, le, &n)
-	a.NTx = int(n)
+	a.NTxIn = int(n)
 	_ = binary.Read(buf, le, &n)
-	a.NDelegation = int(n)
+	a.NTxOut = int(n)
 	_ = binary.Read(buf, le, &n)
-	a.NOrigination = int(n)
-	_ = binary.Read(buf, le, &n)
-	a.NConstants = int(n)
-	_ = binary.Read(buf, le, &a.TokenGenMin)
-	_ = binary.Read(buf, le, &a.TokenGenMax)
 	return nil
 }

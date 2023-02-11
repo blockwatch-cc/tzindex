@@ -59,6 +59,10 @@ func (b *Builder) AppendRegularBlockOps(ctx context.Context, rollback bool) erro
 					err = b.AppendVdfRevelationOp(ctx, oh, id, rollback)
 				case model.OpTypeIncreasePaidStorage:
 					err = b.AppendStorageLimitOp(ctx, oh, id, rollback)
+				case model.OpTypeDrainDelegate:
+					err = b.AppendDrainDelegateOp(ctx, oh, id, rollback)
+				case model.OpTypeUpdateConsensusKey:
+					err = b.AppendUpdateConsensusKeyOp(ctx, oh, id, rollback)
 				}
 				if err != nil {
 					return err

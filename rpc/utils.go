@@ -10,6 +10,7 @@ import (
 	"strconv"
 )
 
+// private constants strings
 const CONTRACT = "contract"
 
 // BlockID is an interface to abstract different kinds of block addressing modes

@@ -61,6 +61,7 @@ func (b *Builder) AppendRollupOriginationOp(ctx context.Context, oh *rpc.Operati
     op.IsSuccess = res.Status.IsSuccess()
     op.GasUsed = res.Gas()
     op.StoragePaid = res.PaidStorageSizeDiff
+    b.block.Ops = append(b.block.Ops, op)
 
     if op.IsSuccess {
         flows := b.NewRollupOriginationFlows(
@@ -70,65 +71,57 @@ func (b *Builder) AppendRollupOriginationOp(ctx context.Context, oh *rpc.Operati
             res.Balances(),
             id,
         )
-
         // update burn from burn flow
         for _, f := range flows {
             if f.IsBurned {
                 op.Burned += f.AmountOut
             }
         }
-
     } else {
-        // handle errors
-        if len(res.Errors) > 0 {
-            if buf, err := json.Marshal(res.Errors); err == nil {
-                op.Errors = buf
-            } else {
-                // non-fatal, but error data will be missing from index
-                log.Error(Errorf("marshal op errors: %s", err))
-            }
-        }
-
         // fees flows
         _ = b.NewRollupOriginationFlows(src, nil, srcbkr, rollup.Fees(), nil, id)
+        // keep errors
+        op.Errors, _ = json.Marshal(res.Errors)
     }
-
-    b.block.Ops = append(b.block.Ops, op)
 
     // update accounts
     if !rollback {
         src.Counter = op.Counter
-        src.NOps++
-        src.NOrigination++
         src.LastSeen = b.block.Height
         src.IsDirty = true
 
-        if !op.IsSuccess {
-            src.NOpsFailed++
-        } else {
+        if op.IsSuccess {
+            src.NTxSuccess++
+            src.NTxOut++
+
             // initialize originated rollup
             op.ReceiverId = dst.RowId
             dst.IsContract = true
             dst.CreatorId = src.RowId
             dst.LastSeen = b.block.Height
+            dst.TotalFeesUsed += op.Fee
             dst.IsDirty = true
 
             // create and register a new contract here; the contract index
             // will pick this up later & inserted a database row
             con := model.NewRollupContract(dst, op, b.block.Params)
             b.conMap[dst.RowId] = con
+        } else {
+            src.NTxFailed++
         }
     } else {
         src.Counter = op.Counter - 1
-        src.NOps--
-        src.NOrigination--
         src.IsDirty = true
-        if !op.IsSuccess {
-            src.NOpsFailed--
-        } else {
+        if op.IsSuccess {
+            src.NTxSuccess--
+            src.NTxOut--
+            dst.TotalFeesUsed -= op.Fee
+
             // reverse origination, dst will be deleted
             dst.MustDelete = true
+        } else {
             dst.IsDirty = true
+            src.NTxFailed--
         }
     }
 
@@ -207,6 +200,7 @@ func (b *Builder) AppendRollupTransactionOp(ctx context.Context, oh *rpc.Operati
     op.IsSuccess = res.Status.IsSuccess()
     op.GasUsed = res.Gas()
     op.StoragePaid = res.PaidStorageSizeDiff
+    b.block.Ops = append(b.block.Ops, op)
 
     if dCon.Address.IsRollup() {
         // receiver is rollup
@@ -219,15 +213,17 @@ func (b *Builder) AppendRollupTransactionOp(ctx context.Context, oh *rpc.Operati
         // receiver is KT1 contract (used for transfer_ticket)
         script, err := dCon.LoadScript()
         if err != nil || script == nil {
-            return Errorf("loading script: %v", err)
+            log.Error(Errorf("loading script: %v", err))
+        } else {
+            eps, _ := script.Entrypoints(false)
+            ep, ok := eps[rollup.Transfer.Entrypoint]
+            if !ok && op.IsSuccess {
+                log.Error(Errorf("missing entrypoint %q", rollup.Transfer.Entrypoint))
+            } else {
+                op.Entrypoint = ep.Id
+                op.Data = rollup.Transfer.Entrypoint
+            }
         }
-        eps, _ := script.Entrypoints(false)
-        ep, ok := eps[rollup.Transfer.Entrypoint]
-        if !ok && op.IsSuccess {
-            return Errorf("missing entrypoint %q", rollup.Transfer.Entrypoint)
-        }
-        op.Entrypoint = ep.Id
-        op.Data = rollup.Transfer.Entrypoint
     }
 
     // add rollup args as parameters
@@ -235,6 +231,9 @@ func (b *Builder) AppendRollupTransactionOp(ctx context.Context, oh *rpc.Operati
     if err != nil {
         log.Error(Errorf("marshal parameters errors: %s", err))
     }
+
+    // keep ticket updates
+    op.RawTicketUpdates = res.TicketUpdates()
 
     if op.IsSuccess {
         flows := b.NewRollupTransactionFlows(
@@ -267,16 +266,6 @@ func (b *Builder) AppendRollupTransactionOp(ctx context.Context, oh *rpc.Operati
             }
         }
     } else {
-        // handle errors
-        if len(res.Errors) > 0 {
-            if buf, err := json.Marshal(res.Errors); err == nil {
-                op.Errors = buf
-            } else {
-                // non-fatal, but error data will be missing from index
-                log.Error(Errorf("marshal op errors: %s", err))
-            }
-        }
-
         // fees only
         _ = b.NewRollupTransactionFlows(
             src, nil, nil, // just source
@@ -286,42 +275,41 @@ func (b *Builder) AppendRollupTransactionOp(ctx context.Context, oh *rpc.Operati
             b.block,
             id,
         )
+
+        // keep errors
+        op.Errors, _ = json.Marshal(res.Errors)
     }
 
     // update sender account
     if !rollback {
         src.Counter = op.Counter
         src.LastSeen = b.block.Height
-        src.NOps++
-        src.NTx++
         src.IsDirty = true
         dst.LastSeen = b.block.Height
-        dst.NOps++
-        dst.NTx++
         dst.IsDirty = true
-        if !op.IsSuccess {
-            src.NOpsFailed++
-            dst.NOpsFailed++
-        } else {
+        if op.IsSuccess {
+            src.NTxSuccess++
+            src.NTxOut++
+            dst.NTxIn++
+            dst.TotalFeesUsed += op.Fee
             _ = dCon.Update(op, b.block.Params)
+        } else {
+            src.NTxFailed++
         }
     } else {
         src.Counter = op.Counter - 1
-        src.NOps--
-        src.NTx--
         src.IsDirty = true
-        dst.NOps--
-        dst.NTx--
         dst.IsDirty = true
-        if !op.IsSuccess {
-            src.NOpsFailed--
-            dst.NOpsFailed--
-        } else {
+        if op.IsSuccess {
+            src.NTxSuccess--
+            src.NTxOut--
+            dst.NTxIn--
+            dst.TotalFeesUsed -= op.Fee
             dCon.Rollback(op, nil, b.block.Params)
+        } else {
+            src.NTxFailed--
         }
     }
-
-    b.block.Ops = append(b.block.Ops, op)
 
     return nil
 }

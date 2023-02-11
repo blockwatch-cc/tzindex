@@ -49,6 +49,8 @@ const (
 	OpTypeRollupTransaction                  // 26 v013
 	OpTypeVdfRevelation                      // 27 v014
 	OpTypeIncreasePaidStorage                // 28 v014
+	OpTypeDrainDelegate                      // 29 v015
+	OpTypeUpdateConsensusKey                 // 30 v015
 	OpTypeBatch                = 254         // API output only
 	OpTypeInvalid              = 255
 )
@@ -85,6 +87,8 @@ var (
 		OpTypeRollupTransaction:    "rollup_transaction",
 		OpTypeVdfRevelation:        "vdf_revelation",
 		OpTypeIncreasePaidStorage:  "increase_paid_storage",
+		OpTypeDrainDelegate:        "drain_delegate",
+		OpTypeUpdateConsensusKey:   "update_consensus_key",
 		OpTypeInvalid:              "",
 	}
 	opTypeReverseStrings = make(map[string]OpType)
@@ -176,11 +180,14 @@ func MapOpType(typ tezos.OpType) OpType {
 		return OpTypeRegisterConstant
 	case tezos.OpTypeSetDepositsLimit:
 		return OpTypeDepositsLimit
-
 	case tezos.OpTypeVdfRevelation:
 		return OpTypeVdfRevelation
 	case tezos.OpTypeIncreasePaidStorage:
 		return OpTypeIncreasePaidStorage
+	case tezos.OpTypeDrainDelegate:
+		return OpTypeDrainDelegate
+	case tezos.OpTypeUpdateConsensusKey:
+		return OpTypeUpdateConsensusKey
 
 	case tezos.OpTypeToruOrigination, tezos.OpTypeScRollupOriginate:
 		return OpTypeRollupOrigination
@@ -231,7 +238,8 @@ func (t OpType) ListId() int {
 		OpTypeDoubleEndorsement,
 		OpTypeNonceRevelation,
 		OpTypeDoublePreendorsement,
-		OpTypeVdfRevelation:
+		OpTypeVdfRevelation,
+		OpTypeDrainDelegate:
 		return 2
 	case OpTypeTransaction,
 		OpTypeOrigination,
@@ -241,7 +249,8 @@ func (t OpType) ListId() int {
 		OpTypeDepositsLimit,
 		OpTypeRollupOrigination,
 		OpTypeRollupTransaction,
-		OpTypeIncreasePaidStorage:
+		OpTypeIncreasePaidStorage,
+		OpTypeUpdateConsensusKey:
 		return 3
 	default:
 		return -1

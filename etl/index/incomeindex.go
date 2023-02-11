@@ -239,7 +239,7 @@ func (idx *IncomeIndex) bootstrapIncome(ctx context.Context, block *model.Block,
 		var totalRolls int64
 		incomeMap := make(map[model.AccountID]*model.Income)
 		for _, v := range bkrs {
-			rolls := v.StakingBalance() / p.TokensPerRoll
+			rolls := v.StakingBalance() / p.MinimalStake
 			totalRolls += rolls
 			incomeMap[v.AccountId] = &model.Income{
 				Cycle:        cycle,
@@ -337,7 +337,7 @@ func (idx *IncomeIndex) bootstrapIncome(ctx context.Context, block *model.Block,
 				for i := 0; i < len(stake); i++ {
 					// find baker in list
 					if stake[i].Baker.Equal(bkr.Address) {
-						income.Rolls = stake[i].ActiveStake / p.TokensPerRoll
+						income.Rolls = stake[i].ActiveStake / p.MinimalStake
 						income.ActiveStake = stake[i].ActiveStake
 						// protect against int64 overflow
 						activeStake := big.NewInt(income.ActiveStake)
@@ -443,7 +443,7 @@ func (idx *IncomeIndex) createCycleIncome(ctx context.Context, block *model.Bloc
 
 		for _, v := range bkrs {
 			// skip inactive bakers and bakers with no roll
-			rolls := v.StakingBalance() / p.TokensPerRoll
+			rolls := v.StakingBalance() / p.MinimalStake
 			if !v.IsActive || rolls == 0 {
 				continue
 			}
@@ -515,7 +515,7 @@ func (idx *IncomeIndex) createCycleIncome(ctx context.Context, block *model.Bloc
 			ic = &model.Income{
 				Cycle:        sn.Cycle,
 				AccountId:    bkr.AccountId,
-				Rolls:        bkr.StakingBalance() / p.TokensPerRoll,
+				Rolls:        bkr.StakingBalance() / p.MinimalStake,
 				Balance:      bkr.Balance(),
 				Delegated:    bkr.DelegatedBalance,
 				NDelegations: bkr.ActiveDelegations,
@@ -553,7 +553,7 @@ func (idx *IncomeIndex) createCycleIncome(ctx context.Context, block *model.Bloc
 			ic = &model.Income{
 				Cycle:        sn.Cycle,
 				AccountId:    bkr.AccountId,
-				Rolls:        bkr.StakingBalance() / p.TokensPerRoll,
+				Rolls:        bkr.StakingBalance() / p.MinimalStake,
 				Balance:      bkr.Balance(),
 				Delegated:    bkr.DelegatedBalance,
 				NDelegations: bkr.ActiveDelegations,
@@ -587,7 +587,7 @@ func (idx *IncomeIndex) createCycleIncome(ctx context.Context, block *model.Bloc
 			ic = &model.Income{
 				Cycle:        sn.Cycle,
 				AccountId:    bkr.AccountId,
-				Rolls:        bkr.StakingBalance() / p.TokensPerRoll,
+				Rolls:        bkr.StakingBalance() / p.MinimalStake,
 				Balance:      bkr.Balance(),
 				Delegated:    bkr.DelegatedBalance,
 				NDelegations: bkr.ActiveDelegations,
@@ -626,7 +626,7 @@ func (idx *IncomeIndex) createCycleIncome(ctx context.Context, block *model.Bloc
 			for i := 0; i < len(stake); i++ {
 				// find baker in list
 				if stake[i].Baker.Equal(bkr.Address) {
-					income.Rolls = stake[i].ActiveStake / p.TokensPerRoll
+					income.Rolls = stake[i].ActiveStake / p.MinimalStake
 					income.ActiveStake = stake[i].ActiveStake
 					// protect against int64 overflow
 					exp := big.NewInt(income.ActiveStake)
@@ -682,7 +682,7 @@ func (idx *IncomeIndex) updateBlockIncome(ctx context.Context, block *model.Bloc
 	if p.IsCycleEnd(block.Height) && len(block.Flows) > 0 && p.Version >= 12 {
 		upd := make([]pack.Item, 0)
 		for _, bkr := range builder.Bakers() {
-			if bkr.StakingBalance() < p.TokensPerRoll {
+			if bkr.StakingBalance() < p.MinimalStake {
 				continue
 			}
 			// load next cycle's income

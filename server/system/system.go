@@ -89,7 +89,7 @@ func GetSysStats(ctx *server.Context) (interface{}, int) {
 }
 
 func GetConfig(ctx *server.Context) (interface{}, int) {
-	return config.AllSettings(), http.StatusOK
+	return config.All(), http.StatusOK
 }
 
 func PurgeCaches(ctx *server.Context) (interface{}, int) {
@@ -145,8 +145,6 @@ func UpdateLog(ctx *server.Context) (interface{}, int) {
 		key = "JRPC"
 	case "server":
 		key = "SRVR"
-	case "report":
-		key = "REPO"
 	case "micheline":
 		key = "MICH"
 	default:

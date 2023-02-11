@@ -39,7 +39,7 @@ func (b *Builder) FixOriginationBug(ctx context.Context, params *tezos.Params) e
 		if bkr.ActiveDelegations > 0 {
 			if bkr.Account.BakerId == 0 {
 				bkr.Account.BakerId = bkr.Account.RowId
-				_ = b.AppendMagicBakerRegistrationOp(ctx, bkr, 0)
+				b.AppendMagicBakerRegistrationOp(ctx, bkr, 0)
 			}
 			bkr.InitGracePeriod(b.block.Cycle, b.block.Params)
 			count++

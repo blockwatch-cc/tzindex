@@ -44,6 +44,8 @@ func init() {
 	blockSourceNames["predecessor"] = "P" // pred hash, requires parent_id
 	blockSourceNames["protocol"] = "-"
 	blockSourceNames["creator"] = "-" // baker or proposer
+	blockSourceNames["proposer_consensus_key"] = "x"
+	blockSourceNames["baker_consensus_key"] = "y"
 
 	blockAllAliases = append(blockAllAliases,
 		"pct_account_reuse",
@@ -51,6 +53,8 @@ func init() {
 		"baker",
 		"proposer",
 		"protocol",
+		"proposer_consensus_key",
+		"baker_consensus_key",
 	)
 }
 
@@ -78,92 +82,100 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		b.params = b.ctx.Crawler.ParamsByHeight(b.Height)
 	}
 	block := struct {
-		RowId             uint64                 `json:"row_id"`
-		ParentId          uint64                 `json:"parent_id"`
-		Hash              string                 `json:"hash"`
-		Predecessor       string                 `json:"predecessor"`
-		Timestamp         int64                  `json:"time"` // convert to UNIX milliseconds
-		Height            int64                  `json:"height"`
-		Cycle             int64                  `json:"cycle"`
-		IsCycleSnapshot   bool                   `json:"is_cycle_snapshot"`
-		Solvetime         int                    `json:"solvetime"`
-		Version           int                    `json:"version"`
-		Round             int                    `json:"round"`
-		Nonce             string                 `json:"nonce"`
-		VotingPeriodKind  tezos.VotingPeriodKind `json:"voting_period_kind"`
-		BakerId           uint64                 `json:"baker_id"`
-		Baker             string                 `json:"baker"`
-		ProposerId        uint64                 `json:"proposer_id"`
-		Proposer          string                 `json:"proposer"`
-		NSlotsEndorsed    int                    `json:"n_endorsed_slots"`
-		NOpsApplied       int                    `json:"n_ops_applied"`
-		NOpsFailed        int                    `json:"n_ops_failed"`
-		NEvents           int                    `json:"n_events"`
-		NContractCalls    int                    `json:"n_calls"`
-		NRollupCalls      int                    `json:"n_rollup_calls"`
-		NTx               int                    `json:"n_tx"`
-		Volume            float64                `json:"volume"`
-		Fee               float64                `json:"fee"`
-		Reward            float64                `json:"reward"`
-		Deposit           float64                `json:"deposit"`
-		ActivatedSupply   float64                `json:"activated_supply"`
-		MintedSupply      float64                `json:"minted_supply"`
-		BurnedSupply      float64                `json:"burned_supply"`
-		SeenAccounts      int                    `json:"n_accounts"`
-		NewAccounts       int                    `json:"n_new_accounts"`
-		NewContracts      int                    `json:"n_new_contracts"`
-		ClearedAccounts   int                    `json:"n_cleared_accounts"`
-		FundedAccounts    int                    `json:"n_funded_accounts"`
-		GasLimit          int64                  `json:"gas_limit"`
-		GasUsed           int64                  `json:"gas_used"`
-		StoragePaid       int64                  `json:"storage_paid"`
-		PctAccountsReused float64                `json:"pct_account_reuse"`
-		LbEscapeVote      tezos.LbVote           `json:"lb_esc_vote"`
-		LbEscapeEma       int64                  `json:"lb_esc_ema"`
-		Protocol          tezos.ProtocolHash     `json:"protocol"`
+		RowId                  uint64                 `json:"row_id"`
+		ParentId               uint64                 `json:"parent_id"`
+		Hash                   string                 `json:"hash"`
+		Predecessor            string                 `json:"predecessor"`
+		Timestamp              int64                  `json:"time"` // convert to UNIX milliseconds
+		Height                 int64                  `json:"height"`
+		Cycle                  int64                  `json:"cycle"`
+		IsCycleSnapshot        bool                   `json:"is_cycle_snapshot"`
+		Solvetime              int                    `json:"solvetime"`
+		Version                int                    `json:"version"`
+		Round                  int                    `json:"round"`
+		Nonce                  string                 `json:"nonce"`
+		VotingPeriodKind       tezos.VotingPeriodKind `json:"voting_period_kind"`
+		BakerId                uint64                 `json:"baker_id"`
+		Baker                  string                 `json:"baker"`
+		ProposerId             uint64                 `json:"proposer_id"`
+		Proposer               string                 `json:"proposer"`
+		NSlotsEndorsed         int                    `json:"n_endorsed_slots"`
+		NOpsApplied            int                    `json:"n_ops_applied"`
+		NOpsFailed             int                    `json:"n_ops_failed"`
+		NEvents                int                    `json:"n_events"`
+		NContractCalls         int                    `json:"n_calls"`
+		NRollupCalls           int                    `json:"n_rollup_calls"`
+		NTx                    int                    `json:"n_tx"`
+		Volume                 float64                `json:"volume"`
+		Fee                    float64                `json:"fee"`
+		Reward                 float64                `json:"reward"`
+		Deposit                float64                `json:"deposit"`
+		ActivatedSupply        float64                `json:"activated_supply"`
+		MintedSupply           float64                `json:"minted_supply"`
+		BurnedSupply           float64                `json:"burned_supply"`
+		SeenAccounts           int                    `json:"n_accounts"`
+		NewAccounts            int                    `json:"n_new_accounts"`
+		NewContracts           int                    `json:"n_new_contracts"`
+		ClearedAccounts        int                    `json:"n_cleared_accounts"`
+		FundedAccounts         int                    `json:"n_funded_accounts"`
+		GasLimit               int64                  `json:"gas_limit"`
+		GasUsed                int64                  `json:"gas_used"`
+		StoragePaid            int64                  `json:"storage_paid"`
+		PctAccountsReused      float64                `json:"pct_account_reuse"`
+		LbEscapeVote           tezos.LbVote           `json:"lb_esc_vote"`
+		LbEscapeEma            int64                  `json:"lb_esc_ema"`
+		Protocol               tezos.ProtocolHash     `json:"protocol"`
+		ProposerConsensusKeyId uint64                 `json:"proposer_consensus_key_id"`
+		BakerConsensusKeyId    uint64                 `json:"baker_consensus_key_id"`
+		ProposerConsensusKey   string                 `json:"proposer_consensus_key"`
+		BakerConsensusKey      string                 `json:"baker_consensus_key"`
 	}{
-		RowId:            b.RowId,
-		ParentId:         b.ParentId,
-		Hash:             b.Hash.String(),
-		Predecessor:      b.Predecessor.String(),
-		Timestamp:        util.UnixMilliNonZero(b.Timestamp),
-		Height:           b.Height,
-		Cycle:            b.Cycle,
-		IsCycleSnapshot:  b.IsCycleSnapshot,
-		Solvetime:        b.Solvetime,
-		Version:          b.Version,
-		Round:            b.Round,
-		Nonce:            util.U64String(b.Nonce).Hex(),
-		VotingPeriodKind: b.VotingPeriodKind,
-		BakerId:          b.BakerId.Value(),
-		Baker:            b.ctx.Indexer.LookupAddress(b.ctx, b.BakerId).String(),
-		ProposerId:       b.ProposerId.Value(),
-		Proposer:         b.ctx.Indexer.LookupAddress(b.ctx, b.ProposerId).String(),
-		NSlotsEndorsed:   b.NSlotsEndorsed,
-		NOpsApplied:      model.Int16Correct(b.NOpsApplied),
-		NOpsFailed:       model.Int16Correct(b.NOpsFailed),
-		NEvents:          model.Int16Correct(b.NEvents),
-		NContractCalls:   model.Int16Correct(b.NContractCalls),
-		NRollupCalls:     model.Int16Correct(b.NRollupCalls),
-		NTx:              model.Int16Correct(b.NTx),
-		Volume:           b.params.ConvertValue(b.Volume),
-		Fee:              b.params.ConvertValue(b.Fee),
-		Reward:           b.params.ConvertValue(b.Reward),
-		Deposit:          b.params.ConvertValue(b.Deposit),
-		ActivatedSupply:  b.params.ConvertValue(b.ActivatedSupply),
-		MintedSupply:     b.params.ConvertValue(b.MintedSupply),
-		BurnedSupply:     b.params.ConvertValue(b.BurnedSupply),
-		SeenAccounts:     model.Int16Correct(b.SeenAccounts),
-		NewAccounts:      model.Int16Correct(b.NewAccounts),
-		NewContracts:     model.Int16Correct(b.NewContracts),
-		ClearedAccounts:  model.Int16Correct(b.ClearedAccounts),
-		FundedAccounts:   model.Int16Correct(b.FundedAccounts),
-		GasLimit:         b.GasLimit,
-		GasUsed:          b.GasUsed,
-		StoragePaid:      b.StoragePaid,
-		LbEscapeVote:     b.LbEscapeVote,
-		LbEscapeEma:      b.LbEscapeEma,
-		Protocol:         b.params.Protocol,
+		RowId:                  b.RowId,
+		ParentId:               b.ParentId,
+		Hash:                   b.Hash.String(),
+		Predecessor:            b.Predecessor.String(),
+		Timestamp:              util.UnixMilliNonZero(b.Timestamp),
+		Height:                 b.Height,
+		Cycle:                  b.Cycle,
+		IsCycleSnapshot:        b.IsCycleSnapshot,
+		Solvetime:              b.Solvetime,
+		Version:                b.Version,
+		Round:                  b.Round,
+		Nonce:                  util.U64String(b.Nonce).Hex(),
+		VotingPeriodKind:       b.VotingPeriodKind,
+		BakerId:                b.BakerId.Value(),
+		Baker:                  b.ctx.Indexer.LookupAddress(b.ctx, b.BakerId).String(),
+		ProposerId:             b.ProposerId.Value(),
+		Proposer:               b.ctx.Indexer.LookupAddress(b.ctx, b.ProposerId).String(),
+		NSlotsEndorsed:         b.NSlotsEndorsed,
+		NOpsApplied:            model.Int16Correct(b.NOpsApplied),
+		NOpsFailed:             model.Int16Correct(b.NOpsFailed),
+		NEvents:                model.Int16Correct(b.NEvents),
+		NContractCalls:         model.Int16Correct(b.NContractCalls),
+		NRollupCalls:           model.Int16Correct(b.NRollupCalls),
+		NTx:                    model.Int16Correct(b.NTx),
+		Volume:                 b.params.ConvertValue(b.Volume),
+		Fee:                    b.params.ConvertValue(b.Fee),
+		Reward:                 b.params.ConvertValue(b.Reward),
+		Deposit:                b.params.ConvertValue(b.Deposit),
+		ActivatedSupply:        b.params.ConvertValue(b.ActivatedSupply),
+		MintedSupply:           b.params.ConvertValue(b.MintedSupply),
+		BurnedSupply:           b.params.ConvertValue(b.BurnedSupply),
+		SeenAccounts:           model.Int16Correct(b.SeenAccounts),
+		NewAccounts:            model.Int16Correct(b.NewAccounts),
+		NewContracts:           model.Int16Correct(b.NewContracts),
+		ClearedAccounts:        model.Int16Correct(b.ClearedAccounts),
+		FundedAccounts:         model.Int16Correct(b.FundedAccounts),
+		GasLimit:               b.GasLimit,
+		GasUsed:                b.GasUsed,
+		StoragePaid:            b.StoragePaid,
+		LbEscapeVote:           b.LbEscapeVote,
+		LbEscapeEma:            b.LbEscapeEma,
+		Protocol:               b.params.Protocol,
+		ProposerConsensusKeyId: b.ProposerConsensusKeyId.Value(),
+		BakerConsensusKeyId:    b.BakerConsensusKeyId.Value(),
+		ProposerConsensusKey:   b.ctx.Indexer.LookupAddress(b.ctx, b.ProposerConsensusKeyId).String(),
+		BakerConsensusKey:      b.ctx.Indexer.LookupAddress(b.ctx, b.BakerConsensusKeyId).String(),
 	}
 	if b.SeenAccounts > 0 {
 		block.PctAccountsReused = float64(b.SeenAccounts-b.NewAccounts) / float64(b.SeenAccounts) * 100
@@ -274,6 +286,14 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, b.LbEscapeEma, 10)
 		case "protocol":
 			buf = strconv.AppendQuote(buf, b.params.Protocol.String())
+		case "proposer_consensus_key_id":
+			buf = strconv.AppendUint(buf, b.ProposerConsensusKeyId.Value(), 10)
+		case "proposer_consensus_key":
+			buf = strconv.AppendQuote(buf, b.ctx.Indexer.LookupAddress(b.ctx, b.ProposerConsensusKeyId).String())
+		case "baker_consensus_key_id":
+			buf = strconv.AppendUint(buf, b.BakerConsensusKeyId.Value(), 10)
+		case "baker_consensus_key":
+			buf = strconv.AppendQuote(buf, b.ctx.Indexer.LookupAddress(b.ctx, b.BakerConsensusKeyId).String())
 		default:
 			continue
 		}
@@ -383,6 +403,14 @@ func (b *Block) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(b.LbEscapeEma, 10)
 		case "protocol":
 			res[i] = strconv.Quote(b.params.Protocol.String())
+		case "proposer_consensus_key_id":
+			res[i] = strconv.FormatUint(b.ProposerConsensusKeyId.Value(), 10)
+		case "proposer_consensus_key":
+			res[i] = strconv.Quote(b.ctx.Indexer.LookupAddress(b.ctx, b.ProposerConsensusKeyId).String())
+		case "baker_consensus_key_id":
+			res[i] = strconv.FormatUint(b.BakerConsensusKeyId.Value(), 10)
+		case "baker_consensus_key":
+			res[i] = strconv.Quote(b.ctx.Indexer.LookupAddress(b.ctx, b.BakerConsensusKeyId).String())
 		default:
 			continue
 		}
@@ -533,7 +561,7 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
 
-		case "baker", "proposer":
+		case "baker", "proposer", "baker_consensus_key", "proposer_consensus_key":
 			// parse baker address and lookup id
 			// valid filter modes: eq, in
 			// 1 resolve account_id from account table

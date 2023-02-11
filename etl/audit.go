@@ -66,13 +66,11 @@ aloop:
 		}
 		// run a sanity check
 		if acc.IsRevealed && acc.Type != tezos.AddressTypeContract {
-			if have, want := len(acc.Pubkey), acc.Type.KeyType().PkHashType().Len()+1; want != have {
-				log.Errorf("Audit: key type check failed: acc=%s type=%s want-len=%d have-len=%d",
-					acc, acc.Type.KeyType().String(), want, have)
+			if !acc.Pubkey.IsValid() {
+				log.Errorf("Audit: invalid pubkey: acc=%s key=%s", acc, acc.Pubkey.String())
 			}
-			key := acc.Key()
-			if !acc.Address.Equal(key.Address()) {
-				log.Errorf("Audit: key mismatch: acc=%s type=%s bad-key=%s", acc, key.Type, key)
+			if !acc.Address.Equal(acc.Pubkey.Address()) {
+				log.Errorf("Audit: key mismatch: acc=%s type=%s bad-key=%s", acc, acc.Pubkey.Type, acc.Pubkey)
 			}
 		}
 		// check balance against node rpc
@@ -125,13 +123,11 @@ bloop:
 			log.Errorf("Audit: baker %s with unrevealed key", acc)
 			continue
 		}
-		if have, want := len(acc.Pubkey), acc.Type.KeyType().PkHashType().Len()+1; want != have {
-			log.Errorf("Audit: baker key type check failed: acc=%s type=%s want-len=%d have-len=%d",
-				acc, acc.Type.KeyType(), want, have)
+		if !acc.Pubkey.IsValid() {
+			log.Errorf("Audit: invalid pubkey: acc=%s key=%s", acc, acc.Pubkey)
 		}
-		key := acc.Key()
-		if !acc.Address.Equal(key.Address()) {
-			log.Errorf("Audit: baker key mismatch: acc=%s type=%s bad-key=%s", acc, key.Type, key)
+		if !acc.Address.Equal(acc.Pubkey.Address()) {
+			log.Errorf("Audit: baker key mismatch: acc=%s type=%s bad-key=%s", acc, acc.Pubkey.Type, acc.Pubkey)
 		}
 		// check balance against node rpc
 		bal, err := b.rpc.GetContract(ctx, acc.Address, rpc.BlockLevel(b.block.Height-offset))
@@ -246,14 +242,12 @@ bloop:
 			log.Errorf("Audit: baker %s with unrevealed key", acc)
 			failed++
 		}
-		if have, want := len(acc.Pubkey), acc.Type.KeyType().PkHashType().Len()+1; want != have {
-			log.Errorf("Audit: baker key type check failed: acc=%s type=%s want-len=%d have-len=%d",
-				acc, acc.Type.KeyType(), want, have)
+		if !acc.Pubkey.IsValid() {
+			log.Errorf("Audit: invalid baker pubkey: acc=%s key=%s", acc, acc.Pubkey)
 			failed++
 		}
-		key := acc.Key()
-		if !acc.Address.Equal(key.Address()) {
-			log.Errorf("Audit: baker key mismatch: acc=%s type=%s bad-key=%s", acc, key.Type, key)
+		if !acc.Address.Equal(acc.Pubkey.Address()) {
+			log.Errorf("Audit: baker key mismatch: acc=%s type=%s bad-key=%s", acc, acc.Pubkey.Type, acc.Pubkey)
 			failed++
 		}
 		// check balance against node rpc
@@ -346,6 +340,7 @@ bloop:
 		return err
 	}
 
+	total := float64(len(seen))
 aloop:
 	for _, acc := range seen {
 		// stop when cancelled
@@ -356,13 +351,13 @@ aloop:
 		}
 
 		// key and balance to check
-		key := acc.Key()
+		key := acc.Pubkey
 		indexedBalance := acc.Balance()
 
 		// for dirty accounts, use the builder value because the block update
 		// has not been written yet
 		if dacc, ok := b.AccountById(acc.RowId); ok && dacc.IsDirty {
-			key = dacc.Key()
+			key = dacc.Pubkey
 			indexedBalance = dacc.Balance()
 		}
 
@@ -405,7 +400,7 @@ aloop:
 		delete(seen, b.accCache.AccountHashKey(acc))
 
 		count++
-		pct := float64(count) * 100 / float64(b.block.Chain.TotalAccounts)
+		pct := float64(count) * 100 / total
 		plog.Log(1, strconv.FormatFloat(pct, 'f', 2, 64)+"%% complete")
 
 	}

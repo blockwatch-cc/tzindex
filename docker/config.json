@@ -2,8 +2,6 @@
 	"server": {
 		"addr": "0.0.0.0",
 		"port": 8000,
-		"scheme": "http",
-		"host": "127.0.0.1",
 		"workers": 64,
 		"queue": 128,
 		"read_timeout": "2s",
@@ -34,7 +32,7 @@
 		"snapshot_blocks": [],
 		"snapshot_interval": 0
 	},
-	"database": {
+	"db": {
 		"path": "./db/xtz",
 		"engine": "bolt",
 		"gc_interval": 50000000,
@@ -121,7 +119,7 @@
 		"continue_timeout": "60s",
 		"idle_conns": 2
 	},
-	"logging": {
+	"log": {
 		"backend": "stdout",
 		"flags": "date,time,micro,utc",
 		"level": "info",

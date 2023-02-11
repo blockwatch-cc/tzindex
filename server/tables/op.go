@@ -58,6 +58,7 @@ func init() {
 	opSourceNames["entrypoint"] = "a"    // stored in data field
 	opSourceNames["entrypoint_id"] = "-" // ignore, internal
 	opSourceNames["address"] = "-"       // any address
+	opSourceNames["code_hash"] = "R"     // need receiver id to find contract in cache
 	opSourceNames["id"] = "h"            //
 	opAllAliases = append(opAllAliases,
 		"sender",
@@ -139,6 +140,7 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		BigmapEvents tezos.HexBytes  `json:"big_map_diff,omitempty"`
 		Errors       json.RawMessage `json:"errors,omitempty"`
 		Entrypoint   string          `json:"entrypoint"`
+		CodeHash     string          `json:"code_hash"`
 	}{
 		Id:           o.Id(),
 		Type:         o.Type.String(),
@@ -175,7 +177,6 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		Baker:        o.ctx.Indexer.LookupAddress(o.ctx, o.BakerId).String(),
 		Data:         o.Data,
 		Parameters:   hex.EncodeToString(o.Parameters),
-		StorageHash:  util.U64String(o.StorageHash).Hex(),
 		Errors:       json.RawMessage(o.Errors),
 	}
 	if o.Type.ListId() >= 0 {
@@ -183,7 +184,10 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 	}
 	if o.IsContract {
 		op.Entrypoint = o.Data
+		op.StorageHash = util.U64String(o.StorageHash).Hex()
 		op.Data = ""
+		_, _, codeHash, _ := o.ctx.Indexer.LookupContractType(o.ctx.Context, o.ReceiverId)
+		op.CodeHash = util.U64String(codeHash).Hex()
 	}
 	if len(o.BigmapEvents) > 0 {
 		buf, _ := o.BigmapEvents.MarshalBinary()
@@ -323,7 +327,11 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 				buf = append(buf, null...)
 			}
 		case "storage_hash":
-			buf = strconv.AppendQuote(buf, util.U64String(o.StorageHash).Hex())
+			if o.IsContract {
+				buf = strconv.AppendQuote(buf, util.U64String(o.StorageHash).Hex())
+			} else {
+				buf = append(buf, null...)
+			}
 		case "big_map_diff":
 			if len(o.BigmapEvents) > 0 {
 				b, _ := o.BigmapEvents.MarshalBinary()
@@ -344,6 +352,12 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 			} else {
 				buf = append(buf, null...)
 			}
+		case "code_hash":
+			var codeHash uint64
+			if o.IsContract {
+				_, _, codeHash, _ = o.ctx.Indexer.LookupContractType(o.ctx.Context, o.ReceiverId)
+			}
+			buf = strconv.AppendQuote(buf, util.U64String(codeHash).Hex())
 		default:
 			continue
 		}
@@ -442,9 +456,17 @@ func (o *Op) MarshalCSV() ([]string, error) {
 				res[i] = `""`
 			}
 		case "parameters":
-			res[i] = strconv.Quote(hex.EncodeToString(o.Parameters))
+			if len(o.Parameters) > 0 {
+				res[i] = strconv.Quote(hex.EncodeToString(o.Parameters))
+			} else {
+				res[i] = `""`
+			}
 		case "storage_hash":
-			res[i] = strconv.Quote(util.U64String(o.StorageHash).Hex())
+			if o.IsContract {
+				res[i] = strconv.Quote(util.U64String(o.StorageHash).Hex())
+			} else {
+				res[i] = `""`
+			}
 		case "big_map_diff":
 			if len(o.BigmapEvents) > 0 {
 				b, _ := o.BigmapEvents.MarshalBinary()
@@ -460,6 +482,13 @@ func (o *Op) MarshalCSV() ([]string, error) {
 			} else {
 				res[i] = `""`
 			}
+		case "code_hash":
+			var codeHash uint64
+			if o.IsContract {
+				_, _, codeHash, _ = o.ctx.Indexer.LookupContractType(o.ctx.Context, o.ReceiverId)
+			}
+			res[i] = strconv.Quote(util.U64String(codeHash).Hex())
+
 		default:
 			continue
 		}
@@ -501,6 +530,8 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				srcNames = append(srcNames, "height", "op_n")
 			case "big_map_diff":
 				needBigmapEvents = true
+			case "code_hash":
+				srcNames = append(srcNames, "receiver_id", "is_contract")
 			}
 		}
 	} else {
@@ -812,13 +843,16 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 		panic(server.EInternal(server.EC_DATABASE, "cannot read ops", err))
 	}
 	ops := make([]*model.Op, 0, res.Rows())
-	_ = res.Walk(func(r pack.Row) error {
+	err = res.Walk(func(r pack.Row) error {
 		o := model.AllocOp()
-		_ = r.Decode(o)
+		err = r.Decode(o)
 		ops = append(ops, o)
-		return nil
+		return err
 	})
 	res.Close()
+	if err != nil {
+		panic(server.EInternal(server.EC_DATABASE, "cannot parse ops", err))
+	}
 
 	// join bigmap events
 	if needBigmapEvents {
@@ -1076,12 +1110,15 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				panic(server.EInternal(server.EC_DATABASE, "cannot read endorsements", err))
 			}
 			// merge results
-			_ = res2.Walk(func(r pack.Row) error {
+			err = res2.Walk(func(r pack.Row) error {
 				e := &model.Endorsement{}
-				_ = r.Decode(e)
+				err = r.Decode(e)
 				ops = append(ops, e.ToOp())
-				return nil
+				return err
 			})
+			if err != nil {
+				panic(server.EInternal(server.EC_DATABASE, "cannot parse endorsements", err))
+			}
 			res2.Close()
 			if q.Order == pack.OrderDesc {
 				sort.Sort(sort.Reverse(OpSorter(ops)))

@@ -37,11 +37,13 @@ type Contract struct {
 	StorageSize   int64                     `json:"storage_size"`
 	StoragePaid   int64                     `json:"storage_paid"`
 	StorageBurn   float64                   `json:"storage_burn"`
+	TotalFeesUsed float64                   `json:"total_fees_used"`
 	FirstSeen     int64                     `json:"first_seen"`
 	LastSeen      int64                     `json:"last_seen"`
 	FirstSeenTime time.Time                 `json:"first_seen_time"`
 	LastSeenTime  time.Time                 `json:"last_seen_time"`
-	NCallsSuccess int                       `json:"n_calls_success"`
+	NCallsIn      int                       `json:"n_calls_in"`
+	NCallsOut     int                       `json:"n_calls_out"`
 	NCallsFailed  int                       `json:"n_calls_failed"`
 	Bigmaps       map[string]int64          `json:"bigmaps,omitempty"`
 	InterfaceHash string                    `json:"iface_hash"`
@@ -63,10 +65,12 @@ func NewContract(ctx *server.Context, c *model.Contract, a *model.Account, args 
 		StorageSize:   c.StorageSize,
 		StoragePaid:   c.StoragePaid,
 		StorageBurn:   p.ConvertValue(c.StorageBurn),
+		TotalFeesUsed: p.ConvertValue(a.TotalFeesUsed),
 		FirstSeen:     a.FirstSeen,
 		LastSeen:      a.LastSeen,
-		NCallsSuccess: a.NOps - a.NOpsFailed,
-		NCallsFailed:  a.NOpsFailed,
+		NCallsIn:      a.NTxIn,
+		NCallsOut:     a.NTxOut,
+		NCallsFailed:  a.NTxFailed,
 		InterfaceHash: util.U64String(c.InterfaceHash).Hex(),
 		CodeHash:      util.U64String(c.CodeHash).Hex(),
 		StorageHash:   util.U64String(c.StorageHash).Hex(),
@@ -82,17 +86,6 @@ func NewContract(ctx *server.Context, c *model.Contract, a *model.Account, args 
 
 	if maps, err := ctx.Indexer.ListContractBigmaps(ctx.Context, a.RowId, args.WithHeight()); err == nil {
 		cc.Bigmaps = c.NamedBigmaps(maps)
-		// cc.Bigmaps = make(map[string]int64)
-		// for _, v := range maps {
-		// 	var prim micheline.Prim
-		// 	_ = prim.UnmarshalBinary(v.Data)
-		// 	// name := v.Name
-		// 	name := ""
-		// 	if name == "" {
-		// 		name = strconv.FormatInt(v.BigmapId, 10)
-		// 	}
-		// 	cc.Bigmaps[name] = v.BigmapId
-		// }
 	} else {
 		log.Errorf("explorer contract: cannot load bigmap ids: %v", err)
 	}

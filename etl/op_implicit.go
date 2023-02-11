@@ -49,7 +49,7 @@ func (b *Builder) AppendImplicitEvents(ctx context.Context) error {
                     id.Kind = model.OpTypeInvoice
                     ops[f.OpN] = model.NewEventOp(b.block, f.AccountId, id)
                     ops[f.OpN].SenderId = f.AccountId
-                    ops[f.OpN].Volume = f.AmountIn
+                    ops[f.OpN].Reward = f.AmountIn
                 }
             }
         case model.FlowTypeBaking:
@@ -214,8 +214,8 @@ func (b *Builder) AppendImplicitBlockOps(ctx context.Context) error {
             }
 
             // patch missing bigmap allocs
-            typs := op.Script.BigmapTypesByName()
-            ids := op.Script.BigmapsByName()
+            typs := op.Script.BigmapTypes()
+            ids := op.Script.Bigmaps()
             if len(ids) > 0 {
                 bmd := make(micheline.BigmapEvents, 0)
                 for n, id := range ids {

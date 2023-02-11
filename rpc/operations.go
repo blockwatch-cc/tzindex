@@ -117,20 +117,32 @@ func (m OperationMetadata) Balances() BalanceUpdates {
 // This type is a generic container for all possible results. Which fields are actually
 // used depends on operation type and performed actions.
 type OperationResult struct {
-	Status              tezos.OpStatus   `json:"status"`
-	BalanceUpdates      BalanceUpdates   `json:"balance_updates"` // burn, etc
-	ConsumedGas         int64            `json:"consumed_gas,string"`
-	ConsumedMilliGas    int64            `json:"consumed_milligas,string"` // v007+
-	Errors              []OperationError `json:"errors,omitempty"`
-	Allocated           bool             `json:"allocated_destination_contract"` // tx only
-	Storage             micheline.Prim   `json:"storage,omitempty"`              // tx, orig
-	OriginatedContracts []tezos.Address  `json:"originated_contracts"`           // orig only
-	StorageSize         int64            `json:"storage_size,string"`            // tx, orig, const
-	PaidStorageSizeDiff int64            `json:"paid_storage_size_diff,string"`  // tx, orig
-	BigmapDiff          json.RawMessage  `json:"big_map_diff,omitempty"`         // tx, orig, <v013
-	LazyStorageDiff     json.RawMessage  `json:"lazy_storage_diff,omitempty"`    // v008+ tx, orig
-	GlobalAddress       tezos.ExprHash   `json:"global_address"`                 // const
-	OriginatedRollup    tezos.Address    `json:"originated_rollup"`              // v013
+	Status               tezos.OpStatus   `json:"status"`
+	BalanceUpdates       BalanceUpdates   `json:"balance_updates"` // burn, etc
+	ConsumedGas          int64            `json:"consumed_gas,string"`
+	ConsumedMilliGas     int64            `json:"consumed_milligas,string"` // v007+
+	Errors               []OperationError `json:"errors,omitempty"`
+	Allocated            bool             `json:"allocated_destination_contract"` // tx only
+	Storage              micheline.Prim   `json:"storage,omitempty"`              // tx, orig
+	OriginatedContracts  []tezos.Address  `json:"originated_contracts"`           // orig only
+	StorageSize          int64            `json:"storage_size,string"`            // tx, orig, const
+	PaidStorageSizeDiff  int64            `json:"paid_storage_size_diff,string"`  // tx, orig
+	BigmapDiff           json.RawMessage  `json:"big_map_diff,omitempty"`         // tx, orig, <v013
+	LazyStorageDiff      json.RawMessage  `json:"lazy_storage_diff,omitempty"`    // v008+ tx, orig
+	GlobalAddress        tezos.ExprHash   `json:"global_address"`                 // const
+	OriginatedRollup     tezos.Address    `json:"originated_rollup"`              // v013
+	TicketUpdatesCorrect []TicketUpdate   `json:"ticket_updates"`                 // v015
+	TicketReceipts       []TicketUpdate   `json:"ticket_receipt"`                 // v015, name on internal
+}
+
+// Always use this helper to retrieve Ticket updates. This is because due to
+// lack of quality control Tezos Lima protocol ended up with 2 distinct names
+// for ticket updates in external call receipts versus internal call receipts.
+func (r OperationResult) TicketUpdates() []TicketUpdate {
+	if len(r.TicketUpdatesCorrect) > 0 {
+		return r.TicketUpdatesCorrect
+	}
+	return r.TicketReceipts
 }
 
 func (r OperationResult) BigmapEvents() micheline.BigmapEvents {
@@ -261,6 +273,8 @@ func (e *OperationList) UnmarshalJSON(data []byte) error {
 			op = &DoubleEndorsement{}
 		case tezos.OpTypeSeedNonceRevelation:
 			op = &SeedNonce{}
+		case tezos.OpTypeDrainDelegate:
+			op = &DrainDelegate{}
 
 		// consensus operations
 		case tezos.OpTypeEndorsement,
@@ -291,6 +305,8 @@ func (e *OperationList) UnmarshalJSON(data []byte) error {
 			op = &IncreasePaidStorage{}
 		case tezos.OpTypeVdfRevelation:
 			op = &VdfRevelation{}
+		case tezos.OpTypeUpdateConsensusKey:
+			op = &UpdateConsensusKey{}
 
 			// rollup operations
 		case tezos.OpTypeTransferTicket,

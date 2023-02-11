@@ -30,28 +30,30 @@ func init() {
 }
 
 type BakerStatistics struct {
-	TotalRewardsEarned float64 `json:"total_rewards_earned"`
-	TotalFeesEarned    float64 `json:"total_fees_earned"`
-	TotalLost          float64 `json:"total_lost"`
-	BlocksBaked        int64   `json:"blocks_baked"`
-	BlocksProposed     int64   `json:"blocks_proposed"`
-	BlocksNotBaked     int64   `json:"blocks_not_baked"`
-	BlocksEndorsed     int64   `json:"blocks_endorsed"`
-	BlocksNotEndorsed  int64   `json:"blocks_not_endorsed"`
-	SlotsEndorsed      int64   `json:"slots_endorsed"`
-	AvgLuck64          *int64  `json:"avg_luck_64,omitempty"`
-	AvgPerformance64   *int64  `json:"avg_performance_64,omitempty"`
-	AvgContribution64  *int64  `json:"avg_contribution_64,omitempty"`
-	NBakerOps          int64   `json:"n_baker_ops"`
-	NProposal          int64   `json:"n_proposals"`
-	NBallot            int64   `json:"n_ballots"`
-	NEndorsement       int64   `json:"n_endorsements"`
-	NPreendorsement    int64   `json:"n_preendorsements"`
-	NSeedNonce         int64   `json:"n_nonce_revelations"`
-	N2Baking           int64   `json:"n_double_bakings"`
-	N2Endorsement      int64   `json:"n_double_endorsements"`
-	NAccusations       int64   `json:"n_accusations"`
-	NSetDepositsLimit  int64   `json:"n_set_limits"`
+	TotalRewardsEarned  float64 `json:"total_rewards_earned"`
+	TotalFeesEarned     float64 `json:"total_fees_earned"`
+	TotalLost           float64 `json:"total_lost"`
+	BlocksBaked         int64   `json:"blocks_baked"`
+	BlocksProposed      int64   `json:"blocks_proposed"`
+	BlocksNotBaked      int64   `json:"blocks_not_baked"`
+	BlocksEndorsed      int64   `json:"blocks_endorsed"`
+	BlocksNotEndorsed   int64   `json:"blocks_not_endorsed"`
+	SlotsEndorsed       int64   `json:"slots_endorsed"`
+	AvgLuck64           *int64  `json:"avg_luck_64,omitempty"`
+	AvgPerformance64    *int64  `json:"avg_performance_64,omitempty"`
+	AvgContribution64   *int64  `json:"avg_contribution_64,omitempty"`
+	NBakerOps           int64   `json:"n_baker_ops"`
+	NProposal           int64   `json:"n_proposals"`
+	NBallot             int64   `json:"n_ballots"`
+	NEndorsement        int64   `json:"n_endorsements"`
+	NPreendorsement     int64   `json:"n_preendorsements"`
+	NSeedNonce          int64   `json:"n_nonce_revelations"`
+	N2Baking            int64   `json:"n_double_bakings"`
+	N2Endorsement       int64   `json:"n_double_endorsements"`
+	NAccusations        int64   `json:"n_accusations"`
+	NSetDepositsLimit   int64   `json:"n_set_limits"`
+	NUpdateConsensusKey int64   `json:"n_update_consensus_key"`
+	NDrainDelegate      int64   `json:"n_drain_delegate"`
 }
 
 type BakerEvents struct {
@@ -70,6 +72,8 @@ type BakerEvents struct {
 type Baker struct {
 	Id                model.AccountID `json:"-"`
 	Address           tezos.Address   `json:"address"`
+	ConsensusKey      tezos.Key       `json:"consensus_key"`
+	ConsensusAddress  tezos.Address   `json:"consensus_address"`
 	BakerSince        time.Time       `json:"baker_since"`
 	BakerUntil        *time.Time      `json:"baker_until,omitempty"`
 	GracePeriod       int64           `json:"grace_period"`
@@ -105,6 +109,8 @@ func NewBaker(ctx *server.Context, b *model.Baker, args server.Options) *Baker {
 	baker := &Baker{
 		Id:                b.AccountId,
 		Address:           b.Address,
+		ConsensusKey:      b.ConsensusKey,
+		ConsensusAddress:  b.ConsensusKey.Address(),
 		BakerSince:        ctx.Indexer.LookupBlockTime(ctx.Context, b.BakerSince),
 		GracePeriod:       b.GracePeriod,
 		BakerVersion:      hex.EncodeToString(b.GetVersionBytes()),
@@ -137,25 +143,27 @@ func NewBaker(ctx *server.Context, b *model.Baker, args server.Options) *Baker {
 	if args.WithMeta() {
 		// add statistics
 		stats := BakerStatistics{
-			TotalRewardsEarned: ctx.Params.ConvertValue(b.TotalRewardsEarned),
-			TotalFeesEarned:    ctx.Params.ConvertValue(b.TotalFeesEarned),
-			TotalLost:          ctx.Params.ConvertValue(b.TotalLost),
-			BlocksBaked:        b.BlocksBaked,
-			BlocksProposed:     b.BlocksProposed,
-			BlocksNotBaked:     b.BlocksNotBaked,
-			BlocksEndorsed:     b.BlocksEndorsed,
-			BlocksNotEndorsed:  b.BlocksNotEndorsed,
-			SlotsEndorsed:      b.SlotsEndorsed,
-			NBakerOps:          b.NBakerOps,
-			NProposal:          b.NProposal,
-			NBallot:            b.NBallot,
-			NEndorsement:       b.NEndorsement,
-			NPreendorsement:    b.NPreendorsement,
-			NSeedNonce:         b.NSeedNonce,
-			N2Baking:           b.N2Baking,
-			N2Endorsement:      b.N2Endorsement,
-			NSetDepositsLimit:  b.NSetDepositsLimit,
-			NAccusations:       b.NAccusations,
+			TotalRewardsEarned:  ctx.Params.ConvertValue(b.TotalRewardsEarned),
+			TotalFeesEarned:     ctx.Params.ConvertValue(b.TotalFeesEarned),
+			TotalLost:           ctx.Params.ConvertValue(b.TotalLost),
+			BlocksBaked:         b.BlocksBaked,
+			BlocksProposed:      b.BlocksProposed,
+			BlocksNotBaked:      b.BlocksNotBaked,
+			BlocksEndorsed:      b.BlocksEndorsed,
+			BlocksNotEndorsed:   b.BlocksNotEndorsed,
+			SlotsEndorsed:       b.SlotsEndorsed,
+			NBakerOps:           b.NBakerOps,
+			NProposal:           b.NProposal,
+			NBallot:             b.NBallot,
+			NEndorsement:        b.NEndorsement,
+			NPreendorsement:     b.NPreendorsement,
+			NSeedNonce:          b.NSeedNonce,
+			N2Baking:            b.N2Baking,
+			N2Endorsement:       b.N2Endorsement,
+			NSetDepositsLimit:   b.NSetDepositsLimit,
+			NAccusations:        b.NAccusations,
+			NUpdateConsensusKey: b.NUpdateConsensusKey,
+			NDrainDelegate:      b.NDrainDelegate,
 		}
 
 		// get performance data
@@ -378,6 +386,8 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 			Id:                v.AccountId,
 			GracePeriod:       v.GracePeriod,
 			Address:           v.Address,
+			ConsensusKey:      v.ConsensusKey,
+			ConsensusAddress:  v.ConsensusKey.Address(),
 			BakerSince:        ctx.Indexer.LookupBlockTime(ctx.Context, v.BakerSince),
 			BakerVersion:      hex.EncodeToString(v.GetVersionBytes()),
 			TotalBalance:      ctx.Params.ConvertValue(v.TotalBalance()),
@@ -394,25 +404,27 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 			IsActive:          v.IsActive,
 			StakingShare:      math.Ceil(float64(stake)/float64(netStake)*100_000) / 100_000,
 			Stats: &BakerStatistics{
-				TotalRewardsEarned: ctx.Params.ConvertValue(v.TotalRewardsEarned),
-				TotalFeesEarned:    ctx.Params.ConvertValue(v.TotalFeesEarned),
-				TotalLost:          ctx.Params.ConvertValue(v.TotalLost),
-				BlocksBaked:        v.BlocksBaked,
-				BlocksProposed:     v.BlocksProposed,
-				BlocksNotBaked:     v.BlocksNotBaked,
-				BlocksEndorsed:     v.BlocksEndorsed,
-				BlocksNotEndorsed:  v.BlocksNotEndorsed,
-				SlotsEndorsed:      v.SlotsEndorsed,
-				NBakerOps:          v.NBakerOps,
-				NProposal:          v.NProposal,
-				NBallot:            v.NBallot,
-				NEndorsement:       v.NEndorsement,
-				NPreendorsement:    v.NPreendorsement,
-				NSeedNonce:         v.NSeedNonce,
-				N2Baking:           v.N2Baking,
-				N2Endorsement:      v.N2Endorsement,
-				NSetDepositsLimit:  v.NSetDepositsLimit,
-				NAccusations:       v.NAccusations,
+				TotalRewardsEarned:  ctx.Params.ConvertValue(v.TotalRewardsEarned),
+				TotalFeesEarned:     ctx.Params.ConvertValue(v.TotalFeesEarned),
+				TotalLost:           ctx.Params.ConvertValue(v.TotalLost),
+				BlocksBaked:         v.BlocksBaked,
+				BlocksProposed:      v.BlocksProposed,
+				BlocksNotBaked:      v.BlocksNotBaked,
+				BlocksEndorsed:      v.BlocksEndorsed,
+				BlocksNotEndorsed:   v.BlocksNotEndorsed,
+				SlotsEndorsed:       v.SlotsEndorsed,
+				NBakerOps:           v.NBakerOps,
+				NProposal:           v.NProposal,
+				NBallot:             v.NBallot,
+				NEndorsement:        v.NEndorsement,
+				NPreendorsement:     v.NPreendorsement,
+				NSeedNonce:          v.NSeedNonce,
+				N2Baking:            v.N2Baking,
+				N2Endorsement:       v.N2Endorsement,
+				NSetDepositsLimit:   v.NSetDepositsLimit,
+				NAccusations:        v.NAccusations,
+				NUpdateConsensusKey: v.NUpdateConsensusKey,
+				NDrainDelegate:      v.NDrainDelegate,
 			},
 		}
 

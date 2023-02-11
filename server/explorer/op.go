@@ -171,6 +171,7 @@ type Op struct {
 	Storage       *Storage                  `json:"storage,omitempty"`
 	BigmapDiff    *BigmapUpdateList         `json:"big_map_diff,omitempty"`
 	Value         *micheline.Prim           `json:"value,omitempty"`
+	CodeHash      string                    `json:"code_hash,omitempty"`
 	Sender        *tezos.Address            `json:"sender,omitempty"`
 	Receiver      *tezos.Address            `json:"receiver,omitempty"`
 	Creator       *tezos.Address            `json:"creator,omitempty"`
@@ -190,6 +191,7 @@ type Op struct {
 	Internal      []*Op                     `json:"internal,omitempty"`
 	Metadata      map[string]*ShortMetadata `json:"metadata,omitempty"`
 	Events        []*Event                  `json:"events,omitempty"`
+	TicketUpdates []*TicketUpdate           `json:"ticket_updates,omitempty"`
 
 	expires time.Time `json:"-"`
 }
@@ -472,10 +474,11 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 	}
 
 	if o.IsContract {
-		pTyp, sTyp, err := ctx.Indexer.LookupContractType(ctx.Context, op.ReceiverId)
+		pTyp, sTyp, codeHash, err := ctx.Indexer.LookupContractType(ctx.Context, op.ReceiverId)
 		if err != nil {
-			log.Errorf("explorer: loading contract type for %s: %v", o.Receiver, err)
+			log.Errorf("explorer: op %d: loading contract type for %s (%d): %v", o.Id, o.Receiver, op.ReceiverId, err)
 		}
+		o.CodeHash = util.U64String(codeHash).Hex()
 
 		// set params
 		if len(op.Parameters) > 0 && pTyp.IsValid() {
@@ -483,7 +486,7 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 		}
 
 		// handle storage
-		if args.WithStorage() && len(op.Storage) > 0 && sTyp.IsValid() {
+		if len(op.Storage) > 0 && sTyp.IsValid() {
 			data := op.Storage
 			if cc != nil {
 				// storage type is patched post-Babylon, but pre-Babylon ops are unpatched,
@@ -502,7 +505,7 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 		}
 
 		// handle bigmap diffs
-		if args.WithStorage() && len(op.BigmapUpdates) > 0 {
+		if len(op.BigmapUpdates) > 0 {
 			var (
 				alloc            *model.BigmapAlloc
 				keyType, valType micheline.Type
@@ -654,13 +657,15 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 		}
 
 		// handle events (must use external op id as filter)
-		if args.WithStorage() && op.IsContract && op.IsSuccess {
-			if events, err := ctx.Indexer.ListOpEvents(ctx, op.Id(), op.ReceiverId); err == nil {
-				for _, ev := range events {
-					o.Events = append(o.Events, NewEvent(ctx, ev, args))
-				}
-			}
+		for _, ev := range op.Events {
+			o.Events = append(o.Events, NewEvent(ctx, ev, args))
 		}
+
+	}
+
+	// handle ticket updates
+	for _, up := range op.TicketUpdates {
+		o.TicketUpdates = append(o.TicketUpdates, NewTicketUpdate(ctx, up, args))
 	}
 
 	// cache until next block is expected

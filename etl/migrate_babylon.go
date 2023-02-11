@@ -37,9 +37,7 @@ func (b *Builder) MigrateBabylon(ctx context.Context, oldparams, nextparams *tez
 			b.accMap[acc.RowId] = acc
 			b.accHashMap[b.accCache.AccountHashKey(acc)] = acc
 		}
-		if err := b.AppendInvoiceOp(ctx, acc, amount, count); err != nil {
-			return err
-		}
+		b.AppendInvoiceOp(ctx, acc, amount, count)
 		count++
 	}
 
@@ -116,9 +114,7 @@ func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *tezos.Params) (
 				return err
 			}
 			// airdrop 1 mutez
-			if err := b.AppendAirdropOp(ctx, acc, 1, count); err != nil {
-				return err
-			}
+			b.AppendAirdropOp(ctx, acc, 1, count)
 			count++
 			// log.Debugf("%04d airdrop: %s %f", count, acc, params.ConvertValue(1))
 			// add account to builder map if not exist
@@ -183,9 +179,7 @@ func (b *Builder) RunBabylonUpgrade(ctx context.Context, params *tezos.Params, n
 			b.conMap[acc.RowId] = contract
 
 			// create migration op
-			if err := b.AppendContractMigrationOp(ctx, acc, contract, n+count); err != nil {
-				return err
-			}
+			b.AppendContractMigrationOp(ctx, acc, contract, n+count)
 			count++
 			return nil
 		})
@@ -234,9 +228,7 @@ func (b *Builder) RunBabylonUpgrade(ctx context.Context, params *tezos.Params, n
 			b.accMap[acc.RowId] = acc
 
 			// create migration op
-			if err := b.AppendContractMigrationOp(ctx, acc, con, n+count+smart); err != nil {
-				return err
-			}
+			b.AppendContractMigrationOp(ctx, acc, con, n+count+smart)
 			smart++
 			return nil
 		})

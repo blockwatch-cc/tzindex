@@ -8,6 +8,7 @@ import (
     "encoding/json"
     "fmt"
 
+    "blockwatch.cc/tzgo/tezos"
     "blockwatch.cc/tzindex/etl/model"
     "blockwatch.cc/tzindex/rpc"
 )
@@ -51,6 +52,9 @@ func (b *Builder) AppendRevealOp(ctx context.Context, oh *rpc.Operation, id mode
     op.GasUsed = res.Gas()
     op.Status = res.Status
     op.IsSuccess = op.Status.IsSuccess()
+    b.block.Ops = append(b.block.Ops, op)
+
+    // pays fees on success and fail
     _ = b.NewRevealFlows(src, sbkr, rop.Fees(), id)
 
     // extend grace period for bakers who send reveal ops
@@ -65,34 +69,27 @@ func (b *Builder) AppendRevealOp(ctx context.Context, oh *rpc.Operation, id mode
         src.Counter = op.Counter
         src.LastSeen = b.block.Height
         src.IsDirty = true
-        if !op.IsSuccess {
-            src.NOps++
-            src.NOpsFailed++
-            if len(res.Errors) > 0 {
-                if buf, err := json.Marshal(res.Errors); err == nil {
-                    op.Errors = buf
-                } else {
-                    // non-fatal, but error data will be missing from index
-                    log.Error(Errorf("marshal op errors: %s", err))
-                }
-            }
-        } else {
-            src.NOps++
+        if op.IsSuccess {
+            src.NTxSuccess++
+            src.NTxOut++
             src.IsRevealed = true
-            src.Pubkey = rop.PublicKey.Bytes()
+            src.Pubkey = rop.PublicKey
+        } else {
+            src.NTxFailed++
+            // keep errors
+            op.Errors, _ = json.Marshal(res.Errors)
         }
     } else {
-        if !op.IsSuccess {
-            src.NOps--
-            src.NOpsFailed--
-            src.IsDirty = true
-        } else {
-            src.NOps--
+        src.Counter = op.Counter - 1
+        src.IsDirty = true
+        if op.IsSuccess {
+            src.NTxSuccess--
+            src.NTxOut--
             src.IsRevealed = false
-            src.Pubkey = nil
-            src.IsDirty = true
+            src.Pubkey = tezos.InvalidKey
+        } else {
+            src.NTxFailed--
         }
     }
-    b.block.Ops = append(b.block.Ops, op)
     return nil
 }

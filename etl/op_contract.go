@@ -50,12 +50,11 @@ func (b *Builder) AppendRegisterConstantOp(ctx context.Context, oh *rpc.Operatio
     op.IsSuccess = op.Status.IsSuccess()
     op.GasUsed = res.Gas()
     op.StoragePaid = res.StorageSize // sic!
+    b.block.Ops = append(b.block.Ops, op)
 
-    var (
-        flows []*model.Flow
-        // err   error
-    )
+    var flows []*model.Flow
     if op.IsSuccess {
+        // fee flows
         flows = b.NewConstantRegistrationFlows(
             src, srcbkr,
             gop.Fees(),
@@ -71,45 +70,34 @@ func (b *Builder) AppendRegisterConstantOp(ctx context.Context, oh *rpc.Operatio
         }
 
         op.Data = res.GlobalAddress.String()
-        // op.Storage, err = gop.Value.MarshalBinary()
-        // if err != nil {
-        //  return Errorf("marshal value: %v", err)
-        // }
 
     } else {
-        // handle errors
-        if len(res.Errors) > 0 {
-            if buf, err := json.Marshal(res.Errors); err == nil {
-                op.Errors = buf
-            } else {
-                // non-fatal, but error data will be missing from index
-                log.Error(Errorf("marshal op errors: %s", err))
-            }
-        }
-
         // fees flows
         b.NewConstantRegistrationFlows(src, srcbkr, gop.Fees(), nil, id)
-    }
 
-    b.block.Ops = append(b.block.Ops, op)
+        // keep errors
+        op.Errors, _ = json.Marshal(res.Errors)
+    }
 
     // update sender account
     if !rollback {
         src.Counter = op.Counter
-        src.NOps++
-        src.NConstants++
         src.LastSeen = b.block.Height
         src.IsDirty = true
-        if !op.IsSuccess {
-            src.NOpsFailed++
+        if op.IsSuccess {
+            src.NTxSuccess++
+            src.NTxOut++
+        } else {
+            src.NTxFailed++
         }
     } else {
         src.Counter = op.Counter - 1
-        src.NOps--
-        src.NConstants--
         src.IsDirty = true
-        if !op.IsSuccess {
-            src.NOpsFailed--
+        if op.IsSuccess {
+            src.NTxSuccess--
+            src.NTxOut--
+        } else {
+            src.NTxFailed--
         }
     }
 
@@ -163,6 +151,7 @@ func (b *Builder) AppendStorageLimitOp(ctx context.Context, oh *rpc.Operation, i
     op.IsSuccess = res.IsSuccess()
     op.GasUsed = res.Gas()
     op.StoragePaid = sop.Amount
+    b.block.Ops = append(b.block.Ops, op)
 
     if op.IsSuccess {
         flows := b.NewIncreasePaidStorageFlows(
@@ -184,43 +173,42 @@ func (b *Builder) AppendStorageLimitOp(ctx context.Context, oh *rpc.Operation, i
         b.NewIncreasePaidStorageFlows(src, srcbkr, sop.Fees(), nil, id)
 
         // handle errors
-        if len(res.Errors) > 0 {
-            if buf, err := json.Marshal(res.Errors); err == nil {
-                op.Errors = buf
-            } else {
-                // non-fatal, but error data will be missing from index
-                log.Error(Errorf("marshal op errors: %s", err))
-            }
-        }
+        op.Errors, _ = json.Marshal(res.Errors)
     }
-
-    b.block.Ops = append(b.block.Ops, op)
 
     // update sender account
     if !rollback {
         src.Counter = op.Counter
-        src.NOps++
         src.LastSeen = b.block.Height
         src.IsDirty = true
-        if !op.IsSuccess {
-            src.NOpsFailed++
-        } else {
+        if op.IsSuccess {
+            src.NTxSuccess++
+            src.NTxOut++
+            recv.NTxIn++
+            recv.IsDirty = true
+
             // increase contract storage limit and paid sum
             con.StoragePaid += op.StoragePaid
             con.StorageBurn += op.StoragePaid * b.block.Params.CostPerByte
             con.IsDirty = true
+        } else {
+            src.NTxFailed++
         }
     } else {
         src.Counter = op.Counter - 1
-        src.NOps--
         src.IsDirty = true
-        if !op.IsSuccess {
-            src.NOpsFailed--
-        } else {
-            // increase contract storage limit and paid sum
+        if op.IsSuccess {
+            src.NTxSuccess--
+            src.NTxOut--
+            recv.NTxIn--
+            recv.IsDirty = true
+
+            // decrease contract storage limit and paid sum
             con.StoragePaid -= op.StoragePaid
             con.StorageBurn -= op.StoragePaid * b.block.Params.CostPerByte
             con.IsDirty = true
+        } else {
+            src.NTxFailed--
         }
     }
 

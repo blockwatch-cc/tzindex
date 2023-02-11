@@ -147,3 +147,50 @@ func (b *Builder) NewSetDepositsLimitFlows(src *model.Account, fees rpc.BalanceU
     b.block.Flows = append(b.block.Flows, flows...)
     return flows
 }
+
+// only fees are paid
+func (b *Builder) NewUpdateConsensusKeyFlows(src *model.Account, fees rpc.BalanceUpdates, id model.OpRef) []*model.Flow {
+    flows, _ := b.NewFeeFlows(src, fees, id)
+    b.block.Flows = append(b.block.Flows, flows...)
+    return flows
+}
+
+// - sends amount from drained baker to destination
+// - sends tip from drained baker to block producer
+// - pays no fee
+func (b *Builder) NewDrainDelegateFlows(src, dst *model.Account, bal rpc.BalanceUpdates, id model.OpRef) (int64, int64, []*model.Flow) {
+    var (
+        vol, reward int64
+        flows       []*model.Flow
+    )
+
+    // drain to dest
+    f := model.NewFlow(b.block, src, dst, id)
+    f.Category = model.FlowCategoryBalance
+    f.Operation = model.FlowTypeDrain
+    f.AmountOut = -bal[0].Amount()
+    flows = append(flows, f)
+
+    f = model.NewFlow(b.block, src, dst, id)
+    f.Category = model.FlowCategoryBalance
+    f.Operation = model.FlowTypeDrain
+    f.AmountIn = bal[1].Amount()
+    flows = append(flows, f)
+    vol = f.AmountIn
+
+    // tip to block proposer
+    f = model.NewFlow(b.block, src, b.block.Proposer.Account, id)
+    f.Category = model.FlowCategoryBalance
+    f.Operation = model.FlowTypeDrain
+    f.AmountOut = -bal[2].Amount()
+    flows = append(flows, f)
+
+    f = model.NewFlow(b.block, src, b.block.Proposer.Account, id)
+    f.Category = model.FlowCategoryBalance
+    f.Operation = model.FlowTypeDrain
+    f.AmountIn = bal[3].Amount()
+    flows = append(flows, f)
+    reward = f.AmountIn
+
+    return vol, reward, flows
+}

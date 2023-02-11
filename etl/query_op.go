@@ -48,7 +48,7 @@ func (m *Indexer) LookupOp(ctx context.Context, opIdent string, r ListRequest) (
     }
 
     if r.WithStorage {
-        _ = m.joinStorage(ctx, ops)
+        m.joinStorage(ctx, ops)
     }
 
     return ops, nil
@@ -196,7 +196,7 @@ func (m *Indexer) ListBlockOps(ctx context.Context, r ListRequest) ([]*model.Op,
         return nil, err
     }
     if r.WithStorage {
-        _ = m.joinStorage(ctx, ops)
+        m.joinStorage(ctx, ops)
     }
     return ops, nil
 }
@@ -389,7 +389,7 @@ func (m *Indexer) ListAccountOps(ctx context.Context, r ListRequest) ([]*model.O
     }
 
     if r.WithStorage {
-        _ = m.joinStorage(ctx, ops)
+        m.joinStorage(ctx, ops)
     }
 
     return ops, nil
@@ -584,7 +584,7 @@ func (m *Indexer) ListAccountOpsCollapsed(ctx context.Context, r ListRequest) ([
     }
 
     if r.WithStorage {
-        _ = m.joinStorage(ctx, ops)
+        m.joinStorage(ctx, ops)
     }
 
     return ops, nil
@@ -737,7 +737,7 @@ func (m *Indexer) ListContractCalls(ctx context.Context, r ListRequest) ([]*mode
     }
 
     if r.WithStorage {
-        _ = m.joinStorage(ctx, ops)
+        m.joinStorage(ctx, ops)
     }
 
     return ops, nil
@@ -823,15 +823,15 @@ func (m *Indexer) FindOrigination(ctx context.Context, id model.AccountID, heigh
 }
 
 // Optimized concurrent lookup for many ops (500)
-func (m *Indexer) joinStorage(ctx context.Context, ops []*model.Op) error {
-    // load and merge storage updates and bigmap diffs
+func (m *Indexer) joinStorage(ctx context.Context, ops []*model.Op) {
+    // load and merge storage updates, bigmap diffs, events and ticket updates
     opRowIds := make([]uint64, 0, len(ops))
     opIds := make([]uint64, 0, len(ops))
     for _, v := range ops {
         if !v.IsSuccess || !v.IsContract {
             continue
         }
-        if v.Type != model.OpTypeTransaction && v.Type != model.OpTypeOrigination {
+        if v.Type != model.OpTypeTransaction && v.Type != model.OpTypeOrigination && v.Type != model.OpTypeSubsidy {
             continue
         }
         opRowIds = append(opRowIds, v.RowId.Value())
@@ -839,24 +839,21 @@ func (m *Indexer) joinStorage(ctx context.Context, ops []*model.Op) error {
     }
 
     var wg sync.WaitGroup
-    wg.Add(3)
 
     // storage
+    wg.Add(1)
     go func() {
         defer wg.Done()
-        table, err := m.Table(index.StorageTableKey)
-        if err != nil {
-            return
-        }
+        table, _ := m.Table(index.StorageTableKey)
         for _, v := range ops {
             if !v.IsSuccess || !v.IsContract {
                 continue
             }
-            if v.Type != model.OpTypeTransaction && v.Type != model.OpTypeOrigination {
+            if v.Type != model.OpTypeTransaction && v.Type != model.OpTypeOrigination && v.Type != model.OpTypeSubsidy {
                 continue
             }
             store := &model.Storage{}
-            err = pack.NewQuery("api.storage.lookup").
+            err := pack.NewQuery("api.storage.lookup").
                 WithTable(table).
                 WithDesc(). // search in reverse order to find latest update
                 AndLte("height", v.Height).
@@ -871,6 +868,7 @@ func (m *Indexer) joinStorage(ctx context.Context, ops []*model.Op) error {
 
     // bigmaps
     upd := make([]model.BigmapUpdate, 0)
+    wg.Add(1)
     go func() {
         defer wg.Done()
         table, err := m.Table(index.BigmapUpdateTableKey)
@@ -884,6 +882,7 @@ func (m *Indexer) joinStorage(ctx context.Context, ops []*model.Op) error {
 
     // events
     events := make([]*model.Event, 0)
+    wg.Add(1)
     go func() {
         defer wg.Done()
         table, err := m.Table(index.EventTableKey)
@@ -895,11 +894,25 @@ func (m *Indexer) joinStorage(ctx context.Context, ops []*model.Op) error {
         }
     }()
 
+    // ticket updates
+    tickets := make([]*model.TicketUpdate, 0)
+    wg.Add(1)
+    go func() {
+        defer wg.Done()
+        table, err := m.Table(index.TicketUpdateTableKey)
+        if err == nil {
+            _ = pack.NewQuery("api.list_ticket_updates").
+                WithTable(table).
+                AndIn("op_id", opIds).
+                Execute(ctx, &tickets)
+        }
+    }()
+
     // wait
     wg.Wait()
 
     // assign
-    var updIdx, evIdx int
+    var bmIdx, evIdx, tiIdx int
     for _, v := range ops {
         if !v.IsSuccess || !v.IsContract {
             continue
@@ -908,13 +921,13 @@ func (m *Indexer) joinStorage(ctx context.Context, ops []*model.Op) error {
             continue
         }
         // skip if necessary
-        for updIdx < len(upd) && upd[updIdx].OpId < v.RowId {
-            updIdx++
+        for bmIdx < len(upd) && upd[bmIdx].OpId < v.RowId {
+            bmIdx++
         }
         // assign
-        for updIdx < len(upd) && upd[updIdx].OpId == v.RowId {
-            v.BigmapUpdates = append(v.BigmapUpdates, upd[updIdx])
-            updIdx++
+        for bmIdx < len(upd) && upd[bmIdx].OpId == v.RowId {
+            v.BigmapUpdates = append(v.BigmapUpdates, upd[bmIdx])
+            bmIdx++
         }
         // skip if necessary
         for evIdx < len(events) && events[evIdx].OpId < v.Id() {
@@ -925,6 +938,14 @@ func (m *Indexer) joinStorage(ctx context.Context, ops []*model.Op) error {
             v.Events = append(v.Events, events[evIdx])
             evIdx++
         }
+        // skip if necessary
+        for tiIdx < len(tickets) && tickets[tiIdx].OpId < v.Id() {
+            tiIdx++
+        }
+        // assign
+        for tiIdx < len(tickets) && tickets[tiIdx].OpId == v.Id() {
+            v.TicketUpdates = append(v.TicketUpdates, tickets[tiIdx])
+            tiIdx++
+        }
     }
-    return nil
 }

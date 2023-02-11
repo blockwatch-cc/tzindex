@@ -545,6 +545,7 @@ func (args *SeriesRequest) StreamJSON(ctx *server.Context) error {
 			if err == nil {
 				args.count++
 			}
+			args.prevBucket = args.bucket.Clone()
 		}
 	}
 
@@ -637,6 +638,7 @@ func (args *SeriesRequest) StreamCSV(ctx *server.Context) error {
 			if err == nil {
 				args.count++
 			}
+			args.prevBucket = args.bucket.Clone()
 		}
 	}
 

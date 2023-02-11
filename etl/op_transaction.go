@@ -75,46 +75,51 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.Operation, id
     op.GasLimit = top.GasLimit
     op.StorageLimit = top.StorageLimit
     op.IsContract = dst.IsContract
+
     res := top.Result()
     op.Status = res.Status
     op.IsSuccess = op.Status.IsSuccess()
     op.GasUsed = res.Gas()
     op.Volume = top.Amount
     op.StoragePaid = res.PaidStorageSizeDiff
+    b.block.Ops = append(b.block.Ops, op)
 
     if top.Parameters.Value.IsValid() {
         op.Parameters, err = top.Parameters.MarshalBinary()
         if err != nil {
-            return Errorf("marshal params: %v", err)
+            log.Error(Errorf("marshal params: %v", err))
         }
 
         if dCon != nil {
             pTyp, _, err := dCon.LoadType()
             if err != nil {
-                return Errorf("loading script: %v", err)
+                log.Error(Errorf("loading script: %v", err))
             }
             ep, _, err := top.Parameters.MapEntrypoint(pTyp)
             if op.IsSuccess && err != nil {
-                return Errorf("searching entrypoint: %v", err)
+                log.Error(Errorf("searching entrypoint: %v", err))
+            } else {
+                op.Entrypoint = ep.Id
+                op.Data = ep.Name
             }
-            op.Entrypoint = ep.Id
-            op.Data = ep.Name
         }
     }
     if res.Storage.IsValid() {
         op.Storage, err = res.Storage.MarshalBinary()
         if err != nil {
-            return Errorf("marshal storage: %v", err)
+            log.Error(Errorf("marshal storage: %v", err))
         }
         op.StorageHash = res.Storage.Hash64()
     }
 
-    if ev := res.BigmapEvents(); len(ev) > 0 {
-        op.BigmapEvents, err = b.PatchBigmapEvents(ctx, ev, dst.Address, nil)
-        if err != nil {
-            return Errorf("patch bigmap: %v", err)
-        }
+    // create or extend bigmap diff to inject alloc for proto < v005, overwrite original
+    op.BigmapEvents = res.BigmapEvents()
+    if b.block.Params.Version <= 4 && len(op.BigmapEvents) > 0 {
+        op.BigmapEvents, _ = b.PatchBigmapEvents(ctx, op.BigmapEvents, dst.Address, nil)
     }
+
+    // keep ticket updates
+    op.RawTicketUpdates = res.TicketUpdates()
 
     var flows []*model.Flow
 
@@ -135,18 +140,7 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.Operation, id
                 op.Burned += f.AmountOut
             }
         }
-
     } else {
-        // handle errors
-        if len(res.Errors) > 0 {
-            if buf, err := json.Marshal(res.Errors); err == nil {
-                op.Errors = buf
-            } else {
-                // non-fatal, but error data will be missing from index
-                log.Error(Errorf("marshal op errors: %s", err))
-            }
-        }
-
         // fees only
         b.NewTransactionFlows(src, nil, sbkr, nil,
             nil, nil,
@@ -155,24 +149,25 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.Operation, id
             b.block,
             id,
         )
+
+        // keep errors
+        op.Errors, _ = json.Marshal(res.Errors)
     }
 
     // update accounts
     if !rollback {
         src.Counter = op.Counter
         src.LastSeen = b.block.Height
-        src.NOps++
-        src.NTx++
         src.IsDirty = true
         dst.LastSeen = b.block.Height
-        dst.NOps++
-        dst.NTx++
         dst.IsDirty = true
 
-        if !op.IsSuccess {
-            src.NOpsFailed++
-            dst.NOpsFailed++
-        } else {
+        if op.IsSuccess {
+            src.NTxSuccess++
+            src.NTxOut++
+            dst.NTxIn++
+            dst.TotalFeesUsed += op.Fee
+
             // reactivate inactive bakers (receiver only)
             // - it seems from reverse engineering baker activation rules
             //   that received transactions will reactivate an inactive baker
@@ -202,35 +197,35 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.Operation, id
                 op.IsStorageUpdate = dCon.Update(op, b.block.Params)
                 op.Contract = dCon
             }
+        } else {
+            src.NTxFailed++
         }
     } else {
         src.Counter = op.Counter - 1
-        src.NOps--
-        src.NTx--
         src.IsDirty = true
-        dst.NOps--
-        dst.NTx--
         dst.IsDirty = true
-        if !op.IsSuccess {
-            src.NOpsFailed--
-            dst.NOpsFailed--
-        } else if dCon != nil {
-            // rollback contract from previous op
-            // if nil, will rollback to previous state
-            prev, _ := b.idx.FindLastCall(ctx, dst.RowId, dst.FirstSeen, op.Height)
-            if prev != nil {
-                store, _ := b.idx.FindPreviousStorage(ctx, dst.RowId, prev.Height, prev.Height)
-                if store != nil {
-                    prev.Storage = store.Storage
-                    prev.StorageHash = store.Hash
-                    dCon.Rollback(op, prev, b.block.Params)
+        if op.IsSuccess {
+            src.NTxSuccess--
+            src.NTxOut--
+            dst.NTxIn--
+            dst.TotalFeesUsed -= op.Fee
+            if dCon != nil {
+                // rollback contract from previous op
+                // if nil, will rollback to previous state
+                prev, _ := b.idx.FindLastCall(ctx, dst.RowId, dst.FirstSeen, op.Height)
+                if prev != nil {
+                    store, _ := b.idx.FindPreviousStorage(ctx, dst.RowId, prev.Height, prev.Height)
+                    if store != nil {
+                        prev.Storage = store.Storage
+                        prev.StorageHash = store.Hash
+                        dCon.Rollback(op, prev, b.block.Params)
+                    }
                 }
             }
+        } else {
+            src.NTxFailed--
         }
     }
-
-    // append before potential internal ops
-    b.block.Ops = append(b.block.Ops, op)
 
     // apply internal operation result (may generate new op and flows)
     for i, v := range top.Metadata.InternalResults {
@@ -327,28 +322,31 @@ func (b *Builder) AppendInternalTransactionOp(
     op.GasLimit = 0     // n.a. for internal ops
     op.StorageLimit = 0 // n.a. for internal ops
     op.Volume = iop.Amount
+
     res := iop.Result
     op.Status = res.Status
     op.IsSuccess = op.Status.IsSuccess()
     op.GasUsed = res.Gas()
     op.StoragePaid = res.PaidStorageSizeDiff
+    b.block.Ops = append(b.block.Ops, op)
 
     if iop.Parameters.Value.IsValid() {
         op.Parameters, err = iop.Parameters.MarshalBinary()
         if err != nil {
-            return Errorf("marshal params: %v", err)
+            log.Error(Errorf("marshal params: %v", err))
         }
         if dCon != nil && op.IsContract {
             pTyp, _, err := dCon.LoadType()
             if err != nil {
-                return Errorf("loading script for %s: %v", dst, err)
+                log.Error(Errorf("loading script for %s: %v", dst, err))
             }
             ep, _, err := iop.Parameters.MapEntrypoint(pTyp)
             if op.IsSuccess && err != nil {
-                return Errorf("searching entrypoint in %s: %v", dst, err)
+                log.Error(Errorf("searching entrypoint in %s: %v", dst, err))
+            } else {
+                op.Entrypoint = ep.Id
+                op.Data = ep.Name
             }
-            op.Entrypoint = ep.Id
-            op.Data = ep.Name
         }
         // ticket deposit
         if dCon != nil && op.IsRollup {
@@ -359,23 +357,23 @@ func (b *Builder) AppendInternalTransactionOp(
     if res.Storage.IsValid() {
         op.Storage, err = res.Storage.MarshalBinary()
         if err != nil {
-            return Errorf("marshal storage: %v", err)
+            log.Error(Errorf("marshal storage: %v", err))
         }
         op.StorageHash = res.Storage.Hash64()
     }
-    if ev := res.BigmapEvents(); len(ev) > 0 {
-        // patch original bigmap diff
-        op.BigmapEvents, err = b.PatchBigmapEvents(ctx, ev, dst.Address, nil)
-        if err != nil {
-            return Errorf("patch bigmap: %v", err)
-        }
+
+    // create or extend bigmap diff to inject alloc for proto < v005, overwrite original
+    op.BigmapEvents = res.BigmapEvents()
+    if b.block.Params.Version <= 4 && len(op.BigmapEvents) > 0 {
+        op.BigmapEvents, _ = b.PatchBigmapEvents(ctx, op.BigmapEvents, dst.Address, nil)
     }
 
-    var flows []*model.Flow
+    // keep ticket updates
+    op.RawTicketUpdates = res.TicketUpdates()
 
     // on success, create flows and update accounts
     if op.IsSuccess {
-        flows = b.NewInternalTransactionFlows(
+        flows := b.NewInternalTransactionFlows(
             origsrc, src, dst, // outer and inner source, inner dest
             origbkr, sbkr, dbkr, // bakers (optional)
             sCon, dCon, // contracts (optional)
@@ -390,63 +388,57 @@ func (b *Builder) AppendInternalTransactionOp(
                 op.Burned += f.AmountOut
             }
         }
+    } else {
+        // keep errors
+        op.Errors, _ = json.Marshal(res.Errors)
 
-    } else if len(res.Errors) > 0 {
-        // handle errors
-        if buf, err := json.Marshal(res.Errors); err == nil {
-            op.Errors = buf
-        } else {
-            // non-fatal, but error data will be missing from index
-            log.Error(Errorf("marshal op errors: %s", err))
-        }
-
-        // a negative outcome leaves no trace because fees are paid by outer tx
+        // fees are paid by outer tx
     }
 
     // update accounts
     if !rollback {
         src.Counter = op.Counter
         src.LastSeen = b.block.Height
-        src.NOps++
-        src.NTx++
         src.IsDirty = true
-        dst.NOps++
-        dst.NTx++
         dst.LastSeen = b.block.Height
         dst.IsDirty = true
-        if !op.IsSuccess {
-            src.NOpsFailed++
-            dst.NOpsFailed++
-        } else if dCon != nil {
-            // update contract from op
-            op.IsStorageUpdate = dCon.Update(op, b.block.Params)
-            op.Contract = dCon
+        if op.IsSuccess {
+            src.NTxSuccess++
+            src.NTxOut++
+            dst.NTxIn++
+            dst.TotalFeesUsed += op.Fee
+            if dCon != nil {
+                op.IsStorageUpdate = dCon.Update(op, b.block.Params)
+                op.Contract = dCon
+            }
+        } else {
+            src.NTxFailed++
         }
     } else {
         src.Counter = op.Counter - 1
-        src.NOps--
-        src.NTx--
         src.IsDirty = true
-        dst.NOps--
-        dst.NTx--
         dst.IsDirty = true
-        if !op.IsSuccess {
-            src.NOpsFailed--
-            dst.NOpsFailed--
-        } else if dCon != nil {
-            // rollback contract from previous op
-            // if nil, will rollback to previous state
-            prev, _ := b.idx.FindLastCall(ctx, dst.RowId, dst.FirstSeen, op.Height)
-            if prev != nil {
-                store, _ := b.idx.FindPreviousStorage(ctx, dst.RowId, prev.Height, prev.Height)
-                if store != nil {
-                    prev.Storage = store.Storage
-                    prev.StorageHash = store.Hash
-                    dCon.Rollback(op, prev, b.block.Params)
+        if op.IsSuccess {
+            src.NTxSuccess--
+            src.NTxOut--
+            dst.NTxIn--
+            dst.TotalFeesUsed -= op.Fee
+            if dCon != nil {
+                // rollback contract from previous op
+                // if nil, will rollback to previous state
+                prev, _ := b.idx.FindLastCall(ctx, dst.RowId, dst.FirstSeen, op.Height)
+                if prev != nil {
+                    store, _ := b.idx.FindPreviousStorage(ctx, dst.RowId, prev.Height, prev.Height)
+                    if store != nil {
+                        prev.Storage = store.Storage
+                        prev.StorageHash = store.Hash
+                        dCon.Rollback(op, prev, b.block.Params)
+                    }
                 }
             }
+        } else {
+            src.NTxFailed--
         }
     }
-    b.block.Ops = append(b.block.Ops, op)
     return nil
 }

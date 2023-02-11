@@ -99,6 +99,7 @@ func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 		TotalSent          float64   `json:"total_sent"`
 		TotalBurned        float64   `json:"total_burned"`
 		TotalFeesPaid      float64   `json:"total_fees_paid"`
+		TotalFeesUsed      float64   `json:"total_fees_used"`
 		UnclaimedBalance   float64   `json:"unclaimed_balance"`
 		SpendableBalance   float64   `json:"spendable_balance"`
 		FrozenBond         float64   `json:"frozen_bond"`
@@ -109,14 +110,10 @@ func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 		IsRevealed         bool      `json:"is_revealed"`
 		IsBaker            bool      `json:"is_baker"`
 		IsContract         bool      `json:"is_contract"`
-		NOps               int       `json:"n_ops"`
-		NOpsFailed         int       `json:"n_ops_failed"`
-		NTx                int       `json:"n_tx"`
-		NDelegation        int       `json:"n_delegation"`
-		NOrigination       int       `json:"n_origination"`
-		NConstants         int       `json:"n_constants"`
-		TokenGenMin        int64     `json:"token_gen_min"`
-		TokenGenMax        int64     `json:"token_gen_max"`
+		NTxSuccess         int       `json:"n_tx_success"`
+		NTxFailed          int       `json:"n_tx_failed"`
+		NTxOut             int       `json:"n_tx_out"`
+		NTxIn              int       `json:"n_tx_in"`
 		FirstSeenTime      int64     `json:"first_seen_time"`
 		LastSeenTime       int64     `json:"last_seen_time"`
 		FirstInTime        int64     `json:"first_in_time"`
@@ -128,7 +125,7 @@ func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 		RowId:              a.RowId.Value(),
 		Address:            a.String(),
 		AddressType:        a.Type.String(),
-		Pubkey:             a.Key(),
+		Pubkey:             a.Pubkey,
 		Counter:            a.Counter,
 		Baker:              a.ctx.Indexer.LookupAddress(a.ctx, a.BakerId).String(),
 		Creator:            a.ctx.Indexer.LookupAddress(a.ctx, a.CreatorId).String(),
@@ -143,6 +140,7 @@ func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 		TotalSent:          a.params.ConvertValue(a.TotalSent),
 		TotalBurned:        a.params.ConvertValue(a.TotalBurned),
 		TotalFeesPaid:      a.params.ConvertValue(a.TotalFeesPaid),
+		TotalFeesUsed:      a.params.ConvertValue(a.TotalFeesUsed),
 		UnclaimedBalance:   a.params.ConvertValue(a.UnclaimedBalance),
 		SpendableBalance:   a.params.ConvertValue(a.SpendableBalance),
 		FrozenBond:         a.params.ConvertValue(a.FrozenBond),
@@ -153,14 +151,10 @@ func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 		IsRevealed:         a.IsRevealed,
 		IsBaker:            a.IsBaker,
 		IsContract:         a.IsContract,
-		NOps:               a.NOps,
-		NOpsFailed:         a.NOpsFailed,
-		NTx:                a.NTx,
-		NDelegation:        a.NDelegation,
-		NOrigination:       a.NOrigination,
-		NConstants:         a.NConstants,
-		TokenGenMin:        a.TokenGenMin,
-		TokenGenMax:        a.TokenGenMax,
+		NTxSuccess:         a.NTxSuccess,
+		NTxFailed:          a.NTxFailed,
+		NTxOut:             a.NTxOut,
+		NTxIn:              a.NTxIn,
 		FirstSeenTime:      a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.FirstSeen),
 		LastSeenTime:       a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.LastSeen),
 		FirstInTime:        a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.FirstIn),
@@ -185,8 +179,8 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 		case "address_type":
 			buf = strconv.AppendQuote(buf, a.Type.String())
 		case "pubkey":
-			if len(a.Pubkey) > 0 {
-				buf = strconv.AppendQuote(buf, a.Key().String())
+			if a.Pubkey.IsValid() {
+				buf = strconv.AppendQuote(buf, a.Pubkey.String())
 			} else {
 				buf = append(buf, null...)
 			}
@@ -226,6 +220,8 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendFloat(buf, a.params.ConvertValue(a.TotalBurned), 'f', dec, 64)
 		case "total_fees_paid":
 			buf = strconv.AppendFloat(buf, a.params.ConvertValue(a.TotalFeesPaid), 'f', dec, 64)
+		case "total_fees_used":
+			buf = strconv.AppendFloat(buf, a.params.ConvertValue(a.TotalFeesUsed), 'f', dec, 64)
 		case "unclaimed_balance":
 			buf = strconv.AppendFloat(buf, a.params.ConvertValue(a.UnclaimedBalance), 'f', dec, 64)
 		case "spendable_balance":
@@ -270,22 +266,14 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 			} else {
 				buf = append(buf, '0')
 			}
-		case "n_ops":
-			buf = strconv.AppendInt(buf, int64(a.NOps), 10)
-		case "n_ops_failed":
-			buf = strconv.AppendInt(buf, int64(a.NOpsFailed), 10)
-		case "n_tx":
-			buf = strconv.AppendInt(buf, int64(a.NTx), 10)
-		case "n_delegation":
-			buf = strconv.AppendInt(buf, int64(a.NDelegation), 10)
-		case "n_origination":
-			buf = strconv.AppendInt(buf, int64(a.NOrigination), 10)
-		case "n_constants":
-			buf = strconv.AppendInt(buf, int64(a.NConstants), 10)
-		case "token_gen_min":
-			buf = strconv.AppendInt(buf, a.TokenGenMin, 10)
-		case "token_gen_max":
-			buf = strconv.AppendInt(buf, a.TokenGenMax, 10)
+		case "n_tx_success":
+			buf = strconv.AppendInt(buf, int64(a.NTxSuccess), 10)
+		case "n_tx_failed":
+			buf = strconv.AppendInt(buf, int64(a.NTxFailed), 10)
+		case "n_tx_out":
+			buf = strconv.AppendInt(buf, int64(a.NTxOut), 10)
+		case "n_tx_in":
+			buf = strconv.AppendInt(buf, int64(a.NTxIn), 10)
 		case "first_seen_time":
 			buf = strconv.AppendInt(buf, a.ctx.Indexer.LookupBlockTimeMs(a.ctx.Context, a.FirstSeen), 10)
 		case "last_seen_time":
@@ -323,7 +311,7 @@ func (a *Account) MarshalCSV() ([]string, error) {
 		case "address_type":
 			res[i] = strconv.Quote(a.Type.String())
 		case "pubkey":
-			res[i] = strconv.Quote(a.Key().String())
+			res[i] = strconv.Quote(a.Pubkey.String())
 		case "counter":
 			res[i] = strconv.FormatInt(a.Counter, 10)
 		case "baker":
@@ -352,6 +340,8 @@ func (a *Account) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(a.params.ConvertValue(a.TotalBurned), 'f', dec, 64)
 		case "total_fees_paid":
 			res[i] = strconv.FormatFloat(a.params.ConvertValue(a.TotalFeesPaid), 'f', dec, 64)
+		case "total_fees_used":
+			res[i] = strconv.FormatFloat(a.params.ConvertValue(a.TotalFeesUsed), 'f', dec, 64)
 		case "unclaimed_balance":
 			res[i] = strconv.FormatFloat(a.params.ConvertValue(a.UnclaimedBalance), 'f', dec, 64)
 		case "spendable_balance":
@@ -372,22 +362,14 @@ func (a *Account) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatBool(a.IsBaker)
 		case "is_contract":
 			res[i] = strconv.FormatBool(a.IsContract)
-		case "n_ops":
-			res[i] = strconv.FormatInt(int64(a.NOps), 10)
-		case "n_ops_failed":
-			res[i] = strconv.FormatInt(int64(a.NOpsFailed), 10)
-		case "n_tx":
-			res[i] = strconv.FormatInt(int64(a.NTx), 10)
-		case "n_delegation":
-			res[i] = strconv.FormatInt(int64(a.NDelegation), 10)
-		case "n_origination":
-			res[i] = strconv.FormatInt(int64(a.NOrigination), 10)
-		case "n_constants":
-			res[i] = strconv.FormatInt(int64(a.NConstants), 10)
-		case "token_gen_min":
-			res[i] = strconv.FormatInt(a.TokenGenMin, 10)
-		case "token_gen_max":
-			res[i] = strconv.FormatInt(a.TokenGenMax, 10)
+		case "n_tx_success":
+			res[i] = strconv.FormatInt(int64(a.NTxSuccess), 10)
+		case "n_tx_failed":
+			res[i] = strconv.FormatInt(int64(a.NTxFailed), 10)
+		case "n_tx_out":
+			res[i] = strconv.FormatInt(int64(a.NTxOut), 10)
+		case "n_tx_in":
+			res[i] = strconv.FormatInt(int64(a.NTxIn), 10)
 		case "first_seen_time":
 			res[i] = strconv.Quote(a.ctx.Indexer.LookupBlockTime(a.ctx.Context, a.FirstSeen).Format(time.RFC3339))
 		case "last_seen_time":
@@ -600,7 +582,8 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 				// convert amounts from float to int64, handle multiple values for rg, in, nin
 				switch prefix {
 				case "total_received", "total_sent", "total_burned",
-					"total_fees_paid", "unclaimed_balance", "spendable_balance",
+					"total_fees_paid", "total_fees_used",
+					"unclaimed_balance", "spendable_balance",
 					"frozen_bond", "lost_bond":
 					fvals := make([]string, 0)
 					for _, vv := range strings.Split(v, ",") {

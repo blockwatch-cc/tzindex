@@ -67,6 +67,8 @@ func (b *Builder) NewImplicitFlows() []*model.Flow {
                 nextType = model.FlowTypeBaking
             case "baking bonuses":
                 nextType = model.FlowTypeBonus
+            case "invoice":
+                nextType = model.FlowTypeInvoice
             }
         case "burned":
             // Ithaca+
@@ -137,7 +139,6 @@ func (b *Builder) NewImplicitFlows() []*model.Flow {
                         f.Category = model.FlowCategoryBalance
                         f.Operation = model.FlowTypeInternal
                         f.AmountIn = u.Change
-                        f.TokenGenMin = 1
                         flows = append(flows, f)
                     } else {
                         if nextType.IsValid() {
@@ -150,7 +151,6 @@ func (b *Builder) NewImplicitFlows() []*model.Flow {
                             f.Category = model.FlowCategoryBalance
                             f.Operation = nextType
                             f.AmountIn = u.Change - fees
-                            f.TokenGenMin = 1
                             flows = append(flows, f)
                             // add fee flow
                             if fees > 0 {
@@ -159,7 +159,6 @@ func (b *Builder) NewImplicitFlows() []*model.Flow {
                                 f.Operation = nextType
                                 f.AmountIn = fees
                                 f.IsFee = true
-                                f.TokenGenMin = 1
                                 flows = append(flows, f)
                                 fees = 0
                             }
@@ -184,26 +183,34 @@ func (b *Builder) NewImplicitFlows() []*model.Flow {
                     f.Category = model.FlowCategoryBalance
                     f.Operation = model.FlowTypeInvoice
                     f.AmountIn = u.Change
-                    f.TokenGenMin = 1
                     flows = append(flows, f)
                 } else {
-                    // Ithanca v012 migration extra deposit freeze or refund
-                    // keep op=internal to not create operation
-                    if u.Change < 0 {
-                        // extra deposit paid
+                    if nextType.IsValid() && nextType == model.FlowTypeInvoice {
+                        // add one or multiple invoice flows
                         f := model.NewFlow(b.block, acc, nil, id)
                         f.Category = model.FlowCategoryBalance
-                        f.Operation = model.FlowTypeInternal
-                        f.AmountOut = -u.Change // note the negation!
-                        flows = append(flows, f)
-                    } else {
-                        // legacy deposit refunded, use op internal
-                        // to not create a deposit operation
-                        f := model.NewFlow(b.block, acc, nil, id)
-                        f.Category = model.FlowCategoryBalance
-                        f.Operation = model.FlowTypeInternal
+                        f.Operation = model.FlowTypeInvoice
                         f.AmountIn = u.Change
                         flows = append(flows, f)
+                    } else {
+                        // Ithanca v012 migration extra deposit freeze or refund
+                        // keep op=internal to not create operation
+                        if u.Change < 0 {
+                            // extra deposit paid
+                            f := model.NewFlow(b.block, acc, nil, id)
+                            f.Category = model.FlowCategoryBalance
+                            f.Operation = model.FlowTypeInternal
+                            f.AmountOut = -u.Change // note the negation!
+                            flows = append(flows, f)
+                        } else {
+                            // legacy deposit refunded, use op internal
+                            // to not create a deposit operation
+                            f := model.NewFlow(b.block, acc, nil, id)
+                            f.Category = model.FlowCategoryBalance
+                            f.Operation = model.FlowTypeInternal
+                            f.AmountIn = u.Change
+                            flows = append(flows, f)
+                        }
                     }
                 }
             }

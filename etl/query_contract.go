@@ -55,16 +55,39 @@ func (m *Indexer) LookupContractId(ctx context.Context, id model.AccountID) (*mo
     return cc, nil
 }
 
-func (m *Indexer) LookupContractType(ctx context.Context, id model.AccountID) (micheline.Type, micheline.Type, error) {
+func (m *Indexer) LookupContractType(ctx context.Context, id model.AccountID) (micheline.Type, micheline.Type, uint64, error) {
     elem, ok := m.contract_types.Get(id)
     if !ok {
         cc, err := m.LookupContractId(ctx, id)
         if err != nil {
-            return micheline.Type{}, micheline.Type{}, err
+            return micheline.Type{}, micheline.Type{}, 0, err
         }
         elem = m.contract_types.Add(cc)
     }
-    return elem.ParamType, elem.StorageType, nil
+    return elem.ParamType, elem.StorageType, elem.CodeHash, nil
+}
+
+func (m *Indexer) LookupTicket(ctx context.Context, id model.TicketID) (*model.TicketType, error) {
+    tt, ok := m.ticket_types.Get(id)
+    if !ok {
+        table, err := m.Table(index.TicketTypeTableKey)
+        if err != nil {
+            return nil, err
+        }
+        tt = model.NewTicketType()
+        err = pack.NewQuery("api.ticket_type_by_id").
+            WithTable(table).
+            AndEqual("row_id", id).
+            Execute(ctx, tt)
+        if err != nil {
+            return nil, err
+        }
+        if tt.Id == 0 {
+            return nil, index.ErrNoTicketType
+        }
+        m.ticket_types.Add(tt)
+    }
+    return tt, nil
 }
 
 func (m *Indexer) ListContracts(ctx context.Context, r ListRequest) ([]*model.Contract, error) {

@@ -235,8 +235,8 @@ func (c *Chain) Update(b *Block, accounts map[AccountID]*Account, bakers map[Acc
 					break
 				}
 			}
-			if bal >= b.Params.TokensPerRoll {
-				c.Rolls += bal / b.Params.TokensPerRoll
+			if bal >= b.Params.MinimalStake {
+				c.Rolls += bal / b.Params.MinimalStake
 				c.RollOwners++
 			}
 		}

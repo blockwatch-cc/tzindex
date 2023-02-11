@@ -11,8 +11,6 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/spf13/cobra"
-
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/store"
 	"blockwatch.cc/tzindex/etl"
@@ -22,66 +20,19 @@ import (
 	"github.com/echa/config"
 )
 
-var (
-	noindex   bool
-	nomonitor bool
-	unsafe    bool
-	norpc     bool
-	noapi     bool
-	cors      bool
-	stop      int64
-
-	validate bool
-)
-
-func init() {
-	rootCmd.PersistentFlags().StringVar(&rpcurl, "rpcurl", "http://127.0.0.1:8732", "RPC url")
-	rootCmd.PersistentFlags().StringVar(&rpcuser, "rpcuser", "", "RPC username")
-	rootCmd.PersistentFlags().StringVar(&rpcpass, "rpcpass", "", "RPC password")
-	rootCmd.PersistentFlags().BoolVar(&norpc, "norpc", false, "disable RPC client")
-	rootCmd.PersistentFlags().BoolVar(&notls, "notls", false, "disable RPC TLS support (use http)")
-	rootCmd.PersistentFlags().BoolVar(&insecure, "insecure", false, "disable RPC TLS certificate checks (not recommended)")
-	rootCmd.PersistentFlags().BoolVar(&lightIndex, "light", true, "light mode (default, skips endorsement, baker and governance data)")
-	rootCmd.PersistentFlags().BoolVar(&fullIndex, "full", false, "full mode (index all data)")
-
-	serverCmd.Flags().BoolVar(&noapi, "noapi", false, "disable API server")
-	serverCmd.Flags().BoolVar(&noindex, "noindex", false, "disable indexing")
-	serverCmd.Flags().BoolVar(&nomonitor, "nomonitor", false, "disable block monitor")
-	serverCmd.Flags().BoolVar(&unsafe, "unsafe", false, "disable fsync for fast ingest (DANGEROUS! data will be lost on crashes)")
-	serverCmd.Flags().BoolVar(&validate, "validate", false, "validate account balances")
-	serverCmd.Flags().Int64Var(&stop, "stop", 0, "stop indexing after `height`")
-	serverCmd.Flags().BoolVar(&cors, "enable-cors", false, "enable API CORS support")
-
-	rootCmd.AddCommand(serverCmd)
-}
-
-var serverCmd = &cobra.Command{
-	Use:   "run",
-	Short: "Run as service",
-	Run: func(cmd *cobra.Command, args []string) {
-		if err := runServer(args); err != nil {
-			log.Fatalf("Fatal: %v", err)
-		}
-	},
-}
-
-func runServer(args []string) error {
+func runServer() error {
 	// set user agent in library client
 	server.UserAgent = UserAgent()
 	server.ApiVersion = apiVersion
-	pack.QueryLogMinDuration = config.GetDuration("database.log_slow_queries")
-
-	if fullIndex {
-		lightIndex = false
-	}
+	pack.QueryLogMinDuration = config.GetDuration("db.log_slow_queries")
 
 	// load metadata extensions
 	if err := metadata.LoadExtensions(); err != nil {
 		return err
 	}
 
-	engine := config.GetString("database.engine")
-	pathname := config.GetString("database.path")
+	engine := config.GetString("db.engine")
+	pathname := config.GetString("db.path")
 	log.Infof("Using %s database %s", engine, pathname)
 	if unsafe {
 		log.Warnf("Enabled NOSYNC mode. Database will not be safe on crashes!")
@@ -174,8 +125,6 @@ func runServer(args []string) error {
 			Http: server.HttpConfig{
 				Addr:                config.GetString("server.addr"),
 				Port:                config.GetInt("server.port"),
-				Scheme:              config.GetString("server.scheme"),
-				Host:                config.GetString("server.host"),
 				MaxWorkers:          config.GetInt("server.workers"),
 				MaxQueue:            config.GetInt("server.queue"),
 				ReadTimeout:         config.GetDuration("server.read_timeout"),
@@ -217,5 +166,6 @@ func runServer(args []string) error {
 		syscall.SIGQUIT,
 	)
 	<-c
+	signal.Stop(c)
 	return nil
 }

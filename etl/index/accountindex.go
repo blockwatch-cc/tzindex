@@ -16,13 +16,13 @@ import (
 )
 
 const (
-	AccountPackSizeLog2         = 15  // =32k packs ~ 3M unpacked
-	AccountJournalSizeLog2      = 17  // =128k entries for busy blockchains
-	AccountCacheSize            = 128 // 192 = 576 MB, 128 = 384MB, 64 = 192M
+	AccountPackSizeLog2         = 14 // =16k packs
+	AccountJournalSizeLog2      = 17 // =128k
+	AccountCacheSize            = 256
 	AccountFillLevel            = 100
-	AccountIndexPackSizeLog2    = 15   // =16k packs (32k split size) ~256k unpacked
-	AccountIndexJournalSizeLog2 = 16   // 64k
-	AccountIndexCacheSize       = 1024 // ~256M
+	AccountIndexPackSizeLog2    = 14 // =8k packs (16k split size)
+	AccountIndexJournalSizeLog2 = 17 // 128k
+	AccountIndexCacheSize       = 512
 	AccountIndexFillLevel       = 90
 	AccountIndexKey             = "account"
 	AccountTableKey             = "account"

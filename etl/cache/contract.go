@@ -25,10 +25,11 @@ type ContractTypeCache struct {
 type ContractTypeElem struct {
     ParamType   micheline.Type
     StorageType micheline.Type
+    CodeHash    uint64
 }
 
 func (e ContractTypeElem) Size() int64 {
-    return int64(e.ParamType.Size() + e.StorageType.Size())
+    return int64(e.ParamType.Size()+e.StorageType.Size()) + 8
 }
 
 func NewContractTypeCache(sz int) *ContractTypeCache {
@@ -44,7 +45,7 @@ func NewContractTypeCache(sz int) *ContractTypeCache {
 }
 
 func (c *ContractTypeCache) Add(cc *model.Contract) *ContractTypeElem {
-    elem := &ContractTypeElem{}
+    elem := &ContractTypeElem{CodeHash: cc.CodeHash}
     elem.ParamType, elem.StorageType, _ = cc.LoadType()
     updated, _ := c.cache.Add(cc.AccountId, elem)
     if updated {

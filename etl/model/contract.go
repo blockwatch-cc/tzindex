@@ -173,7 +173,7 @@ func NewManagerTzContract(a *Account, height int64) (*Contract, error) {
 	c.StorageSize = 232           // fixed 232 bytes
 	c.StoragePaid = 0             // noone paid for this
 	c.CallStats = make([]byte, 8) // 2 entrypoints, 'do' (0) and 'default' (1)
-	binary.BigEndian.PutUint32(c.CallStats[4:8], uint32(a.NTx))
+	binary.BigEndian.PutUint32(c.CallStats[4:8], uint32(a.NTxSuccess))
 	c.IsNew = true
 	c.IsDirty = true
 	return c, nil

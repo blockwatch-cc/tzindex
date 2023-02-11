@@ -248,26 +248,23 @@ type BlockchainConfig struct {
 	Decimals    int                `json:"decimals"`
 	Token       int64              `json:"units"`
 
-	TokensPerRoll       float64 `json:"tokens_per_roll"`
+	MinimalStake        float64 `json:"minimal_stake"`
 	PreservedCycles     int64   `json:"preserved_cycles"`
 	BlocksPerCommitment int64   `json:"blocks_per_commitment"`
 	BlocksPerCycle      int64   `json:"blocks_per_cycle"`
 	BlocksPerSnapshot   int64   `json:"blocks_per_snapshot,omitempty"`
 
 	// timing
-	TimeBetweenBlocks      *[2]int `json:"time_between_blocks,omitempty"`
-	MinimalBlockDelay      int     `json:"minimal_block_delay"`
-	DelayIncrementPerRound int     `json:"delay_increment_per_round,omitempty"`
+	MinimalBlockDelay      int `json:"minimal_block_delay"`
+	DelayIncrementPerRound int `json:"delay_increment_per_round,omitempty"`
 
 	// rewards
-	BlockReward              float64     `json:"block_reward"`
-	EndorsementReward        float64     `json:"endorsement_reward"`
-	BlockRewardV6            *[2]float64 `json:"block_rewards_v6,omitempty"`
-	EndorsementRewardV6      *[2]float64 `json:"endorsement_rewards_v6,omitempty"`
-	SeedNonceRevelationTip   float64     `json:"seed_nonce_revelation_tip"`
-	BakingRewardFixedPortion int64       `json:"baking_reward_fixed_portion,omitempty"`
-	BakingRewardBonusPerSlot int64       `json:"baking_reward_bonus_per_slot,omitempty"`
-	EndorsingRewardPerSlot   int64       `json:"endorsing_reward_per_slot,omitempty"`
+	BlockReward              float64 `json:"block_reward"`
+	EndorsementReward        float64 `json:"endorsement_reward"`
+	SeedNonceRevelationTip   float64 `json:"seed_nonce_revelation_tip"`
+	BakingRewardFixedPortion int64   `json:"baking_reward_fixed_portion,omitempty"`
+	BakingRewardBonusPerSlot int64   `json:"baking_reward_bonus_per_slot,omitempty"`
+	EndorsingRewardPerSlot   int64   `json:"endorsing_reward_per_slot,omitempty"`
 
 	// costs
 	OriginationBurn            float64 `json:"origination_burn,omitempty"`
@@ -324,7 +321,7 @@ func GetBlockchainConfig(ctx *server.Context) (interface{}, int) {
 		Token:       p.Token,
 
 		// main
-		TokensPerRoll:       p.ConvertValue(p.TokensPerRoll),
+		MinimalStake:        p.ConvertValue(p.MinimalStake),
 		PreservedCycles:     p.PreservedCycles,
 		BlocksPerCommitment: p.BlocksPerCommitment,
 		BlocksPerCycle:      p.BlocksPerCycle,
@@ -370,23 +367,6 @@ func GetBlockchainConfig(ctx *server.Context) (interface{}, int) {
 
 		timestamp: ctx.Tip.BestTime,
 		expires:   ctx.Tip.BestTime.Add(p.BlockTime()),
-	}
-
-	if p.TimeBetweenBlocks[0] > 0 {
-		cfg.TimeBetweenBlocks = &[2]int{
-			int(p.TimeBetweenBlocks[0] / time.Second),
-			int(p.TimeBetweenBlocks[1] / time.Second),
-		}
-	}
-	if p.BlockRewardV6[0] > 0 {
-		cfg.BlockRewardV6 = &[2]float64{
-			p.ConvertValue(p.BlockRewardV6[0]),
-			p.ConvertValue(p.BlockRewardV6[1]),
-		}
-		cfg.EndorsementRewardV6 = &[2]float64{
-			p.ConvertValue(p.EndorsementRewardV6[0]),
-			p.ConvertValue(p.EndorsementRewardV6[1]),
-		}
 	}
 
 	return cfg, http.StatusOK
@@ -463,18 +443,12 @@ func estimateHealth(ctx *server.Context, height, history int64) int {
 	// check if next block is past due and estimate expected priority
 	if height == nowheight && isSync {
 		delay := ctx.Now.Sub(ctx.Tip.BestTime)
-		t1 := params.BlockTime()
-		t2 := params.TimeBetweenBlocks[1]
-		if t2 == 0 {
-			t2 = t1
-		}
+		t1 := params.MinimalBlockDelay
+		t2 := params.DelayIncrementPerRound
 		if delay > t1 {
-			var round int = int((delay-t1+t2/2)/t2) + 1
-			if params.Version >= 12 {
-				round = 1
-				for d := delay - t1; d > 0; d -= t1 + time.Duration(round-1)*params.DelayIncrementPerRound {
-					round++
-				}
+			round := 1
+			for d := delay - t1; d > 0; d -= t1 + time.Duration(round-1)*t2 {
+				round++
 			}
 			health -= float64(round) * missedRoundPenalty
 			// log.Warnf("Health penalty %.3f due to %s overdue next block %d [%d]",

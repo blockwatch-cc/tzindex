@@ -8,11 +8,10 @@ import (
 )
 
 type Balance struct {
-    RowId      uint64    `pack:"I,pk"     json:"row_id"`
-    AccountId  AccountID `pack:"A,bloom"  json:"account_id"`
-    Balance    int64     `pack:"B"        json:"balance"`
-    ValidFrom  int64     `pack:">"        json:"valid_from"`
-    ValidUntil int64     `pack:"<"        json:"valid_until"`
+    RowId     uint64    `pack:"I,pk"     json:"row_id"`
+    AccountId AccountID `pack:"A,bloom"  json:"account_id"`
+    Balance   int64     `pack:"B"        json:"balance"`
+    ValidFrom int64     `pack:">"        json:"valid_from"`
 }
 
 // Ensure Balance implements the pack.Item interface.
@@ -27,9 +26,5 @@ func (b *Balance) SetID(id uint64) {
 }
 
 func (b *Balance) Reset() {
-    b.RowId = 0
-    b.AccountId = 0
-    b.Balance = 0
-    b.ValidFrom = 0
-    b.ValidUntil = 0
+    *b = Balance{}
 }

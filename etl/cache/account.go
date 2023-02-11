@@ -100,7 +100,9 @@ func (c *AccountCache) GetAddress(addr tezos.Address) (uint64, *model.Account, b
 		return key, nil, false
 	}
 	acc := model.AllocAccount()
-	_ = acc.UnmarshalBinary(val.([]byte))
+	if err := acc.UnmarshalBinary(val.([]byte)); err != nil {
+		return key, nil, false
+	}
 	// cross-check for hash collisions
 	if acc.RowId == 0 || !acc.Address.Equal(addr) {
 		acc.Free()
@@ -124,7 +126,9 @@ func (c *AccountCache) GetId(id model.AccountID) (uint64, *model.Account, bool) 
 		return key, nil, false
 	}
 	acc := model.AllocAccount()
-	_ = acc.UnmarshalBinary(val.([]byte))
+	if err := acc.UnmarshalBinary(val.([]byte)); err != nil {
+		return key, nil, false
+	}
 	// cross-check for hash collisions
 	if acc.RowId != id {
 		acc.Free()

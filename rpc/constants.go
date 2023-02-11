@@ -63,6 +63,9 @@ type Constants struct {
 
 	// New in v13
 	CyclesPerVotingPeriod int64 `json:"cycles_per_voting_period"`
+
+	// New in v15
+	MinimalStake int64 `json:"minimal_stake,string"` // replaces tokens_per_roll
 }
 
 func (c Constants) HaveV6Rewards() bool {
@@ -145,14 +148,6 @@ func (c *Client) GetConstants(ctx context.Context, id BlockID) (con Constants, e
 	return
 }
 
-// GetCustomConstants returns chain configuration constants at block id
-// marshaled into a user-defined structure.
-// https://tezos.gitlab.io/tezos/api/rpc.html#get-block-id-context-constants
-func (c *Client) GetCustomConstants(ctx context.Context, id BlockID, resp interface{}) error {
-	u := fmt.Sprintf("chains/main/blocks/%s/context/constants", id)
-	return c.Get(ctx, u, resp)
-}
-
 // GetParams returns a translated parameters structure for the current
 // network at block id.
 func (c *Client) GetParams(ctx context.Context, id BlockID) (*tezos.Params, error) {
@@ -171,21 +166,20 @@ func (c *Client) GetParams(ctx context.Context, id BlockID) (*tezos.Params, erro
 	if err != nil {
 		return nil, err
 	}
-	return con.MapToChainParams().
+	return con.Params().
 		ForNetwork(c.ChainId).
 		ForProtocol(meta.Protocol).
 		ForHeight(meta.GetLevel()), nil
 }
 
-func (c Constants) MapToChainParams() *tezos.Params {
+func (c Constants) Params() *tezos.Params {
 	p := tezos.NewParams()
-	p.TokensPerRoll = c.TokensPerRoll
+	p.MinimalStake = c.TokensPerRoll + c.MinimalStake // either/or
 
 	p.PreservedCycles = c.PreservedCycles
 	p.BlocksPerCycle = c.BlocksPerCycle
 	p.BlocksPerCommitment = c.BlocksPerCommitment
-	p.BlocksPerRollSnapshot = c.BlocksPerRollSnapshot
-	p.BlocksPerStakeSnapshot = c.BlocksPerStakeSnapshot
+	p.BlocksPerSnapshot = c.BlocksPerRollSnapshot + c.BlocksPerStakeSnapshot // either/or
 
 	// timing
 	for i, v := range c.TimeBetweenBlocks {
@@ -196,10 +190,10 @@ func (c Constants) MapToChainParams() *tezos.Params {
 		if err != nil {
 			log.Errorf("parsing TimeBetweenBlocks: %v", err)
 		} else {
-			p.TimeBetweenBlocks[i] = time.Duration(val) * time.Second
+			p.MinimalBlockDelay = time.Duration(val) * time.Second
 		}
 	}
-	p.MinimalBlockDelay = time.Duration(c.MinimalBlockDelay) * time.Second
+	p.MinimalBlockDelay += time.Duration(c.MinimalBlockDelay) * time.Second // either/or
 	p.DelayIncrementPerRound = time.Duration(c.DelayIncrementPerRound) * time.Second
 
 	// rewards

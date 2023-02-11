@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -32,7 +31,7 @@ type BalanceModel struct {
 }
 
 func (m *BalanceModel) Time() time.Time {
-	return m.idx.LookupBlockTime(m.ctx, m.ValidUntil)
+	return m.idx.LookupBlockTime(m.ctx, m.ValidFrom)
 }
 
 // configurable marshalling helper
@@ -44,6 +43,7 @@ type BalanceSeries struct {
 	params  *tezos.Params
 	verbose bool
 	null    bool
+	empty   bool
 }
 
 var _ SeriesBucket = (*BalanceSeries)(nil)
@@ -52,34 +52,39 @@ func (s *BalanceSeries) Init(params *tezos.Params, columns []string, verbose boo
 	s.params = params
 	s.columns = columns
 	s.verbose = verbose
+	s.empty = true
 }
 
 func (s *BalanceSeries) IsEmpty() bool {
-	return s.null
+	return s.empty
 }
 
 // Aggregation func is `last()` instead of `sum()`
 func (s *BalanceSeries) Add(m SeriesModel) {
 	o := m.(*BalanceModel)
 	s.Balance = o.Balance.Balance
+	s.empty = false
 }
 
 func (s *BalanceSeries) Reset() {
 	s.Timestamp = time.Time{}
 	s.Balance = 0
 	s.null = false
+	s.empty = true
 }
 
 func (s *BalanceSeries) Null(ts time.Time) SeriesBucket {
 	s.Reset()
 	s.Timestamp = ts
 	s.null = true
+	s.empty = false
 	return s
 }
 
 func (s *BalanceSeries) Zero(ts time.Time) SeriesBucket {
 	s.Reset()
 	s.Timestamp = ts
+	s.empty = false
 	return s
 }
 
@@ -100,6 +105,7 @@ func (s *BalanceSeries) Clone() SeriesBucket {
 		params:    s.params,
 		verbose:   s.verbose,
 		null:      s.null,
+		empty:     s.empty,
 	}
 }
 
@@ -188,9 +194,6 @@ func (s *BalanceSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pac
 		panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", args.Series), err))
 	}
 
-	// translate long column names to short names used in pack tables
-	var hasAddres bool
-
 	// time is auto-added from parser
 	if len(args.Columns) == 1 {
 		// use all series columns
@@ -212,9 +215,9 @@ func (s *BalanceSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pac
 	q := pack.NewQuery(ctx.RequestID).
 		WithTable(table).
 		WithFields(srcNames...).
-		WithOrder(args.Order).
-		AndGt("valid_until", from).
-		AndLt("valid_from", to)
+		WithOrder(args.Order)
+
+	var acc *model.Account
 
 	// build dynamic filter conditions from query (will panic on error)
 	for key, val := range ctx.Request.URL.Query() {
@@ -234,27 +237,43 @@ func (s *BalanceSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pac
 
 		case "address":
 			field := "account_id" // account
-			if mode == pack.FilterModeEqual {
-				// single-address lookup and compile condition
-				addr, err := tezos.ParseAddress(val[0])
-				if err != nil || !addr.IsValid() {
-					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
-				}
-				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-				if err != nil && err != index.ErrNoAccountEntry {
-					panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("address not found '%s'", val[0]), err))
-				}
-				// Note: when not found we insert an always false condition
-				if acc == nil || acc.RowId == 0 {
-					q = q.And(field, mode, uint64(math.MaxUint64))
-				} else {
-					// add id as extra condition
-					q = q.And(field, mode, acc.RowId)
-				}
-				hasAddres = true
-			} else {
+			if mode != pack.FilterModeEqual {
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode '%s' for column '%s'", mode, prefix), nil))
 			}
+			// single-address lookup and compile condition
+			addr, err := tezos.ParseAddress(val[0])
+			if err != nil || !addr.IsValid() {
+				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
+			}
+			acc, err = ctx.Indexer.LookupAccount(ctx, addr)
+			if err != nil && err != index.ErrNoAccountEntry {
+				panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("address not found '%s'", val[0]), err))
+			}
+			// fail if not found
+			if acc == nil || acc.RowId == 0 {
+				panic(server.EBadRequest(server.EC_PARAM_REQUIRED, "missing address", nil))
+			}
+
+			// use account
+			q = q.And(field, mode, acc.RowId)
+
+			// use current balance as seed (will overwrite below if any update exists)
+			if acc.FirstSeen < from {
+				s.Balance = acc.Balance()
+				s.empty = true
+			}
+
+			// find the previous value (if any exists) and pre-seed the bucket
+			var prev model.Balance
+			err = q.AndLt("valid_from", from).WithDesc().Execute(ctx, &prev)
+			if err != nil {
+				panic(server.EInternal(server.EC_DATABASE, "cannot query table", err))
+			}
+			if prev.RowId > 0 {
+				s.Balance = prev.Balance
+				s.empty = true
+			}
+
 		default:
 			// the same field name may appear multiple times, in which case conditions
 			// are combined like any other condition with logical AND
@@ -268,9 +287,8 @@ func (s *BalanceSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pac
 		}
 	}
 
-	if !hasAddres {
-		panic(server.EBadRequest(server.EC_PARAM_REQUIRED, "missing address", nil))
+	// add remaining query fields
+	q = q.AndRange("valid_from", from, to)
 
-	}
 	return q
 }

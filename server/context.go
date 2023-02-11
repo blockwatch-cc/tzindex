@@ -230,7 +230,7 @@ func (api *Context) handleError(e error) {
 			}
 		}
 	}
-	_ = re.SetScope(api.name)
+	re.SetScope(api.name)
 	re.RequestId = api.RequestID
 	re.Reason = "" // clear internal error
 	api.err = re
@@ -465,7 +465,7 @@ func (api *Context) writeResponseBody() {
 				}, " ")
 				api.Log.Errorf("Response Error %s: %v in struct %T", path, err, api.result)
 				e := EInternal(EC_MARSHAL_FAILED, "cannot marshal response", err).(*Error)
-				_ = e.SetScope(api.name)
+				e.SetScope(api.name)
 				if api.isStreamed {
 					api.ResponseWriter.Header().Set(trailerError, e.String())
 				} else {

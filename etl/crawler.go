@@ -408,7 +408,9 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 			// register genesis protocol
 			genesis.Params.StartHeight = 0
 			genesis.Params.Version = -1
-			_ = c.indexer.ConnectProtocol(ctx, genesis.Params, nil)
+			if err := c.indexer.ConnectProtocol(ctx, genesis.Params, nil); err != nil {
+				return err
+			}
 
 			// add to all indexes
 			if err := c.indexer.ConnectBlock(ctx, genesis, c.builder); err != nil {
@@ -439,9 +441,8 @@ func (c *Crawler) Init(ctx context.Context, mode Mode) error {
 			return err
 		}
 
-		// retry reporting in case the last try failed
+		// retry database snapshot in case it failed last time
 		if mode == MODE_SYNC {
-			// retry database snapshot in case it failed last time
 			if err := c.MaybeSnapshot(ctx); err != nil {
 				c.setState(STATE_FAILED, MONITOR_DISABLE)
 				return fmt.Errorf("Snapshot failed at block %d: %v", c.Height(), err)
@@ -694,17 +695,17 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 				err     error
 			)
 			if nextHash.IsValid() {
-				log.Debugf("crawler: fetching next block %s", nextHash)
+				// log.Debugf("crawler: fetching next block %s", nextHash)
 				tzblock, err = c.fetchBlock(c.ctx, nextHash)
 			} else {
-				log.Debugf("crawler: fetching next block %d", lastblock+1)
+				// log.Debugf("crawler: fetching next block %d", lastblock+1)
 				tzblock, err = c.fetchBlock(c.ctx, rpc.BlockLevel(lastblock+1))
 			}
 
 			// be resilient to network errors
 			if tzblock != nil {
 				// push block through reorg/delay filter and into finalized queue; may block
-				log.Debugf("crawler: queuing block %d %s q=%d", tzblock.Height(), tzblock.Hash(), len(c.finalized))
+				// log.Debugf("crawler: queuing block %d %s q=%d", tzblock.Height(), tzblock.Hash(), len(c.finalized))
 				err := c.filter.Push(c.ctx, tzblock, c.quit)
 				if err != nil {
 					switch err {
@@ -909,7 +910,7 @@ func (c *Crawler) syncBlockchain() {
 				log.Infof("Stopping blockchain sync at height %d.", tip.BestHeight)
 				return
 			}
-			log.Tracef("Processing block %d %s", tzblock.Height(), tzblock.Hash())
+			// log.Tracef("Processing block %d %s", tzblock.Height(), tzblock.Hash())
 			if c.bchead.Level > tzblock.Height()+c.delay {
 				c.setState(STATE_SYNCHRONIZING, MONITOR_KEEP)
 			}
@@ -1085,7 +1086,7 @@ func (c *Crawler) fetchParamsForBlock(ctx context.Context, block *rpc.Block) (*t
 			if err != nil {
 				return nil, fmt.Errorf("block init: %v", err)
 			}
-			params = cons.MapToChainParams()
+			params = cons.Params()
 		} else {
 			params = tezos.NewParams()
 		}

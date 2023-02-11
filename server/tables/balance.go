@@ -41,11 +41,9 @@ func init() {
 	balanceSourceNames["time"] = "-" // for balance series
 	balanceSourceNames["address"] = "A"
 	balanceSourceNames["valid_from_time"] = ">"
-	balanceSourceNames["valid_until_time"] = "<"
 	balanceAllAliases = append(balanceAllAliases,
 		"address",
 		"valid_from_time",
-		"valid_until_time",
 	)
 }
 
@@ -68,23 +66,19 @@ func (b *Balance) MarshalJSON() ([]byte, error) {
 
 func (b *Balance) MarshalJSONVerbose() ([]byte, error) {
 	balance := struct {
-		RowId          uint64    `json:"row_id"`
-		AccountId      uint64    `json:"account_id"`
-		Account        string    `json:"address"`
-		Balance        float64   `json:"balance"`
-		ValidFrom      int64     `json:"valid_from"`
-		ValidFromTime  time.Time `json:"valid_from_time"`
-		ValidUntil     int64     `json:"valid_until"`
-		ValidUntilTime time.Time `json:"valid_until_time"`
+		RowId         uint64    `json:"row_id"`
+		AccountId     uint64    `json:"account_id"`
+		Account       string    `json:"address"`
+		Balance       float64   `json:"balance"`
+		ValidFrom     int64     `json:"valid_from"`
+		ValidFromTime time.Time `json:"valid_from_time"`
 	}{
-		RowId:          b.RowId,
-		AccountId:      b.AccountId.Value(),
-		Account:        b.ctx.Indexer.LookupAddress(b.ctx, b.AccountId).String(),
-		Balance:        b.params.ConvertValue(b.Balance.Balance),
-		ValidFrom:      b.ValidFrom,
-		ValidFromTime:  b.ctx.Indexer.LookupBlockTime(b.ctx, b.ValidFrom),
-		ValidUntil:     b.ValidUntil,
-		ValidUntilTime: b.ctx.Indexer.LookupBlockTime(b.ctx, b.ValidUntil),
+		RowId:         b.RowId,
+		AccountId:     b.AccountId.Value(),
+		Account:       b.ctx.Indexer.LookupAddress(b.ctx, b.AccountId).String(),
+		Balance:       b.params.ConvertValue(b.Balance.Balance),
+		ValidFrom:     b.ValidFrom,
+		ValidFromTime: b.ctx.Indexer.LookupBlockTime(b.ctx, b.ValidFrom),
 	}
 	return json.Marshal(balance)
 }
@@ -105,12 +99,8 @@ func (b *Balance) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Balance.Balance), 'f', dec, 64)
 		case "valid_from":
 			buf = strconv.AppendInt(buf, b.ValidFrom, 10)
-		case "valid_until":
-			buf = strconv.AppendInt(buf, b.ValidUntil, 10)
 		case "valid_from_time":
 			buf = strconv.AppendInt(buf, b.ctx.Indexer.LookupBlockTimeMs(b.ctx, b.ValidFrom), 10)
-		case "valid_until_time":
-			buf = strconv.AppendInt(buf, b.ctx.Indexer.LookupBlockTimeMs(b.ctx, b.ValidUntil), 10)
 		default:
 			continue
 		}
@@ -137,12 +127,8 @@ func (b *Balance) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Balance.Balance), 'f', dec, 64)
 		case "valid_from":
 			res[i] = strconv.FormatInt(b.ValidFrom, 10)
-		case "valid_until":
-			res[i] = strconv.FormatInt(b.ValidUntil, 10)
 		case "valid_from_time":
 			res[i] = strconv.FormatInt(b.ctx.Indexer.LookupBlockTimeMs(b.ctx, b.ValidFrom), 10)
-		case "valid_until_time":
-			res[i] = strconv.FormatInt(b.ctx.Indexer.LookupBlockTimeMs(b.ctx, b.ValidUntil), 10)
 		default:
 			continue
 		}
@@ -264,12 +250,6 @@ func StreamBalanceTable(ctx *server.Context, args *TableRequest) (interface{}, i
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid time '%s'", val[0]), err))
 			}
 			q = q.And(field, mode, ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, from.Time()))
-		case "valid_until_time":
-			until, err := util.ParseTime(val[0])
-			if err != nil {
-				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid time '%s'", val[0]), err))
-			}
-			q = q.And(field, mode, ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, until.Time()))
 		default:
 			// translate long column name used in query to short column name used in packs
 			if short, ok := balanceSourceNames[prefix]; !ok {

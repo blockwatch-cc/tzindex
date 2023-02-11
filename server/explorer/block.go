@@ -25,48 +25,50 @@ var _ server.RESTful = (*Block)(nil)
 var _ server.Resource = (*Block)(nil)
 
 type Block struct {
-	Hash              tezos.BlockHash           `json:"hash"`
-	ParentHash        tezos.BlockHash           `json:"predecessor"`
-	FollowerHash      tezos.BlockHash           `json:"successor"`
-	Baker             tezos.Address             `json:"baker"`
-	Proposer          tezos.Address             `json:"proposer"`
-	Height            int64                     `json:"height"`
-	Cycle             int64                     `json:"cycle"`
-	IsCycleSnapshot   bool                      `json:"is_cycle_snapshot"`
-	Timestamp         time.Time                 `json:"time"`
-	Solvetime         int                       `json:"solvetime"`
-	Version           int                       `json:"version"`
-	Round             int                       `json:"round"`
-	Nonce             string                    `json:"nonce"`
-	VotingPeriodKind  tezos.VotingPeriodKind    `json:"voting_period_kind"`
-	NSlotsEndorsed    int                       `json:"n_endorsed_slots"`
-	NOps              int                       `json:"n_ops_applied"`
-	NOpsFailed        int                       `json:"n_ops_failed"`
-	NEvents           int                       `json:"n_events"`
-	NContractCalls    int                       `json:"n_calls"`
-	NRollupCalls      int                       `json:"n_rollup_calls"`
-	NTx               int                       `json:"n_tx"`
-	Volume            float64                   `json:"volume"`
-	Fee               float64                   `json:"fee"`
-	Reward            float64                   `json:"reward"`
-	Deposit           float64                   `json:"deposit"`
-	ActivatedSupply   float64                   `json:"activated_supply"`
-	MintedSupply      float64                   `json:"minted_supply"`
-	BurnedSupply      float64                   `json:"burned_supply"`
-	SeenAccounts      int                       `json:"n_accounts"`
-	NewAccounts       int                       `json:"n_new_accounts"`
-	NewContracts      int                       `json:"n_new_contracts"`
-	ClearedAccounts   int                       `json:"n_cleared_accounts"`
-	FundedAccounts    int                       `json:"n_funded_accounts"`
-	GasLimit          int64                     `json:"gas_limit"`
-	GasUsed           int64                     `json:"gas_used"`
-	StoragePaid       int64                     `json:"storage_paid"`
-	PctAccountsReused float64                   `json:"pct_account_reuse"`
-	LbEscapeVote      tezos.LbVote              `json:"lb_esc_vote"`
-	LbEscapeEma       int64                     `json:"lb_esc_ema"`
-	Metadata          map[string]*ShortMetadata `json:"metadata,omitempty"`
-	Rights            []Right                   `json:"rights,omitempty"`
-	Protocol          tezos.ProtocolHash        `json:"protocol"`
+	Hash                 tezos.BlockHash           `json:"hash"`
+	ParentHash           tezos.BlockHash           `json:"predecessor"`
+	FollowerHash         tezos.BlockHash           `json:"successor"`
+	Protocol             tezos.ProtocolHash        `json:"protocol"`
+	Baker                tezos.Address             `json:"baker"`
+	Proposer             tezos.Address             `json:"proposer"`
+	BakerConsensusKey    tezos.Address             `json:"baker_consensus_key"`
+	ProposerConsensusKey tezos.Address             `json:"proposer_consensus_key"`
+	Height               int64                     `json:"height"`
+	Cycle                int64                     `json:"cycle"`
+	IsCycleSnapshot      bool                      `json:"is_cycle_snapshot"`
+	Timestamp            time.Time                 `json:"time"`
+	Solvetime            int                       `json:"solvetime"`
+	Version              int                       `json:"version"`
+	Round                int                       `json:"round"`
+	Nonce                string                    `json:"nonce"`
+	VotingPeriodKind     tezos.VotingPeriodKind    `json:"voting_period_kind"`
+	NSlotsEndorsed       int                       `json:"n_endorsed_slots"`
+	NOps                 int                       `json:"n_ops_applied"`
+	NOpsFailed           int                       `json:"n_ops_failed"`
+	NEvents              int                       `json:"n_events"`
+	NContractCalls       int                       `json:"n_calls"`
+	NRollupCalls         int                       `json:"n_rollup_calls"`
+	NTx                  int                       `json:"n_tx"`
+	Volume               float64                   `json:"volume"`
+	Fee                  float64                   `json:"fee"`
+	Reward               float64                   `json:"reward"`
+	Deposit              float64                   `json:"deposit"`
+	ActivatedSupply      float64                   `json:"activated_supply"`
+	MintedSupply         float64                   `json:"minted_supply"`
+	BurnedSupply         float64                   `json:"burned_supply"`
+	SeenAccounts         int                       `json:"n_accounts"`
+	NewAccounts          int                       `json:"n_new_accounts"`
+	NewContracts         int                       `json:"n_new_contracts"`
+	ClearedAccounts      int                       `json:"n_cleared_accounts"`
+	FundedAccounts       int                       `json:"n_funded_accounts"`
+	GasLimit             int64                     `json:"gas_limit"`
+	GasUsed              int64                     `json:"gas_used"`
+	StoragePaid          int64                     `json:"storage_paid"`
+	PctAccountsReused    float64                   `json:"pct_account_reuse"`
+	LbEscapeVote         tezos.LbVote              `json:"lb_esc_vote"`
+	LbEscapeEma          int64                     `json:"lb_esc_ema"`
+	Metadata             map[string]*ShortMetadata `json:"metadata,omitempty"`
+	Rights               []Right                   `json:"rights,omitempty"`
 
 	// LEGACY
 	Ops OpList `json:"ops,omitempty"`
@@ -128,43 +130,45 @@ func NewBlock(ctx *server.Context, block *model.Block, args server.Options) *Blo
 		p = ctx.Crawler.ParamsByHeight(block.Height)
 	}
 	b := &Block{
-		Hash:             block.Hash,
-		Baker:            ctx.Indexer.LookupAddress(ctx, block.BakerId),
-		Proposer:         ctx.Indexer.LookupAddress(ctx, block.ProposerId),
-		Height:           block.Height,
-		Cycle:            block.Cycle,
-		IsCycleSnapshot:  block.IsCycleSnapshot,
-		Timestamp:        block.Timestamp,
-		Solvetime:        block.Solvetime,
-		Version:          block.Version,
-		Round:            block.Round,
-		Nonce:            util.U64String(block.Nonce).Hex(),
-		VotingPeriodKind: block.VotingPeriodKind,
-		NSlotsEndorsed:   block.NSlotsEndorsed,
-		NOps:             model.Int16Correct(block.NOpsApplied),
-		NOpsFailed:       model.Int16Correct(block.NOpsFailed),
-		NEvents:          model.Int16Correct(block.NEvents),
-		NContractCalls:   model.Int16Correct(block.NContractCalls),
-		NRollupCalls:     model.Int16Correct(block.NRollupCalls),
-		NTx:              model.Int16Correct(block.NTx),
-		Volume:           p.ConvertValue(block.Volume),
-		Fee:              p.ConvertValue(block.Fee),
-		Reward:           p.ConvertValue(block.Reward),
-		Deposit:          p.ConvertValue(block.Deposit),
-		ActivatedSupply:  p.ConvertValue(block.ActivatedSupply),
-		MintedSupply:     p.ConvertValue(block.MintedSupply),
-		BurnedSupply:     p.ConvertValue(block.BurnedSupply),
-		SeenAccounts:     model.Int16Correct(block.SeenAccounts),
-		NewAccounts:      model.Int16Correct(block.NewAccounts),
-		NewContracts:     model.Int16Correct(block.NewContracts),
-		ClearedAccounts:  model.Int16Correct(block.ClearedAccounts),
-		FundedAccounts:   model.Int16Correct(block.FundedAccounts),
-		GasLimit:         block.GasLimit,
-		GasUsed:          block.GasUsed,
-		StoragePaid:      block.StoragePaid,
-		LbEscapeVote:     block.LbEscapeVote,
-		LbEscapeEma:      block.LbEscapeEma,
-		Protocol:         p.Protocol,
+		Hash:                 block.Hash,
+		Baker:                ctx.Indexer.LookupAddress(ctx, block.BakerId),
+		Proposer:             ctx.Indexer.LookupAddress(ctx, block.ProposerId),
+		Height:               block.Height,
+		Cycle:                block.Cycle,
+		IsCycleSnapshot:      block.IsCycleSnapshot,
+		Timestamp:            block.Timestamp,
+		Solvetime:            block.Solvetime,
+		Version:              block.Version,
+		Round:                block.Round,
+		Nonce:                util.U64String(block.Nonce).Hex(),
+		VotingPeriodKind:     block.VotingPeriodKind,
+		NSlotsEndorsed:       block.NSlotsEndorsed,
+		NOps:                 model.Int16Correct(block.NOpsApplied),
+		NOpsFailed:           model.Int16Correct(block.NOpsFailed),
+		NEvents:              model.Int16Correct(block.NEvents),
+		NContractCalls:       model.Int16Correct(block.NContractCalls),
+		NRollupCalls:         model.Int16Correct(block.NRollupCalls),
+		NTx:                  model.Int16Correct(block.NTx),
+		Volume:               p.ConvertValue(block.Volume),
+		Fee:                  p.ConvertValue(block.Fee),
+		Reward:               p.ConvertValue(block.Reward),
+		Deposit:              p.ConvertValue(block.Deposit),
+		ActivatedSupply:      p.ConvertValue(block.ActivatedSupply),
+		MintedSupply:         p.ConvertValue(block.MintedSupply),
+		BurnedSupply:         p.ConvertValue(block.BurnedSupply),
+		SeenAccounts:         model.Int16Correct(block.SeenAccounts),
+		NewAccounts:          model.Int16Correct(block.NewAccounts),
+		NewContracts:         model.Int16Correct(block.NewContracts),
+		ClearedAccounts:      model.Int16Correct(block.ClearedAccounts),
+		FundedAccounts:       model.Int16Correct(block.FundedAccounts),
+		GasLimit:             block.GasLimit,
+		GasUsed:              block.GasUsed,
+		StoragePaid:          block.StoragePaid,
+		LbEscapeVote:         block.LbEscapeVote,
+		LbEscapeEma:          block.LbEscapeEma,
+		Protocol:             p.Protocol,
+		BakerConsensusKey:    ctx.Indexer.LookupAddress(ctx, block.BakerConsensusKeyId),
+		ProposerConsensusKey: ctx.Indexer.LookupAddress(ctx, block.ProposerConsensusKeyId),
 	}
 	nowHeight := ctx.Tip.BestHeight
 	if b.SeenAccounts != 0 {

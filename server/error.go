@@ -161,13 +161,12 @@ func (e *Error) Error() string {
 	return strings.Join(s, " ")
 }
 
-func (e *Error) SetScope(s string) *Error {
+func (e *Error) SetScope(s string) {
 	if e.Scope != "" {
 		e.Scope = strings.Join([]string{s, e.Scope}, ": ")
 	} else {
 		e.Scope = s
 	}
-	return e
 }
 
 func (e *Error) MarshalIndent() []byte {

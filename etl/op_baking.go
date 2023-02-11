@@ -255,9 +255,10 @@ func (b *Builder) AppendDoubleBakingOp(ctx context.Context, oh *rpc.Operation, i
     // we store both block headers as json array
     buf, err := json.Marshal(dop.Strip())
     if err != nil {
-        return Errorf("cannot write data: %v", err)
+        log.Error(Errorf("cannot write data: %v", err))
+    } else {
+        op.Data = string(buf)
     }
-    op.Data = string(buf)
 
     // calc burn from flows
     for _, f := range flows {
@@ -363,9 +364,10 @@ func (b *Builder) AppendDoubleEndorsingOp(ctx context.Context, oh *rpc.Operation
     // we store double-endorsed evidences as JSON
     buf, err := json.Marshal(dop.Strip())
     if err != nil {
-        return Errorf("cannot write data: %v", err)
+        log.Error(Errorf("cannot write data: %v", err))
+    } else {
+        op.Data = string(buf)
     }
-    op.Data = string(buf)
 
     // calc burn from flows
     for _, f := range flows {
@@ -502,6 +504,146 @@ func (b *Builder) AppendDepositsLimitOp(ctx context.Context, oh *rpc.Operation, 
         if src != nil {
             src.NBakerOps--
             src.IsDirty = true
+        }
+    }
+
+    return nil
+}
+
+func (b *Builder) AppendDrainDelegateOp(ctx context.Context, oh *rpc.Operation, id model.OpRef, rollback bool) error {
+    o := id.Get(oh)
+
+    Errorf := func(format string, args ...interface{}) error {
+        return fmt.Errorf(
+            "%s op [%d:%d:%d]: "+format,
+            append([]interface{}{o.Kind(), id.L, id.P, id.C}, args...)...,
+        )
+    }
+
+    dop, ok := o.(*rpc.DrainDelegate)
+    if !ok {
+        return Errorf("unexpected type %T", o)
+    }
+
+    // baker who is drained
+    baker, ok := b.BakerByAddress(dop.Delegate)
+    if !ok {
+        return Errorf("missing drained baker account %s", dop.Delegate)
+    }
+
+    // no sender, but destination is receiver
+    receiver, ok := b.AccountByAddress(dop.Destination)
+    if !ok {
+        return Errorf("missing sender account %s", dop.Destination)
+    }
+
+    // build op
+    op := model.NewOp(b.block, id)
+    op.SenderId = baker.Account.RowId
+    op.ReceiverId = receiver.RowId
+    op.BakerId = b.block.ProposerId
+    op.Status = tezos.OpStatusApplied
+    op.IsSuccess = true
+    op.Data = dop.ConsensusKey.String()
+    b.block.Ops = append(b.block.Ops, op)
+
+    // extract flows from balance updates
+    op.Volume, op.Reward, _ = b.NewDrainDelegateFlows(baker.Account, receiver, dop.Fees(), id)
+
+    // update accounts
+    if !rollback {
+        receiver.LastSeen = b.block.Height
+        receiver.IsDirty = true
+        baker.NBakerOps++
+        baker.NDrainDelegate++
+        baker.IsDirty = true
+    } else {
+        baker.NBakerOps--
+        baker.NDrainDelegate--
+        baker.IsDirty = true
+    }
+
+    return nil
+}
+
+func (b *Builder) AppendUpdateConsensusKeyOp(ctx context.Context, oh *rpc.Operation, id model.OpRef, rollback bool) error {
+    o := id.Get(oh)
+
+    Errorf := func(format string, args ...interface{}) error {
+        return fmt.Errorf(
+            "%s op [%d:%d:%d]: "+format,
+            append([]interface{}{o.Kind(), id.L, id.P, id.C}, args...)...,
+        )
+    }
+
+    uop, ok := o.(*rpc.UpdateConsensusKey)
+    if !ok {
+        return Errorf("unexpected type %T", o)
+    }
+
+    // sender must be a baker
+    sender, ok := b.AccountByAddress(uop.Source)
+    if !ok {
+        return Errorf("missing sender account %s", uop.Source)
+    }
+
+    res := uop.Result()
+    baker, ok := b.BakerByAddress(uop.Source)
+    if !ok && res.Status.IsSuccess() {
+        return Errorf("missing source baker account %s", uop.Source)
+    }
+
+    // build op
+    op := model.NewOp(b.block, id)
+    op.SenderId = sender.RowId
+    op.Counter = uop.Counter
+    op.Fee = uop.Fee
+    op.GasLimit = uop.GasLimit
+    op.StorageLimit = uop.StorageLimit
+    op.Status = res.Status
+    op.IsSuccess = res.Status.IsSuccess()
+    op.GasUsed = res.Gas()
+    op.StoragePaid = res.PaidStorageSizeDiff
+    op.Data = uop.Pk.String()
+    b.block.Ops = append(b.block.Ops, op)
+
+    _ = b.NewUpdateConsensusKeyFlows(sender, uop.Fees(), id)
+
+    if op.IsSuccess {
+        baker.ConsensusKey = uop.Pk
+    } else {
+        op.Errors, _ = json.Marshal(res.Errors)
+    }
+
+    // update sender account
+    if !rollback {
+        sender.Counter = op.Counter
+        sender.LastSeen = b.block.Height
+        sender.IsDirty = true
+        if op.IsSuccess {
+            sender.NTxOut++
+            sender.NTxSuccess++
+        } else {
+            sender.NTxFailed++
+        }
+        if op.IsSuccess && baker != nil {
+            baker.NBakerOps++
+            baker.NUpdateConsensusKey++
+            baker.IsDirty = true
+        }
+    } else {
+        sender.Counter = op.Counter - 1
+        sender.IsDirty = true
+        if op.IsSuccess {
+            sender.NTxOut--
+            sender.NTxSuccess--
+        } else {
+            sender.NTxFailed--
+        }
+        if op.IsSuccess && baker != nil {
+            baker.NBakerOps--
+            baker.NUpdateConsensusKey--
+            baker.IsDirty = true
         }
     }
 

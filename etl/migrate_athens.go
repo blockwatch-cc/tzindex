@@ -45,9 +45,7 @@ func (b *Builder) MigrateAthens(ctx context.Context, oldparams, params *tezos.Pa
         b.accHashMap[b.accCache.AccountHashKey(acc)] = acc
 
         // add invoice op
-        if err := b.AppendInvoiceOp(ctx, acc, amount, count); err != nil {
-            return err
-        }
+        b.AppendInvoiceOp(ctx, acc, amount, count)
         count++
     }
 

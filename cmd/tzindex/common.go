@@ -18,22 +18,8 @@ import (
 	"github.com/echa/config"
 )
 
-// common command-line options
-var (
-	// rpc-specific options
-	rpcurl   string
-	rpcuser  string
-	rpcpass  string
-	notls    bool
-	insecure bool
-
-	// index options
-	lightIndex bool
-	fullIndex  bool
-)
-
 func tableOptions(name string) pack.Options {
-	pre := "database." + name + "."
+	pre := "db." + name + "."
 	return pack.Options{
 		PackSizeLog2:    config.GetInt(pre + "pack_size_log2"),
 		JournalSizeLog2: config.GetInt(pre + "journal_size_log2"),
@@ -43,7 +29,7 @@ func tableOptions(name string) pack.Options {
 }
 
 func indexOptions(name string) pack.Options {
-	pre := "database." + name + "_index."
+	pre := "db." + name + "_index."
 	return pack.Options{
 		PackSizeLog2:    config.GetInt(pre + "pack_size_log2"),
 		JournalSizeLog2: config.GetInt(pre + "journal_size_log2"),
@@ -98,75 +84,25 @@ func newHTTPClient() (*http.Client, error) {
 func newRPCClient() (*rpc.Client, error) {
 	c, err := newHTTPClient()
 	if err != nil {
-		return nil, fmt.Errorf("rpc client: %v", err)
+		return nil, fmt.Errorf("rpc client: %w", err)
 	}
 	usetls := !config.GetBool("rpc.disable_tls")
-	host, port := config.GetString("rpc.host"), config.GetString("rpc.port")
-	baseurl := host
-	if port != "" {
-		baseurl = net.JoinHostPort(host, port)
+	u, err := url.Parse(config.GetString("rpc.url"))
+	if err != nil {
+		return nil, err
 	}
 	if usetls {
-		baseurl = "https://" + baseurl
-	} else {
-		baseurl = "http://" + baseurl
+		u.Scheme = "https"
 	}
-	rpcclient, err := rpc.NewClient(baseurl+"/"+config.GetString("rpc.path"), c)
+	if p := config.GetString("rpc.path"); p != "" {
+		u.Path = p
+	}
+	rpcclient, err := rpc.NewClient(u.String(), c)
 	if err != nil {
-		return nil, fmt.Errorf("rpc client: %v", err)
+		return nil, fmt.Errorf("rpc client: %w", err)
 	}
 	rpcclient.UserAgent = UserAgent()
 	return rpcclient, nil
-}
-
-func parseRPCFlags() error {
-	// overwrite config from flags only if set
-	if serverCmd.Flags().Changed("notls") {
-		config.Set("rpc.disable_tls", notls)
-	}
-	if serverCmd.Flags().Changed("insecure") {
-		config.Set("rpc.insecure_tls", insecure)
-	}
-	if serverCmd.Flags().Changed("rpcurl") && rpcurl != "" {
-		ux := rpcurl
-		if !strings.HasPrefix(ux, "http") {
-			if config.GetBool("rpc.disable_tls") {
-				ux = "http://" + ux
-			} else {
-				ux = "https://" + ux
-			}
-		} else {
-			config.Set("rpc.disable_tls", !strings.HasPrefix(ux, "https://"))
-		}
-		u, err := url.Parse(ux)
-		if err != nil {
-			return fmt.Errorf("invalid rpc url '%s': %v", rpcurl, err)
-		}
-		if u.Scheme == "" || u.Host == "" {
-			return fmt.Errorf("invalid rpc url '%s'", rpcurl)
-		}
-		fields := strings.Split(u.Host, ":")
-		if len(fields[0]) > 0 {
-			config.Set("rpc.host", fields[0])
-		}
-		if len(fields) > 1 && len(fields[1]) > 0 {
-			config.Set("rpc.port", fields[1])
-		} else {
-			config.Set("rpc.port", "")
-		}
-		path := strings.TrimPrefix(u.Path, "/")
-		if len(path) > 0 && !strings.HasSuffix(path, "/") {
-			path = path + "/"
-		}
-		config.Set("rpc.path", path)
-	}
-	if serverCmd.Flags().Changed("rpcuser") {
-		config.Set("rpc.user", rpcuser)
-	}
-	if serverCmd.Flags().Changed("rpcpass") {
-		config.Set("rpc.pass", rpcpass)
-	}
-	return nil
 }
 
 func enabledIndexes() []model.BlockIndexer {
@@ -185,6 +121,7 @@ func enabledIndexes() []model.BlockIndexer {
 			index.NewSupplyIndex(tableOptions("supply")),
 			index.NewBigmapIndex(tableOptions("bigmap")),
 			index.NewMetadataIndex(tableOptions("metadata"), indexOptions("metadata")),
+			index.NewTicketIndex(tableOptions("ticket")),
 		}
 	} else {
 		return []model.BlockIndexer{
@@ -205,6 +142,7 @@ func enabledIndexes() []model.BlockIndexer {
 			index.NewGovIndex(tableOptions("gov")),
 			index.NewBigmapIndex(tableOptions("bigmap")),
 			index.NewMetadataIndex(tableOptions("metadata"), indexOptions("metadata")),
+			index.NewTicketIndex(tableOptions("ticket")),
 		}
 	}
 }

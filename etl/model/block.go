@@ -30,44 +30,46 @@ func init() {
 // contains raw data and translations for related types such as operations, chain totals
 // rights, etc. that is used by indexers and reporters
 type Block struct {
-	RowId            uint64                 `pack:"I,pk"             json:"row_id"`
-	ParentId         uint64                 `pack:"P"                json:"parent_id"`
-	Hash             tezos.BlockHash        `pack:"H,snappy,bloom=3" json:"hash"`
-	Height           int64                  `pack:"h"                json:"height"`
-	Cycle            int64                  `pack:"c"                json:"cycle"`
-	IsCycleSnapshot  bool                   `pack:"o"                json:"is_cycle_snapshot"`
-	Timestamp        time.Time              `pack:"T"                json:"time"`
-	Solvetime        int                    `pack:"d"                json:"solvetime"`
-	Version          int                    `pack:"v"                json:"version"`
-	Round            int                    `pack:"p"                json:"round"`
-	Nonce            uint64                 `pack:"n,snappy"         json:"nonce"`
-	VotingPeriodKind tezos.VotingPeriodKind `pack:"k"                json:"voting_period_kind"`
-	BakerId          AccountID              `pack:"B"                json:"baker_id"`
-	ProposerId       AccountID              `pack:"X"                json:"proposer_id"`
-	NSlotsEndorsed   int                    `pack:"e"                json:"n_endorsed_slots"`
-	NOpsApplied      int                    `pack:"1"                json:"n_ops_applied"`
-	NOpsFailed       int                    `pack:"2"                json:"n_ops_failed"`
-	NContractCalls   int                    `pack:"3"                json:"n_calls"`
-	NRollupCalls     int                    `pack:"6"                json:"n_rollup_calls"`
-	NEvents          int                    `pack:"4"                json:"n_events"`
-	NTx              int                    `pack:"5"                json:"n_tx"`
-	Volume           int64                  `pack:"V"                json:"volume"`
-	Fee              int64                  `pack:"F"                json:"fee"`
-	Reward           int64                  `pack:"R"                json:"reward"`
-	Deposit          int64                  `pack:"D"                json:"deposit"`
-	ActivatedSupply  int64                  `pack:"S"                json:"activated_supply"`
-	BurnedSupply     int64                  `pack:"b"                json:"burned_supply"`
-	MintedSupply     int64                  `pack:"m"                json:"minted_supply"`
-	SeenAccounts     int                    `pack:"a"                json:"n_accounts"`
-	NewAccounts      int                    `pack:"A"                json:"n_new_accounts"`
-	NewContracts     int                    `pack:"C"                json:"n_new_contracts"`
-	ClearedAccounts  int                    `pack:"E"                json:"n_cleared_accounts"`
-	FundedAccounts   int                    `pack:"J"                json:"n_funded_accounts"`
-	GasLimit         int64                  `pack:"L"                json:"gas_limit"`
-	GasUsed          int64                  `pack:"G"                json:"gas_used"`
-	StoragePaid      int64                  `pack:"Y"                json:"storage_paid"`
-	LbEscapeVote     tezos.LbVote           `pack:"O"                json:"lb_esc_vote"`
-	LbEscapeEma      int64                  `pack:"M"                json:"lb_esc_ema"`
+	RowId                  uint64                 `pack:"I,pk"             json:"row_id"`
+	ParentId               uint64                 `pack:"P"                json:"parent_id"`
+	Hash                   tezos.BlockHash        `pack:"H,snappy,bloom=3" json:"hash"`
+	Height                 int64                  `pack:"h"                json:"height"`
+	Cycle                  int64                  `pack:"c"                json:"cycle"`
+	IsCycleSnapshot        bool                   `pack:"o"                json:"is_cycle_snapshot"`
+	Timestamp              time.Time              `pack:"T"                json:"time"`
+	Solvetime              int                    `pack:"d"                json:"solvetime"`
+	Version                int                    `pack:"v"                json:"version"`
+	Round                  int                    `pack:"p"                json:"round"`
+	Nonce                  uint64                 `pack:"n,snappy"         json:"nonce"`
+	VotingPeriodKind       tezos.VotingPeriodKind `pack:"k"                json:"voting_period_kind"`
+	BakerId                AccountID              `pack:"B"                json:"baker_id"`
+	ProposerId             AccountID              `pack:"X"                json:"proposer_id"`
+	NSlotsEndorsed         int                    `pack:"e"                json:"n_endorsed_slots"`
+	NOpsApplied            int                    `pack:"1"                json:"n_ops_applied"`
+	NOpsFailed             int                    `pack:"2"                json:"n_ops_failed"`
+	NContractCalls         int                    `pack:"3"                json:"n_calls"`
+	NRollupCalls           int                    `pack:"6"                json:"n_rollup_calls"`
+	NEvents                int                    `pack:"4"                json:"n_events"`
+	NTx                    int                    `pack:"5"                json:"n_tx"`
+	Volume                 int64                  `pack:"V"                json:"volume"`
+	Fee                    int64                  `pack:"F"                json:"fee"`
+	Reward                 int64                  `pack:"R"                json:"reward"`
+	Deposit                int64                  `pack:"D"                json:"deposit"`
+	ActivatedSupply        int64                  `pack:"S"                json:"activated_supply"`
+	BurnedSupply           int64                  `pack:"b"                json:"burned_supply"`
+	MintedSupply           int64                  `pack:"m"                json:"minted_supply"`
+	SeenAccounts           int                    `pack:"a"                json:"n_accounts"`
+	NewAccounts            int                    `pack:"A"                json:"n_new_accounts"`
+	NewContracts           int                    `pack:"C"                json:"n_new_contracts"`
+	ClearedAccounts        int                    `pack:"E"                json:"n_cleared_accounts"`
+	FundedAccounts         int                    `pack:"J"                json:"n_funded_accounts"`
+	GasLimit               int64                  `pack:"L"                json:"gas_limit"`
+	GasUsed                int64                  `pack:"G"                json:"gas_used"`
+	StoragePaid            int64                  `pack:"Y"                json:"storage_paid"`
+	LbEscapeVote           tezos.LbVote           `pack:"O"                json:"lb_esc_vote"`
+	LbEscapeEma            int64                  `pack:"M"                json:"lb_esc_ema"`
+	ProposerConsensusKeyId AccountID              `pack:"x"                json:"proposer_consensus_key_id"`
+	BakerConsensusKeyId    AccountID              `pack:"y"                json:"baker_consensus_key_id"`
 
 	// other tz or extracted/translated data for processing
 	TZ              *rpc.Bundle   `pack:"-" json:"-"`
@@ -209,7 +211,7 @@ func (b *Block) FetchRPC(ctx context.Context, c *rpc.Client) error {
 			if err != nil {
 				return fmt.Errorf("block init: %w", err)
 			}
-			b.Params = cons.MapToChainParams()
+			b.Params = cons.Params()
 		} else {
 			b.Params = tezos.NewParams()
 		}
@@ -338,6 +340,8 @@ func (b *Block) Reset() {
 	b.StoragePaid = 0
 	b.LbEscapeVote = 0
 	b.LbEscapeEma = 0
+	b.ProposerConsensusKeyId = 0
+	b.BakerConsensusKeyId = 0
 	b.TZ = nil
 	b.Params = nil
 	b.Chain = nil

@@ -39,6 +39,7 @@ func (m *Indexer) CacheStats() map[string]interface{} {
 	stats["bigmap_values"] = m.bigmap_values.Stats()
 	stats["bigmap_types"] = m.bigmap_types.Stats()
 	stats["contract_types"] = m.contract_types.Stats()
+	stats["ticket_types"] = m.ticket_types.Stats()
 	return stats
 }
 
@@ -53,6 +54,7 @@ func (m *Indexer) PurgeCaches() {
 	m.bigmap_values.Purge()
 	m.bigmap_types.Purge()
 	m.contract_types.Purge()
+	m.ticket_types.Purge()
 	for _, idx := range m.indexes {
 		for _, t := range idx.Tables() {
 			t.PurgeCache()

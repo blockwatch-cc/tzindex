@@ -16,7 +16,7 @@ import (
 
 const (
     StoragePackSizeLog2    = 10  // 1k packs because storage can be very large
-    StorageJournalSizeLog2 = 11  // 2k journal to flush often
+    StorageJournalSizeLog2 = 10  // 1k journal to flush often
     StorageCacheSize       = 2   // very small cache, fixed
     StorageFillLevel       = 100 // append only
     StorageIndexKey        = "storage"

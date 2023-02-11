@@ -86,7 +86,6 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.Operation, id 
     op.Fee = dop.Fee
     op.GasLimit = dop.GasLimit
     op.StorageLimit = dop.StorageLimit
-
     op.Status = res.Status
     op.IsSuccess = op.Status.IsSuccess()
     op.GasUsed = res.Gas()
@@ -115,22 +114,13 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.Operation, id 
             id,
         )
 
-        // handle errors
-        if len(res.Errors) > 0 {
-            if buf, err := json.Marshal(res.Errors); err == nil {
-                op.Errors = buf
-            } else {
-                // non-fatal, but error data will be missing from index
-                log.Error(Errorf("marshal op errors: %s", err))
-            }
-        }
+        // keep errors
+        op.Errors, _ = json.Marshal(res.Errors)
     }
 
     // update accounts
     if !rollback {
         src.Counter = op.Counter
-        src.NOps++
-        src.NDelegation++
         src.LastSeen = b.block.Height
         src.IsDirty = true
         if nbkr != nil {
@@ -144,9 +134,10 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.Operation, id 
             obkr.IsDirty = true
         }
 
-        if !op.IsSuccess {
-            src.NOpsFailed++
-        } else {
+        if op.IsSuccess {
+            src.NTxSuccess++
+            src.NTxOut++
+
             // handle baker registration
             if isRegistration {
                 if nbkr == nil {
@@ -187,16 +178,19 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.Operation, id 
                     obkr.ActiveDelegations--
                 }
             }
+        } else {
+            src.NTxFailed++
         }
     } else {
         // rollback accounts
         src.Counter = op.Counter - 1
-        src.NOps--
-        src.NDelegation--
         src.IsDirty = true
-        if !op.IsSuccess {
-            src.NOpsFailed--
-        } else {
+
+        if op.IsSuccess {
+            src.NTxSuccess--
+            src.NTxOut--
+
+            // update registrations
             if isRegistration {
                 // reverse effects of baker registration on base account
                 src.BakerId = 0
@@ -218,14 +212,14 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.Operation, id 
             var lastsince int64
             if prevop, err := b.idx.FindLatestDelegation(ctx, src.RowId, op.Height); err != nil {
                 if err != index.ErrNoOpEntry {
-                    return Errorf("rollback: failed loading previous delegation op for account %d: %v", src.RowId, err)
+                    log.Error(Errorf("rollback: failed loading previous delegation op for account %d: %v", src.RowId, err))
                 }
                 obkr = nil
             } else if prevop.BakerId > 0 {
                 lastsince = prevop.Height
                 obkr, ok = b.BakerById(prevop.BakerId)
                 if !ok {
-                    return Errorf("rollback: missing previous baker id %d", prevop.BakerId)
+                    log.Error(Errorf("rollback: missing previous baker id %d", prevop.BakerId))
                 }
             }
             if obkr == nil {
@@ -233,12 +227,12 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.Operation, id 
                 // set the initial baker
                 if prevop, err := b.idx.FindOrigination(ctx, src.RowId, src.FirstSeen); err != nil {
                     if err != index.ErrNoOpEntry {
-                        return Errorf("rollback: failed loading previous origination op for account %d: %v", src.RowId, err)
+                        log.Error(Errorf("rollback: failed loading previous origination op for account %d: %v", src.RowId, err))
                     }
                 } else if prevop.BakerId != 0 {
                     obkr, ok = b.BakerById(prevop.BakerId)
                     if !ok {
-                        return Errorf("rollback: missing origin baker %s", prevop.BakerId)
+                        log.Error(Errorf("rollback: missing origin baker %s", prevop.BakerId))
                     }
                 }
             }
@@ -260,6 +254,8 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.Operation, id 
                 src.BakerId = 0
                 src.DelegatedSince = 0
             }
+        } else {
+            src.NTxFailed--
         }
     }
 
@@ -320,31 +316,22 @@ func (b *Builder) AppendInternalDelegationOp(
     op.GasUsed = res.Gas()
     op.IsSuccess = op.Status.IsSuccess()
     op.Volume = src.Balance()
-
-    // build op
     b.block.Ops = append(b.block.Ops, op)
 
-    // build flows
-    // - no fees (paid by outer op)
-    // - (re)delegate source balance on success
-    // - no fees paid, no flow on failure
     if op.IsSuccess {
+        // build flows
+        // - no fees (paid by outer op)
+        // - (re)delegate source balance on success
+        // - no fees paid, no flow on failure
         b.NewDelegationFlows(src, nbkr, obkr, nil, id)
-    } else if len(res.Errors) > 0 {
-        // handle errors
-        if buf, err := json.Marshal(res.Errors); err == nil {
-            op.Errors = buf
-        } else {
-            // non-fatal, but error data will be missing from index
-            log.Error(Errorf("marshal op errors: %s", err))
-        }
+    } else {
+        // keep errors
+        op.Errors, _ = json.Marshal(res.Errors)
     }
 
     // update accounts
     if !rollback {
         src.Counter = op.Counter
-        src.NOps++
-        src.NDelegation++
         src.IsDirty = true
         src.LastSeen = b.block.Height
         if nbkr != nil {
@@ -355,9 +342,11 @@ func (b *Builder) AppendInternalDelegationOp(
             obkr.Account.LastSeen = b.block.Height
             obkr.Account.IsDirty = true
         }
-        if !op.IsSuccess {
-            src.NOpsFailed++
-        } else {
+
+        if op.IsSuccess {
+            src.NTxSuccess++
+            src.NTxOut++
+
             // no baker registration via internal op
 
             // handle delegator withdraw
@@ -367,50 +356,43 @@ func (b *Builder) AppendInternalDelegationOp(
                 src.DelegatedSince = 0
             }
 
-            // handle new baker
-            if nbkr != nil {
-                // only update when this delegation changes baker
-                if src.BakerId != nbkr.AccountId {
-                    src.IsDelegated = true
-                    src.BakerId = nbkr.AccountId
-                    src.DelegatedSince = b.block.Height
-                    nbkr.TotalDelegations++
-                    // if src.Balance() > 0 {
-                    // delegation becomes active only when src is funded
-                    nbkr.ActiveDelegations++
-                    // }
-                }
+            // only update when this delegation changes baker
+            if nbkr != nil && src.BakerId != nbkr.AccountId {
+                src.IsDelegated = true
+                src.BakerId = nbkr.AccountId
+                src.DelegatedSince = b.block.Height
+                nbkr.TotalDelegations++
+                nbkr.ActiveDelegations++
             }
 
             // handle withdraw from old baker (also ensures we're duplicate safe)
             if obkr != nil {
-                // if src.Balance() > 0 {
                 obkr.ActiveDelegations--
-                // }
             }
+        } else {
+            src.NTxFailed++
         }
     } else {
         // rollback accounts
         src.Counter = op.Counter - 1
-        src.NOps--
-        src.NDelegation--
         src.IsDirty = true
-        if !op.IsSuccess {
-            src.NOpsFailed--
-        } else {
+
+        if op.IsSuccess {
+            src.NTxSuccess--
+            src.NTxOut--
 
             // find previous baker, if any
             var lastsince int64
             if prevop, err := b.idx.FindLatestDelegation(ctx, src.RowId, op.Height); err != nil {
                 if err != index.ErrNoOpEntry {
-                    return Errorf("rollback: failed loading previous delegation op for account %d: %v", src.RowId, err)
+                    log.Error(Errorf("rollback: failed loading previous delegation op for account %d: %v", src.RowId, err))
                 }
                 obkr = nil
             } else if prevop.BakerId > 0 {
                 lastsince = prevop.Height
                 obkr, ok = b.BakerById(prevop.BakerId)
                 if !ok {
-                    return Errorf("rollback: missing previous baker id %d", prevop.BakerId)
+                    log.Error(Errorf("rollback: missing previous baker id %d", prevop.BakerId))
                 }
             }
             if obkr == nil {
@@ -418,12 +400,12 @@ func (b *Builder) AppendInternalDelegationOp(
                 // set the initial baker
                 if prevop, err := b.idx.FindOrigination(ctx, src.RowId, src.FirstSeen); err != nil {
                     if err != index.ErrNoOpEntry {
-                        return Errorf("rollback: failed loading previous origination op for account %d: %v", src.RowId, err)
+                        log.Error(Errorf("rollback: failed loading previous origination op for account %d: %v", src.RowId, err))
                     }
                 } else if prevop.BakerId != 0 {
                     obkr, ok = b.BakerById(prevop.BakerId)
                     if !ok {
-                        return Errorf("rollback: missing origin baker %s", prevop.BakerId)
+                        log.Error(Errorf("rollback: missing origin baker %s", prevop.BakerId))
                     }
                 }
             }
@@ -447,6 +429,8 @@ func (b *Builder) AppendInternalDelegationOp(
                 src.BakerId = 0
                 src.DelegatedSince = 0
             }
+        } else {
+            src.NTxFailed--
         }
     }
 

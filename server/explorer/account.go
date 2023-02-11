@@ -50,6 +50,7 @@ type Account struct {
 	TotalSent          float64              `json:"total_sent"`
 	TotalBurned        float64              `json:"total_burned"`
 	TotalFeesPaid      float64              `json:"total_fees_paid"`
+	TotalFeesUsed      float64              `json:"total_fees_used"`
 	UnclaimedBalance   float64              `json:"unclaimed_balance,omitempty"`
 	SpendableBalance   float64              `json:"spendable_balance"`
 	FrozenBond         float64              `json:"frozen_bond"`
@@ -60,14 +61,10 @@ type Account struct {
 	IsRevealed         bool                 `json:"is_revealed"`
 	IsBaker            bool                 `json:"is_baker"`
 	IsContract         bool                 `json:"is_contract"`
-	NOps               int                  `json:"n_ops"`
-	NOpsFailed         int                  `json:"n_ops_failed"`
-	NTx                int                  `json:"n_tx"`
-	NDelegation        int                  `json:"n_delegation"`
-	NOrigination       int                  `json:"n_origination"`
-	NConstants         int                  `json:"n_constants"`
-	TokenGenMin        int64                `json:"token_gen_min"`
-	TokenGenMax        int64                `json:"token_gen_max"`
+	NTxSuccess         int                  `json:"n_tx_success"`
+	NTxFailed          int                  `json:"n_tx_failed"`
+	NTxOut             int                  `json:"n_tx_out"`
+	NTxIn              int                  `json:"n_tx_in"`
 	Metadata           map[string]*Metadata `json:"metadata,omitempty"`
 
 	// LEGACY
@@ -85,7 +82,7 @@ func NewAccount(ctx *server.Context, a *model.Account, args server.Options) *Acc
 		RowId:            a.RowId,
 		Address:          a.String(),
 		Type:             a.Type.String(),
-		Pubkey:           a.Key(),
+		Pubkey:           a.Pubkey,
 		Counter:          a.Counter,
 		FirstIn:          a.FirstIn,
 		FirstOut:         a.FirstOut,
@@ -98,6 +95,7 @@ func NewAccount(ctx *server.Context, a *model.Account, args server.Options) *Acc
 		TotalSent:        p.ConvertValue(a.TotalSent),
 		TotalBurned:      p.ConvertValue(a.TotalBurned),
 		TotalFeesPaid:    p.ConvertValue(a.TotalFeesPaid),
+		TotalFeesUsed:    p.ConvertValue(a.TotalFeesUsed),
 		SpendableBalance: p.ConvertValue(a.SpendableBalance),
 		FrozenBond:       p.ConvertValue(a.FrozenBond),
 		LostBond:         p.ConvertValue(a.LostBond),
@@ -107,13 +105,10 @@ func NewAccount(ctx *server.Context, a *model.Account, args server.Options) *Acc
 		IsRevealed:       a.IsRevealed,
 		IsBaker:          a.IsBaker,
 		IsContract:       a.IsContract,
-		NOps:             a.NOps,
-		NOpsFailed:       a.NOpsFailed,
-		NTx:              a.NTx,
-		NDelegation:      a.NDelegation,
-		NOrigination:     a.NOrigination,
-		TokenGenMin:      a.TokenGenMin,
-		TokenGenMax:      a.TokenGenMax,
+		NTxSuccess:       a.NTxSuccess,
+		NTxFailed:        a.NTxFailed,
+		NTxOut:           a.NTxOut,
+		NTxIn:            a.NTxIn,
 		expires:          tip.BestTime.Add(p.BlockTime()),
 	}
 

@@ -41,8 +41,6 @@ func (b *Builder) NewTransactionFlows(
         f.Category = model.FlowCategoryBalance
         f.Operation = model.FlowTypeTransaction
         f.AmountOut = moved
-        f.TokenGenMin = src.TokenGenMin
-        f.TokenGenMax = src.TokenGenMax
         f.TokenAge = block.Age(src.LastIn)
         f.IsUnshielded = srccon != nil && srccon.Features.Contains(micheline.FeatureSapling)
         flows = append(flows, f)
@@ -51,8 +49,6 @@ func (b *Builder) NewTransactionFlows(
         f.Category = model.FlowCategoryBalance
         f.Operation = model.FlowTypeTransaction
         f.AmountIn = moved
-        f.TokenGenMin = src.TokenGenMin
-        f.TokenGenMax = src.TokenGenMax
         f.TokenAge = block.Age(src.LastIn)
         f.IsShielded = dstcon != nil && dstcon.Features.Contains(micheline.FeatureSapling)
         flows = append(flows, f)
@@ -123,8 +119,6 @@ func (b *Builder) NewInternalTransactionFlows(
         f.Category = model.FlowCategoryBalance
         f.Operation = model.FlowTypeTransaction
         f.AmountOut = moved
-        f.TokenGenMin = src.TokenGenMin
-        f.TokenGenMax = src.TokenGenMax
         f.TokenAge = block.Age(src.LastIn)
         f.IsUnshielded = srccon != nil && srccon.Features.Contains(micheline.FeatureSapling)
         flows = append(flows, f)
@@ -133,8 +127,6 @@ func (b *Builder) NewInternalTransactionFlows(
         f.Category = model.FlowCategoryBalance
         f.Operation = model.FlowTypeTransaction
         f.AmountIn = moved
-        f.TokenGenMin = src.TokenGenMin
-        f.TokenGenMax = src.TokenGenMax
         f.TokenAge = block.Age(src.LastIn)
         f.IsShielded = dstcon != nil && dstcon.Features.Contains(micheline.FeatureSapling)
         flows = append(flows, f)

@@ -6,7 +6,6 @@ package server
 import (
 	"fmt"
 	"net"
-	"net/url"
 	"strconv"
 	"time"
 
@@ -73,8 +72,6 @@ func (c Config) ClampExplore64(count int64) int64 {
 type HttpConfig struct {
 	Addr                string        `json:"addr"`
 	Port                int           `json:"port"`
-	Scheme              string        `json:"scheme"`
-	Host                string        `json:"host"`
 	MaxWorkers          int           `json:"max_workers"`
 	MaxQueue            int           `json:"max_queue"`
 	ReadTimeout         time.Duration `json:"read_timeout"`
@@ -108,8 +105,6 @@ func NewHttpConfig() HttpConfig {
 	return HttpConfig{
 		Addr:                "127.0.0.1",
 		Port:                8000,
-		Host:                "127.0.0.1",
-		Scheme:              "http",
 		MaxWorkers:          50,
 		MaxQueue:            200,
 		HeaderTimeout:       2 * time.Second,  // header timeout
@@ -128,20 +123,6 @@ func NewHttpConfig() HttpConfig {
 }
 
 func (cfg *HttpConfig) Check() error {
-	// pre-process config
-	if u, err := url.Parse(cfg.Host); err == nil {
-		if u.Host != "" {
-			cfg.Host = u.Host
-		}
-		if u.Scheme != "" {
-			cfg.Scheme = u.Scheme
-		}
-	}
-
-	if cfg.Scheme != "https" && cfg.Scheme != "http" {
-		cfg.Scheme = "http"
-	}
-
 	var hasError bool
 	// server IP and port
 	if cfg.Addr == "" {
@@ -190,16 +171,6 @@ func (cfg *HttpConfig) Check() error {
 	//  warn when port is used (may be blocked by Safari/iOS (6666, 6667, 6000))
 	if cfg.Port == 6666 || cfg.Port == 6667 || cfg.Port == 6000 {
 		log.Warn("HTTP Server port may be blocked by Apple Webkit browsers")
-	}
-
-	if cfg.Scheme == "" {
-		log.Errorf("Empty http scheme")
-		hasError = true
-	}
-
-	if cfg.Host == "" {
-		log.Errorf("Empty http hostname")
-		hasError = true
 	}
 
 	if hasError {

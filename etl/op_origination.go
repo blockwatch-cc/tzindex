@@ -78,6 +78,8 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.Operation, id
     op.GasUsed = res.Gas()
     op.Volume = oop.Balance
     op.StoragePaid = res.PaidStorageSizeDiff
+    op.RawTicketUpdates = res.TicketUpdates()
+    b.block.Ops = append(b.block.Ops, op)
 
     // store manager and baker
     if mgr != nil {
@@ -87,10 +89,6 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.Operation, id
         op.BakerId = newbkr.AccountId
     }
 
-    var (
-        flows []*model.Flow
-        err   error
-    )
     if op.IsSuccess {
         if l := len(res.OriginatedContracts); l != 1 {
             return Errorf("%d originated accounts, expected exactly 1", l)
@@ -102,7 +100,7 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.Operation, id
             return Errorf("missing originated account %s", addr)
         }
         op.ReceiverId = dst.RowId
-        flows = b.NewOriginationFlows(
+        flows := b.NewOriginationFlows(
             src, dst,
             srcbkr, newbkr,
             oop.Fees(),
@@ -117,43 +115,31 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.Operation, id
             }
         }
 
-        // create or extend bigmap diff to inject alloc for proto < v005
-        // overwrite original diff
-        if ev := res.BigmapEvents(); len(ev) > 0 {
-            op.BigmapEvents, err = b.PatchBigmapEvents(ctx, ev, dst.Address, oop.Script)
-            if err != nil {
-                return Errorf("patch bigmap: %v", err)
-            }
+        // create or extend bigmap diff to inject alloc for proto < v005, overwrite original
+        op.BigmapEvents = res.BigmapEvents()
+        if b.block.Params.Version <= 4 && len(op.BigmapEvents) > 0 {
+            op.BigmapEvents, _ = b.PatchBigmapEvents(ctx, op.BigmapEvents, dst.Address, oop.Script)
         }
 
     } else {
-        // handle errors
-        if len(res.Errors) > 0 {
-            if buf, err := json.Marshal(res.Errors); err == nil {
-                op.Errors = buf
-            } else {
-                // non-fatal, but error data will be missing from index
-                log.Error(Errorf("marshal op errors: %s", err))
-            }
-        }
-
         // fees flows
         b.NewOriginationFlows(src, nil, srcbkr, nil, oop.Fees(), nil, id)
-    }
 
-    b.block.Ops = append(b.block.Ops, op)
+        // keep errors
+        op.Errors, _ = json.Marshal(res.Errors)
+    }
 
     // update accounts
     if !rollback {
         src.Counter = op.Counter
-        src.NOps++
-        src.NOrigination++
         src.LastSeen = b.block.Height
         src.IsDirty = true
 
-        if !op.IsSuccess {
-            src.NOpsFailed++
-        } else {
+        if op.IsSuccess {
+            src.NTxSuccess++
+            src.NTxOut++
+            dst.TotalFeesUsed += op.Fee
+
             // initialize originated account
             // pre-Babylon delegator KT1s had no code, post-babylon keep sender
             // as creator, until Athens it was called manager
@@ -190,17 +176,19 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.Operation, id
             op.StorageHash = con.StorageHash
             op.IsStorageUpdate = true
             op.Contract = con
+        } else {
+            src.NTxFailed++
         }
     } else {
         src.Counter = op.Counter - 1
-        src.NOps--
-        src.NOrigination--
         src.IsDirty = true
-        if !op.IsSuccess {
-            src.NOpsFailed--
-        } else {
+        if op.IsSuccess {
+            src.NTxSuccess--
+            src.NTxOut--
+
             // reverse origination, dst will be deleted
             dst.MustDelete = true
+            dst.TotalFeesUsed -= op.Fee
             dst.IsDirty = true
             if newbkr != nil {
                 dst.IsDelegated = false
@@ -209,11 +197,8 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.Operation, id
                 newbkr.ActiveDelegations--
                 newbkr.IsDirty = true
             }
-            // ignore, not possible anymore
-            // // handle self-delegate deregistration (note: there is no previous delegate)
-            // if b.block.Params.HasOriginationBug && newdlg != nil && newdlg.TotalDelegations == 0 && src.RowId == newdlg.RowId {
-            //  b.UnregisterDelegate(newdlg)
-            // }
+        } else {
+            src.NTxFailed--
         }
     }
 
@@ -273,16 +258,14 @@ func (b *Builder) AppendInternalOriginationOp(
     op.IsSuccess = op.Status.IsSuccess()
     op.Volume = iop.Balance
     op.StoragePaid = res.PaidStorageSizeDiff
+    op.RawTicketUpdates = res.TicketUpdates()
+    b.block.Ops = append(b.block.Ops, op)
 
     // store baker
     if newbkr != nil {
         op.BakerId = newbkr.AccountId
     }
 
-    var (
-        flows []*model.Flow
-        err   error
-    )
     if op.IsSuccess {
         if l := len(res.OriginatedContracts); l != 1 {
             return Errorf("%d originated accounts", l)
@@ -294,7 +277,7 @@ func (b *Builder) AppendInternalOriginationOp(
             return Errorf("missing originated account %s", addr)
         }
         op.ReceiverId = dst.RowId
-        flows = b.NewInternalOriginationFlows(
+        flows := b.NewInternalOriginationFlows(
             origsrc,
             src,
             dst,
@@ -312,39 +295,28 @@ func (b *Builder) AppendInternalOriginationOp(
             }
         }
 
-        // create or extend bigmap diff to inject alloc for proto < v005
-        // patch original result
-        if ev := res.BigmapEvents(); len(ev) > 0 {
-            op.BigmapEvents, err = b.PatchBigmapEvents(ctx, ev, dst.Address, iop.Script)
-            if err != nil {
-                return Errorf("patch bigmap: %v", err)
-            }
+        // create or extend bigmap diff to inject alloc for proto < v005, overwrite original
+        op.BigmapEvents = res.BigmapEvents()
+        if b.block.Params.Version <= 4 && len(op.BigmapEvents) > 0 {
+            op.BigmapEvents, _ = b.PatchBigmapEvents(ctx, op.BigmapEvents, dst.Address, iop.Script)
         }
 
-    } else if len(res.Errors) > 0 {
-        // handle errors
-        if buf, err := json.Marshal(res.Errors); err == nil {
-            op.Errors = buf
-        } else {
-            // non-fatal, but error data will be missing from index
-            log.Error(Errorf("marshal op errors: %s", err))
-        }
+    } else {
+        // keep errors
+        op.Errors, _ = json.Marshal(res.Errors)
 
         // no internal fees, no flows on failure
     }
 
-    b.block.Ops = append(b.block.Ops, op)
-
     // update accounts
     if !rollback {
         src.Counter = op.Counter
-        src.NOps++
-        src.NOrigination++
         src.LastSeen = b.block.Height
         src.IsDirty = true
-        if !op.IsSuccess {
-            src.NOpsFailed++
-        } else {
+        if op.IsSuccess {
+            src.NTxSuccess++
+            src.NTxOut++
+
             dst.LastSeen = b.block.Height
             dst.IsContract = iop.Script != nil
             dst.IsDirty = true
@@ -374,16 +346,17 @@ func (b *Builder) AppendInternalOriginationOp(
             op.StorageHash = con.StorageHash
             op.IsStorageUpdate = true
             op.Contract = con
+        } else {
+            src.NTxFailed++
         }
     } else {
         src.Counter = op.Counter - 1
-        src.NOps--
-        src.NOrigination--
         src.IsDirty = true
-        if !op.IsSuccess {
-            src.NOpsFailed--
-        } else {
-            // reverse origination
+        if op.IsSuccess {
+            src.NTxSuccess--
+            src.NTxOut--
+
+            // reverse origination effects
             dst.MustDelete = true
             dst.IsDirty = true
             if newbkr != nil {
@@ -393,6 +366,8 @@ func (b *Builder) AppendInternalOriginationOp(
                 newbkr.ActiveDelegations--
                 newbkr.IsDirty = true
             }
+        } else {
+            src.NTxFailed--
         }
     }
 

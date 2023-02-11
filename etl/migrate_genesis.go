@@ -23,7 +23,9 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 
 	// register new protocol (will save as new deployment)
 	b.block.Params.StartHeight = b.block.Height
-	_ = b.idx.ConnectProtocol(ctx, b.block.Params, nil)
+	if err := b.idx.ConnectProtocol(ctx, b.block.Params, nil); err != nil {
+		return nil, err
+	}
 
 	accounts := make([]pack.Item, 0)
 	contracts := make([]pack.Item, 0)
@@ -51,11 +53,11 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		// revealed accounts are registered as active bakers (i.e. foundation bakers)
 		if v.Key.IsValid() {
 			acc.IsRevealed = true
-			acc.Pubkey = v.Key.Bytes()
+			acc.Pubkey = v.Key
 			acc.IsBaker = true
 			acc.BakerId = acc.RowId
 			bkr := b.RegisterBaker(acc, true)
-			_ = b.AppendMagicBakerRegistrationOp(ctx, bkr, i)
+			b.AppendMagicBakerRegistrationOp(ctx, bkr, i)
 
 			// update supply counters
 			b.block.Supply.ActiveStaking += v.Value

@@ -1,6 +1,6 @@
 # Blockwatch Tezos Indexer
 
-© 2020-2022 Blockwatch Data Inc., All rights reserved.
+© 2020-2023 Blockwatch Data Inc., All rights reserved.
 
 All-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resource friendly way to gain tactical insights and build dapps on top of Tezos. Supported by [Blockwatch Data](https://blockwatch.cc), Pro version available on request.
 
@@ -8,7 +8,7 @@ For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](h
 
 **Core Features**
 
-- supports protocols up to Kathmandu (v014)
+- supports protocols up to Lima (v015)
 - indexes and cross-checks full on-chain state
 - feature-rich [REST API](https://tzstats.com/docs/api/index.html) with objects, bulk tables and time-series
 - auto-detects and locks Tezos network (never mixes data from different networks)
@@ -42,6 +42,7 @@ For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](h
 - **constants**: global constants (e.g. smart contract code/type macros to lower contract size and reuse common features)
 - **storage**: separate smart contract storage updates to decrease operation table cache pressure
 - **event**: emitted smart contract events
+- **tickets**: emitted smart contract ticket updates
 
 **Operation modes**
 
@@ -56,7 +57,7 @@ For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](h
 
 ### Requirements
 
-- Storage: 43GB (full Mainnet index, Sep 2022), 38G (light mode)
+- Storage: 37GB (full Mainnet index, Dec 2022), 25G (light mode)
 - RAM:  8-64GB (configurable, use more memory for better query latency)
 - CPU:  2+ cores (configurable, use more for better query parallelism)
 - Tezos node in archive mode
@@ -89,7 +90,7 @@ The contained Makefile supports local and Docker builds. For local builds you ne
 make build
 
 # or directly with Go
-go build tzindex.go
+go build ./cmd/tzindex.go
 
 # build docker images
 make image
@@ -116,9 +117,9 @@ Config file sections
 ```
 rpc      - configures RPC connection to the Tezos node
 crawler  - configures the blockchain crawl logic
-database - configures the embedded database
+db       - configures the embedded database
 server   - configures the built-in HTTP API server
-logging  - configures logging for all subsystems
+log      - configures logging for all subsystems
 ```
 
 See the default `config.json` in the `docker` subfolder for a detailed list of all settings.
@@ -137,76 +138,127 @@ TZ_RPC_HOST=127.0.0.1
 
 **Command line arguments**
 
-A few global settings can only be controlled via cli arguments:
+All TzIndex config options can be controlled via cli arguments.
+
+Global options:
 
 ```
-Usage:
-  tzindex [command]
+Usage: tzindex [flags]
 
-Available Commands:
-  help        Help about any command
-  run         Run as service
-  version     Print the version number of tzindex
-
-Flags:
-  -c, --config string          config file
-      --cpus int               max number of logical CPU cores to use (default: all) (default -1)
-  -p, --dbpath path            database path
-      --gogc int               trigger GC when used mem grows by N percent (default 20)
-  -h, --help                   help for tzindex
-      --insecure               disable RPC TLS certificate checks (not recommended)
-      --norpc                  disable RPC client
-      --notls                  disable RPC TLS support (use http)
-      --profile-block string   write blocking events to file
-      --profile-cpu string     write cpu profile to file
-      --profile-mutex string   write mutex contention samples to file
-      --profile-rate int       block/mutex profiling rate in fractions of 100 (e.g. 100 == 1%) (default 100)
-      --rpcpass string         RPC password
-      --rpcurl string          RPC url (default "http://127.0.0.1:8732")
-      --rpcuser string         RPC username
-  -t, --test                   test configuration and exit
-      --v                      be verbose
-      --vv                     debug mode
-      --vvv                    trace mode
+Flags
+  -c file
+      read config from file (default "config.json")
+  -config file
+      read config from file (default "config.json")
+  -enable-cors
+      enable API CORS support
+  -full
+      full mode (including baker and gov data)
+  -insecure
+      disable RPC TLS certificate checks (not recommended)
+  -light
+      light mode (use to skip baker and gov data) (default true)
+  -noapi
+      disable API server
+  -noindex
+      disable indexing
+  -nomonitor
+      disable block monitor
+  -nopublish
+      disable ZMQ event publishing
+  -norpc
+      disable RPC client
+  -notls
+      disable RPC TLS support (use http)
+  -rpcurl string
+      RPC url (default "http://127.0.0.1:8732")
+  -stats n
+      print statistics every n seconds
+  -stop height
+      stop indexing after height
+  -unsafe
+      disable fsync for fast ingest (DANGEROUS! data will be lost on crashes)
+  -v  be verbose
+  -validate
+      validate account balances
+  -version
+      show version
+  -vv
+      debug mode
+  -vvv
+      trace mode
 ```
 
-The main `tzindex run` command has a few additional options
+Subsystem Options
 
 ```
-Usage:
-  tzindex run [flags]
+Database
+  -db.path=./db             path for database storage
+  -db.log_slow_queries=1s   warn when DB queries take longer than this
 
-Flags:
-      --enable-cors   enable API CORS support
-  -h, --help          help for run
-      --noapi         disable API server
-      --noindex       disable indexing
-      --nomonitor     disable block monitor
-      --stop height   stop indexing after height
-      --unsafe        disable fsync for fast ingest (DANGEROUS! data will be lost on crashes)
-      --validate      validate account balances
+Go runtime
+  -go.cpu=0            max number of CPU cores to use (0 = all)
+  -go.gc=20            trigger GC when used mem grows by N percent
+  -go.sample_rate=0    block and mutex profiling sample rate (0 = off)
 
-Global Flags:
-  -c, --config string          config file
-      --cpus int               max number of logical CPU cores to use (default: all) (default -1)
-  -p, --dbpath path            database path
-      --gogc int               trigger GC when used mem grows by N percent (default 20)
-      --insecure               disable RPC TLS certificate checks (not recommended)
-      --light                  light mode (default, skips endorsement, baker and governance data)
-      --full                   full mode (index all data)
-      --norpc                  disable RPC client
-      --notls                  disable RPC TLS support (use http)
-      --profile-block string   write blocking events to file
-      --profile-cpu string     write cpu profile to file
-      --profile-mutex string   write mutex contention samples to file
-      --profile-rate int       block/mutex profiling rate in fractions of 100 (e.g. 100 == 1%) (default 100)
-      --rpcpass string         RPC password
-      --rpcurl string          RPC url (default "http://127.0.0.1:8732")
-      --rpcuser string         RPC username
-  -t, --test                   test configuration and exit
-      --v                      be verbose
-      --vv                     debug mode
-      --vvv                    trace mode
+Crawler
+  -crawler.cache_size_log2=15                max number of cached accounts when crawling
+  -crawler.queue=100                         max number of blocks to prefetch
+  -crawler.delay=1                           offset from chain head (use 1 or 2 for reorg safe indexing)
+  -crawler.snapshot.path=./db/snapshot       target path for indexer database snapshots
+  -crawler.snapshot.blocks=height1,height2   target blocks to create snapshots
+  -crawler.snapshot.interval=0               interval between blocks to create snapshots
+
+Server
+  -server.addr=127.0.0.1            server listen address
+  -server.port=8000                 server listen port
+  -server.workers=64                number of Goroutines for executing API queries
+  -server.queue=128                 number of open requests to queue for execution
+  -server.read_timeout=5s           max timeout for receiving complete requests
+  -server.header_timeout=2s         max timeout for receiving request headers
+  -server.write_timeout=90s         max timeout for sending replies
+  -server.keepalive=90s             connection keep alive time
+  -server.shutdown_timeout=60s      delay to wait for draining open requests on shutdown
+  -server.max_list_count=500000     max number of result rows for table queries
+  -server.default_list_count=500    default number of result rows for table queries
+  -server.max_series_duration=0     max time-series duration per request
+  -server.max_explore_count=100     max number or explorer API results in lists
+  -server.default_explore_count=20  default number of results in explorer API lists
+  -server.cors_enable=false         add CORS response headers
+  -server.cors_origin=*             CORS origin header contents
+  -server.cors_allow_headers=       CORS allow header contents
+  -server.cors_expose_headers=      CORS expose header contents
+  -server.cors_methods=             CORS methods header contents
+  -server.cors_maxage=              CORS maxage header contents
+  -server.cors_credentials=         CORS credentials header contents
+  -server.cache_control=public      cache control header contents
+  -server.cache_expires=30s         default cache expiry time for mutable API responses
+  -server.cache_max=24h             max cache expiry time for immutable API responses
+
+RPC
+  -rpc.url=http://127.0.0.1:8732    Tezos RPC host
+  -rpc.disable_tls=true             use HTTP by default
+  -rpc.insecure_tls=false           disable TLS certificate checks
+  -rpc.proxy=                       set HTTP proxy
+  -rpc.proxy_user=                  optional HTTP proxy username
+  -rpc.proxy_pass=                  optional HTTP proxy password
+  -rpc.dial_timeout=10s             max connection delay before failing
+  -rpc.keepalive=30m                connection keep alive
+  -rpc.idle_timeout=30m             close connections when idle for longer
+  -rpc.response_timeout=60m         max delay waiting for RPC responses
+  -rpc.continue_timeout=60s         max delay waiting for HTTP chunks
+  -rpc.idle_conns=16                max server connections
+
+Logging
+  -log.progress=10s                 interval for progress logs
+  -log.backend=stdout               log backend (stdout, stderr, syslog, file)
+  -log.flags= date,time,micro,utc   log flags (see Golang log package)
+  -log.level=info                   default global log level
+  -log.blockchain=info              log level for chain crawler
+  -log.db=info                      log level for database layer
+  -log.rpc=info                     log level for RPC layer
+  -log.server=info                  log level for API server
+  -log.micheline=info               log level for TzGo micheline package
 ```
 
 ### License
@@ -223,10 +275,13 @@ The following table may help you pick the right license for your intended use-ca
 | Costs | Free | Subscription |
 | Type | Perpetual | Perpetual |
 | Use | Any | Commercial Use |
-| Mode | Light-only | Light/Full |
+| Mode | All | All |
 | Limitations | - | See Agreement |
 | Support | Best effort | Commercial Support Available |
-| Protocol Upgrade Availability | Best-effort | Early |
+| Upgrades | Best-effort | Early |
+| Health check | No | Available |
+| API statistics | No | Available |
+| ZMQ | No | Available |
 | RPC Proxy | No | Available |
 | QA Tools | No | Available |
 

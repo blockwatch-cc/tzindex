@@ -6,17 +6,14 @@ package main
 import (
 	"fmt"
 	"runtime"
-
-	"github.com/spf13/cobra"
 )
 
 var (
 	company           = "Blockwatch Data Inc."
 	orgUrl            = "blockwatch.cc"
-	orgName           = "Blockwatch"
 	appName           = "tzindex"
-	apiVersion        = "v014-2022-09-06"
-	version    string = "v14.0"
+	apiVersion        = "v015-2022-12-06"
+	version    string = "v15.0"
 	commit     string = "dev"
 	envprefix         = "TZ"
 )
@@ -30,16 +27,9 @@ func UserAgent() string {
 	)
 }
 
-func init() {
-	rootCmd.AddCommand(versionCmd)
-}
-
-var versionCmd = &cobra.Command{
-	Use:   "version",
-	Short: "Print the version number of " + appName,
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("%s TzIndex OSS %s -- %s\n", orgName, version, commit)
-		fmt.Printf("(c) Copyright 2018-2022 -- %s\n", company)
-		fmt.Printf("Go version (client): %s\n", runtime.Version())
-	},
+func printVersion() {
+	fmt.Printf("Tezos TzIndex L1 indexer by %s\n", company)
+	fmt.Printf("Version: %s (%s)\n", version, commit)
+	fmt.Printf("API version: %s\n", apiVersion)
+	fmt.Printf("Go version: %s\n", runtime.Version())
 }

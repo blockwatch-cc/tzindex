@@ -177,7 +177,7 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 		}
 
 		// skip non-roll owners
-		if b.StakingBalance() < block.Params.TokensPerRoll {
+		if b.StakingBalance() < block.Params.MinimalStake {
 			continue
 		}
 
@@ -186,7 +186,7 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 		snap.Cycle = block.Cycle
 		snap.Timestamp = block.Timestamp
 		snap.Index = sn
-		snap.Rolls = b.StakingBalance() / block.Params.TokensPerRoll
+		snap.Rolls = b.StakingBalance() / block.Params.MinimalStake
 		snap.ActiveStake = stake
 		snap.AccountId = b.AccountId
 		snap.BakerId = b.AccountId

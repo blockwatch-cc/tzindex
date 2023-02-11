@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	BigmapPackSizeLog2    = 15 // 32k packs
-	BigmapJournalSizeLog2 = 16 // 64k
+	BigmapPackSizeLog2    = 14 // 16k packs
+	BigmapJournalSizeLog2 = 17 // 128k
 	BigmapCacheSize       = 128
 	BigmapFillLevel       = 100
 
@@ -243,6 +243,38 @@ func (idx *BigmapIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 		for _, diff := range op.BigmapEvents {
 			switch diff.Action {
 			case micheline.DiffActionAlloc:
+				// post Jakarta v013, bitmap allocs no longer contain type annotations
+				// so we must lookup the correct bigmap type from script (exclude copies)
+				if block.Params.Version >= 13 && diff.Id > 0 {
+					script, err := op.Contract.LoadScript()
+					if err != nil {
+						return fmt.Errorf("etl.bigmap_alloc.load_type: %v", err)
+					}
+					var matchFound bool
+					// compare the allocated bigmap type with annotated type in storage
+					// using converted typedef to match comb and tree type pairs
+					kt := micheline.NewType(diff.KeyType).Typedef("").Unfold()
+					vt := micheline.NewType(diff.ValueType).Typedef("").Unfold()
+					for _, btyp := range script.BigmapTypes() {
+						if !btyp.Left().Typedef("").Unfold().Equal(kt) {
+							continue
+						}
+						if !btyp.Right().Typedef("").Unfold().Equal(vt) {
+							continue
+						}
+						// overwrite type in bigmap diff with annotated type from script
+						diff.KeyType = btyp.Left().Prim.Clone()
+						diff.ValueType = btyp.Right().Prim.Clone()
+						matchFound = true
+						break
+					}
+					if !matchFound {
+						log.Errorf("No type match found for bigmap %d in %s script", diff.Id, op.Contract)
+						// } else {
+						// 	log.Debugf("Bigmap %d type replaced from script %s", diff.Id, op.Contract)
+					}
+				}
+
 				// insert immediately to allow sequence of updates
 				// log.Debugf("Bigmap %s %d in block %d", v.Action, v.Id, block.Height)
 				if diff.Id < 0 {

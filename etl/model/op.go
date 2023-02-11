@@ -85,15 +85,17 @@ type Op struct {
 	Entrypoint   int            `pack:"E"                 json:"entrypoint_id"` // update contract counters, search by entrypoint
 
 	// internal
-	OpC             int                    `pack:"-"  json:"-"` // contents list pos
-	OpI             int                    `pack:"-"  json:"-"` // internal op result list pos
-	Raw             rpc.TypedOperation     `pack:"-"  json:"-"` // cache
-	BigmapEvents    micheline.BigmapEvents `pack:"-"  json:"-"` // cache here for bigmap index
-	Storage         []byte                 `pack:"-"  json:"-"` // storage update
-	IsStorageUpdate bool                   `pack:"-"  json:"-"` // true when contract storage changed
-	Contract        *Contract              `pack:"-"  json:"-"` // cached contract
-	BigmapUpdates   []BigmapUpdate         `pack:"-"  json:"-"` // cached query result
-	Events          []*Event               `pack:"-"  json:"-"` // cached query result
+	OpC              int                    `pack:"-"  json:"-"` // contents list pos
+	OpI              int                    `pack:"-"  json:"-"` // internal op result list pos
+	Raw              rpc.TypedOperation     `pack:"-"  json:"-"` // cache
+	RawTicketUpdates []rpc.TicketUpdate     `pack:"-"  json:"-"` // rpc ticket updates
+	BigmapEvents     micheline.BigmapEvents `pack:"-"  json:"-"` // cache here for bigmap index
+	Storage          []byte                 `pack:"-"  json:"-"` // storage update
+	IsStorageUpdate  bool                   `pack:"-"  json:"-"` // true when contract storage changed
+	Contract         *Contract              `pack:"-"  json:"-"` // cached contract
+	BigmapUpdates    []BigmapUpdate         `pack:"-"  json:"-"` // cached query result
+	Events           []*Event               `pack:"-"  json:"-"` // cached query result
+	TicketUpdates    []*TicketUpdate        `pack:"-"  json:"-"` // cached query result
 }
 
 // Ensure Op implements the pack.Item interface.
@@ -159,47 +161,7 @@ func (o *Op) Free() {
 }
 
 func (o *Op) Reset() {
-	o.RowId = 0
-	o.Type = 0
-	o.Hash = tezos.OpHash{Hash: tezos.InvalidHash}
-	o.Height = 0
-	o.Cycle = 0
-	o.Timestamp = time.Time{}
-	o.OpN = 0
-	o.OpP = 0
-	o.Status = 0
-	o.IsSuccess = false
-	o.IsContract = false
-	o.IsInternal = false
-	o.IsEvent = false
-	o.IsRollup = false
-	o.Counter = 0
-	o.GasLimit = 0
-	o.GasUsed = 0
-	o.StorageLimit = 0
-	o.StoragePaid = 0
-	o.Volume = 0
-	o.Fee = 0
-	o.Reward = 0
-	o.Deposit = 0
-	o.Burned = 0
-	o.SenderId = 0
-	o.ReceiverId = 0
-	o.CreatorId = 0
-	o.BakerId = 0
-	o.Data = ""
-	o.Parameters = nil
-	o.Errors = nil
-	o.Entrypoint = 0
-
-	o.OpC = 0
-	o.OpI = 0
-	o.Raw = nil
-	o.BigmapEvents = nil
-	o.Storage = nil
-	o.StorageHash = 0
-	o.IsStorageUpdate = false
-	o.Contract = nil
+	*o = Op{}
 }
 
 // Separate endorsement table for better cache locality

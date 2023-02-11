@@ -93,10 +93,22 @@ func (b Block) IsProtocolUpgrade() bool {
 	return !b.Metadata.Protocol.Equal(b.Metadata.NextProtocol)
 }
 
-func (b Block) Invoice() (upd BalanceUpdate, ok bool) {
+func (b Block) Invoices() (upd []BalanceUpdate, ok bool) {
 	list := b.Metadata.BalanceUpdates
-	if len(list) > 1 && list[0].Category == "invoice" {
-		upd = list[1]
+	if len(list) == 0 || list[0].Category != "invoice" {
+		return
+	}
+	for _, v := range list[1:] {
+		if v.Category != "" {
+			break
+		}
+		if v.Kind != "contract" {
+			break
+		}
+		if v.Origin != "migration" {
+			break
+		}
+		upd = append(upd, v)
 		ok = true
 	}
 	return
@@ -180,6 +192,10 @@ type BlockMetadata struct {
 	// v010+
 	ImplicitOperationsResults []ImplicitResult `json:"implicit_operations_results"`
 	LiquidityBakingEscapeEma  int64            `json:"liquidity_baking_escape_ema"`
+
+	// v015+
+	ProposerConsensusKey tezos.Address `json:"proposer_consensus_key"`
+	BakerConsensusKey    tezos.Address `json:"baker_consensus_key"`
 }
 
 func (m *BlockMetadata) GetLevel() int64 {

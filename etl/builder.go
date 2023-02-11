@@ -8,7 +8,6 @@ import (
 	"fmt"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
@@ -543,8 +542,16 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 
 	// collect from block-level balance updates if invoice is found
 	block := b.block.TZ.Block
-	if inv, ok := block.Invoice(); ok {
-		addUnique(inv.Address())
+	if inv, ok := block.Invoices(); ok {
+		for _, v := range inv {
+			addUnique(v.Address())
+		}
+	}
+	for _, v := range []tezos.Address{
+		block.Metadata.ProposerConsensusKey,
+		block.Metadata.BakerConsensusKey,
+	} {
+		addUnique(v)
 	}
 
 	// collect from ops
@@ -656,6 +663,15 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 						addUnique(bal[0].Address()) // offender
 					}
 					log.Debugf("Found %s in block %d", kind, b.block.Height)
+
+				case tezos.OpTypeUpdateConsensusKey:
+					addUnique(op.(*rpc.UpdateConsensusKey).Source)
+
+				case tezos.OpTypeDrainDelegate:
+					dop := op.(*rpc.DrainDelegate)
+					addUnique(dop.ConsensusKey)
+					addUnique(dop.Delegate)
+					addUnique(dop.Destination)
 				}
 			}
 		}
@@ -802,6 +818,7 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 		}
 		b.block.Baker = baker
 		b.block.BakerId = baker.AccountId
+		b.block.BakerConsensusKeyId = baker.AccountId
 	}
 
 	if addr := b.block.TZ.Block.Metadata.Proposer; addr.IsValid() {
@@ -811,9 +828,26 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 		}
 		b.block.Proposer = proposer
 		b.block.ProposerId = proposer.AccountId
+		b.block.ProposerConsensusKeyId = proposer.AccountId
 	} else {
 		b.block.Proposer = b.block.Baker
 		b.block.ProposerId = b.block.BakerId
+		b.block.ProposerConsensusKeyId = b.block.BakerId
+	}
+
+	if b.block.ProposerId != b.block.ProposerConsensusKeyId {
+		acc, ok := b.AccountById(b.block.ProposerConsensusKeyId)
+		if !ok {
+			return fmt.Errorf("missing proposer consensus key account %d", b.block.ProposerConsensusKeyId)
+		}
+		b.block.ProposerConsensusKeyId = acc.RowId
+	}
+	if b.block.BakerId != b.block.BakerConsensusKeyId {
+		acc, ok := b.AccountById(b.block.BakerConsensusKeyId)
+		if !ok {
+			return fmt.Errorf("missing baker consensus key account %d", b.block.BakerConsensusKeyId)
+		}
+		b.block.BakerConsensusKeyId = acc.RowId
 	}
 
 	return nil
@@ -1012,15 +1046,12 @@ func (b *Builder) OnUpgrade(ctx context.Context, rollback bool) error {
 
 		// special actions on protocol upgrades
 		if !rollback {
-			err := b.MigrateProtocol(ctx, prev, next)
-			if err != nil {
-				return err
-			}
+			return b.MigrateProtocol(ctx, prev, next)
 		}
 
 	} else if b.block.Params != nil && b.block.Params.IsCycleStart(b.block.Height) {
 		// update params at start of cycle (to capture early ramp up data)
-		_ = b.idx.reg.Register(b.block.Params)
+		return b.idx.reg.Register(b.block.Params)
 	}
 	return nil
 }
@@ -1126,13 +1157,11 @@ func (b *Builder) UpdateStats(ctx context.Context) error {
 		acc.WasFunded = acc.Balance() > 0
 		acc.WasDust = acc.IsDust()
 		acc.PrevBalance = acc.Balance()
-		acc.PrevSeen = util.Max64(acc.LastIn, acc.LastOut)
 	}
 	for _, bkr := range b.bakerMap {
 		bkr.Account.WasFunded = bkr.Balance() > 0 // !sic
 		bkr.Account.WasDust = bkr.Account.IsDust()
 		bkr.Account.PrevBalance = bkr.Account.Balance()
-		bkr.Account.PrevSeen = util.Max64(bkr.Account.LastIn, bkr.Account.LastOut)
 	}
 
 	// apply pure in-flows

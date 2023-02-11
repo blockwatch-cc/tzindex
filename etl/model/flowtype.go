@@ -64,58 +64,62 @@ func (c FlowCategory) String() string {
 type FlowType byte
 
 const (
-	FlowTypeEndorsement       FlowType = iota // 0
-	FlowTypeTransaction                       // 1
-	FlowTypeOrigination                       // 2
-	FlowTypeDelegation                        // 3
-	FlowTypeReveal                            // 4
-	FlowTypeBaking                            // 5
-	FlowTypeNonceRevelation                   // 6
-	FlowTypeActivation                        // 7
-	FlowTypePenalty                           // 8
-	FlowTypeInternal                          // 9 - used for unfreeze
-	FlowTypeInvoice                           // 10 - invoice feature
-	FlowTypeAirdrop                           // 11 - Babylon Airdrop
-	FlowTypeSubsidy                           // 12 - Granada liquidity baking
-	FlowTypeRegisterConstant                  // 13 - Hangzhou+
-	FlowTypeBonus                             // 14 - Ithaca+ baking bonus
-	FlowTypeReward                            // 15 - Ithaca+ endorsing reward (or slash)
-	FlowTypeDeposit                           // 16 - Ithaca+ deposit transfer
-	FlowTypeDepositsLimit                     // 17 - Ithaca+
-	FlowTypeRollupOrigination                 // 18 - Jakarta+
-	FlowTypeRollupTransaction                 // 19 - Jakarta+
-	FlowTypeRollupReward                      // 20 - Jakarta+
-	FlowTypeRollupPenalty                     // 21 - Jakarta+
-	FlowTypePayStorage                        // 22 - Kathmandu+
-	FlowTypeInvalid           = 255
+	FlowTypeEndorsement        FlowType = iota // 0
+	FlowTypeTransaction                        // 1
+	FlowTypeOrigination                        // 2
+	FlowTypeDelegation                         // 3
+	FlowTypeReveal                             // 4
+	FlowTypeBaking                             // 5
+	FlowTypeNonceRevelation                    // 6
+	FlowTypeActivation                         // 7
+	FlowTypePenalty                            // 8
+	FlowTypeInternal                           // 9 - used for unfreeze
+	FlowTypeInvoice                            // 10 - invoice feature
+	FlowTypeAirdrop                            // 11 - Babylon Airdrop
+	FlowTypeSubsidy                            // 12 - Granada liquidity baking
+	FlowTypeRegisterConstant                   // 13 - Hangzhou+
+	FlowTypeBonus                              // 14 - Ithaca+ baking bonus
+	FlowTypeReward                             // 15 - Ithaca+ endorsing reward (or slash)
+	FlowTypeDeposit                            // 16 - Ithaca+ deposit transfer
+	FlowTypeDepositsLimit                      // 17 - Ithaca+
+	FlowTypeRollupOrigination                  // 18 - Jakarta+
+	FlowTypeRollupTransaction                  // 19 - Jakarta+
+	FlowTypeRollupReward                       // 20 - Jakarta+
+	FlowTypeRollupPenalty                      // 21 - Jakarta+
+	FlowTypePayStorage                         // 22 - Kathmandu+
+	FlowTypeUpdateConsensusKey                 // 23 - Lima+
+	FlowTypeDrain                              // 24 - Lima+
+	FlowTypeInvalid            = 255
 )
 
 var (
 	flowTypeStrings = map[FlowType]string{
-		FlowTypeEndorsement:       "endorsement",
-		FlowTypeTransaction:       "transaction",
-		FlowTypeOrigination:       "origination",
-		FlowTypeDelegation:        "delegation",
-		FlowTypeReveal:            "reveal",
-		FlowTypeBaking:            "baking",
-		FlowTypeNonceRevelation:   "nonce_revelation",
-		FlowTypeActivation:        "activation",
-		FlowTypePenalty:           "penalty",
-		FlowTypeInternal:          "internal",
-		FlowTypeInvoice:           "invoice",
-		FlowTypeAirdrop:           "airdrop",
-		FlowTypeSubsidy:           "subsidy",
-		FlowTypeRegisterConstant:  "register_constant",
-		FlowTypeBonus:             "bonus",
-		FlowTypeReward:            "reward",
-		FlowTypeDeposit:           "deposit",
-		FlowTypeDepositsLimit:     "deposits_limit",
-		FlowTypeRollupOrigination: "rollup_origination",
-		FlowTypeRollupTransaction: "rollup_transaction",
-		FlowTypeRollupReward:      "rollup_reward",
-		FlowTypeRollupPenalty:     "rollup_penalty",
-		FlowTypePayStorage:        "pay_storage",
-		FlowTypeInvalid:           "invalid",
+		FlowTypeEndorsement:        "endorsement",
+		FlowTypeTransaction:        "transaction",
+		FlowTypeOrigination:        "origination",
+		FlowTypeDelegation:         "delegation",
+		FlowTypeReveal:             "reveal",
+		FlowTypeBaking:             "baking",
+		FlowTypeNonceRevelation:    "nonce_revelation",
+		FlowTypeActivation:         "activation",
+		FlowTypePenalty:            "penalty",
+		FlowTypeInternal:           "internal",
+		FlowTypeInvoice:            "invoice",
+		FlowTypeAirdrop:            "airdrop",
+		FlowTypeSubsidy:            "subsidy",
+		FlowTypeRegisterConstant:   "register_constant",
+		FlowTypeBonus:              "bonus",
+		FlowTypeReward:             "reward",
+		FlowTypeDeposit:            "deposit",
+		FlowTypeDepositsLimit:      "deposits_limit",
+		FlowTypeRollupOrigination:  "rollup_origination",
+		FlowTypeRollupTransaction:  "rollup_transaction",
+		FlowTypeRollupReward:       "rollup_reward",
+		FlowTypeRollupPenalty:      "rollup_penalty",
+		FlowTypePayStorage:         "pay_storage",
+		FlowTypeUpdateConsensusKey: "update_consensus_key",
+		FlowTypeDrain:              "drain",
+		FlowTypeInvalid:            "invalid",
 	}
 	flowTypeReverseStrings = make(map[string]FlowType)
 )
@@ -190,6 +194,10 @@ func MapFlowType(typ OpType) FlowType {
 		return FlowTypeRollupTransaction
 	case OpTypeIncreasePaidStorage:
 		return FlowTypePayStorage
+	case OpTypeUpdateConsensusKey:
+		return FlowTypeUpdateConsensusKey
+	case OpTypeDrainDelegate:
+		return FlowTypeDrain
 	default:
 		return FlowTypeInvalid
 	}

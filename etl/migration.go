@@ -25,31 +25,37 @@ func (b *Builder) MigrateProtocol(ctx context.Context, prevparams, nextparams *t
 		// origination bugfix
 		return b.FixOriginationBug(ctx, nextparams)
 
-	case nextparams.Protocol.Equal(tezos.ProtoV004):
+	case nextparams.Protocol.Equal(tezos.PtAthens):
 		// adds invoice
 		return b.MigrateAthens(ctx, prevparams, nextparams)
 
-	case nextparams.Protocol.Equal(tezos.ProtoV005_2):
+	case nextparams.Protocol.Equal(tezos.PsBabyM1):
 		// adds invoice
 		// runs manager airdrop
 		// migrates delegator contracts
 		return b.MigrateBabylon(ctx, prevparams, nextparams)
 
-	case nextparams.Protocol.Equal(tezos.ProtoV006_2):
+	case nextparams.Protocol.Equal(tezos.PsCARTHA):
 		// new rewards
 		return b.MigrateCarthage(ctx, prevparams, nextparams)
 
-	case nextparams.Protocol.Equal(tezos.ProtoV010):
+	case nextparams.Protocol.Equal(tezos.PtGRANAD):
 		// Granada changes cycle length and rights
 		// - remove and reload future rights
 		// - remove and build future income data
 		return b.MigrateGranada(ctx, prevparams, nextparams)
 
-	case nextparams.Protocol.Equal(tezos.ProtoV012_2):
+	case nextparams.Protocol.Equal(tezos.Psithaca):
 		// Ithaca changes all rights
 		// - remove and reload future rights
 		// - remove and rebuild future income data
 		return b.MigrateIthaca(ctx, prevparams, nextparams)
+
+	case nextparams.Protocol.Equal(tezos.PtLimaPt):
+		// Lima changes all rights
+		// - remove and reload future rights
+		// - remove and rebuild future income data
+		return b.MigrateLima(ctx, prevparams, nextparams)
 	}
 
 	return nil

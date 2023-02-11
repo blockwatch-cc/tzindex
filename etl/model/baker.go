@@ -22,40 +22,43 @@ func (id BakerID) Value() uint64 {
 // For history look at Op and Flow (balance updates), for generic info look
 // at Account.
 type Baker struct {
-    RowId              BakerID       `pack:"I,pk"     json:"row_id"`
-    AccountId          AccountID     `pack:"A"        json:"account_id"`
-    Address            tezos.Address `pack:"H,snappy" json:"address"`
-    IsActive           bool          `pack:"v,snappy" json:"is_active"`
-    BakerSince         int64         `pack:"*"        json:"baker_since"`
-    BakerUntil         int64         `pack:"/"        json:"baker_until"`
-    TotalRewardsEarned int64         `pack:"W"        json:"total_rewards_earned"`
-    TotalFeesEarned    int64         `pack:"E"        json:"total_fees_earned"`
-    TotalLost          int64         `pack:"L"        json:"total_lost"`
-    FrozenDeposits     int64         `pack:"z"        json:"frozen_deposits"`
-    FrozenRewards      int64         `pack:"Z"        json:"frozen_rewards"`
-    FrozenFees         int64         `pack:"Y"        json:"frozen_fees"`
-    DelegatedBalance   int64         `pack:"~"        json:"delegated_balance"`
-    DepositsLimit      int64         `pack:"T"        json:"deposit_limit"`
-    TotalDelegations   int64         `pack:">"        json:"total_delegations"`
-    ActiveDelegations  int64         `pack:"a"        json:"active_delegations"`
-    BlocksBaked        int64         `pack:"b"        json:"blocks_baked"`
-    BlocksProposed     int64         `pack:"P"        json:"blocks_proposed"`
-    BlocksNotBaked     int64         `pack:"N"        json:"blocks_not_baked"`
-    BlocksEndorsed     int64         `pack:"x"        json:"blocks_endorsed"`
-    BlocksNotEndorsed  int64         `pack:"y"        json:"blocks_not_endorsed"`
-    SlotsEndorsed      int64         `pack:"e"        json:"slots_endorsed"`
-    NBakerOps          int64         `pack:"1"        json:"n_baker_ops"`
-    NProposal          int64         `pack:"2"        json:"n_proposals"`
-    NBallot            int64         `pack:"3"        json:"n_ballots"`
-    NEndorsement       int64         `pack:"4"        json:"n_endorsements"`
-    NPreendorsement    int64         `pack:"5"        json:"n_preendorsements"`
-    NSeedNonce         int64         `pack:"6"        json:"n_nonce_revelations"`
-    N2Baking           int64         `pack:"7"        json:"n_double_bakings"`
-    N2Endorsement      int64         `pack:"8"        json:"n_double_endorsements"`
-    NSetDepositsLimit  int64         `pack:"9"        json:"n_set_limits"`
-    NAccusations       int64         `pack:"0"        json:"n_accusations"`
-    GracePeriod        int64         `pack:"G"        json:"grace_period"`
-    Version            uint32        `pack:"V,snappy" json:"baker_version"`
+    RowId               BakerID       `pack:"I,pk"     json:"row_id"`
+    AccountId           AccountID     `pack:"A"        json:"account_id"`
+    Address             tezos.Address `pack:"H,snappy" json:"address"`
+    ConsensusKey        tezos.Key     `knox:"K"        json:"consensus_key"`
+    IsActive            bool          `pack:"v,snappy" json:"is_active"`
+    BakerSince          int64         `pack:"*"        json:"baker_since"`
+    BakerUntil          int64         `pack:"/"        json:"baker_until"`
+    TotalRewardsEarned  int64         `pack:"W"        json:"total_rewards_earned"`
+    TotalFeesEarned     int64         `pack:"E"        json:"total_fees_earned"`
+    TotalLost           int64         `pack:"L"        json:"total_lost"`
+    FrozenDeposits      int64         `pack:"z"        json:"frozen_deposits"`
+    FrozenRewards       int64         `pack:"Z"        json:"frozen_rewards"`
+    FrozenFees          int64         `pack:"Y"        json:"frozen_fees"`
+    DelegatedBalance    int64         `pack:"~"        json:"delegated_balance"`
+    DepositsLimit       int64         `pack:"T"        json:"deposit_limit"`
+    TotalDelegations    int64         `pack:">"        json:"total_delegations"`
+    ActiveDelegations   int64         `pack:"a"        json:"active_delegations"`
+    BlocksBaked         int64         `pack:"b"        json:"blocks_baked"`
+    BlocksProposed      int64         `pack:"P"        json:"blocks_proposed"`
+    BlocksNotBaked      int64         `pack:"N"        json:"blocks_not_baked"`
+    BlocksEndorsed      int64         `pack:"x"        json:"blocks_endorsed"`
+    BlocksNotEndorsed   int64         `pack:"y"        json:"blocks_not_endorsed"`
+    SlotsEndorsed       int64         `pack:"e"        json:"slots_endorsed"`
+    NBakerOps           int64         `pack:"1"        json:"n_baker_ops"`
+    NProposal           int64         `pack:"2"        json:"n_proposals"`
+    NBallot             int64         `pack:"3"        json:"n_ballots"`
+    NEndorsement        int64         `pack:"4"        json:"n_endorsements"`
+    NPreendorsement     int64         `pack:"5"        json:"n_preendorsements"`
+    NSeedNonce          int64         `pack:"6"        json:"n_nonce_revelations"`
+    N2Baking            int64         `pack:"7"        json:"n_double_bakings"`
+    N2Endorsement       int64         `pack:"8"        json:"n_double_endorsements"`
+    NSetDepositsLimit   int64         `pack:"9"        json:"n_set_limits"`
+    NAccusations        int64         `pack:"0"        json:"n_accusations"`
+    NUpdateConsensusKey int64         `pack:"!"        json:"n_update_consensus_key"`
+    NDrainDelegate      int64         `pack:"="        json:"n_drain_delegate"`
+    GracePeriod         int64         `pack:"G"        json:"grace_period"`
+    Version             uint32        `pack:"V,snappy" json:"baker_version"`
 
     Account     *Account `pack:"-" json:"-"` // related account
     Reliability int64    `pack:"-" json:"-"` // current cycle reliability from rights
@@ -121,17 +124,17 @@ func (b Baker) ActiveStake(p *tezos.Params, netRolls int64) int64 {
 }
 
 func (b Baker) Rolls(p *tezos.Params) int64 {
-    if p.TokensPerRoll == 0 {
+    if p.MinimalStake == 0 {
         return 0
     }
-    return b.StakingBalance() / p.TokensPerRoll
+    return b.StakingBalance() / p.MinimalStake
 }
 
 func (b Baker) StakingCapacity(p *tezos.Params, netRolls int64) int64 {
     if p.Version < 12 {
         blockDeposits := p.BlockSecurityDeposit + p.EndorsementSecurityDeposit*int64(p.EndorsersPerBlock)
         netBond := blockDeposits * p.BlocksPerCycle * (p.PreservedCycles + 1)
-        netStake := netRolls * p.TokensPerRoll
+        netStake := netRolls * p.MinimalStake
         // numeric overflow is likely
         return int64(float64(b.TotalBalance()) * float64(netStake) / float64(netBond))
     }
@@ -157,44 +160,7 @@ func (b *Baker) GetVersionBytes() []byte {
 }
 
 func (b *Baker) Reset() {
-    b.RowId = 0
-    b.AccountId = 0
-    b.Address = tezos.Address{}
-    b.IsActive = false
-    b.BakerSince = 0
-    b.BakerUntil = 0
-    b.TotalRewardsEarned = 0
-    b.TotalFeesEarned = 0
-    b.TotalLost = 0
-    b.FrozenDeposits = 0
-    b.FrozenRewards = 0
-    b.FrozenFees = 0
-    b.DelegatedBalance = 0
-    b.DepositsLimit = 0
-    b.TotalDelegations = 0
-    b.ActiveDelegations = 0
-    b.BlocksBaked = 0
-    b.BlocksProposed = 0
-    b.BlocksNotBaked = 0
-    b.BlocksEndorsed = 0
-    b.BlocksNotEndorsed = 0
-    b.SlotsEndorsed = 0
-    b.NBakerOps = 0
-    b.NProposal = 0
-    b.NBallot = 0
-    b.NEndorsement = 0
-    b.NPreendorsement = 0
-    b.NSeedNonce = 0
-    b.N2Baking = 0
-    b.N2Endorsement = 0
-    b.NSetDepositsLimit = 0
-    b.NAccusations = 0
-    b.GracePeriod = 0
-    b.Version = 0
-    b.Account = nil
-    b.IsNew = false
-    b.Reliability = 0
-    b.IsDirty = false
+    *b = Baker{}
 }
 
 func (b *Baker) UpdateBalanceN(flows []*Flow) error {

@@ -127,30 +127,26 @@ func (idx *BalanceIndex) ConnectBlock(ctx context.Context, block *model.Block, b
     // handle bakers
     for _, bkr := range builder.Bakers() {
         acc := bkr.Account
-        if !acc.IsDirty || acc.PrevBalance == acc.Balance() || acc.PrevSeen == block.Height {
-            // log.Infof("Skip %s from=%d to=%d bal=%d", acc, acc.PrevSeen, block.Height, acc.PrevBalance)
+        if !acc.IsDirty || acc.PrevBalance == acc.Balance() {
             continue
         }
-        // log.Infof("Balance for %s from=%d to=%d bal=%d", acc, acc.PrevSeen, block.Height, acc.PrevBalance)
         bal := &model.Balance{
-            AccountId:  acc.RowId,
-            Balance:    acc.PrevBalance,
-            ValidFrom:  acc.PrevSeen,
-            ValidUntil: block.Height,
+            AccountId: acc.RowId,
+            Balance:   acc.Balance(),
+            ValidFrom: block.Height,
         }
         ins = append(ins, bal)
     }
 
     // handle regular accounts
     for _, acc := range builder.Accounts() {
-        if !acc.IsDirty || acc.PrevBalance == acc.Balance() || acc.PrevSeen == block.Height {
+        if !acc.IsDirty || acc.PrevBalance == acc.Balance() {
             continue
         }
         bal := &model.Balance{
-            AccountId:  acc.RowId,
-            Balance:    acc.PrevBalance,
-            ValidFrom:  acc.PrevSeen,
-            ValidUntil: block.Height,
+            AccountId: acc.RowId,
+            Balance:   acc.Balance(),
+            ValidFrom: block.Height,
         }
         ins = append(ins, bal)
     }
@@ -167,7 +163,7 @@ func (idx *BalanceIndex) DisconnectBlock(ctx context.Context, block *model.Block
 func (idx *BalanceIndex) DeleteBlock(ctx context.Context, height int64) error {
     _, err := pack.NewQuery("etl.balance.delete").
         WithTable(idx.table).
-        AndEqual("valid_until", height).
+        AndEqual("valid_from", height).
         Delete(ctx)
     return err
 }

@@ -1,5 +1,61 @@
 # Changelog
 
+### v15.0.1 (v015-2022-12-06)
+
+Lima upgrade
+
+- CLI: BREAKING changes in CLI args (see README.md)
+  - replace Cobra due to lack of maintenance, benefit: reduces binary size and decreases dependencies
+  - dropped CPU profiling args, use the built-in HTTP profiling endpoints `/debug/pprof/*` instead
+  - renamed config and environment args for database from `TZ_DATABASE_*` to `TZ_DB_*` and logging from `TZ_LOGGING_*` to `TZ_LOG_*`
+  - replaced `rpc.host` + `rpc.port` options with `rpc.url`
+- op model
+    - add Lima operations `drain_delegate` and `update_consensus_key`
+    - drop `days_destroyed` without replacement
+    - add `code_hash` field on contract calls to help filter by receiver contract type
+    - add Lima `ticket_updates` on contract calls that mint, burn or transfer tickets
+- block model
+    - add Lima `proposer_consensus_key_id` and `proposer_consensus_key` fields
+    - add Lima `baker_consensus_key_id` and `baker_consensus_key` fields
+- account model (update statistics fields)
+    - replace `n_ops` with `n_tx_success`
+    - replace `n_ops_failed` with `n_tx_failed`
+    - replace `n_tx` by `n_tx_out` and `n_tx_in`
+    - drop `token_gen_min` without replacement
+    - drop `token_gen_max` without replacement
+    - drop `n_constants` without replacement
+    - drop `n_origination` without replacement
+    - drop `n_delegation` without replacement
+    - add `total_fees_used` for total fees from tx where this account is receiver
+    - hide `frozen_bond`, `lost_bond`, `is_activated`, `is_baker`, `is_contract` flags if unused
+- contract model (update statistics fields)
+    - replace `n_calls_success` by `n_calls_in`
+    - add `n_calls_out`
+    - add `total_fees_used` for all fees pay for calling this contract
+- ticket models
+    - add `ticket_update` table to track ticket updates
+    - add `ticket_type` table to track ticket types (== ticketer, type and content)
+- constants model
+    - replace `tokens_per_roll` with `minimal_stake`
+    - remove `time_between_blocks` (use `minimal_block_delay` and `delay_increment_per_round` instead)
+    - remove `block_rewards_v6` and `endorsement_rewards_v6` without replacement
+- balance model
+    - drop `valid_until` field and always store most recent balance
+- Micheline
+    - add new opcodes Lima `D_LAMBDA_REC`, `I_LAMBDA_REC`
+    - replace deprecated opcode `TICKET` with new opcode of same name (breaking!)
+- ZMQ
+    - extended op data with new fields `code_hash`, `events` and `ticket_updates`
+- fixes
+    - fix missing bigmap type annotations post Jakarta
+    - fix detecting protocol invoices
+    - fix use consistent field `volume` for all invoices
+    - fix balance history start value when out of request window
+    - fix better bigmap type matching to find annotated types
+    - fix entrypoint detection
+    - fix prevent indexing process to stop on transaction data analysis errors
+
+
 ### v14.0.0 (v014-2022-09-06)
 
 Kathmandu upgrade

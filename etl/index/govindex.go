@@ -814,8 +814,6 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *model.Block, b
 			vote.TurnoutRolls += rolls
 			vote.TurnoutStake += stake
 			vote.TurnoutVoters++
-			// } else {
-			// log.Debugf("Skipping turnout calc for period %d voter %s  with %d rolls (already voted %d times)", vote.VotingPeriod, acc, rolls, cnt)
 		}
 	}
 
@@ -991,6 +989,19 @@ func (idx *GovIndex) proposalsByElection(ctx context.Context, id model.ElectionI
 	}
 	return proposals, nil
 }
+
+// func (idx *GovIndex) ballotsByVote(ctx context.Context, period int64) ([]*model.Ballot, error) {
+// 	ballots := make([]*model.Ballot, 0)
+// 	err := pack.NewQuery("list_ballots").
+// 		WithTable(idx.ballotTable).
+// 		WithoutCache().
+// 		AndEqual("voting_period", period).
+// 		Execute(ctx, &ballots)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	return ballots, nil
+// }
 
 // MUST call at vote end block
 func (idx *GovIndex) makeRollSnapshot(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {

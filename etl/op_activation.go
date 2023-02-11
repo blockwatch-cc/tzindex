@@ -68,14 +68,16 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.Operation, id 
         if origacc != nil {
             // move funds and deactivate blinded account
             origacc.UnclaimedBalance = acc.UnclaimedBalance
-            origacc.NOps++
+            origacc.NTxSuccess++
+            origacc.NTxOut++
             origacc.IsActivated = true
             origacc.IsDirty = true
             op.ReceiverId = origacc.RowId // keep reference to activated account
             acc.UnclaimedBalance = 0
             acc.LastSeen = b.block.Height
             acc.IsActivated = true
-            acc.NOps++
+            acc.NTxSuccess++
+            acc.NTxOut++
             acc.IsDirty = true
 
             // register original account with builder
@@ -90,6 +92,7 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.Operation, id 
             acc.Type = aop.Pkh.Type
             acc.FirstSeen = b.block.Height
             acc.LastSeen = b.block.Height
+            acc.FirstIn = b.block.Height
             acc.IsActivated = true
             acc.IsFunded = true
             acc.IsDirty = true
@@ -108,7 +111,8 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.Operation, id 
 
             // rollback current account (adjust spendable balance here!)
             acc.SpendableBalance -= activated
-            acc.NOps--
+            acc.NTxSuccess--
+            acc.NTxOut--
             acc.IsActivated = false
             acc.IsDirty = true
 
@@ -117,13 +121,15 @@ func (b *Builder) AppendActivationOp(ctx context.Context, oh *rpc.Operation, id 
         } else {
             // replace implicit hash with blinded hash
             delete(b.accHashMap, b.accCache.AccountHashKey(acc))
-            acc.NOps--
+            acc.NTxSuccess--
+            acc.NTxOut--
             acc.Address = bkey
             acc.Type = bkey.Type
             acc.IsActivated = false
             acc.IsDirty = true
             acc.FirstSeen = 1 // reset to genesis
             acc.LastSeen = 1  // reset to genesis
+            acc.FirstIn = 0   // reset to ghost account (pre-genesis)
             b.accHashMap[b.accCache.AccountHashKey(acc)] = acc
         }
     }
