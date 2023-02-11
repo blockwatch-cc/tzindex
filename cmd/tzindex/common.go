@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzindex/etl/index"
