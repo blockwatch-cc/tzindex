@@ -1,5 +1,9 @@
 # Changelog
 
+### v15.0.2 (v015-2022-12-06)
+
+- FIX: correct accounts for drain delegate reverse flows
+
 ### v15.0.1 (v015-2022-12-06)
 
 - FIX: apply effects of `drain_delegate` operation on account balances

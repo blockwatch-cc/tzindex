@@ -171,7 +171,7 @@ func (b *Builder) NewDrainDelegateFlows(src, dst *model.Account, bal rpc.Balance
     f.AmountOut = -bal[0].Amount()
     flows = append(flows, f)
 
-    f = model.NewFlow(b.block, src, dst, id)
+    f = model.NewFlow(b.block, dst, src, id)
     f.Category = model.FlowCategoryBalance
     f.Operation = model.FlowTypeDrain
     f.AmountIn = bal[1].Amount()
@@ -185,7 +185,7 @@ func (b *Builder) NewDrainDelegateFlows(src, dst *model.Account, bal rpc.Balance
     f.AmountOut = -bal[2].Amount()
     flows = append(flows, f)
 
-    f = model.NewFlow(b.block, src, b.block.Proposer.Account, id)
+    f = model.NewFlow(b.block, b.block.Proposer.Account, src, id)
     f.Category = model.FlowCategoryBalance
     f.Operation = model.FlowTypeDrain
     f.AmountIn = bal[3].Amount()
