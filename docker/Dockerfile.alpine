@@ -10,7 +10,7 @@ ADD           . /go/src/${BUILD_TARGET}
 WORKDIR       /go/src/${BUILD_TARGET}
 RUN           apk --no-cache add git binutils
 RUN           git checkout ${BUILD_TAG}
-RUN           go install -v -ldflags "-X main.version=${BUILD_VERSION} -X main.commit=${BUILD_COMMIT}" ./cmd/...
+RUN           go install -mod=mod -v -ldflags "-X main.version=${BUILD_VERSION} -X main.commit=${BUILD_COMMIT}" ./cmd/...
 
 # final stage
 FROM          alpine:latest
