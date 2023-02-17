@@ -108,23 +108,24 @@
 		}]
 	},
 	"rpc": {
-		"host": "127.0.0.1",
-		"port": 8732,
+		"url": "127.0.0.1:8732",
 		"threads": 2,
 		"disable_tls": true,
+		"insecure_tls": false,
 		"dial_timeout": "10s",
 		"keepalive": "30m",
 		"idle_timeout": "30m",
 		"response_timeout": "60s",
 		"continue_timeout": "60s",
-		"idle_conns": 2
+		"idle_conns": 16
 	},
 	"log": {
+    "progress": "10s",
 		"backend": "stdout",
 		"flags": "date,time,micro,utc",
 		"level": "info",
 		"blockchain": "info",
-		"database": "info",
+		"db": "info",
 		"rpc": "info",
 		"server": "info",
 		"micheline": "info"

@@ -101,7 +101,7 @@ make image
 tzindex aims to be zero-conf and comes with sane defaults. All you need to do is point it to the RPC endpoint of a running Tezos node.
 
 ```
-tzindex run --rpcurl tezos-node
+tzindex -rpcurl tezos-node
 ```
 
 If you prefer running from docker, check out the docker directory. Official images are available for the [indexer](https://hub.docker.com/r/blockwatch/tzindex) and [frontend](https://hub.docker.com/r/blockwatch/tzstats) (note the frontend may not support advanced features of new protocols). You can run both, the indexer and the frontend in local Docker containers and have them connect to your Tezos node in a third container. Make sure all containers are connected to the same Docker network or if you choose different networks that they are known. Docker port forwarding on Linux usually works, on OSX its broken.
@@ -130,10 +130,10 @@ Env variables allow you to override settings from the config file or even specif
 
 ```
 # in config.json
-{ "rpc": { "host" : "127.0.0.1" }}
+{ "rpc": { "url" : "127.0.0.1:8732" }}
 
 # same as env variable
-TZ_RPC_HOST=127.0.0.1
+TZ_RPC_URL=127.0.0.1:8732
 ```
 
 **Command line arguments**
