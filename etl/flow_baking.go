@@ -192,5 +192,6 @@ func (b *Builder) NewDrainDelegateFlows(src, dst *model.Account, bal rpc.Balance
     flows = append(flows, f)
     reward = f.AmountIn
 
+    b.block.Flows = append(b.block.Flows, flows...)
     return vol, reward, flows
 }

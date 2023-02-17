@@ -2,6 +2,10 @@
 
 ### v15.0.1 (v015-2022-12-06)
 
+- FIX: apply effects of `drain_delegate` operation on account balances
+
+### v15.0.0 (v015-2022-12-06)
+
 Lima upgrade
 
 - CLI: BREAKING changes in CLI args (see README.md)
