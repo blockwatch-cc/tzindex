@@ -2,8 +2,8 @@ blockwatch.cc/packdb v0.0.0-20221212142842-1be6dc53f4ea h1:afJLFqeZmqI/c2crl88cx
 blockwatch.cc/packdb v0.0.0-20221212142842-1be6dc53f4ea/go.mod h1:XYZrdoXfx9FLBVjyGlAx5r0V/Uwi7jpnTP2EzYdLQVg=
 blockwatch.cc/tzgo v1.15.1 h1:kuJk1mqw86jqYCzTy2gBPtSxLHPMXjS/2Gs6cPwj6Qc=
 blockwatch.cc/tzgo v1.15.1/go.mod h1:Bm3ZfCsqnJtpsAdwBQmhsoz4n8qc9qL4uJhsDoLArR8=
-blockwatch.cc/tzpro-go v0.14.1 h1:ESXUIOsa/8EW3mcf0edDafg1vXqPRBqzMp6juLhHYHw=
-blockwatch.cc/tzpro-go v0.14.1/go.mod h1:cIk6WkGmfzmThIsMSxejhVdJcOWTpS9YCxMzuOnhKrY=
+blockwatch.cc/tzpro-go v0.15.1-0.20230210090947-230e132ba0a4 h1:CL7IYLRXtkNg+Y5KDGFmzHom4mxsZ+R/Pxoi1xa2AHo=
+blockwatch.cc/tzpro-go v0.15.1-0.20230210090947-230e132ba0a4/go.mod h1:k8eWysCo3imSN3e5ccHPqdLCuIHlQ9AqZyohJbT83Ls=
 github.com/OneOfOne/xxhash v1.2.2 h1:KMrpdQIwFcEqXDklaen+P1axHaj9BSKzvpUUfnHldSE=
 github.com/OneOfOne/xxhash v1.2.2/go.mod h1:HSdplMjZKSmBqAxg5vPj2TmRDmfkzw+cTzAElWljhcU=
 github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d h1:licZJFw2RwpHMqeKTCYkitsPqHNxTmd4SNR5r94FGM8=
