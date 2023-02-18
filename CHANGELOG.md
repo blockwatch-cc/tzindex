@@ -1,5 +1,9 @@
 # Changelog
 
+### untagged
+
+- FIX: Add missing delegation flow to drain op
+
 ### v15.0.2 (v015-2022-12-06)
 
 - FIX: correct accounts for drain delegate reverse flows

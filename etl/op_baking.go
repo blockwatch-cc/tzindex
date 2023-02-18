@@ -532,15 +532,23 @@ func (b *Builder) AppendDrainDelegateOp(ctx context.Context, oh *rpc.Operation, 
     }
 
     // no sender, but destination is receiver
-    receiver, ok := b.AccountByAddress(dop.Destination)
+    dst, ok := b.AccountByAddress(dop.Destination)
     if !ok {
-        return Errorf("missing sender account %s", dop.Destination)
+        return Errorf("missing destination account %s", dop.Destination)
+    }
+
+    // load destination baker
+    var dbkr *model.Baker
+    if dst.BakerId != 0 {
+        if dbkr, ok = b.BakerById(dst.BakerId); !ok {
+            return Errorf("missing baker %d for dest account %d", dst.BakerId, dst.RowId)
+        }
     }
 
     // build op
     op := model.NewOp(b.block, id)
     op.SenderId = baker.Account.RowId
-    op.ReceiverId = receiver.RowId
+    op.ReceiverId = dst.RowId
     op.BakerId = b.block.ProposerId
     op.Status = tezos.OpStatusApplied
     op.IsSuccess = true
@@ -548,12 +556,12 @@ func (b *Builder) AppendDrainDelegateOp(ctx context.Context, oh *rpc.Operation, 
     b.block.Ops = append(b.block.Ops, op)
 
     // extract flows from balance updates
-    op.Volume, op.Reward, _ = b.NewDrainDelegateFlows(baker.Account, receiver, dop.Fees(), id)
+    op.Volume, op.Reward, _ = b.NewDrainDelegateFlows(baker.Account, dst, dbkr, dop.Fees(), id)
 
     // update accounts
     if !rollback {
-        receiver.LastSeen = b.block.Height
-        receiver.IsDirty = true
+        dst.LastSeen = b.block.Height
+        dst.IsDirty = true
         baker.NBakerOps++
         baker.NDrainDelegate++
         baker.IsDirty = true

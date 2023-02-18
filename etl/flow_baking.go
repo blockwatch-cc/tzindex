@@ -158,7 +158,7 @@ func (b *Builder) NewUpdateConsensusKeyFlows(src *model.Account, fees rpc.Balanc
 // - sends amount from drained baker to destination
 // - sends tip from drained baker to block producer
 // - pays no fee
-func (b *Builder) NewDrainDelegateFlows(src, dst *model.Account, bal rpc.BalanceUpdates, id model.OpRef) (int64, int64, []*model.Flow) {
+func (b *Builder) NewDrainDelegateFlows(src, dst *model.Account, dbkr *model.Baker, bal rpc.BalanceUpdates, id model.OpRef) (int64, int64, []*model.Flow) {
     var (
         vol, reward int64
         flows       []*model.Flow
@@ -191,6 +191,15 @@ func (b *Builder) NewDrainDelegateFlows(src, dst *model.Account, bal rpc.Balance
     f.AmountIn = bal[3].Amount()
     flows = append(flows, f)
     reward = f.AmountIn
+
+    // credit to destination baker unless dest is a baker
+    if dbkr != nil && !dst.IsBaker {
+        f := model.NewFlow(b.block, dbkr.Account, src, id)
+        f.Category = model.FlowCategoryDelegation
+        f.Operation = model.FlowTypeDrain
+        f.AmountIn = bal[1].Amount()
+        flows = append(flows, f)
+    }
 
     b.block.Flows = append(b.block.Flows, flows...)
     return vol, reward, flows
