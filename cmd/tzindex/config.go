@@ -218,6 +218,12 @@ func parseFlags() error {
         return errExit
     }
 
+    // load config file now (before applying extra CLI args so users can override
+    // config file settings with cli args )
+    if err := loadConfig(); err != nil {
+        return err
+    }
+
     // handle other command line flags
     for i := 0; i < len(extraFlags); i++ {
         key, val := extraFlags[i], ""

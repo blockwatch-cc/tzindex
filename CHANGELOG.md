@@ -3,6 +3,7 @@
 ### untagged
 
 - FIX: Add missing delegation flow to drain op
+- CLI: let cli args have priority over config file
 
 ### v15.0.2 (v015-2022-12-06)
 

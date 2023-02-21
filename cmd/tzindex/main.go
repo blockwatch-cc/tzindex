@@ -36,9 +36,6 @@ func setup() error {
 	if err := parseFlags(); err != nil {
 		return err
 	}
-	if err := loadConfig(); err != nil {
-		return err
-	}
 	initLogging()
 
 	if fullIndex {
