@@ -118,17 +118,21 @@ func (m *Indexer) Init(ctx context.Context, tip *model.ChainTip, mode Mode) erro
 	var needCreate bool
 	err := m.statedb.View(func(dbTx store.Tx) error {
 		for _, t := range m.indexes {
-			// load tip
 			key := t.Key()
 			tip, err := dbLoadIndexTip(dbTx, key)
 			if err != nil {
-				needCreate = err == ErrNoTable
-				return err
+				needCreate = needCreate || err == ErrNoTable
 			}
 			m.tips[string(key)] = tip
 		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
 
-		// load known protocol deployment parameters
+	// load known protocol deployment parameters
+	err = m.statedb.View(func(dbTx store.Tx) error {
 		deps, err := dbLoadDeployments(dbTx, tip)
 		if err != nil {
 			return err
@@ -140,7 +144,7 @@ func (m *Indexer) Init(ctx context.Context, tip *model.ChainTip, mode Mode) erro
 		}
 		return nil
 	})
-	if err != nil && !needCreate {
+	if err != nil {
 		return err
 	}
 
