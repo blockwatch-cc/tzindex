@@ -25,8 +25,8 @@ const (
 	StateDBName = "state.db"
 
 	// state database schema
-	stateDBSchemaName    = "2022-04-16"
-	stateDBSchemaVersion = 6
+	stateDBSchemaName    = "2022-12-06"
+	stateDBSchemaVersion = 7
 	stateDBKey           = "statedb"
 )
 
