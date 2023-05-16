@@ -1,12 +1,14 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2023 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
 
 import (
 	"context"
+	"fmt"
 
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 )
 
 func (b *Builder) AppendRegularBlockOps(ctx context.Context, rollback bool) error {
@@ -51,6 +53,8 @@ func (b *Builder) AppendRegularBlockOps(ctx context.Context, rollback bool) erro
 					err = b.AppendRegisterConstantOp(ctx, oh, id, rollback)
 				case model.OpTypeDepositsLimit:
 					err = b.AppendDepositsLimitOp(ctx, oh, id, rollback)
+				case model.OpTypeTransferTicket:
+					err = b.AppendTransferTicketOp(ctx, oh, id, rollback)
 				case model.OpTypeRollupOrigination:
 					err = b.AppendRollupOriginationOp(ctx, oh, id, rollback)
 				case model.OpTypeRollupTransaction:
@@ -71,4 +75,26 @@ func (b *Builder) AppendRegularBlockOps(ctx context.Context, rollback bool) erro
 		}
 	}
 	return nil
+}
+
+func (b *Builder) AppendRollupOriginationOp(ctx context.Context, oh *rpc.Operation, id model.OpRef, rollback bool) error {
+	o := id.Get(oh)
+	switch o.(type) {
+	case *rpc.TxRollup:
+		return b.AppendTxRollupOriginationOp(ctx, oh, id, rollback)
+	case *rpc.SmartRollupOriginate:
+		return b.AppendSmartRollupOriginationOp(ctx, oh, id, rollback)
+	default:
+		return fmt.Errorf("unsupported op %s", o.Kind())
+	}
+}
+
+func (b *Builder) AppendRollupTransactionOp(ctx context.Context, oh *rpc.Operation, id model.OpRef, rollback bool) error {
+	o := id.Get(oh)
+	switch o.(type) {
+	case *rpc.TxRollup:
+		return b.AppendTxRollupTransactionOp(ctx, oh, id, rollback)
+	default:
+		return b.AppendSmartRollupTransactionOp(ctx, oh, id, rollback)
+	}
 }

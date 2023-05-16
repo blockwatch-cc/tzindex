@@ -12,7 +12,6 @@ import (
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/cache"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
 )
@@ -56,7 +55,7 @@ func NewBuilder(idx *Indexer, cachesz int, c *rpc.Client, validate bool) *Builde
 	}
 }
 
-func (b *Builder) Params(height int64) *tezos.Params {
+func (b *Builder) Params(height int64) *rpc.Params {
 	return b.idx.ParamsByHeight(height)
 }
 
@@ -146,11 +145,11 @@ func (b *Builder) DeactivateBaker(bkr *model.Baker) {
 func (b *Builder) AccountByAddress(addr tezos.Address) (*model.Account, bool) {
 	key := b.accCache.AddressHashKey(addr)
 	bkr, ok := b.bakerHashMap[key]
-	if ok && bkr.Address.Equal(addr) {
+	if ok && bkr.Address == addr {
 		return bkr.Account, true
 	}
 	acc, ok := b.accHashMap[key]
-	if ok && acc.Address.Equal(addr) {
+	if ok && acc.Address == addr {
 		return acc, true
 	}
 	return nil, false
@@ -168,7 +167,7 @@ func (b *Builder) AccountById(id model.AccountID) (*model.Account, bool) {
 func (b *Builder) BakerByAddress(addr tezos.Address) (*model.Baker, bool) {
 	key := b.accCache.AddressHashKey(addr)
 	bkr, ok := b.bakerHashMap[key]
-	if ok && bkr.Address.Equal(addr) {
+	if ok && bkr.Address == addr {
 		return bkr, true
 	}
 	return nil, false
@@ -244,7 +243,8 @@ func (b *Builder) Init(ctx context.Context, tip *model.ChainTip, c *rpc.Client) 
 	// to the next protocol
 	version := b.parent.Version
 	p := b.idx.ParamsByHeight(tip.BestHeight)
-	if p.IsCycleEnd(tip.BestHeight) && version > 0 {
+	// if p.IsCycleEnd(tip.BestHeight) && version > 0 {
+	if tip.BestHeight == p.EndHeight && version > 0 {
 		version--
 	}
 	b.parent.Params, err = b.idx.ParamsByDeployment(version)
@@ -520,177 +520,22 @@ func (b *Builder) CleanReorg() {
 	b.block = nil
 }
 
-// Note on hash collisions
-//
-// Account hashes without a type may not be unique, hence we treat both as pair.
-// Our pack hash index works on a single field only, so we may see some collisions
-// when retrieving data from the accounts table.
-//
-// The code below takes care of this fact and matches by both type+hash. In the
-// worst case we fetch an undesired address more, but we'll never use it.
 func (b *Builder) InitAccounts(ctx context.Context) error {
 	// collect unique accounts/addresses
-	addresses := tezos.NewAddressSet()
+	set := tezos.NewAddressSet()
 	addUnique := func(a tezos.Address) {
 		if !a.IsValid() {
 			return
 		}
 		if _, ok := b.AccountByAddress(a); !ok {
-			addresses.AddUnique(a)
+			set.AddUnique(a)
 		}
 	}
 
-	// collect from block-level balance updates if invoice is found
-	block := b.block.TZ.Block
-	if inv, ok := block.Invoices(); ok {
-		for _, v := range inv {
-			addUnique(v.Address())
-		}
-	}
-	for _, v := range []tezos.Address{
-		block.Metadata.ProposerConsensusKey,
-		block.Metadata.BakerConsensusKey,
-	} {
-		addUnique(v)
-	}
-
-	// collect from ops
-	for _, oll := range block.Operations {
-		for _, oh := range oll {
-			// check for pruned metadata
-			if len(oh.Metadata) > 0 {
-				return fmt.Errorf("metadata %s! Your archive node has pruned metadata and must be rebuilt. Always run Octez v12.x with --metadata-size-limit unlimited. Sorry for your trouble.", oh.Metadata)
-			}
-			// parse operations
-			for _, op := range oh.Contents {
-				switch kind := op.Kind(); kind {
-				case tezos.OpTypeActivateAccount:
-					// need to search for blinded key
-					// account may already be activated and this is a second claim
-					// don't look for and allocate new account, this happens in
-					// op processing
-					aop := op.(*rpc.Activation)
-					bkey, err := tezos.BlindAddress(aop.Pkh, aop.Secret)
-					if err != nil {
-						return fmt.Errorf("activation op %s: blinded address creation failed: %w", oh.Hash, err)
-					}
-					addUnique(bkey)
-
-				case tezos.OpTypeDelegation:
-					del := op.(*rpc.Delegation)
-					addUnique(del.Source)
-					// not required, not even for baker registration
-					// addUnique(del.Delegate)
-
-				case tezos.OpTypeOrigination:
-					orig := op.(*rpc.Origination)
-					addUnique(orig.Source)
-					addUnique(orig.ManagerAddress())
-					for _, v := range orig.Metadata.Result.OriginatedContracts {
-						addresses.AddUnique(v)
-					}
-
-					// add addresses found in storage and bigmap updates
-					// most of these when not exist are ghost accounts
-					// that receive L2 tokens
-					orig.FindEmbeddedAddresses(addresses)
-
-				case tezos.OpTypeReveal:
-					addUnique(op.(*rpc.Reveal).Source)
-
-				case tezos.OpTypeTransaction:
-					tx := op.(*rpc.Transaction)
-					addUnique(tx.Source)
-					addUnique(tx.Destination)
-					for _, res := range tx.Metadata.InternalResults {
-						addUnique(res.Destination)
-						addUnique(res.Delegate)
-						for _, v := range res.Result.OriginatedContracts {
-							addresses.AddUnique(v)
-						}
-					}
-					tx.FindEmbeddedAddresses(addresses)
-
-				case tezos.OpTypeRegisterConstant:
-					addUnique(op.(*rpc.ConstantRegistration).Source)
-
-					// all bakers are already known
-					// case tezos.OpTypeBallot:
-					// case tezos.OpTypeProposals:
-					// case tezos.OpTypeSeedNonceRevelation:
-					// case tezos.OpTypeDoubleBakingEvidence:
-					// case tezos.OpTypeDoubleEndorsementEvidence:
-					// case tezos.OpTypeDoublePreendorsementEvidence:
-					// case tezos.OpTypeEndorsement, tezos.OpTypeEndorsementWithSlot:
-					// case tezos.OpTypeVdfRevelation:
-				case tezos.OpTypeSetDepositsLimit:
-					// successful ops have a baker, but failed ops may use
-					// a non-baker account
-					dop := op.(*rpc.SetDepositsLimit)
-					if !dop.Result().Status.IsSuccess() {
-						addUnique(dop.Source)
-					}
-				case tezos.OpTypeIncreasePaidStorage:
-					tx := op.(*rpc.IncreasePaidStorage)
-					addUnique(tx.Source)
-					addUnique(tx.Destination)
-
-				case tezos.OpTypeTransferTicket,
-					tezos.OpTypeToruOrigination,
-					tezos.OpTypeToruSubmitBatch,
-					tezos.OpTypeToruCommit,
-					tezos.OpTypeToruReturnBond,
-					tezos.OpTypeToruFinalizeCommitment,
-					tezos.OpTypeToruRemoveCommitment,
-					tezos.OpTypeToruRejection,
-					tezos.OpTypeToruDispatchTickets,
-					tezos.OpTypeScRollupAddMessages,
-					tezos.OpTypeScRollupCement,
-					tezos.OpTypeScRollupPublish,
-					tezos.OpTypeScRollupRefute,
-					tezos.OpTypeScRollupTimeout,
-					tezos.OpTypeScRollupExecuteOutboxMessage,
-					tezos.OpTypeScRollupRecoverBond,
-					tezos.OpTypeScRollupDalSlotSubscribe,
-					tezos.OpTypeDalSlotAvailability,
-					tezos.OpTypeDalPublishSlotHeader:
-
-					tx := op.(*rpc.Rollup)
-					addUnique(tx.Source)
-					addUnique(tx.Target())
-					addUnique(tx.Metadata.Result.OriginatedRollup)
-					if bal := tx.Metadata.Result.BalanceUpdates; len(bal) > 0 {
-						addUnique(bal[0].Address()) // offender
-					}
-					log.Debugf("Found %s in block %d", kind, b.block.Height)
-
-				case tezos.OpTypeUpdateConsensusKey:
-					addUnique(op.(*rpc.UpdateConsensusKey).Source)
-
-				case tezos.OpTypeDrainDelegate:
-					dop := op.(*rpc.DrainDelegate)
-					addUnique(dop.ConsensusKey)
-					addUnique(dop.Delegate)
-					addUnique(dop.Destination)
-				}
-			}
-		}
-	}
-
-	// collect from implicit block ops
-	for i, op := range block.Metadata.ImplicitOperationsResults {
-		switch op.Kind {
-		case tezos.OpTypeOrigination:
-			for _, v := range op.OriginatedContracts {
-				addresses.AddUnique(v)
-			}
-		case tezos.OpTypeTransaction:
-			for _, v := range op.BalanceUpdates {
-				addUnique(v.Address())
-			}
-		default:
-			return fmt.Errorf("implicit block op [%d]: unsupported op %s", i, op.Kind)
-		}
+	// collect all addresses referenced in this block's header and operations
+	// including addresses from contract parameters, storage, bigmap updates
+	if err := b.block.TZ.Block.CollectAddresses(addUnique); err != nil {
+		return err
 	}
 
 	// collect from future cycle rights when available
@@ -707,7 +552,7 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 
 	// search cached accounts and build map
 	lookup := make([][]byte, 0)
-	for _, v := range addresses.Map() {
+	for _, v := range set.Map() {
 		if !v.IsValid() {
 			continue
 		}
@@ -731,8 +576,8 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 			acc = model.NewAccount(v)
 			acc.FirstSeen = b.block.Height
 			acc.LastSeen = b.block.Height
-			lookup = append(lookup, v.Bytes22())
-			// log.Infof("Lookup addr %s %x", v, v.Bytes22())
+			lookup = append(lookup, acc.Address[:])
+			// log.Infof("Lookup addr %s %x hashkey=%016x", v, v[:], hashKey)
 			// store in map, will be overwritten when resolved from db
 			// or kept as new address when this is the first time we see it
 			b.accHashMap[hashKey] = acc
@@ -740,7 +585,7 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 	}
 
 	// lookup addr by hashes (non-existent addrs are expected to not resolve)
-	table, err := b.idx.Table(index.AccountTableKey)
+	table, err := b.idx.Table(model.AccountTableKey)
 	if err != nil {
 		return err
 	}
@@ -761,6 +606,7 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 				}
 
 				hashKey := b.accCache.AccountHashKey(acc)
+				// log.Infof("Found addr %s hashkey=%016x", acc, hashKey)
 
 				// return temp addrs to pool (Note: don't free addrs loaded from cache!)
 				if tmp, ok := b.accHashMap[hashKey]; ok && tmp.RowId == 0 {
@@ -790,6 +636,7 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 				log.Warnf("Existing account %d %s with NEW flag", v.RowId, v)
 				continue
 			}
+			// log.Infof("Addr %s looks like a new account", v)
 			newacc = append(newacc, v)
 		}
 	}
@@ -804,6 +651,7 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 		for _, v := range newacc {
 			acc := v.(*model.Account)
 			b.accMap[acc.RowId] = acc
+			// log.Infof("Create A_%d for addr %s", acc.RowId, acc)
 		}
 	}
 
@@ -903,14 +751,11 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 }
 
 func (b *Builder) LoadAbsentRightsHolders(ctx context.Context) error {
-	if b.IsLightMode() {
+	if b.IsLightMode() || b.block.Height == 0 {
 		return nil
 	}
 
-	ofs := b.block.Height - b.block.Params.CycleStartHeight(b.block.Cycle)
-	if ofs == 0 {
-		// start of cycle
-
+	if b.block.TZ.IsCycleStart() {
 		// 1 use endorse rights from last block of previous cycle
 		adj := b.parent.Params.BlocksPerCycle - 1
 		for n, bits := range b.endorseRights {
@@ -928,7 +773,7 @@ func (b *Builder) LoadAbsentRightsHolders(ctx context.Context) error {
 		}
 
 		// 3 load new rights for current cycle
-		rights, err := b.idx.Table(index.RightsTableKey)
+		rights, err := b.idx.Table(model.RightsTableKey)
 		if err != nil {
 			return err
 		}
@@ -949,6 +794,7 @@ func (b *Builder) LoadAbsentRightsHolders(ctx context.Context) error {
 			return err
 		}
 	} else {
+		ofs := b.block.TZ.GetCyclePosition()
 		// use endorse rights from previous block
 		for n, bits := range b.endorseRights {
 			if bits.IsSet(int(ofs - 1)) {
@@ -974,6 +820,7 @@ func (b *Builder) LoadAbsentRightsHolders(ctx context.Context) error {
 
 	// if prio/round is > 0, identify absent first baker
 	if b.block.Round > 0 {
+		ofs := b.block.TZ.GetCyclePosition()
 		for n, bits := range b.bakeRights {
 			if bits.IsSet(int(ofs)) {
 				b.block.AbsentBaker = n
@@ -985,7 +832,8 @@ func (b *Builder) LoadAbsentRightsHolders(ctx context.Context) error {
 }
 
 func (b *Builder) OnDeactivate(ctx context.Context, rollback bool) error {
-	if b.block.Params.IsCycleStart(b.block.Height) && b.block.Height > 0 {
+	// if b.block.Params.IsCycleStart(b.block.Height) && b.block.Height > 0 {
+	if b.block.TZ.IsCycleStart() && b.block.Height > 0 {
 		// deactivate based on grace period
 		for _, bkr := range b.bakerMap {
 			if bkr.IsActive && bkr.GracePeriod < b.block.Cycle {
@@ -1023,35 +871,30 @@ func (b *Builder) OnDeactivate(ctx context.Context, rollback bool) error {
 }
 
 func (b *Builder) OnUpgrade(ctx context.Context, rollback bool) error {
-	parentProtocol := b.parent.TZ.Block.Metadata.Protocol
-	blockProtocol := b.block.TZ.Block.Metadata.Protocol
-	if !parentProtocol.Equal(blockProtocol) {
-		prev, err := b.idx.ParamsByProtocol(parentProtocol)
-		if err != nil {
-			return err
-		}
-
-		if !rollback {
-			// register new protocol (will save as new deployment)
-			log.Infof("New protocol %s detected at %d", blockProtocol, b.block.Height)
-			if err := b.idx.ConnectProtocol(ctx, b.block.Params, prev); err != nil {
-				return err
-			}
-		}
-
-		next, err := b.idx.ParamsByProtocol(blockProtocol)
+	from, to := b.parent.TZ.Protocol(), b.block.TZ.Protocol()
+	if from != to {
+		next := b.block.Params
+		prev, err := b.idx.ParamsByProtocol(from)
 		if err != nil {
 			return err
 		}
 
 		// special actions on protocol upgrades
 		if !rollback {
-			return b.MigrateProtocol(ctx, prev, next)
-		}
+			// register new protocol (will save as new deployment)
+			log.Infof("New protocol %s detected at %d", to, b.block.Height)
+			log.Infof("Upgrading from %s => %s", from, to)
+			if err := b.idx.ConnectProtocol(ctx, next, prev); err != nil {
+				return err
+			}
 
-	} else if b.block.Params != nil && b.block.Params.IsCycleStart(b.block.Height) {
+			if err := b.MigrateProtocol(ctx, prev, next); err != nil {
+				return err
+			}
+		}
+	} else if b.block.TZ.IsCycleStart() {
 		// update params at start of cycle (to capture early ramp up data)
-		return b.idx.reg.Register(b.block.Params)
+		b.idx.reg.Register(b.block.Params)
 	}
 	return nil
 }

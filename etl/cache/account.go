@@ -5,14 +5,14 @@ package cache
 
 import (
 	"encoding/binary"
-	"sync"
+	"fmt"
 	"sync/atomic"
-
-	"blockwatch.cc/tzgo/tezos"
-	"blockwatch.cc/tzindex/etl/model"
 
 	"blockwatch.cc/packdb/cache/lru"
 	"github.com/cespare/xxhash"
+
+	"blockwatch.cc/tzgo/tezos"
+	"blockwatch.cc/tzindex/etl/model"
 )
 
 var AccountCacheSizeLog2 = 17 // 128k
@@ -39,26 +39,15 @@ func NewAccountCache(sz int) *AccountCache {
 }
 
 func (c *AccountCache) AccountHashKey(a *model.Account) uint64 {
-	return c.hashKey(a.Address.Type, a.Address.Hash)
+	return c.hashKey(a.Address)
 }
 
 func (c *AccountCache) AddressHashKey(a tezos.Address) uint64 {
-	return c.hashKey(a.Type, a.Hash)
+	return c.hashKey(a)
 }
 
-var hashKeyPool = &sync.Pool{
-	// we always only need 20 + 1 bytes for address hash plus type
-	New: func() interface{} { return make([]byte, 0, 21) },
-}
-
-func (c *AccountCache) hashKey(typ tezos.AddressType, h []byte) uint64 {
-	bufIf := hashKeyPool.Get()
-	buf := bufIf.([]byte)[:1+len(h)]
-	buf[0] = byte(typ)
-	copy(buf[1:], h)
-	sum := xxhash.Sum64(buf)
-	hashKeyPool.Put(bufIf)
-	return sum
+func (c *AccountCache) hashKey(a tezos.Address) uint64 {
+	return xxhash.Sum64(a[:])
 }
 
 func (c *AccountCache) Add(a *model.Account) {
@@ -100,9 +89,7 @@ func (c *AccountCache) GetAddress(addr tezos.Address) (uint64, *model.Account, b
 		return key, nil, false
 	}
 	acc := model.AllocAccount()
-	if err := acc.UnmarshalBinary(val.([]byte)); err != nil {
-		return key, nil, false
-	}
+	_ = acc.UnmarshalBinary(val.([]byte))
 	// cross-check for hash collisions
 	if acc.RowId == 0 || !acc.Address.Equal(addr) {
 		acc.Free()
@@ -126,9 +113,7 @@ func (c *AccountCache) GetId(id model.AccountID) (uint64, *model.Account, bool) 
 		return key, nil, false
 	}
 	acc := model.AllocAccount()
-	if err := acc.UnmarshalBinary(val.([]byte)); err != nil {
-		return key, nil, false
-	}
+	_ = acc.UnmarshalBinary(val.([]byte))
 	// cross-check for hash collisions
 	if acc.RowId != id {
 		acc.Free()
@@ -162,7 +147,7 @@ func (c *AccountCache) Walk(fn func(key uint64, acc *model.Account) error) error
 	for _, key := range c.cache.Keys() {
 		val, ok := c.cache.Peek(key)
 		if !ok {
-			continue
+			return fmt.Errorf("missing cache key %v", key)
 		}
 		if err := acc.UnmarshalBinary(val.([]byte)); err != nil {
 			return err

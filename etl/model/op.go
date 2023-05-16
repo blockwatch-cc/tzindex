@@ -4,6 +4,7 @@
 package model
 
 import (
+	"errors"
 	"strconv"
 	"sync"
 	"time"
@@ -12,6 +13,18 @@ import (
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/rpc"
+)
+
+const (
+	OpTableKey        = "op"
+	EndorseOpTableKey = "endorsement"
+)
+
+var (
+	ErrNoOp          = errors.New("op not indexed")
+	ErrNoEndorsement = errors.New("endorsement not indexed")
+	ErrInvalidOpID   = errors.New("invalid op id")
+	ErrInvalidOpHash = errors.New("invalid op hash")
 )
 
 // Helper to uniquely identify an operation while indexing
@@ -96,6 +109,7 @@ type Op struct {
 	BigmapUpdates    []BigmapUpdate         `pack:"-"  json:"-"` // cached query result
 	Events           []*Event               `pack:"-"  json:"-"` // cached query result
 	TicketUpdates    []*TicketUpdate        `pack:"-"  json:"-"` // cached query result
+	IsBurnAddress    bool                   `pack:"-"  json:"-"` // target is known burn address
 }
 
 // Ensure Op implements the pack.Item interface.
@@ -155,6 +169,23 @@ func (o Op) Id() uint64 {
 	return uint64(o.Height)<<16 | uint64(o.OpN)
 }
 
+func (m Op) TableKey() string {
+	return OpTableKey
+}
+
+func (m Op) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    15,
+		JournalSizeLog2: 15,
+		CacheSize:       1024,
+		FillLevel:       100,
+	}
+}
+
+func (m Op) IndexOpts(key string) pack.Options {
+	return pack.NoOptions
+}
+
 func (o *Op) Free() {
 	o.Reset()
 	opPool.Put(o)
@@ -184,6 +215,23 @@ func (o Endorsement) ID() uint64 {
 
 func (o *Endorsement) SetID(id uint64) {
 	o.RowId = OpID(id)
+}
+
+func (m Endorsement) TableKey() string {
+	return EndorseOpTableKey
+}
+
+func (m Endorsement) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    15,
+		JournalSizeLog2: 15,
+		CacheSize:       2,
+		FillLevel:       100,
+	}
+}
+
+func (m Endorsement) IndexOpts(key string) pack.Options {
+	return pack.NoOptions
 }
 
 func (o Op) ToEndorsement() *Endorsement {

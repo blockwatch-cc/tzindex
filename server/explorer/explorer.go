@@ -5,19 +5,20 @@ package explorer
 
 import (
 	"encoding/json"
-	"github.com/gorilla/mux"
 	"math"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/gorilla/mux"
+
 	"blockwatch.cc/packdb/pack"
 
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -246,51 +247,12 @@ type BlockchainConfig struct {
 	StartHeight int64              `json:"start_height"`
 	EndHeight   int64              `json:"end_height"`
 	Decimals    int                `json:"decimals"`
-	Token       int64              `json:"units"`
 
-	MinimalStake        float64 `json:"minimal_stake"`
-	PreservedCycles     int64   `json:"preserved_cycles"`
-	BlocksPerCommitment int64   `json:"blocks_per_commitment"`
-	BlocksPerCycle      int64   `json:"blocks_per_cycle"`
-	BlocksPerSnapshot   int64   `json:"blocks_per_snapshot,omitempty"`
-
-	// timing
-	MinimalBlockDelay      int `json:"minimal_block_delay"`
-	DelayIncrementPerRound int `json:"delay_increment_per_round,omitempty"`
-
-	// rewards
-	BlockReward              float64 `json:"block_reward"`
-	EndorsementReward        float64 `json:"endorsement_reward"`
-	SeedNonceRevelationTip   float64 `json:"seed_nonce_revelation_tip"`
-	BakingRewardFixedPortion int64   `json:"baking_reward_fixed_portion,omitempty"`
-	BakingRewardBonusPerSlot int64   `json:"baking_reward_bonus_per_slot,omitempty"`
-	EndorsingRewardPerSlot   int64   `json:"endorsing_reward_per_slot,omitempty"`
-
-	// costs
-	OriginationBurn            float64 `json:"origination_burn,omitempty"`
-	OriginationSize            int64   `json:"origination_size,omitempty"`
-	CostPerByte                int64   `json:"cost_per_byte"`
-	BlockSecurityDeposit       float64 `json:"block_security_deposit,omitempty"`
-	EndorsementSecurityDeposit float64 `json:"endorsement_security_deposit,omitempty"`
-	FrozenDepositsPercentage   int     `json:"frozen_deposits_percentage,omitempty"`
-
-	// limits
-	MichelsonMaximumTypeSize     int   `json:"michelson_maximum_type_size"`
-	EndorsersPerBlock            int   `json:"endorsers_per_block,omitempty"`
-	HardGasLimitPerBlock         int64 `json:"hard_gas_limit_per_block"`
-	HardGasLimitPerOperation     int64 `json:"hard_gas_limit_per_operation"`
-	HardStorageLimitPerOperation int64 `json:"hard_storage_limit_per_operation"`
-	MaxOperationDataLength       int   `json:"max_operation_data_length"`
-	MaxOperationsTTL             int64 `json:"max_operations_ttl"`
-	ConsensusCommitteeSize       int   `json:"consensus_committee_size,omitempty"`
-	ConsensusThreshold           int   `json:"consensus_threshold,omitempty"`
-
-	// voting
-	NumVotingPeriods      int   `json:"num_voting_periods"`
-	BlocksPerVotingPeriod int64 `json:"blocks_per_voting_period"`
-	MinProposalQuorum     int64 `json:"min_proposal_quorum,omitempty"`
-	QuorumMin             int64 `json:"quorum_min,omitempty"`
-	QuorumMax             int64 `json:"quorum_max,omitempty"`
+	MinimalStake           float64 `json:"minimal_stake"`
+	PreservedCycles        int64   `json:"preserved_cycles"`
+	BlocksPerCycle         int64   `json:"blocks_per_cycle"`
+	MinimalBlockDelay      int     `json:"minimal_block_delay"`
+	DelayIncrementPerRound int     `json:"delay_increment_per_round,omitempty"`
 
 	timestamp time.Time `json:"-"`
 	expires   time.Time `json:"-"`
@@ -308,65 +270,23 @@ func GetBlockchainConfig(ctx *server.Context) (interface{}, int) {
 	b := loadBlock(ctx)
 	p := ctx.Crawler.ParamsByHeight(b.Height)
 	cfg := BlockchainConfig{
-		Name:        p.Name,
-		Network:     p.Network,
-		Symbol:      p.Symbol,
-		ChainId:     p.ChainId,
-		Deployment:  p.Deployment,
-		Version:     p.Version,
-		Protocol:    p.Protocol,
-		StartHeight: p.StartHeight,
-		EndHeight:   p.EndHeight,
-		Decimals:    p.Decimals,
-		Token:       p.Token,
-
-		// main
-		MinimalStake:        p.ConvertValue(p.MinimalStake),
-		PreservedCycles:     p.PreservedCycles,
-		BlocksPerCommitment: p.BlocksPerCommitment,
-		BlocksPerCycle:      p.BlocksPerCycle,
-		BlocksPerSnapshot:   p.SnapshotBlocks(),
-
-		// timing
+		Name:                   "Tezos",
+		Network:                p.Network,
+		Symbol:                 p.Symbol,
+		ChainId:                p.ChainId,
+		Deployment:             p.Deployment,
+		Version:                p.Version,
+		Protocol:               p.Protocol,
+		StartHeight:            p.StartHeight,
+		EndHeight:              p.EndHeight,
+		Decimals:               p.Decimals,
+		MinimalStake:           p.ConvertValue(p.MinimalStake),
+		PreservedCycles:        p.PreservedCycles,
+		BlocksPerCycle:         p.BlocksPerCycle,
 		MinimalBlockDelay:      int(p.MinimalBlockDelay / time.Second),
 		DelayIncrementPerRound: int(p.DelayIncrementPerRound / time.Second),
-
-		// rewards
-		BlockReward:              p.ConvertValue(p.BlockReward),
-		EndorsementReward:        p.ConvertValue(p.EndorsementReward),
-		SeedNonceRevelationTip:   p.ConvertValue(p.SeedNonceRevelationTip),
-		BakingRewardFixedPortion: p.BakingRewardFixedPortion,
-		BakingRewardBonusPerSlot: p.BakingRewardBonusPerSlot,
-		EndorsingRewardPerSlot:   p.EndorsingRewardPerSlot,
-
-		// costs
-		CostPerByte:                p.CostPerByte,
-		OriginationBurn:            p.ConvertValue(p.OriginationBurn),
-		OriginationSize:            p.OriginationSize,
-		BlockSecurityDeposit:       p.ConvertValue(p.BlockSecurityDeposit),
-		EndorsementSecurityDeposit: p.ConvertValue(p.EndorsementSecurityDeposit),
-		FrozenDepositsPercentage:   p.FrozenDepositsPercentage,
-
-		// limits
-		MichelsonMaximumTypeSize:     p.MichelsonMaximumTypeSize,
-		EndorsersPerBlock:            p.EndorsersPerBlock,
-		HardGasLimitPerBlock:         p.HardGasLimitPerBlock,
-		HardGasLimitPerOperation:     p.HardGasLimitPerOperation,
-		HardStorageLimitPerOperation: p.HardStorageLimitPerOperation,
-		MaxOperationDataLength:       p.MaxOperationDataLength,
-		MaxOperationsTTL:             p.MaxOperationsTTL,
-		ConsensusCommitteeSize:       p.ConsensusCommitteeSize,
-		ConsensusThreshold:           p.ConsensusThreshold,
-
-		// voting
-		NumVotingPeriods:      p.NumVotingPeriods,
-		BlocksPerVotingPeriod: p.BlocksPerVotingPeriod,
-		MinProposalQuorum:     p.MinProposalQuorum,
-		QuorumMin:             p.QuorumMin,
-		QuorumMax:             p.QuorumMax,
-
-		timestamp: ctx.Tip.BestTime,
-		expires:   ctx.Tip.BestTime.Add(p.BlockTime()),
+		timestamp:              ctx.Tip.BestTime,
+		expires:                ctx.Tip.BestTime.Add(p.BlockTime()),
 	}
 
 	return cfg, http.StatusOK
@@ -394,7 +314,7 @@ func estimateHealth(ctx *server.Context, height, history int64) int {
 	)
 	var missedEndorsePenalty = 50.0 / float64(params.EndorsersPerBlock+params.ConsensusCommitteeSize) / float64(history)
 
-	blocks, err := ctx.Indexer.Table(index.BlockTableKey)
+	blocks, err := ctx.Indexer.Table(model.BlockTableKey)
 	if err != nil {
 		log.Errorf("health: block table: %v", err)
 		return 0
@@ -465,7 +385,7 @@ func estimateHealth(ctx *server.Context, height, history int64) int {
 // configurable marshalling helper
 type Supply struct {
 	model.Supply
-	params *tezos.Params // blockchain amount conversion
+	params *rpc.Params // blockchain amount conversion
 }
 
 func (s *Supply) MarshalJSON() ([]byte, error) {

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2023 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"strconv"
 	"time"
-
-	"blockwatch.cc/tzgo/tezos"
 )
 
 type Constants struct {
@@ -150,13 +148,13 @@ func (c *Client) GetConstants(ctx context.Context, id BlockID) (con Constants, e
 
 // GetParams returns a translated parameters structure for the current
 // network at block id.
-func (c *Client) GetParams(ctx context.Context, id BlockID) (*tezos.Params, error) {
-	if !c.ChainId.IsValid() {
+func (c *Client) GetParams(ctx context.Context, id BlockID) (*Params, error) {
+	if !c.chainId.IsValid() {
 		id, err := c.GetChainId(ctx)
 		if err != nil {
 			return nil, err
 		}
-		c.ChainId = id
+		c.chainId = id
 	}
 	meta, err := c.GetBlockMetadata(ctx, id)
 	if err != nil {
@@ -166,14 +164,19 @@ func (c *Client) GetParams(ctx context.Context, id BlockID) (*tezos.Params, erro
 	if err != nil {
 		return nil, err
 	}
-	return con.Params().
-		ForNetwork(c.ChainId).
-		ForProtocol(meta.Protocol).
-		ForHeight(meta.GetLevel()), nil
+	ver, err := c.GetVersionInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	p := con.Params().
+		WithChainId(c.chainId).
+		WithProtocol(meta.Protocol).
+		WithNetwork(ver.NetworkVersion.ChainName)
+	return p, nil
 }
 
-func (c Constants) Params() *tezos.Params {
-	p := tezos.NewParams()
+func (c Constants) Params() *Params {
+	p := NewParams()
 	p.MinimalStake = c.TokensPerRoll + c.MinimalStake // either/or
 
 	p.PreservedCycles = c.PreservedCycles
@@ -182,11 +185,8 @@ func (c Constants) Params() *tezos.Params {
 	p.BlocksPerSnapshot = c.BlocksPerRollSnapshot + c.BlocksPerStakeSnapshot // either/or
 
 	// timing
-	for i, v := range c.TimeBetweenBlocks {
-		if i > 1 {
-			break
-		}
-		val, err := strconv.ParseInt(v, 10, 64)
+	if len(c.TimeBetweenBlocks) > 0 {
+		val, err := strconv.ParseInt(c.TimeBetweenBlocks[0], 10, 64)
 		if err != nil {
 			log.Errorf("parsing TimeBetweenBlocks: %v", err)
 		} else {
@@ -201,8 +201,8 @@ func (c Constants) Params() *tezos.Params {
 	p.BlockReward = c.GetBlockReward()
 	p.EndorsementReward = c.GetEndorsementReward()
 	if c.HaveV6Rewards() {
-		p.BlockRewardV6 = c.BakingRewardPerEndorsement_v6
-		p.EndorsementRewardV6 = c.EndorsementReward_v6
+		p.BlockRewardV6 = &c.BakingRewardPerEndorsement_v6
+		p.EndorsementRewardV6 = &c.EndorsementReward_v6
 	}
 	p.BakingRewardFixedPortion = c.BakingRewardFixedPortion
 	p.BakingRewardBonusPerSlot = c.BakingRewardBonusPerSlot
@@ -216,27 +216,20 @@ func (c Constants) Params() *tezos.Params {
 	p.CostPerByte = c.CostPerByte
 
 	// limits
-	p.MichelsonMaximumTypeSize = c.MichelsonMaximumTypeSize
 	p.EndorsersPerBlock = c.EndorsersPerBlock
-	p.HardGasLimitPerOperation = c.HardGasLimitPerOperation
-	p.HardGasLimitPerBlock = c.HardGasLimitPerBlock
-	p.HardStorageLimitPerOperation = c.HardStorageLimitPerOperation
-	p.MaxOperationDataLength = c.MaxOperationDataLength
-	p.MaxOperationsTTL = c.MaxOperationsTimeToLive
+	if c.MaxOperationsTimeToLive > 0 {
+		p.MaxOperationsTTL = c.MaxOperationsTimeToLive
+	}
 	p.ConsensusCommitteeSize = c.ConsensusCommitteeSize
-	p.ConsensusThreshold = c.ConsensusThreshold
 	p.FrozenDepositsPercentage = c.FrozenDepositsPercentage
 
-	// votinog
+	// voting
 	p.MinProposalQuorum = c.MinProposalQuorum
 	p.QuorumMin = c.QuorumMin
 	p.QuorumMax = c.QuorumMax
 	p.BlocksPerVotingPeriod = c.BlocksPerVotingPeriod
 	if p.BlocksPerVotingPeriod == 0 {
-		p.CyclesPerVotingPeriod = c.CyclesPerVotingPeriod
 		p.BlocksPerVotingPeriod = c.CyclesPerVotingPeriod * c.BlocksPerCycle
-	} else {
-		p.CyclesPerVotingPeriod = c.BlocksPerVotingPeriod / c.BlocksPerCycle
 	}
 
 	return p

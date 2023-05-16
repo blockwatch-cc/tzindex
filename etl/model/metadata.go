@@ -4,9 +4,15 @@
 package model
 
 import (
+	"errors"
+
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzgo/tezos"
 )
+
+const MetadataTableKey = "metadata"
+
+var ErrNoMetadata = errors.New("metadata not indexed")
 
 type Metadata struct {
 	RowId     uint64        `pack:"I,pk"      json:"row_id"`
@@ -26,4 +32,26 @@ func (c *Metadata) ID() uint64 {
 
 func (c *Metadata) SetID(id uint64) {
 	c.RowId = id
+}
+
+func (m Metadata) TableKey() string {
+	return MetadataTableKey
+}
+
+func (m Metadata) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    12,
+		JournalSizeLog2: 12,
+		CacheSize:       16,
+		FillLevel:       100,
+	}
+}
+
+func (m Metadata) IndexOpts(key string) pack.Options {
+	return pack.Options{
+		PackSizeLog2:    12,
+		JournalSizeLog2: 12,
+		CacheSize:       16,
+		FillLevel:       90,
+	}
 }

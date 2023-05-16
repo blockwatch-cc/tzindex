@@ -30,29 +30,11 @@ type Operation struct {
 // }
 
 // Addresses lists all Tezos addresses that appear in this operation group. This does
-// not include addresses used in contract call parameters and storage updates.
+// not include addresses used in contract call parameters, storage updates and tickets.
 func (o Operation) Addresses() *tezos.AddressSet {
 	set := tezos.NewAddressSet()
 	for _, v := range o.Contents {
-		switch v.Kind() {
-		case tezos.OpTypeTransaction:
-			tx := v.(*Transaction)
-			set.AddUnique(tx.Source)
-			set.AddUnique(tx.Destination)
-			for _, vv := range tx.Meta().InternalResults {
-				set.AddUnique(vv.Source)
-				set.AddUnique(vv.Destination)
-			}
-		case tezos.OpTypeOrigination:
-			tx := v.(*Origination)
-			set.AddUnique(tx.Source)
-			for _, vv := range tx.Result().OriginatedContracts {
-				set.AddUnique(vv)
-			}
-		default:
-			// skip
-			continue
-		}
+		v.Addresses(set)
 	}
 	return set
 }
@@ -63,6 +45,7 @@ type TypedOperation interface {
 	Meta() OperationMetadata
 	Result() OperationResult
 	Fees() BalanceUpdates
+	Addresses(*tezos.AddressSet)
 }
 
 // OperationError represents data describing an error conditon that lead to a
@@ -77,8 +60,8 @@ type OperationError struct {
 	Location       int64           `json:"location,omitempty"`
 	Loc            int64           `json:"loc,omitempty"`
 	With           *micheline.Prim `json:"with,omitempty"`
-	Amount         int64           `json:"amount,string,omitempty"`
-	Balance        int64           `json:"balance,string,omitempty"`
+	Amount         string          `json:"amount,omitempty"`
+	Balance        string          `json:"balance,omitempty"`
 }
 
 // OperationMetadata contains execution receipts for successful and failed
@@ -95,9 +78,6 @@ type OperationMetadata struct {
 	Slots               []int         `json:"slots,omitempty"`
 	EndorsementPower    int           `json:"endorsement_power,omitempty"`    // v12+
 	PreendorsementPower int           `json:"preendorsement_power,omitempty"` // v12+
-
-	// some rollup ops only
-	Level int64 `json:"level"`
 }
 
 func (m OperationMetadata) Power() int {
@@ -129,10 +109,15 @@ type OperationResult struct {
 	PaidStorageSizeDiff  int64            `json:"paid_storage_size_diff,string"`  // tx, orig
 	BigmapDiff           json.RawMessage  `json:"big_map_diff,omitempty"`         // tx, orig, <v013
 	LazyStorageDiff      json.RawMessage  `json:"lazy_storage_diff,omitempty"`    // v008+ tx, orig
-	GlobalAddress        tezos.ExprHash   `json:"global_address"`                 // const
-	OriginatedRollup     tezos.Address    `json:"originated_rollup"`              // v013
-	TicketUpdatesCorrect []TicketUpdate   `json:"ticket_updates"`                 // v015
-	TicketReceipts       []TicketUpdate   `json:"ticket_receipt"`                 // v015, name on internal
+	GlobalAddress        tezos.ExprHash   `json:"global_address"`                 // global constant
+	TicketUpdatesCorrect []TicketUpdate   `json:"ticket_updates"`                 // v015, correct name on external
+	TicketReceipts       []TicketUpdate   `json:"ticket_receipt"`                 // v015, incorrect name on internal
+
+	// v013 tx rollup
+	TxRollupResult
+
+	// v016 smart rollup
+	SmartRollupResult
 }
 
 // Always use this helper to retrieve Ticket updates. This is because due to
@@ -211,6 +196,12 @@ func (e Generic) Fees() BalanceUpdates {
 	return e.Metadata.BalanceUpdates
 }
 
+// Addresses adds all addresses used in this operation to the set.
+// Implements TypedOperation interface.
+func (e Generic) Addresses(set *tezos.AddressSet) {
+	// noop
+}
+
 // Manager represents data common for all manager operations.
 type Manager struct {
 	Generic
@@ -228,6 +219,12 @@ func (e Manager) Limits() tezos.Limits {
 		GasLimit:     e.GasLimit,
 		StorageLimit: e.StorageLimit,
 	}
+}
+
+// Addresses adds all addresses used in this operation to the set.
+// Implements TypedOperation interface.
+func (e Manager) Addresses(set *tezos.AddressSet) {
+	set.AddUnique(e.Source)
 }
 
 // OperationList is a slice of TypedOperation (interface type) with custom JSON unmarshaller
@@ -305,34 +302,45 @@ func (e *OperationList) UnmarshalJSON(data []byte) error {
 			op = &IncreasePaidStorage{}
 		case tezos.OpTypeVdfRevelation:
 			op = &VdfRevelation{}
+		case tezos.OpTypeTransferTicket:
+			op = &TransferTicket{}
 		case tezos.OpTypeUpdateConsensusKey:
 			op = &UpdateConsensusKey{}
 
-			// rollup operations
-		case tezos.OpTypeTransferTicket,
-			tezos.OpTypeToruOrigination,
-			tezos.OpTypeToruSubmitBatch,
-			tezos.OpTypeToruCommit,
-			tezos.OpTypeToruReturnBond,
-			tezos.OpTypeToruFinalizeCommitment,
-			tezos.OpTypeToruRemoveCommitment,
-			tezos.OpTypeToruRejection,
-			tezos.OpTypeToruDispatchTickets,
-			tezos.OpTypeScRollupOriginate,
-			tezos.OpTypeScRollupAddMessages,
-			tezos.OpTypeScRollupCement,
-			tezos.OpTypeScRollupPublish,
-			tezos.OpTypeScRollupRefute,
-			tezos.OpTypeScRollupTimeout,
-			tezos.OpTypeScRollupExecuteOutboxMessage,
-			tezos.OpTypeScRollupRecoverBond,
-			tezos.OpTypeScRollupDalSlotSubscribe,
-			tezos.OpTypeDalSlotAvailability,
-			tezos.OpTypeDalPublishSlotHeader:
-			op = &Rollup{}
+			// DEPRECATED: tx rollup operations, kept for testnet backward compatibility
+		case tezos.OpTypeTxRollupOrigination,
+			tezos.OpTypeTxRollupSubmitBatch,
+			tezos.OpTypeTxRollupCommit,
+			tezos.OpTypeTxRollupReturnBond,
+			tezos.OpTypeTxRollupFinalizeCommitment,
+			tezos.OpTypeTxRollupRemoveCommitment,
+			tezos.OpTypeTxRollupRejection,
+			tezos.OpTypeTxRollupDispatchTickets:
+			op = &TxRollup{}
+
+		case tezos.OpTypeSmartRollupOriginate:
+			op = &SmartRollupOriginate{}
+		case tezos.OpTypeSmartRollupAddMessages:
+			op = &SmartRollupAddMessages{}
+		case tezos.OpTypeSmartRollupCement:
+			op = &SmartRollupCement{}
+		case tezos.OpTypeSmartRollupPublish:
+			op = &SmartRollupPublish{}
+		case tezos.OpTypeSmartRollupRefute:
+			op = &SmartRollupRefute{}
+		case tezos.OpTypeSmartRollupTimeout:
+			op = &SmartRollupTimeout{}
+		case tezos.OpTypeSmartRollupExecuteOutboxMessage:
+			op = &SmartRollupExecuteOutboxMessage{}
+		case tezos.OpTypeSmartRollupRecoverBond:
+			op = &SmartRollupRecoverBond{}
+		case tezos.OpTypeDalAttestation:
+			op = &DalAttestation{}
+		case tezos.OpTypeDalPublishSlotHeader:
+			op = &DalPublishSlotHeader{}
 
 		default:
-			return fmt.Errorf("rpc: unsupported op %q", kind)
+			return fmt.Errorf("rpc: unsupported op %q", string(data[start:end]))
 		}
 
 		if err := dec.Decode(op); err != nil {

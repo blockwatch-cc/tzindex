@@ -13,11 +13,16 @@ import (
 
 // Block holds information about a Tezos block
 type Block struct {
-	ChainId    tezos.ChainIdHash `json:"chain_id"`
-	Hash       tezos.BlockHash   `json:"hash"`
-	Header     BlockHeader       `json:"header"`
-	Metadata   BlockMetadata     `json:"metadata"`
-	Operations [][]*Operation    `json:"operations"`
+	Protocol   tezos.ProtocolHash `json:"protocol"`
+	ChainId    tezos.ChainIdHash  `json:"chain_id"`
+	Hash       tezos.BlockHash    `json:"hash"`
+	Header     BlockHeader        `json:"header"`
+	Metadata   BlockMetadata      `json:"metadata"`
+	Operations [][]*Operation     `json:"operations"`
+}
+
+func (b Block) GetProtocol() tezos.ProtocolHash {
+	return b.Protocol
 }
 
 func (b Block) GetLevel() int64 {
@@ -42,6 +47,10 @@ func (b Block) GetCycle() int64 {
 	return 0
 }
 
+func (b Block) GetCyclePosition() int64 {
+	return b.GetLevelInfo().CyclePosition
+}
+
 func (b Block) GetLevelInfo() LevelInfo {
 	if b.Metadata.LevelInfo != nil {
 		return *b.Metadata.LevelInfo
@@ -58,12 +67,15 @@ func (b Block) GetVotingInfo() VotingPeriodInfo {
 	if b.Metadata.VotingPeriodInfo != nil {
 		return *b.Metadata.VotingPeriodInfo
 	}
-	if b.Metadata.Level != nil {
+	// only for <v008
+	if lvl := b.Metadata.Level; lvl != nil {
 		return VotingPeriodInfo{
 			VotingPeriod: VotingPeriod{
-				Index: b.Metadata.Level.VotingPeriod,
+				Index: lvl.VotingPeriod,
 				Kind:  *b.Metadata.VotingPeriodKind,
 			},
+			Position:  lvl.VotingPeriodPosition,
+			Remaining: 32767 - lvl.VotingPeriodPosition, // v2..7
 		}
 	}
 	return VotingPeriodInfo{}
@@ -135,6 +147,11 @@ type BlockHeader struct {
 	Content                   *BlockContent     `json:"content,omitempty"`
 	LiquidityBakingEscapeVote bool              `json:"liquidity_baking_escape_vote"`
 	LiquidityBakingToggleVote tezos.LbVote      `json:"liquidity_baking_toggle_vote"`
+
+	// only present when header is fetched explicitly
+	// Hash     tezos.BlockHash    `json:"hash"`
+	// Protocol tezos.ProtocolHash `json:"protocol"`
+	ChainId tezos.ChainIdHash `json:"chain_id"`
 }
 
 func (h BlockHeader) LbVote() tezos.LbVote {
@@ -157,16 +174,22 @@ type LevelInfo struct {
 	Level int64 `json:"level"`
 	Cycle int64 `json:"cycle"`
 	// <v008
-	VotingPeriod int64 `json:"voting_period"`
+	VotingPeriod         int64 `json:"voting_period"`
+	CyclePosition        int64 `json:"cycle_position"`
+	VotingPeriodPosition int64 `json:"voting_period_position"`
+	ExpectedCommitment   bool  `json:"expected_commitment"`
 }
 
 type VotingPeriod struct {
-	Index int64                  `json:"index"`
-	Kind  tezos.VotingPeriodKind `json:"kind"`
+	Index         int64                  `json:"index"`
+	Kind          tezos.VotingPeriodKind `json:"kind"`
+	StartPosition int64                  `json:"start_position"`
 }
 
 type VotingPeriodInfo struct {
 	VotingPeriod VotingPeriod `json:"voting_period"`
+	Position     int64        `json:"position"`
+	Remaining    int64        `json:"remaining"`
 }
 
 // BlockMetadata is a part of the Tezos block data

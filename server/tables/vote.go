@@ -17,7 +17,6 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/server"
 )
@@ -159,7 +158,7 @@ func (v *Vote) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(v.StartTime), 10)
 		case "period_end_time":
 			if v.IsOpen {
-				diff := int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - (v.ctx.Tip.BestHeight - v.StartHeight)
+				diff := p.NumVotingPeriods*p.BlocksPerVotingPeriod - (v.ctx.Tip.BestHeight - v.StartHeight)
 				endTime := v.StartTime.Add(time.Duration(diff) * p.BlockTime())
 				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(endTime), 10)
 			} else {
@@ -169,7 +168,7 @@ func (v *Vote) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, v.StartHeight, 10)
 		case "period_end_height":
 			if v.IsOpen {
-				endHeight := v.StartHeight + int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - 1
+				endHeight := v.StartHeight + p.NumVotingPeriods*p.BlocksPerVotingPeriod - 1
 				buf = strconv.AppendInt(buf, endHeight, 10)
 			} else {
 				buf = strconv.AppendInt(buf, v.EndHeight, 10)
@@ -283,7 +282,7 @@ func (v *Vote) MarshalCSV() ([]string, error) {
 			res[i] = strconv.Quote(v.StartTime.Format(time.RFC3339))
 		case "period_end_time":
 			if v.IsOpen {
-				diff := int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - (v.ctx.Tip.BestHeight - v.StartHeight)
+				diff := p.NumVotingPeriods*p.BlocksPerVotingPeriod - (v.ctx.Tip.BestHeight - v.StartHeight)
 				endTime := v.StartTime.Add(time.Duration(diff) * p.BlockTime())
 				res[i] = strconv.Quote(endTime.Format(time.RFC3339))
 			} else {
@@ -293,7 +292,7 @@ func (v *Vote) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(v.StartHeight, 10)
 		case "period_end_height":
 			if v.IsOpen {
-				endHeight := v.StartHeight + int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - 1
+				endHeight := v.StartHeight + p.NumVotingPeriods*p.BlocksPerVotingPeriod - 1
 				res[i] = strconv.FormatInt(endHeight, 10)
 			} else {
 				res[i] = strconv.FormatInt(v.EndHeight, 10)
@@ -434,7 +433,7 @@ func StreamVoteTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", val[0]), err))
 					}
 					prop, err := ctx.Indexer.LookupProposal(ctx, h)
-					if err != nil && err != index.ErrNoProposalEntry {
+					if err != nil && err != model.ErrNoProposal {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", val[0]), err))
 					}
 					// Note: when not found we insert an always false condition
@@ -454,7 +453,7 @@ func StreamVoteTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", v), err))
 					}
 					prop, err := ctx.Indexer.LookupProposal(ctx, h)
-					if err != nil && err != index.ErrNoProposalEntry {
+					if err != nil && err != model.ErrNoProposal {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", v), err))
 					}
 					// skip not found proposal

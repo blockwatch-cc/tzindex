@@ -17,7 +17,6 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/server"
 )
@@ -81,7 +80,6 @@ func (e *Election) MarshalJSONVerbose() ([]byte, error) {
 	}{
 		RowId:            e.RowId.Value(),
 		ProposalId:       e.ProposalId.Value(),
-		Proposal:         e.ctx.Indexer.LookupProposalHash(e.ctx, e.ProposalId).String(),
 		NumPeriods:       e.NumPeriods,
 		NumProposals:     e.NumProposals,
 		VotingPeriod:     e.VotingPeriod,
@@ -97,12 +95,15 @@ func (e *Election) MarshalJSONVerbose() ([]byte, error) {
 		NoProposal:       e.NumProposals == 0,
 		VotingPeriodKind: tezos.ToVotingPeriod(e.NumPeriods).String(),
 	}
+	if p := e.ctx.Indexer.LookupProposalHash(e.ctx, e.ProposalId); p.IsValid() {
+		election.Proposal = p.String()
+	}
 	if e.IsOpen {
 		p := e.ctx.Params
 		tm := e.ctx.Tip.BestTime
-		diff := int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - (e.ctx.Tip.BestHeight - e.StartHeight)
+		diff := p.NumVotingPeriods*p.BlocksPerVotingPeriod - (e.ctx.Tip.BestHeight - e.StartHeight)
 		election.EndTime = util.UnixMilliNonZero(tm.Add(time.Duration(diff) * p.BlockTime()))
-		election.EndHeight = election.StartHeight + int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - 1
+		election.EndHeight = election.StartHeight + p.NumVotingPeriods*p.BlocksPerVotingPeriod - 1
 	}
 	return json.Marshal(election)
 }
@@ -119,7 +120,11 @@ func (e *Election) MarshalJSONBrief() ([]byte, error) {
 		case "proposal_id":
 			buf = strconv.AppendUint(buf, e.ProposalId.Value(), 10)
 		case "proposal":
-			buf = strconv.AppendQuote(buf, e.ctx.Indexer.LookupProposalHash(e.ctx, e.ProposalId).String())
+			if p := e.ctx.Indexer.LookupProposalHash(e.ctx, e.ProposalId); p.IsValid() {
+				buf = strconv.AppendQuote(buf, p.String())
+			} else {
+				buf = strconv.AppendQuote(buf, "")
+			}
 		case "num_periods":
 			buf = strconv.AppendInt(buf, int64(e.NumPeriods), 10)
 		case "num_proposals":
@@ -130,7 +135,7 @@ func (e *Election) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(e.StartTime), 10)
 		case "end_time":
 			if e.IsOpen {
-				diff := int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - (e.ctx.Tip.BestHeight - e.StartHeight)
+				diff := p.NumVotingPeriods*p.BlocksPerVotingPeriod - (e.ctx.Tip.BestHeight - e.StartHeight)
 				endTime := tm.Add(time.Duration(diff) * p.BlockTime())
 				buf = strconv.AppendInt(buf, util.UnixMilliNonZero(endTime), 10)
 			} else {
@@ -140,7 +145,7 @@ func (e *Election) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, e.StartHeight, 10)
 		case "end_height":
 			if e.IsOpen {
-				endHeight := e.StartHeight + int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - 1
+				endHeight := e.StartHeight + p.NumVotingPeriods*p.BlocksPerVotingPeriod - 1
 				buf = strconv.AppendInt(buf, endHeight, 10)
 			} else {
 				buf = strconv.AppendInt(buf, e.EndHeight, 10)
@@ -205,7 +210,9 @@ func (e *Election) MarshalCSV() ([]string, error) {
 		case "proposal_id":
 			res[i] = strconv.FormatUint(e.ProposalId.Value(), 10)
 		case "proposal":
-			res[i] = strconv.Quote(e.ctx.Indexer.LookupProposalHash(e.ctx, e.ProposalId).String())
+			if p := e.ctx.Indexer.LookupProposalHash(e.ctx, e.ProposalId); p.IsValid() {
+				res[i] = strconv.Quote(p.String())
+			}
 		case "num_periods":
 			res[i] = strconv.FormatInt(int64(e.NumPeriods), 10)
 		case "num_proposals":
@@ -216,7 +223,7 @@ func (e *Election) MarshalCSV() ([]string, error) {
 			res[i] = strconv.Quote(e.StartTime.Format(time.RFC3339))
 		case "end_time":
 			if e.IsOpen {
-				diff := int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - (e.ctx.Tip.BestHeight - e.StartHeight)
+				diff := p.NumVotingPeriods*p.BlocksPerVotingPeriod - (e.ctx.Tip.BestHeight - e.StartHeight)
 				endTime := tm.Add(time.Duration(diff) * p.BlockTime())
 				res[i] = strconv.Quote(endTime.Format(time.RFC3339))
 			} else {
@@ -226,7 +233,7 @@ func (e *Election) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(e.StartHeight, 10)
 		case "end_height":
 			if e.IsOpen {
-				endHeight := e.StartHeight + int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - 1
+				endHeight := e.StartHeight + p.NumVotingPeriods*p.BlocksPerVotingPeriod - 1
 				res[i] = strconv.FormatInt(endHeight, 10)
 			} else {
 				res[i] = strconv.FormatInt(e.EndHeight, 10)
@@ -333,7 +340,7 @@ func StreamElectionTable(ctx *server.Context, args *TableRequest) (interface{}, 
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", val[0]), err))
 					}
 					prop, err := ctx.Indexer.LookupProposal(ctx, h)
-					if err != nil && err != index.ErrNoProposalEntry {
+					if err != nil && err != model.ErrNoProposal {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", val[0]), err))
 					}
 					// Note: when not found we insert an always false condition
@@ -353,7 +360,7 @@ func StreamElectionTable(ctx *server.Context, args *TableRequest) (interface{}, 
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", v), err))
 					}
 					prop, err := ctx.Indexer.LookupProposal(ctx, h)
-					if err != nil && err != index.ErrNoProposalEntry {
+					if err != nil && err != model.ErrNoProposal {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", v), err))
 					}
 					// skip not found proposal

@@ -15,8 +15,8 @@ import (
 	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -41,7 +41,7 @@ type Chain struct {
 	model.Chain
 	verbose bool            // cond. marshal
 	columns util.StringList // cond. cols & order when brief
-	params  *tezos.Params   // blockchain amount conversion
+	params  *rpc.Params     // blockchain amount conversion
 }
 
 func (c *Chain) MarshalJSON() ([]byte, error) {
@@ -81,6 +81,7 @@ func (c *Chain) MarshalJSONVerbose() ([]byte, error) {
 		TotalConstants       int64  `json:"total_constants"`
 		TotalSetLimits       int64  `json:"total_set_limits"`
 		TotalStorageBytes    int64  `json:"total_storage_bytes"`
+		TotalTicketTransfers int64  `json:"total_ticket_transfers"`
 		FundedAccounts       int64  `json:"funded_accounts"`
 		DustAccounts         int64  `json:"dust_accounts"`
 		GhostAccounts        int64  `json:"ghost_accounts"`
@@ -125,6 +126,7 @@ func (c *Chain) MarshalJSONVerbose() ([]byte, error) {
 		TotalBallots:         c.TotalBallots,
 		TotalConstants:       c.TotalConstants,
 		TotalSetLimits:       c.TotalSetLimits,
+		TotalTicketTransfers: c.TotalTicketTransfers,
 		TotalStorageBytes:    c.TotalStorageBytes,
 		FundedAccounts:       c.FundedAccounts,
 		DustAccounts:         c.DustAccounts,
@@ -204,6 +206,8 @@ func (c *Chain) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, c.TotalConstants, 10)
 		case "total_set_limits":
 			buf = strconv.AppendInt(buf, c.TotalSetLimits, 10)
+		case "total_ticket_transfers":
+			buf = strconv.AppendInt(buf, c.TotalTicketTransfers, 10)
 		case "total_storage_bytes":
 			buf = strconv.AppendInt(buf, c.TotalStorageBytes, 10)
 		case "funded_accounts":
@@ -307,6 +311,8 @@ func (c *Chain) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(c.TotalConstants, 10)
 		case "total_set_limits":
 			res[i] = strconv.FormatInt(c.TotalSetLimits, 10)
+		case "total_ticket_transfers":
+			res[i] = strconv.FormatInt(c.TotalTicketTransfers, 10)
 		case "total_storage_bytes":
 			res[i] = strconv.FormatInt(c.TotalStorageBytes, 10)
 		case "funded_accounts":
@@ -421,10 +427,6 @@ func StreamChainTable(ctx *server.Context, args *TableRequest) (interface{}, int
 			// the same field name may appear multiple times, in which case conditions
 			// are combined like any other condition with logical AND
 			for _, v := range val {
-				if prefix == "cycle" && v == "head" {
-					currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
-					v = strconv.FormatInt(currentCycle, 10)
-				}
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {

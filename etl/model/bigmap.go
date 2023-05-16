@@ -5,6 +5,7 @@ package model
 
 import (
 	"encoding/binary"
+	"errors"
 	"time"
 
 	"github.com/cespare/xxhash"
@@ -12,6 +13,17 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
+)
+
+var (
+	ErrNoBigmap        = errors.New("bigmap not indexed")
+	ErrInvalidExprHash = errors.New("invalid expr hash")
+)
+
+const (
+	BigmapAllocTableKey  = "bigmaps"
+	BigmapUpdateTableKey = "bigmap_updates"
+	BigmapValueTableKey  = "bigmap_values"
 )
 
 // /tables/bigmaps
@@ -42,10 +54,27 @@ func (m *BigmapAlloc) SetID(id uint64) {
 	m.RowId = id
 }
 
+func (m BigmapAlloc) TableKey() string {
+	return BigmapAllocTableKey
+}
+
+func (m BigmapAlloc) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    13,  // 8k pack size
+		JournalSizeLog2: 12,  // 4k journal size
+		CacheSize:       128, // max MB
+		FillLevel:       100, // boltdb fill level to limit reallocations
+	}
+}
+
+func (m BigmapAlloc) IndexOpts(key string) pack.Options {
+	return pack.NoOptions
+}
+
 func GetKeyId(bigmapid int64, kh tezos.ExprHash) uint64 {
 	var buf [40]byte
 	binary.BigEndian.PutUint64(buf[:], uint64(bigmapid))
-	copy(buf[8:], kh.Hash.Hash)
+	copy(buf[8:], kh[:])
 	return xxhash.Sum64(buf[:])
 }
 
@@ -167,7 +196,7 @@ func (m *BigmapAlloc) Reset() {
 }
 
 // /tables/bigmap_values
-type BigmapKV struct {
+type BigmapValue struct {
 	RowId    uint64 `pack:"I,pk"             json:"row_id"`    // internal: id
 	BigmapId int64  `pack:"B,bloom"          json:"bigmap_id"` // unique bigmap id
 	Height   int64  `pack:"h"                json:"height"`    // update height
@@ -176,35 +205,52 @@ type BigmapKV struct {
 	Value    []byte `pack:"v,snappy"         json:"value"`     // key/value bytes: binary encoded micheline.Prim Pair
 }
 
-var _ pack.Item = (*BigmapKV)(nil)
+var _ pack.Item = (*BigmapValue)(nil)
 
-func (m *BigmapKV) ID() uint64 {
+func (m *BigmapValue) ID() uint64 {
 	return m.RowId
 }
 
-func (m *BigmapKV) SetID(id uint64) {
+func (m *BigmapValue) SetID(id uint64) {
 	m.RowId = id
 }
 
-func (b *BigmapKV) GetKey(typ micheline.Type) (micheline.Key, error) {
+func (m BigmapValue) TableKey() string {
+	return BigmapValueTableKey
+}
+
+func (m BigmapValue) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    14,   // 16k pack size
+		JournalSizeLog2: 17,   // 128k journal size
+		CacheSize:       2048, // max MB
+		FillLevel:       100,  // boltdb fill level to limit reallocations
+	}
+}
+
+func (m BigmapValue) IndexOpts(key string) pack.Options {
+	return pack.NoOptions
+}
+
+func (b *BigmapValue) GetKey(typ micheline.Type) (micheline.Key, error) {
 	return micheline.DecodeKey(typ, b.Key)
 }
 
-func (b *BigmapKV) GetValue(typ micheline.Type) micheline.Value {
+func (b *BigmapValue) GetValue(typ micheline.Type) micheline.Value {
 	prim := micheline.Prim{}
 	_ = prim.UnmarshalBinary(b.Value)
 	return micheline.NewValue(typ, prim)
 }
 
-func (b *BigmapKV) GetKeyHash() tezos.ExprHash {
+func (b *BigmapValue) GetKeyHash() tezos.ExprHash {
 	return micheline.KeyHash(b.Key)
 }
 
-func NewBigmapKV(b micheline.BigmapEvent, height int64) *BigmapKV {
+func NewBigmapValue(b micheline.BigmapEvent, height int64) *BigmapValue {
 	if b.Action != micheline.DiffActionUpdate {
 		return nil
 	}
-	m := &BigmapKV{
+	m := &BigmapValue{
 		BigmapId: b.Id,
 		KeyId:    GetKeyId(b.Id, b.KeyHash),
 		Height:   height,
@@ -214,8 +260,8 @@ func NewBigmapKV(b micheline.BigmapEvent, height int64) *BigmapKV {
 	return m
 }
 
-func CopyBigmapKV(b *BigmapKV, dst, height int64) *BigmapKV {
-	m := &BigmapKV{
+func CopyBigmapValue(b *BigmapValue, dst, height int64) *BigmapValue {
+	m := &BigmapValue{
 		BigmapId: dst,
 		Height:   height,
 		KeyId:    GetKeyId(dst, b.GetKeyHash()),
@@ -227,7 +273,7 @@ func CopyBigmapKV(b *BigmapKV, dst, height int64) *BigmapKV {
 	return m
 }
 
-func (b *BigmapKV) ToUpdateCopy(op *Op) *BigmapUpdate {
+func (b *BigmapValue) ToUpdateCopy(op *Op) *BigmapUpdate {
 	m := &BigmapUpdate{
 		BigmapId:  b.BigmapId,
 		KeyId:     b.KeyId,
@@ -243,7 +289,7 @@ func (b *BigmapKV) ToUpdateCopy(op *Op) *BigmapUpdate {
 	return m
 }
 
-func (b *BigmapKV) ToUpdateRemove(op *Op) *BigmapUpdate {
+func (b *BigmapValue) ToUpdateRemove(op *Op) *BigmapUpdate {
 	m := &BigmapUpdate{
 		BigmapId:  b.BigmapId,
 		KeyId:     b.KeyId,
@@ -258,13 +304,8 @@ func (b *BigmapKV) ToUpdateRemove(op *Op) *BigmapUpdate {
 	return m
 }
 
-func (m *BigmapKV) Reset() {
-	m.RowId = 0
-	m.BigmapId = 0
-	m.Height = 0
-	m.KeyId = 0
-	m.Key = nil
-	m.Value = nil
+func (m *BigmapValue) Reset() {
+	*m = BigmapValue{}
 }
 
 // /tables/bigmap_updates
@@ -288,6 +329,23 @@ func (m *BigmapUpdate) ID() uint64 {
 
 func (m *BigmapUpdate) SetID(id uint64) {
 	m.RowId = id
+}
+
+func (m BigmapUpdate) TableKey() string {
+	return BigmapUpdateTableKey
+}
+
+func (m BigmapUpdate) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    15,  // 32k pack size
+		JournalSizeLog2: 15,  // 32k journal size
+		CacheSize:       128, // max MB
+		FillLevel:       100, // boltdb fill level to limit reallocations
+	}
+}
+
+func (m BigmapUpdate) IndexOpts(key string) pack.Options {
+	return pack.NoOptions
 }
 
 func (b *BigmapUpdate) GetKey(typ micheline.Type) (micheline.Key, error) {
@@ -343,8 +401,8 @@ func NewBigmapUpdate(op *Op, b micheline.BigmapEvent) *BigmapUpdate {
 	return m
 }
 
-func (b *BigmapUpdate) ToKV() *BigmapKV {
-	m := &BigmapKV{
+func (b *BigmapUpdate) ToKV() *BigmapValue {
+	m := &BigmapValue{
 		BigmapId: b.BigmapId,
 		KeyId:    b.KeyId,
 		Height:   b.Height,
@@ -389,13 +447,5 @@ func (b *BigmapUpdate) ToEvent() micheline.BigmapEvent {
 }
 
 func (m *BigmapUpdate) Reset() {
-	m.RowId = 0
-	m.BigmapId = 0
-	m.KeyId = 0
-	m.Action = 0
-	m.OpId = 0
-	m.Height = 0
-	m.Timestamp = time.Time{}
-	m.Key = nil
-	m.Value = nil
+	*m = BigmapUpdate{}
 }

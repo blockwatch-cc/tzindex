@@ -29,13 +29,14 @@ var _ server.RESTful = (*TableRequest)(nil)
 
 // build packdb query from request
 type TableRequest struct {
-	Table   string          `schema:"-"`
-	Columns util.StringList `schema:"columns"`
-	Limit   uint            `schema:"limit"`
-	Cursor  string          `schema:"cursor"`
-	Format  string          `schema:"-"`     // from URL
-	Order   pack.OrderType  `schema:"order"` // asc/desc
-	Verbose bool            `schema:"verbose"`
+	Table    string          `schema:"-"`
+	Columns  util.StringList `schema:"columns"`
+	Limit    uint            `schema:"limit"`
+	Cursor   string          `schema:"cursor"`
+	Format   string          `schema:"-"`     // from URL
+	Order    pack.OrderType  `schema:"order"` // asc/desc
+	Verbose  bool            `schema:"verbose"`
+	Filename string          `schema:"filename"` // for CSV downloads
 	// OrderBy string // column name
 }
 

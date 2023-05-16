@@ -10,7 +10,6 @@ import (
 
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/server"
 )
@@ -83,7 +82,7 @@ func loadConstant(ctx *server.Context) *model.Constant {
 		cc, err := ctx.Indexer.LookupConstant(ctx, hash)
 		if err != nil {
 			switch err {
-			case index.ErrNoConstantEntry:
+			case model.ErrNoConstant:
 				panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no such constant", err))
 			default:
 				panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))

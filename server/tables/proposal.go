@@ -19,7 +19,6 @@ import (
 	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/server"
 )
@@ -184,9 +183,9 @@ func StreamProposalTable(ctx *server.Context, args *TableRequest) (interface{}, 
 	if err != nil {
 		panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", args.Table), err))
 	}
-	opT, err := ctx.Indexer.Table(index.OpTableKey)
+	opT, err := ctx.Indexer.Table(model.OpTableKey)
 	if err != nil {
-		panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", index.OpTableKey), err))
+		panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", model.OpTableKey), err))
 	}
 
 	// translate long column names to short names used in pack tables
@@ -258,7 +257,7 @@ func StreamProposalTable(ctx *server.Context, args *TableRequest) (interface{}, 
 				if err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid protocol hash '%s'", val), err))
 				}
-				hashes[i] = h.Hash.Hash
+				hashes[i] = h[:]
 			}
 			q = q.AndIn(field, hashes)
 		case "source":
@@ -278,7 +277,7 @@ func StreamProposalTable(ctx *server.Context, args *TableRequest) (interface{}, 
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
+					if err != nil && err != model.ErrNoAccount {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					// Note: when not found we insert an always false condition
@@ -298,7 +297,7 @@ func StreamProposalTable(ctx *server.Context, args *TableRequest) (interface{}, 
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
+					if err != nil && err != model.ErrNoAccount {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account
@@ -330,9 +329,9 @@ func StreamProposalTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					op, err := ctx.Indexer.LookupOp(ctx, val[0], etl.ListRequest{})
 					if err != nil {
 						switch err {
-						case index.ErrNoOpEntry:
+						case model.ErrNoOp:
 							// expected
-						case etl.ErrInvalidHash:
+						case model.ErrInvalidOpHash:
 							panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid op hash '%s'", val[0]), err))
 						default:
 							panic(server.EInternal(server.EC_DATABASE, fmt.Sprintf("cannot lookup op hash '%s'", val[0]), err))
@@ -353,9 +352,9 @@ func StreamProposalTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					op, err := ctx.Indexer.LookupOp(ctx, v, etl.ListRequest{})
 					if err != nil {
 						switch err {
-						case index.ErrNoOpEntry:
+						case model.ErrNoOp:
 							// expected
-						case etl.ErrInvalidHash:
+						case model.ErrInvalidOpHash:
 							panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid op hash '%s'", v), err))
 						default:
 							panic(server.EInternal(server.EC_DATABASE, fmt.Sprintf("cannot lookup op hash '%s'", v), err))
@@ -438,8 +437,8 @@ func StreamProposalTable(ctx *server.Context, args *TableRequest) (interface{}, 
 		if len(find) > 0 {
 			// lookup ops from id
 			type XOp struct {
-				Id   model.OpID   `pack:"I,pk"`
-				Hash tezos.OpHash `pack:"H"`
+				Id   model.OpID   `knox:"I,pk"`
+				Hash tezos.OpHash `knox:"H"`
 			}
 			op := &XOp{}
 			err = pack.NewQuery(ctx.RequestID+".proposal_op_lookup").

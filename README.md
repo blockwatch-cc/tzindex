@@ -8,7 +8,7 @@ For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](h
 
 **Core Features**
 
-- supports protocols up to Lima (v015)
+- supports protocols up to Mumbai (v016)
 - indexes and cross-checks full on-chain state
 - feature-rich [REST API](https://tzstats.com/docs/api/index.html) with objects, bulk tables and time-series
 - auto-detects and locks Tezos network (never mixes data from different networks)
@@ -57,7 +57,7 @@ For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](h
 
 ### Requirements
 
-- Storage: 37GB (full Mainnet index, Dec 2022), 25G (light mode)
+- Storage: 43GB (full Mainnet index, May 2023), 29G (light mode)
 - RAM:  8-64GB (configurable, use more memory for better query latency)
 - CPU:  2+ cores (configurable, use more for better query parallelism)
 - Tezos node in archive mode
@@ -101,7 +101,7 @@ make image
 tzindex aims to be zero-conf and comes with sane defaults. All you need to do is point it to the RPC endpoint of a running Tezos node.
 
 ```
-tzindex -rpcurl tezos-node
+tzindex -rpc.url tezos-node
 ```
 
 If you prefer running from docker, check out the docker directory. Official images are available for the [indexer](https://hub.docker.com/r/blockwatch/tzindex) and [frontend](https://hub.docker.com/r/blockwatch/tzstats) (note the frontend may not support advanced features of new protocols). You can run both, the indexer and the frontend in local Docker containers and have them connect to your Tezos node in a third container. Make sure all containers are connected to the same Docker network or if you choose different networks that they are known. Docker port forwarding on Linux usually works, on OSX its broken.
@@ -130,10 +130,10 @@ Env variables allow you to override settings from the config file or even specif
 
 ```
 # in config.json
-{ "rpc": { "url" : "127.0.0.1:8732" }}
+{ "rpc": { "url" : "http://127.0.0.1:8732" }}
 
 # same as env variable
-TZ_RPC_URL=127.0.0.1:8732
+TZ_RPC_URL=http://127.0.0.1:8732
 ```
 
 **Command line arguments**
@@ -164,16 +164,10 @@ Flags
       disable indexing
   -nomonitor
       disable block monitor
-  -nopublish
-      disable ZMQ event publishing
   -norpc
       disable RPC client
   -notls
       disable RPC TLS support (use http)
-  -rpcurl string
-      RPC url (default "http://127.0.0.1:8732")
-  -stats n
-      print statistics every n seconds
   -stop height
       stop indexing after height
   -unsafe
@@ -254,10 +248,10 @@ Logging
   -log.backend=stdout               log backend (stdout, stderr, syslog, file)
   -log.flags= date,time,micro,utc   log flags (see Golang log package)
   -log.level=info                   default global log level
-  -log.blockchain=info              log level for chain crawler
+  -log.etl=info                     log level for chain crawler
   -log.db=info                      log level for database layer
   -log.rpc=info                     log level for RPC layer
-  -log.server=info                  log level for API server
+  -log.api=info                     log level for API server
   -log.micheline=info               log level for TzGo micheline package
 ```
 

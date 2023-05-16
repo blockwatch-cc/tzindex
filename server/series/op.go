@@ -14,8 +14,8 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -29,7 +29,6 @@ var (
 		"reward",
 		"deposit",
 		"burned",
-		"days_destroyed",
 		"count",
 	})
 )
@@ -48,14 +47,14 @@ type OpSeries struct {
 	Burned      int64     `json:"burned"`
 
 	columns util.StringList // cond. cols & order when brief
-	params  *tezos.Params
+	params  *rpc.Params
 	verbose bool
 	null    bool
 }
 
 var _ SeriesBucket = (*OpSeries)(nil)
 
-func (s *OpSeries) Init(params *tezos.Params, columns []string, verbose bool) {
+func (s *OpSeries) Init(params *rpc.Params, columns []string, verbose bool) {
 	s.params = params
 	s.columns = columns
 	s.verbose = verbose
@@ -182,6 +181,7 @@ func (o *OpSeries) MarshalJSONVerbose() ([]byte, error) {
 		Reward      float64   `json:"reward"`
 		Deposit     float64   `json:"deposit"`
 		Burned      float64   `json:"burned"`
+		TDD         float64   `json:"days_destroyed"`
 	}{
 		Timestamp:   o.Timestamp,
 		Count:       o.Count,
@@ -375,7 +375,7 @@ func (s *OpSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Que
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
+					if err != nil && err != model.ErrNoAccount {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					// Note: when not found we insert an always false condition
@@ -395,7 +395,7 @@ func (s *OpSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Que
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
+					if err != nil && err != model.ErrNoAccount {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account

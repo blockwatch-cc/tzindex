@@ -17,7 +17,6 @@ import (
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/server"
 )
@@ -184,11 +183,11 @@ func (r *ContractRequest) Parse(ctx *server.Context) {
 		hash, height, err := ctx.Indexer.LookupBlockId(ctx.Context, r.Block)
 		if err != nil {
 			switch err {
-			case index.ErrNoBlockEntry:
+			case model.ErrNoBlock:
 				panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no such block", err))
-			case index.ErrInvalidBlockHeight:
+			case model.ErrInvalidBlockHeight:
 				panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, "invalid block height", err))
-			case index.ErrInvalidBlockHash:
+			case model.ErrInvalidBlockHash:
 				panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, "invalid block hash", err))
 			default:
 				panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
@@ -201,11 +200,11 @@ func (r *ContractRequest) Parse(ctx *server.Context) {
 		hash, height, err := ctx.Indexer.LookupBlockId(ctx.Context, r.Since)
 		if err != nil {
 			switch err {
-			case index.ErrNoBlockEntry:
+			case model.ErrNoBlock:
 				panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no such block", err))
-			case index.ErrInvalidBlockHeight:
+			case model.ErrInvalidBlockHeight:
 				panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, "invalid block height", err))
-			case index.ErrInvalidBlockHash:
+			case model.ErrInvalidBlockHash:
 				panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, "invalid block hash", err))
 			default:
 				panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
@@ -258,7 +257,7 @@ func loadContract(ctx *server.Context) *model.Contract {
 		cc, err := ctx.Indexer.LookupContract(ctx, addr)
 		if err != nil {
 			switch err {
-			case index.ErrNoContractEntry:
+			case model.ErrNoContract:
 				panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no such contract", err))
 			default:
 				panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
@@ -275,7 +274,7 @@ func ReadContract(ctx *server.Context) (interface{}, int) {
 	acc, err := ctx.Indexer.LookupAccountId(ctx, cc.AccountId)
 	if err != nil {
 		switch err {
-		case index.ErrNoContractEntry, index.ErrNoAccountEntry:
+		case model.ErrNoContract, model.ErrNoAccount:
 			panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no such contract", err))
 		default:
 			panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
@@ -297,7 +296,7 @@ func ReadContractCalls(ctx *server.Context) (interface{}, int) {
 	acc, err := ctx.Indexer.LookupAccountId(ctx, cc.AccountId)
 	if err != nil {
 		switch err {
-		case index.ErrNoAccountEntry:
+		case model.ErrNoAccount:
 			panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no such contract", err))
 		default:
 			panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
@@ -501,7 +500,7 @@ func ReadContractStorage(ctx *server.Context) (interface{}, int) {
 			cc.FirstSeen,
 			args.BlockHeight,
 		)
-		if err != nil && err != index.ErrNoOpEntry {
+		if err != nil && err != model.ErrNoOp {
 			panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
 		}
 

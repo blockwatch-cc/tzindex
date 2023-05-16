@@ -19,8 +19,8 @@ import (
 	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -51,7 +51,7 @@ type Flow struct {
 	model.Flow
 	verbose bool            // cond. marshal
 	columns util.StringList // cond. cols & order when brief
-	params  *tezos.Params   // blockchain amount conversion
+	params  *rpc.Params     // blockchain amount conversion
 	ctx     *server.Context
 }
 
@@ -333,7 +333,7 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-				if err != nil && err != index.ErrNoAccountEntry {
+				if err != nil && err != model.ErrNoAccount {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				// Note: when not found we insert an always false condition
@@ -352,7 +352,7 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
+					if err != nil && err != model.ErrNoAccount {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account
@@ -381,9 +381,9 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 					ops, err := ctx.Indexer.LookupOp(ctx, val[0], etl.ListRequest{})
 					if err != nil {
 						switch err {
-						case index.ErrNoOpEntry:
+						case model.ErrNoOp:
 							panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("no such op '%s'", val[0]), nil))
-						case etl.ErrInvalidHash:
+						case model.ErrInvalidOpHash:
 							panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid op hash '%s'", val[0]), err))
 						default:
 							panic(server.EInternal(server.EC_DATABASE, fmt.Sprintf("cannot lookup op hash '%s'", val[0]), err))
@@ -417,11 +417,6 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 			for _, v := range val {
 				// convert amounts from float to int64
 				switch prefix {
-				case "cycle":
-					if v == "head" {
-						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
-						v = strconv.FormatInt(currentCycle, 10)
-					}
 				case "amount_in", "amount_out":
 					fvals := make([]string, 0)
 					for _, vv := range strings.Split(v, ",") {

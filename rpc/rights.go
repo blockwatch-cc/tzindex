@@ -4,9 +4,11 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"blockwatch.cc/tzgo/tezos"
 )
@@ -73,14 +75,60 @@ type SnapshotIndex struct {
 	Index int   // the index inside base where snapshot happened
 }
 
+type SnapshotOwners struct {
+	Cycle int64          `json:"cycle"`
+	Index int64          `json:"index"`
+	Rolls []SnapshotRoll `json:"rolls"`
+}
+
+type SnapshotRoll struct {
+	RollId   int64
+	OwnerKey tezos.Key
+}
+
+func (r *SnapshotRoll) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || bytes.Equal(data, []byte(`null`)) {
+		return nil
+	}
+	if len(data) == 2 {
+		return nil
+	}
+	if data[0] != '[' || data[len(data)-1] != ']' {
+		return fmt.Errorf("SnapshotRoll: invalid json array '%s'", string(data))
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	unpacked := make([]any, 0)
+	err := dec.Decode(&unpacked)
+	if err != nil {
+		return err
+	}
+	return r.decode(unpacked)
+}
+
+func (r *SnapshotRoll) decode(unpacked []any) error {
+	if l := len(unpacked); l != 2 {
+		return fmt.Errorf("SnapshotRoll: invalid json array len %d", l)
+	}
+	id, err := strconv.ParseInt(unpacked[0].(json.Number).String(), 10, 64)
+	if err != nil {
+		return fmt.Errorf("SnapshotRoll: invalid roll id: %v", err)
+	}
+	if err = r.OwnerKey.UnmarshalText([]byte(unpacked[1].(string))); err != nil {
+		return err
+	}
+	r.RollId = id
+	return nil
+}
+
 // ListBakingRights returns information about baking rights at block id.
 // Use max to set a max block priority (before Ithaca) or a max round (after Ithaca).
-func (c *Client) ListBakingRights(ctx context.Context, id BlockID, max int, p *tezos.Params) ([]BakingRight, error) {
+func (c *Client) ListBakingRights(ctx context.Context, id BlockID, max int, p *Params) ([]BakingRight, error) {
 	maxSelector := "max_priority=%d"
-	if p.Version >= 12 {
+	if p.Version >= 12 && p.IsPreIthacaNetworkAtStart() {
 		maxSelector = "max_round=%d"
 	}
-	if p.Version < 6 {
+	if p.Version < 6 && p.IsPreIthacaNetworkAtStart() {
 		max++
 	}
 	rights := make([]BakingRight, 0)
@@ -95,12 +143,12 @@ func (c *Client) ListBakingRights(ctx context.Context, id BlockID, max int, p *t
 // as seen from block id. Note block and cycle must be no further than preserved cycles
 // away from each other. Use max to set a max block priority (before Ithaca) or a max
 // round (after Ithaca).
-func (c *Client) ListBakingRightsCycle(ctx context.Context, id BlockID, cycle int64, max int, p *tezos.Params) ([]BakingRight, error) {
+func (c *Client) ListBakingRightsCycle(ctx context.Context, id BlockID, cycle int64, max int, p *Params) ([]BakingRight, error) {
 	maxSelector := "max_round=%d"
-	if p.Version < 12 {
+	if p.Version < 12 && p.IsPreIthacaNetworkAtStart() {
 		maxSelector = "max_priority=%d"
 	}
-	if p.Version < 6 {
+	if p.Version < 6 && p.IsPreIthacaNetworkAtStart() {
 		max++
 	}
 	rights := make([]BakingRight, 0)
@@ -112,11 +160,28 @@ func (c *Client) ListBakingRightsCycle(ctx context.Context, id BlockID, cycle in
 }
 
 // ListEndorsingRights returns information about block endorsing rights.
-func (c *Client) ListEndorsingRights(ctx context.Context, id BlockID, p *tezos.Params) ([]EndorsingRight, error) {
+func (c *Client) ListEndorsingRights(ctx context.Context, id BlockID, p *Params) ([]EndorsingRight, error) {
 	u := fmt.Sprintf("chains/main/blocks/%s/helpers/endorsing_rights?all=true", id)
 	rights := make([]EndorsingRight, 0)
 	// Note: future cycles are seen from current protocol (!)
-	if p.Version >= 12 {
+	if p.Version < 12 && p.IsPreIthacaNetworkAtStart() {
+		type Rights struct {
+			Level    int64  `json:"level"`
+			Delegate string `json:"delegate"`
+			Slots    []int  `json:"slots"`
+		}
+		list := make([]Rights, 0)
+		if err := c.Get(ctx, u, &list); err != nil {
+			return nil, err
+		}
+		for _, r := range list {
+			rights = append(rights, EndorsingRight{
+				Level:    r.Level,
+				Delegate: r.Delegate,
+				Power:    len(r.Slots),
+			})
+		}
+	} else {
 		type V12Rights struct {
 			Level     int64 `json:"level"`
 			Delegates []struct {
@@ -136,23 +201,6 @@ func (c *Client) ListEndorsingRights(ctx context.Context, id BlockID, p *tezos.P
 					Power:    r.Power,
 				})
 			}
-		}
-	} else {
-		type Rights struct {
-			Level    int64  `json:"level"`
-			Delegate string `json:"delegate"`
-			Slots    []int  `json:"slots"`
-		}
-		list := make([]Rights, 0)
-		if err := c.Get(ctx, u, &list); err != nil {
-			return nil, err
-		}
-		for _, r := range list {
-			rights = append(rights, EndorsingRight{
-				Level:    r.Level,
-				Delegate: r.Delegate,
-				Power:    len(r.Slots),
-			})
 		}
 	}
 	return rights, nil
@@ -160,12 +208,34 @@ func (c *Client) ListEndorsingRights(ctx context.Context, id BlockID, p *tezos.P
 
 // ListEndorsingRightsCycle returns information about endorsing rights for an entire cycle
 // as seen from block id. Note block and cycle must be no further than preserved cycles
-// away.
-func (c *Client) ListEndorsingRightsCycle(ctx context.Context, id BlockID, cycle int64, p *tezos.Params) ([]EndorsingRight, error) {
+// away. On protocol changes future rights must be refetched!
+func (c *Client) ListEndorsingRightsCycle(ctx context.Context, id BlockID, cycle int64, p *Params) ([]EndorsingRight, error) {
 	u := fmt.Sprintf("chains/main/blocks/%s/helpers/endorsing_rights?all=true&cycle=%d", id, cycle)
 	rights := make([]EndorsingRight, 0)
-	// Note: future cycles are seen from current protocol (!)
-	if p.Version >= 12 {
+	//
+	switch {
+	case p.Version < 12 && p.IsPreIthacaNetworkAtStart():
+		// until Ithaca v012
+		type Rights struct {
+			Level    int64  `json:"level"`
+			Delegate string `json:"delegate"`
+			Slots    []int  `json:"slots"`
+		}
+		list := make([]Rights, 0)
+		if err := c.Get(ctx, u, &list); err != nil {
+			return nil, err
+		}
+		for _, r := range list {
+			rights = append(rights, EndorsingRight{
+				Level:    r.Level,
+				Delegate: r.Delegate,
+				Power:    len(r.Slots),
+			})
+		}
+	default:
+		// FIXME: it seems this is still not removed
+		// case p.Version >= 12 && p.Version <= 15:
+		// until Lima v015
 		type V12Rights struct {
 			Level     int64 `json:"level"`
 			Delegates []struct {
@@ -186,23 +256,9 @@ func (c *Client) ListEndorsingRightsCycle(ctx context.Context, id BlockID, cycle
 				})
 			}
 		}
-	} else {
-		type Rights struct {
-			Level    int64  `json:"level"`
-			Delegate string `json:"delegate"`
-			Slots    []int  `json:"slots"`
-		}
-		list := make([]Rights, 0)
-		if err := c.Get(ctx, u, &list); err != nil {
-			return nil, err
-		}
-		for _, r := range list {
-			rights = append(rights, EndorsingRight{
-				Level:    r.Level,
-				Delegate: r.Delegate,
-				Power:    len(r.Slots),
-			})
-		}
+		// default:
+		// Lima+ v016 (cannot fetch full cycle of endorsing rights)
+		// TODO: fetch per block in parallel
 	}
 	return rights, nil
 }
@@ -226,25 +282,14 @@ func (c *Client) GetSnapshotInfoCycle(ctx context.Context, id BlockID, cycle int
 
 // GetSnapshotIndexCycle returns information about a roll snapshot as seen from block id.
 // Note block and cycle must be no further than preserved cycles away.
-func (c *Client) GetSnapshotIndexCycle(ctx context.Context, id BlockID, cycle int64, p *tezos.Params) (*SnapshotIndex, error) {
+func (c *Client) GetSnapshotIndexCycle(ctx context.Context, id BlockID, cycle int64, p *Params) (*SnapshotIndex, error) {
 	idx := &SnapshotIndex{}
-	if p.Version >= 12 {
-		idx.Cycle = cycle
-		idx.Base = p.SnapshotBaseCycle(cycle)
-		idx.Index = -1
-		if cycle >= p.PreservedCycles+1 {
-			u := fmt.Sprintf("chains/main/blocks/%s/context/selected_snapshot?cycle=%d", id, cycle)
-			if err := c.Get(ctx, u, &idx.Index); err != nil {
-				return nil, err
-			}
-		} else {
-			log.Debugf("No snapshot for cycle %d", cycle)
-		}
-	} else {
+	if p.Version < 12 && p.IsPreIthacaNetworkAtStart() {
 		// pre-Ithaca we can at most look PRESERVED_CYCLES into the future since
 		// the snapshot happened 2 cycles back from the block we're looking from.
 		var info SnapshotInfo
 		u := fmt.Sprintf("chains/main/blocks/%s/context/raw/json/cycle/%d", id, cycle)
+		// log.Infof("GET %s", u)
 		if err := c.Get(ctx, u, &info); err != nil {
 			return nil, err
 		}
@@ -254,6 +299,20 @@ func (c *Client) GetSnapshotIndexCycle(ctx context.Context, id BlockID, cycle in
 		idx.Cycle = cycle
 		idx.Base = p.SnapshotBaseCycle(cycle)
 		idx.Index = info.RollSnapshot
+	} else {
+		idx.Cycle = cycle
+		idx.Base = p.SnapshotBaseCycle(cycle)
+		idx.Index = 15
+		// if cycle > p.PreservedCycles+1 {
+		if idx.Base <= 0 {
+			log.Debugf("No snapshot for cycle %d", cycle)
+		} else {
+			u := fmt.Sprintf("chains/main/blocks/%s/context/selected_snapshot?cycle=%d", id, cycle)
+			// log.Infof("GET %s", u)
+			if err := c.Get(ctx, u, &idx.Index); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return idx, nil
 }
@@ -263,16 +322,18 @@ func (c *Client) FetchRightsByCycle(ctx context.Context, height, cycle int64, bu
 	if bundle.Params == nil {
 		p, err := c.GetParams(ctx, level)
 		if err != nil {
-			return err
+			return fmt.Errorf("params: %v", err)
 		}
 		bundle.Params = p
-		log.Debugf("Using fresh params with version=%d", p.Version)
+		log.Debugf("Using fresh params for v%03d", p.Version)
 	} else {
-		log.Debugf("Using passed params with version=%d", bundle.Params.Version)
+		log.Debugf("Using passed params for v%03d", bundle.Params.Version)
 	}
-	br, err := c.ListBakingRightsCycle(ctx, level, cycle, 0, bundle.Params)
+	p := bundle.Params
+
+	br, err := c.ListBakingRightsCycle(ctx, level, cycle, 0, p)
 	if err != nil {
-		return err
+		return fmt.Errorf("baking: %v", err)
 	}
 	if len(br) == 0 {
 		return fmt.Errorf("empty baking rights, make sure your Tezos node runs in archive mode")
@@ -280,9 +341,9 @@ func (c *Client) FetchRightsByCycle(ctx context.Context, height, cycle int64, bu
 	log.Debugf("Fetched %d baking rights for cycle %d at height %d", len(br), cycle, height)
 	bundle.Baking = append(bundle.Baking, br)
 
-	er, err := c.ListEndorsingRightsCycle(ctx, level, cycle, bundle.Params)
+	er, err := c.ListEndorsingRightsCycle(ctx, level, cycle, p)
 	if err != nil {
-		return err
+		return fmt.Errorf("endorsing: %v", err)
 	}
 	if len(er) == 0 {
 		return fmt.Errorf("empty endorsing rights, make sure your Tezos node runs in archive mode")
@@ -292,34 +353,45 @@ func (c *Client) FetchRightsByCycle(ctx context.Context, height, cycle int64, bu
 
 	// unavailable on genesis
 	if height > 1 {
-		prev, err := c.ListEndorsingRights(ctx, BlockLevel(height-1), bundle.Params)
+		prev, err := c.ListEndorsingRights(ctx, BlockLevel(height-1), p)
 		if err != nil {
-			return err
+			return fmt.Errorf("last endorsing: %v", err)
 		}
 		if len(prev) == 0 {
 			return fmt.Errorf("empty endorsing rights from last cycle end, make sure your Tezos node runs in archive mode")
 		}
 		bundle.PrevEndorsing = prev
 	}
-	snap, err := c.GetSnapshotIndexCycle(ctx, level, cycle, bundle.Params)
+
+	// unavailable for the first preserved + 1 cycles (so 0..6 on mainnet)
+	// post-Ithaca testnets have no snapshot for preserved + 1 cycles (0..4)
+	snap, err := c.GetSnapshotIndexCycle(ctx, level, cycle, p)
 	if err != nil {
-		// FIXME: kathmandunet does not know c4 snapshot at block 4097, but should
-		log.Errorf("Fetching cycle index for c%d at block %d: %v", cycle, height, err)
+		log.Errorf("Fetching snapshot index for c%d at block %d: %v", cycle, height, err)
 		// return err
 		snap = &SnapshotIndex{
 			Cycle: cycle,
-			Base:  bundle.Params.SnapshotBaseCycle(cycle),
-			Index: 0, // guess, just return something
+			Base:  p.SnapshotBaseCycle(cycle),
+			Index: 15, // guess, just return something
 		}
 	}
 	bundle.Snapshot = snap
 	info, err := c.GetSnapshotInfoCycle(ctx, level, cycle)
 	if err != nil {
-		// FIXME: kathmandunet does not know c4 snapshot at block 4097, but should
-		log.Error(err)
+		log.Errorf("Fetching snapshot info for c%d at block %d: %v", cycle, height, err)
 		// return err
 	}
 	bundle.SnapInfo = info
-
 	return nil
+}
+
+// ListSnapshotRollOwners returns information about a roll snapshot ownership.
+// Response is a nested array `[[roll_id, pubkey]]`. Deprecated in Ithaca.
+func (c *Client) ListSnapshotRollOwners(ctx context.Context, id BlockID, cycle, index int64) (*SnapshotOwners, error) {
+	owners := &SnapshotOwners{Cycle: cycle, Index: index}
+	u := fmt.Sprintf("chains/main/blocks/%s/context/raw/json/rolls/owner/snapshot/%d/%d?depth=1", id, cycle, index)
+	if err := c.Get(ctx, u, &owners.Rolls); err != nil {
+		return nil, err
+	}
+	return owners, nil
 }

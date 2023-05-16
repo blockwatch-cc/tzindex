@@ -4,6 +4,7 @@
 package model
 
 import (
+    "errors"
     "sync"
     "time"
 
@@ -17,7 +18,15 @@ import (
 // TicketType    unique identity (ticketer + content_type + content)
 // TicketUpdate  copy of operation receipts
 
+const (
+    TicketTypeTableKey   = "ticket_types"
+    TicketUpdateTableKey = "ticket_updates"
+)
+
 var (
+    ErrNoTicketType   = errors.New("ticket type not indexed")
+    ErrNoTicketUpdate = errors.New("ticket update not indexed")
+
     ticketTypePool = &sync.Pool{
         New: func() interface{} { return new(TicketType) },
     }
@@ -61,6 +70,23 @@ func (m *TicketType) Free() {
     ticketTypePool.Put(m)
 }
 
+func (m TicketType) TableKey() string {
+    return TicketTypeTableKey
+}
+
+func (m TicketType) TableOpts() pack.Options {
+    return pack.Options{
+        PackSizeLog2:    13,  // 8k pack size
+        JournalSizeLog2: 14,  // 16k journal size
+        CacheSize:       128, // max MB
+        FillLevel:       100, // boltdb fill level to limit reallocations
+    }
+}
+
+func (m TicketType) IndexOpts(key string) pack.Options {
+    return pack.NoOptions
+}
+
 func (m TicketType) Size() int {
     // address size is 1 + 24 + 22 = 47
     // hash size is 1 + 24 + 32 = 57
@@ -102,4 +128,21 @@ func (m *TicketUpdate) Reset() {
 func (m *TicketUpdate) Free() {
     m.Reset()
     ticketUpdatePool.Put(m)
+}
+
+func (m TicketUpdate) TableKey() string {
+    return TicketUpdateTableKey
+}
+
+func (m TicketUpdate) TableOpts() pack.Options {
+    return pack.Options{
+        PackSizeLog2:    13,  // 8k pack size
+        JournalSizeLog2: 14,  // 16k journal size
+        CacheSize:       128, // max MB
+        FillLevel:       100, // boltdb fill level to limit reallocations
+    }
+}
+
+func (m TicketUpdate) IndexOpts(key string) pack.Options {
+    return pack.NoOptions
 }

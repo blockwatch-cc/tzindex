@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2023 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 // Note on voting_period_kind field in block headers:
@@ -13,67 +13,29 @@ package index
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"time"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
 )
 
-const (
-	firstVoteBlock int64 = 2 // chain is initialized at block 1 !
-)
-
-var (
-	GovPackSizeLog2    = 15 // 32k
-	GovJournalSizeLog2 = 16 // 64k
-	GovCacheSize       = 2
-	GovFillLevel       = 100
-	GovIndexKey        = "gov"
-	ElectionTableKey   = "election"
-	ProposalTableKey   = "proposal"
-	VoteTableKey       = "vote"
-	BallotTableKey     = "ballot"
-	RollsTableKey      = "rolls"
-)
-
-var (
-	// ErrNoElectionEntry is an error that indicates a requested entry does
-	// not exist in the election table.
-	ErrNoElectionEntry = errors.New("election not found")
-
-	// ErrNoProposalEntry is an error that indicates a requested entry does
-	// not exist in the proposal table.
-	ErrNoProposalEntry = errors.New("proposal not found")
-
-	// ErrNoVoteEntry is an error that indicates a requested entry does
-	// not exist in the vote table.
-	ErrNoVoteEntry = errors.New("vote not found")
-
-	// ErrNoBallotEntry is an error that indicates a requested entry does
-	// not exist in the ballot table.
-	ErrNoBallotEntry = errors.New("ballot not found")
-)
+const GovIndexKey = "gov"
 
 type GovIndex struct {
-	db            *pack.DB
-	opts          pack.Options
-	electionTable *pack.Table
-	proposalTable *pack.Table
-	voteTable     *pack.Table
-	ballotTable   *pack.Table
-	rollsTable    *pack.Table
+	db     *pack.DB
+	tables map[string]*pack.Table
 }
 
 var _ model.BlockIndexer = (*GovIndex)(nil)
 
-func NewGovIndex(opts pack.Options) *GovIndex {
-	return &GovIndex{opts: opts}
+func NewGovIndex() *GovIndex {
+	return &GovIndex{
+		tables: make(map[string]*pack.Table),
+	}
 }
 
 func (idx *GovIndex) DB() *pack.DB {
@@ -81,13 +43,11 @@ func (idx *GovIndex) DB() *pack.DB {
 }
 
 func (idx *GovIndex) Tables() []*pack.Table {
-	return []*pack.Table{
-		idx.electionTable,
-		idx.proposalTable,
-		idx.voteTable,
-		idx.ballotTable,
-		idx.rollsTable,
+	t := []*pack.Table{}
+	for _, v := range idx.tables {
+		t = append(t, v)
 	}
+	return t
 }
 
 func (idx *GovIndex) Key() string {
@@ -99,138 +59,57 @@ func (idx *GovIndex) Name() string {
 }
 
 func (idx *GovIndex) Create(path, label string, opts interface{}) error {
-	electionFields, err := pack.Fields(model.Election{})
-	if err != nil {
-		return err
-	}
-	proposalFields, err := pack.Fields(model.Proposal{})
-	if err != nil {
-		return err
-	}
-	voteFields, err := pack.Fields(model.Vote{})
-	if err != nil {
-		return err
-	}
-	ballotFields, err := pack.Fields(model.Ballot{})
-	if err != nil {
-		return err
-	}
-	rollsFields, err := pack.Fields(model.RollSnapshot{})
-	if err != nil {
-		return err
-	}
 	db, err := pack.CreateDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return fmt.Errorf("creating %s database: %w", idx.Key(), err)
 	}
 	defer db.Close()
 
-	_, err = db.CreateTableIfNotExists(
-		ElectionTableKey,
-		electionFields,
-		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, GovPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, GovJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, GovCacheSize),
-			FillLevel:       util.NonZero(idx.opts.FillLevel, GovFillLevel),
-		})
-	if err != nil {
-		return err
+	for _, m := range []model.Model{
+		model.Election{},
+		model.Proposal{},
+		model.Vote{},
+		model.Ballot{},
+		model.Stake{},
+	} {
+		key := m.TableKey()
+		fields, err := pack.Fields(m)
+		if err != nil {
+			return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
+		}
+		opts := m.TableOpts().Merge(readConfigOpts(key))
+		_, err = db.CreateTableIfNotExists(key, fields, opts)
+		if err != nil {
+			return err
+		}
 	}
-	_, err = db.CreateTableIfNotExists(
-		ProposalTableKey,
-		proposalFields,
-		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, GovPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, GovJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, GovCacheSize),
-			FillLevel:       util.NonZero(idx.opts.FillLevel, GovFillLevel),
-		})
-	if err != nil {
-		return err
-	}
-	_, err = db.CreateTableIfNotExists(
-		VoteTableKey,
-		voteFields,
-		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, GovPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, GovJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, GovCacheSize),
-			FillLevel:       util.NonZero(idx.opts.FillLevel, GovFillLevel),
-		})
-	if err != nil {
-		return err
-	}
-	_, err = db.CreateTableIfNotExists(
-		BallotTableKey,
-		ballotFields,
-		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, GovPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, GovJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, GovCacheSize),
-			FillLevel:       util.NonZero(idx.opts.FillLevel, GovFillLevel),
-		})
-	if err != nil {
-		return err
-	}
-	_, err = db.CreateTableIfNotExists(
-		RollsTableKey,
-		rollsFields,
-		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, GovPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, GovJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, GovCacheSize),
-			FillLevel:       util.NonZero(idx.opts.FillLevel, GovFillLevel),
-		})
-	return err
+	return nil
 }
 
 func (idx *GovIndex) Init(path, label string, opts interface{}) error {
-	var err error
-	idx.db, err = pack.OpenDatabase(path, idx.Key(), label, opts)
+	db, err := pack.OpenDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return err
 	}
-	idx.electionTable, err = idx.db.Table(ElectionTableKey, pack.Options{
-		JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, GovJournalSizeLog2),
-		CacheSize:       util.NonZero(idx.opts.CacheSize, GovCacheSize),
-	})
-	if err != nil {
-		idx.Close()
-		return err
+	idx.db = db
+
+	for _, m := range []model.Model{
+		model.Election{},
+		model.Proposal{},
+		model.Vote{},
+		model.Ballot{},
+		model.Stake{},
+	} {
+		key := m.TableKey()
+		topts := m.TableOpts().Merge(readConfigOpts(key))
+		table, err := idx.db.Table(key, topts)
+		if err != nil {
+			idx.Close()
+			return err
+		}
+		idx.tables[key] = table
 	}
-	idx.proposalTable, err = idx.db.Table(ProposalTableKey, pack.Options{
-		JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, GovJournalSizeLog2),
-		CacheSize:       util.NonZero(idx.opts.CacheSize, GovCacheSize),
-	})
-	if err != nil {
-		idx.Close()
-		return err
-	}
-	idx.voteTable, err = idx.db.Table(VoteTableKey, pack.Options{
-		JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, GovJournalSizeLog2),
-		CacheSize:       util.NonZero(idx.opts.CacheSize, GovCacheSize),
-	})
-	if err != nil {
-		idx.Close()
-		return err
-	}
-	idx.ballotTable, err = idx.db.Table(BallotTableKey, pack.Options{
-		JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, GovJournalSizeLog2),
-		CacheSize:       util.NonZero(idx.opts.CacheSize, GovCacheSize),
-	})
-	if err != nil {
-		idx.Close()
-		return err
-	}
-	idx.rollsTable, err = idx.db.Table(RollsTableKey, pack.Options{
-		JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, GovJournalSizeLog2),
-		CacheSize:       util.NonZero(idx.opts.CacheSize, GovCacheSize),
-	})
-	if err != nil {
-		idx.Close()
-		return err
-	}
+
 	return nil
 }
 
@@ -239,18 +118,14 @@ func (idx *GovIndex) FinalizeSync(_ context.Context) error {
 }
 
 func (idx *GovIndex) Close() error {
-	for _, v := range idx.Tables() {
+	for n, v := range idx.tables {
 		if v != nil {
 			if err := v.Close(); err != nil {
-				log.Errorf("Closing %s table: %s", v.Name(), err)
+				log.Errorf("Closing %s table: %s", n, err)
 			}
 		}
+		delete(idx.tables, n)
 	}
-	idx.electionTable = nil
-	idx.proposalTable = nil
-	idx.voteTable = nil
-	idx.ballotTable = nil
-	idx.rollsTable = nil
 	if idx.db != nil {
 		if err := idx.db.Close(); err != nil {
 			return err
@@ -261,15 +136,9 @@ func (idx *GovIndex) Close() error {
 }
 
 func (idx *GovIndex) ConnectBlock(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
-	// skip genesis and bootstrap blocks
-	if block.Height < firstVoteBlock {
-		return nil
-	}
-
 	// detect first and last block of a voting period
-	p := block.Params
-	isPeriodStart := block.Height == firstVoteBlock || p.IsVoteStart(block.Height)
-	isPeriodEnd := block.Height > firstVoteBlock && p.IsVoteEnd(block.Height)
+	isPeriodStart := block.TZ.IsVoteStart()
+	isPeriodEnd := block.TZ.IsVoteEnd()
 
 	// open a new election or vote on first block
 	if isPeriodStart {
@@ -342,8 +211,7 @@ func (idx *GovIndex) DisconnectBlock(ctx context.Context, block *model.Block, bu
 	}
 
 	// re-open vote/election when at end of cycle
-	p := block.Params
-	isPeriodEnd := block.Height > firstVoteBlock && p.IsVoteEnd(block.Height)
+	isPeriodEnd := block.TZ.IsVoteEnd()
 	if isPeriodEnd {
 		success, err := idx.reopenVote(ctx, block, builder)
 		if err != nil {
@@ -365,8 +233,8 @@ func (idx *GovIndex) DisconnectBlock(ctx context.Context, block *model.Block, bu
 
 func (idx *GovIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// delete ballots by height
-	_, err := pack.NewQuery("etl.ballots.delete").
-		WithTable(idx.ballotTable).
+	_, err := pack.NewQuery("etl.delete").
+		WithTable(idx.tables[model.BallotTableKey]).
 		AndEqual("height", height).
 		Delete(ctx)
 	if err != nil {
@@ -374,8 +242,8 @@ func (idx *GovIndex) DeleteBlock(ctx context.Context, height int64) error {
 	}
 
 	// delete proposals by height
-	_, err = pack.NewQuery("etl.proposals.delete").
-		WithTable(idx.proposalTable).
+	_, err = pack.NewQuery("etl.delete").
+		WithTable(idx.tables[model.ProposalTableKey]).
 		AndEqual("height", height).
 		Delete(ctx)
 	if err != nil {
@@ -383,8 +251,8 @@ func (idx *GovIndex) DeleteBlock(ctx context.Context, height int64) error {
 	}
 
 	// on vote period start, delete vote by start height
-	_, err = pack.NewQuery("etl.vote.delete").
-		WithTable(idx.voteTable).
+	_, err = pack.NewQuery("etl.delete").
+		WithTable(idx.tables[model.VoteTableKey]).
 		AndEqual("period_start_height", height).
 		Delete(ctx)
 	if err != nil {
@@ -392,8 +260,8 @@ func (idx *GovIndex) DeleteBlock(ctx context.Context, height int64) error {
 	}
 
 	// on election start, delete election (Note: will shift row id counter!!)
-	_, err = pack.NewQuery("etl.election.delete").
-		WithTable(idx.electionTable).
+	_, err = pack.NewQuery("etl.delete").
+		WithTable(idx.tables[model.ElectionTableKey]).
 		AndEqual("start_height", height).
 		Delete(ctx)
 	if err != nil {
@@ -401,8 +269,8 @@ func (idx *GovIndex) DeleteBlock(ctx context.Context, height int64) error {
 	}
 
 	// on vote period end delete snapshot
-	_, err = pack.NewQuery("etl.election.delete").
-		WithTable(idx.rollsTable).
+	_, err = pack.NewQuery("etl.delete").
+		WithTable(idx.tables[model.StakeTableKey]).
 		AndEqual("height", height).
 		Delete(ctx)
 	if err != nil {
@@ -415,7 +283,7 @@ func (idx *GovIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 	return nil
 }
 
-func (idx *GovIndex) openElection(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
+func (idx *GovIndex) openElection(ctx context.Context, block *model.Block, _ model.BlockBuilder) error {
 	log.Debugf("gov: open election at height %d", block.Height)
 	election := &model.Election{
 		NumPeriods:   1,
@@ -430,10 +298,10 @@ func (idx *GovIndex) openElection(ctx context.Context, block *model.Block, build
 		NoQuorum:     false,
 		NoMajority:   false,
 	}
-	return idx.electionTable.Insert(ctx, election)
+	return idx.tables[model.ElectionTableKey].Insert(ctx, election)
 }
 
-func (idx *GovIndex) closeElection(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
+func (idx *GovIndex) closeElection(ctx context.Context, block *model.Block, _ model.BlockBuilder) error {
 	// load current election
 	election, err := idx.electionByHeight(ctx, block.Height, block.Params)
 	if err != nil {
@@ -460,10 +328,10 @@ func (idx *GovIndex) closeElection(ctx context.Context, block *model.Block, buil
 	election.IsFailed = vote.IsFailed
 	election.NoQuorum = vote.NoQuorum
 	election.NoMajority = vote.NoMajority
-	return idx.electionTable.Update(ctx, election)
+	return idx.tables[model.ElectionTableKey].Update(ctx, election)
 }
 
-func (idx *GovIndex) reopenElection(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
+func (idx *GovIndex) reopenElection(ctx context.Context, block *model.Block, _ model.BlockBuilder) error {
 	// load current election
 	election, err := idx.electionByHeight(ctx, block.Height, block.Params)
 	if err != nil {
@@ -475,10 +343,10 @@ func (idx *GovIndex) reopenElection(ctx context.Context, block *model.Block, bui
 	}
 	// just update state (will roll forward at end of reorg)
 	election.IsOpen = false
-	return idx.electionTable.Update(ctx, election)
+	return idx.tables[model.ElectionTableKey].Update(ctx, election)
 }
 
-func (idx *GovIndex) openVote(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
+func (idx *GovIndex) openVote(ctx context.Context, block *model.Block, _ model.BlockBuilder) error {
 	// load current election, must exist
 	election, err := idx.electionByHeight(ctx, block.Height, block.Params)
 	if err != nil {
@@ -487,7 +355,11 @@ func (idx *GovIndex) openVote(ctx context.Context, block *model.Block, builder m
 	if !election.IsOpen {
 		return fmt.Errorf("opening vote: election %d already closed", election.RowId)
 	}
-	log.Debugf("gov: open %s vote in election %d at height %d", block.TZ.Block.GetVotingPeriodKind(), election.RowId, block.Height)
+	log.Debugf("gov: open %s vote in election %d at height %d with %d steps of %d blocks",
+		block.VotingPeriodKind, election.RowId, block.Height,
+		block.Params.NumVotingPeriods, block.Params.BlocksPerVotingPeriod,
+	)
+	log.Debugf("gov: vote counters %#v", block.TZ.Block.GetVotingInfo())
 
 	// update election
 	election.NumPeriods = block.VotingPeriodKind.Num()
@@ -504,7 +376,7 @@ func (idx *GovIndex) openVote(ctx context.Context, block *model.Block, builder m
 		StartTime:        block.Timestamp,
 		EndTime:          time.Time{}.UTC(), // set on close
 		StartHeight:      block.Height,
-		EndHeight:        p.VoteEndHeight(block.Height),
+		EndHeight:        block.Height + block.Params.BlocksPerVotingPeriod - 1,
 		IsOpen:           true,
 	}
 
@@ -536,12 +408,12 @@ func (idx *GovIndex) openVote(ctx context.Context, block *model.Block, builder m
 	vote.QuorumStake = vote.EligibleStake * vote.QuorumPct / 10000
 
 	// insert vote
-	if err := idx.voteTable.Insert(ctx, vote); err != nil {
+	if err := idx.tables[model.VoteTableKey].Insert(ctx, vote); err != nil {
 		return err
 	}
 
 	// update election
-	return idx.electionTable.Update(ctx, election)
+	return idx.tables[model.ElectionTableKey].Update(ctx, election)
 }
 
 func (idx *GovIndex) closeVote(ctx context.Context, block *model.Block, builder model.BlockBuilder) (bool, error) {
@@ -556,6 +428,7 @@ func (idx *GovIndex) closeVote(ctx context.Context, block *model.Block, builder 
 	}
 
 	log.Debugf("gov: close %s vote in election %d at height %d", vote.VotingPeriodKind, vote.ElectionId, block.Height)
+	log.Debugf("gov: vote counters %#v", block.TZ.Block.GetVotingInfo())
 
 	// determine result
 	params := block.Params
@@ -595,7 +468,7 @@ func (idx *GovIndex) closeVote(ctx context.Context, block *model.Block, builder 
 				}
 				// store winner and update election
 				election.ProposalId = winner
-				if err := idx.electionTable.Update(ctx, election); err != nil {
+				if err := idx.tables[model.ElectionTableKey].Update(ctx, election); err != nil {
 					return false, err
 				}
 				vote.ProposalId = winner
@@ -618,7 +491,7 @@ func (idx *GovIndex) closeVote(ctx context.Context, block *model.Block, builder 
 	vote.EndTime = block.Timestamp
 	vote.IsOpen = false
 
-	if err := idx.voteTable.Update(ctx, vote); err != nil {
+	if err := idx.tables[model.VoteTableKey].Update(ctx, vote); err != nil {
 		return false, err
 	}
 
@@ -629,7 +502,7 @@ func (idx *GovIndex) closeVote(ctx context.Context, block *model.Block, builder 
 	return !vote.IsFailed, nil
 }
 
-func (idx *GovIndex) reopenVote(ctx context.Context, block *model.Block, builder model.BlockBuilder) (bool, error) {
+func (idx *GovIndex) reopenVote(ctx context.Context, block *model.Block, _ model.BlockBuilder) (bool, error) {
 	// load current vote
 	vote, err := idx.voteByHeight(ctx, block.Height, block.Params)
 	if err != nil {
@@ -642,7 +515,7 @@ func (idx *GovIndex) reopenVote(ctx context.Context, block *model.Block, builder
 
 	// just reset state flag
 	vote.IsOpen = true
-	if err := idx.voteTable.Update(ctx, vote); err != nil {
+	if err := idx.tables[model.VoteTableKey].Update(ctx, vote); err != nil {
 		return false, err
 	}
 
@@ -704,7 +577,7 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *model.Block, b
 
 	// insert unknown proposals to create ids
 	if len(insProposals) > 0 {
-		if err := idx.proposalTable.Insert(ctx, insProposals); err != nil {
+		if err := idx.tables[model.ProposalTableKey].Insert(ctx, insProposals); err != nil {
 			return err
 		}
 		for _, v := range insProposals {
@@ -722,7 +595,7 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *model.Block, b
 		}
 		election.IsEmpty = false
 		election.NumProposals += len(insProposals)
-		if err := idx.electionTable.Update(ctx, election); err != nil {
+		if err := idx.tables[model.ElectionTableKey].Update(ctx, election); err != nil {
 			return err
 		}
 	}
@@ -749,11 +622,8 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *model.Block, b
 		}
 		// fix for missing pre-genesis snapshot
 		if block.Cycle == 0 && rolls == 0 {
-			rolls = bkr.Rolls(block.Params)
-			stake = bkr.ActiveStake(block.Params, block.Chain.Rolls)
-			if block.Params.Version < 12 {
-				stake = bkr.StakingBalance()
-			}
+			rolls = bkr.Rolls(block.Params, 0)
+			stake = bkr.ActiveStake(block.Params, 0)
 		}
 
 		// create ballots for all proposals
@@ -765,7 +635,7 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *model.Block, b
 
 			// skip when the same account voted for the same proposal already
 			cnt, err := pack.NewQuery("etl.count_account_ballots").
-				WithTable(idx.ballotTable).
+				WithTable(idx.tables[model.BallotTableKey]).
 				AndEqual("source_id", bkr.AccountId).
 				AndEqual("voting_period", vote.VotingPeriod).
 				AndEqual("proposal_id", prop.RowId).
@@ -802,7 +672,7 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *model.Block, b
 
 		// update vote, skip when the same account voted already
 		cnt, err := pack.NewQuery("etl.count_account_ballots").
-			WithTable(idx.ballotTable).
+			WithTable(idx.tables[model.BallotTableKey]).
 			AndEqual("source_id", bkr.AccountId).
 			AndEqual("voting_period", vote.VotingPeriod).
 			Count(ctx)
@@ -814,6 +684,8 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *model.Block, b
 			vote.TurnoutRolls += rolls
 			vote.TurnoutStake += stake
 			vote.TurnoutVoters++
+			// } else {
+			// log.Debugf("Skipping turnout calc for period %d voter %s  with %d rolls (already voted %d times)", vote.VotingPeriod, acc, rolls, cnt)
 		}
 	}
 
@@ -831,7 +703,7 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *model.Block, b
 	} else {
 		vote.TurnoutPct = vote.TurnoutStake * 10000 / vote.EligibleStake
 	}
-	if err := idx.voteTable.Update(ctx, vote); err != nil {
+	if err := idx.tables[model.VoteTableKey].Update(ctx, vote); err != nil {
 		return err
 	}
 
@@ -840,10 +712,10 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *model.Block, b
 	for _, v := range proposalMap {
 		insProposals = append(insProposals, v)
 	}
-	if err := idx.proposalTable.Update(ctx, insProposals); err != nil {
+	if err := idx.tables[model.ProposalTableKey].Update(ctx, insProposals); err != nil {
 		return err
 	}
-	return idx.ballotTable.Insert(ctx, insBallots)
+	return idx.tables[model.BallotTableKey].Insert(ctx, insBallots)
 }
 
 func (idx *GovIndex) processBallots(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
@@ -879,11 +751,8 @@ func (idx *GovIndex) processBallots(ctx context.Context, block *model.Block, bui
 		}
 		// fix for missing pre-genesis snapshot
 		if block.Cycle == 0 && rolls == 0 {
-			rolls = bkr.Rolls(block.Params)
-			stake = bkr.ActiveStake(block.Params, block.Chain.Rolls)
-			if block.Params.Version < 12 {
-				stake = bkr.StakingBalance()
-			}
+			rolls = bkr.Rolls(block.Params, 0)
+			stake = bkr.ActiveStake(block.Params, 0)
 		}
 
 		// update vote
@@ -935,16 +804,16 @@ func (idx *GovIndex) processBallots(ctx context.Context, block *model.Block, bui
 	} else {
 		vote.TurnoutPct = vote.TurnoutStake * 10000 / vote.EligibleStake
 	}
-	if err := idx.voteTable.Update(ctx, vote); err != nil {
+	if err := idx.tables[model.VoteTableKey].Update(ctx, vote); err != nil {
 		return err
 	}
-	return idx.ballotTable.Insert(ctx, insBallots)
+	return idx.tables[model.BallotTableKey].Insert(ctx, insBallots)
 }
 
-func (idx *GovIndex) electionByHeight(ctx context.Context, height int64, params *tezos.Params) (*model.Election, error) {
+func (idx *GovIndex) electionByHeight(ctx context.Context, height int64, _ *rpc.Params) (*model.Election, error) {
 	election := &model.Election{}
-	err := pack.NewQuery("find_election").
-		WithTable(idx.electionTable).
+	err := pack.NewQuery("etl.find_election").
+		WithTable(idx.tables[model.ElectionTableKey]).
 		WithoutCache().
 		WithLimit(1).
 		WithDesc().
@@ -954,15 +823,15 @@ func (idx *GovIndex) electionByHeight(ctx context.Context, height int64, params 
 		return nil, err
 	}
 	if election.RowId == 0 {
-		return nil, ErrNoElectionEntry
+		return nil, model.ErrNoElection
 	}
 	return election, nil
 }
 
-func (idx *GovIndex) voteByHeight(ctx context.Context, height int64, params *tezos.Params) (*model.Vote, error) {
+func (idx *GovIndex) voteByHeight(ctx context.Context, height int64, _ *rpc.Params) (*model.Vote, error) {
 	vote := &model.Vote{}
-	err := pack.NewQuery("find_vote").
-		WithTable(idx.voteTable).
+	err := pack.NewQuery("etl.find_vote").
+		WithTable(idx.tables[model.VoteTableKey]).
 		WithoutCache().
 		WithLimit(1).
 		WithDesc().
@@ -972,15 +841,15 @@ func (idx *GovIndex) voteByHeight(ctx context.Context, height int64, params *tez
 		return nil, err
 	}
 	if vote.RowId == 0 {
-		return nil, ErrNoVoteEntry
+		return nil, model.ErrNoVote
 	}
 	return vote, nil
 }
 
 func (idx *GovIndex) proposalsByElection(ctx context.Context, id model.ElectionID) ([]*model.Proposal, error) {
 	proposals := make([]*model.Proposal, 0)
-	err := pack.NewQuery("list_proposals").
-		WithTable(idx.proposalTable).
+	err := pack.NewQuery("etl.list_proposals").
+		WithTable(idx.tables[model.ProposalTableKey]).
 		WithoutCache().
 		AndEqual("election_id", id).
 		Execute(ctx, &proposals)
@@ -993,7 +862,7 @@ func (idx *GovIndex) proposalsByElection(ctx context.Context, id model.ElectionI
 // func (idx *GovIndex) ballotsByVote(ctx context.Context, period int64) ([]*model.Ballot, error) {
 // 	ballots := make([]*model.Ballot, 0)
 // 	err := pack.NewQuery("list_ballots").
-// 		WithTable(idx.ballotTable).
+// 		WithTable(idx.tables[model.BallotTableKey]).
 // 		WithoutCache().
 // 		AndEqual("voting_period", period).
 // 		Execute(ctx, &ballots)
@@ -1018,37 +887,44 @@ func (idx *GovIndex) makeRollSnapshot(ctx context.Context, block *model.Block, b
 	// snapshot all active bakers with at least 1 roll (deactivation happens at
 	// start of the next cycle, so here bakers are still active!)
 	ins := make([]pack.Item, 0, int(block.Chain.RollOwners)) // hint
-	for _, bkr := range builder.Bakers() {
+	for _, v := range builder.Bakers() {
 		// check for deactivation
-		if deactivated.Contains(bkr.Address) {
+		if !v.IsActive || deactivated.Contains(v.Address) {
 			continue
 		}
 
-		// check account owns at least one roll
-		stake := bkr.ActiveStake(p, block.Chain.Rolls)
-		if block.Params.Version < 12 {
-			stake = bkr.StakingBalance()
-		}
-		rolls := bkr.Rolls(p)
-		if rolls == 0 {
-			continue
+		var rolls, stake int64
+		if p.Version < 12 {
+			// check account owns at least one roll
+			rolls = v.Rolls(p, 0)
+			if rolls == 0 {
+				continue
+			}
+			stake = v.StakingBalance()
+		} else {
+			// use stake truncated to full coins
+			stake = v.StakingBalance()
+			if stake < p.MinimalStake {
+				continue
+			}
+			rolls = stake / p.MinimalStake
 		}
 
-		snap := &model.RollSnapshot{
+		snap := &model.Stake{
 			Height:    block.Height,
-			AccountId: bkr.AccountId,
+			AccountId: v.AccountId,
 			Rolls:     rolls,
 			Stake:     stake,
 		}
 		ins = append(ins, snap)
 	}
-	return idx.rollsTable.Insert(ctx, ins)
+	return idx.tables[model.StakeTableKey].Insert(ctx, ins)
 }
 
 func (idx *GovIndex) snapshotByHeight(ctx context.Context, aid model.AccountID, height int64) (int64, int64, error) {
-	var snap model.RollSnapshot
-	err := pack.NewQuery("gov_find_rolls").
-		WithTable(idx.rollsTable).
+	var snap model.Stake
+	err := pack.NewQuery("etl.gov_find_rolls").
+		WithTable(idx.tables[model.StakeTableKey]).
 		WithoutCache().
 		WithDesc().
 		AndEqual("account_id", aid).
@@ -1066,12 +942,12 @@ func (idx *GovIndex) snapshotByHeight(ctx context.Context, aid model.AccountID, 
 
 // quorums adjust at the end of each exploration & promotion voting period
 // starting in v005 the algorithm changes to track participation as EMA (80/20)
-func (idx *GovIndex) quorumByHeight(ctx context.Context, height int64, params *tezos.Params) (int64, int64, error) {
+func (idx *GovIndex) quorumByHeight(ctx context.Context, height int64, params *rpc.Params) (int64, int64, error) {
 	// find most recent exploration or promotion period
 	var lastQuorum, lastTurnout, lastTurnoutEma, nextQuorum, nextEma int64
 	vote := &model.Vote{}
-	err := pack.NewQuery("find_quorum_vote").
-		WithTable(idx.voteTable).
+	err := pack.NewQuery("etl.find_quorum_vote").
+		WithTable(idx.tables[model.VoteTableKey]).
 		WithoutCache().
 		WithDesc().
 		AndLt("period_start_height", height).
@@ -1103,7 +979,7 @@ func (idx *GovIndex) quorumByHeight(ctx context.Context, height int64, params *t
 		}
 	}
 	// calculate next quorum
-	switch true {
+	switch {
 	case params.Version >= 5:
 		// Babylon v005 changed this to participation EMA and min/max caps
 		if lastTurnoutEma == 0 {
@@ -1135,7 +1011,7 @@ func (idx *GovIndex) quorumByHeight(ctx context.Context, height int64, params *t
 func (idx *GovIndex) Flush(ctx context.Context) error {
 	for _, v := range idx.Tables() {
 		if err := v.Flush(ctx); err != nil {
-			return err
+			log.Errorf("Flushing %s table: %v", v.Name(), err)
 		}
 	}
 	return nil

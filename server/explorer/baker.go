@@ -20,7 +20,6 @@ import (
 	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/server"
 )
@@ -104,7 +103,7 @@ type Baker struct {
 
 func NewBaker(ctx *server.Context, b *model.Baker, args server.Options) *Baker {
 	tip := getTip(ctx)
-	capacity := b.StakingCapacity(ctx.Params, 0)
+	capacity := b.StakingCapacity(ctx.Params, 0, 0)
 	stake := b.ActiveStake(ctx.Params, 0)
 	baker := &Baker{
 		Id:                b.AccountId,
@@ -167,7 +166,7 @@ func NewBaker(ctx *server.Context, b *model.Baker, args server.Options) *Baker {
 		}
 
 		// get performance data
-		recentCycle := ctx.Params.CycleFromHeight(b.Account.LastSeen) - 1
+		recentCycle := ctx.Params.HeightToCycle(b.Account.LastSeen) - 1
 		if p, err := ctx.Indexer.BakerPerformance(ctx, b.AccountId, util.Max64(0, recentCycle-64), recentCycle); err == nil {
 			stats.AvgLuck64 = &p[0]
 			stats.AvgPerformance64 = &p[1]
@@ -271,7 +270,7 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 		var err error
 		if suggest, err = ctx.Indexer.LookupAccount(ctx.Context, *args.Suggest); err != nil {
 			switch err {
-			case index.ErrNoAccountEntry:
+			case model.ErrNoAccount:
 				panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no such account", err))
 			default:
 				panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
@@ -352,7 +351,7 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 				continue
 			}
 			// filter by capacity
-			if suggest.Balance() > v.StakingCapacity(ctx.Params, netRolls)-v.StakingBalance() {
+			if suggest.Balance() > v.StakingCapacity(ctx.Params, netRolls, 0)-v.StakingBalance() {
 				// log.Infof("Skip %s capacity %d < %d",
 				// 	v,
 				// 	v.StakingCapacity(ctx.Params, netRolls)-v.StakingBalance(),
@@ -380,7 +379,7 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 		}
 
 		// build result
-		capacity := v.StakingCapacity(ctx.Params, netRolls)
+		capacity := v.StakingCapacity(ctx.Params, netRolls, 0)
 		stake := v.ActiveStake(ctx.Params, netRolls)
 		baker := Baker{
 			Id:                v.AccountId,
@@ -518,7 +517,7 @@ func loadBaker(ctx *server.Context) *model.Baker {
 		bkr, err := ctx.Indexer.LookupBaker(ctx, addr)
 		if err != nil {
 			switch err {
-			case index.ErrNoBakerEntry:
+			case model.ErrNoBaker:
 				panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no such account", err))
 			default:
 				panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
@@ -572,7 +571,7 @@ func ListBakerVotes(ctx *server.Context) (interface{}, int) {
 
 	// lookup
 	ops, err := ctx.Indexer.LookupOpIds(ctx, vec.UniqueUint64Slice(oids))
-	if err != nil && err != index.ErrNoOpEntry {
+	if err != nil && err != model.ErrNoOp {
 		panic(server.EInternal(server.EC_DATABASE, "cannot read ops for ballots", err))
 	}
 
@@ -688,7 +687,7 @@ func GetBakerRights(ctx *server.Context) (interface{}, int) {
 	acc := loadBaker(ctx)
 	cycle := parseCycle(ctx)
 
-	table, err := ctx.Indexer.Table(index.RightsTableKey)
+	table, err := ctx.Indexer.Table(model.RightsTableKey)
 	if err != nil {
 		panic(server.ENotFound(server.EC_DATABASE, "missing rights table", err))
 	}
@@ -708,7 +707,7 @@ func GetBakerRights(ctx *server.Context) (interface{}, int) {
 	resp := &ExplorerRights{
 		Address:  acc.Address,
 		Cycle:    cycle,
-		Height:   ctx.Params.CycleStartHeight(cycle),
+		Height:   right.Height,
 		Bake:     right.Bake.String(),
 		Endorse:  right.Endorse.String(),
 		Baked:    right.Baked.String(),
@@ -763,7 +762,7 @@ func GetBakerIncome(ctx *server.Context) (interface{}, int) {
 	acc := loadBaker(ctx)
 	cycle := parseCycle(ctx)
 
-	table, err := ctx.Indexer.Table(index.IncomeTableKey)
+	table, err := ctx.Indexer.Table(model.IncomeTableKey)
 	if err != nil {
 		panic(server.ENotFound(server.EC_DATABASE, "missing income table", err))
 	}
@@ -864,9 +863,9 @@ type ExplorerSnapshot struct {
 func GetBakerSnapshot(ctx *server.Context) (interface{}, int) {
 	acc := loadBaker(ctx)
 	cycle := parseCycle(ctx)
-	baseCycle := ctx.Params.ForCycle(cycle).SnapshotBaseCycle(cycle)
+	baseCycle := ctx.Indexer.ParamsByCycle(cycle).SnapshotBaseCycle(cycle)
 
-	snapshotTable, err := ctx.Indexer.Table(index.SnapshotTableKey)
+	snapshotTable, err := ctx.Indexer.Table(model.SnapshotTableKey)
 	if err != nil {
 		panic(server.ENotFound(server.EC_DATABASE, "missing snapshot table", err))
 	}
@@ -888,7 +887,7 @@ func GetBakerSnapshot(ctx *server.Context) (interface{}, int) {
 	}
 
 	// get income
-	incomeTable, err := ctx.Indexer.Table(index.IncomeTableKey)
+	incomeTable, err := ctx.Indexer.Table(model.IncomeTableKey)
 	if err != nil {
 		panic(server.ENotFound(server.EC_DATABASE, "missing income table", err))
 	}
@@ -926,11 +925,11 @@ func GetBakerSnapshot(ctx *server.Context) (interface{}, int) {
 		ids[i] = v.AccountId.Value()
 	}
 	type XAcc struct {
-		RowId    model.AccountID `pack:"I"`
-		IsFunded bool            `pack:"f"`
+		RowId    model.AccountID `knox:"I"`
+		IsFunded bool            `knox:"f"`
 	}
 	accs := make([]*XAcc, 0)
-	accountTable, err := ctx.Indexer.Table(index.AccountTableKey)
+	accountTable, err := ctx.Indexer.Table(model.AccountTableKey)
 	if err != nil {
 		panic(server.ENotFound(server.EC_DATABASE, "missing account table", err))
 	}

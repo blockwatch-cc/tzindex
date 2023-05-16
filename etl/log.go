@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -83,6 +83,10 @@ func (b *BlockProgressLogger) LogBlockHeight(block *model.Block, qlen int, state
 	if duration < time.Second*10 {
 		return
 	}
+
+	// // Truncate the duration to 10s of milliseconds.
+	// ms := int64(duration / time.Millisecond)
+	// dur := 10 * time.Millisecond * time.Duration(ms/10)
 
 	// Log information about new block height.
 	blockStr := "blocks"

@@ -5,10 +5,8 @@ package main
 
 import (
 	"fmt"
-	"math/rand"
 	"runtime"
 	"runtime/debug"
-	"time"
 
 	"github.com/echa/config"
 )
@@ -42,11 +40,6 @@ func setup() error {
 		lightIndex = false
 	}
 
-	// init pseudo-random number generator in math package
-	// Note: this is not used for cryptographic random numbers,
-	//       but may be used by packages
-	rand.Seed(time.Now().UnixNano())
-
 	// set max number or CPU cores used for scheduling
 	maxcpu = config.GetInt("go.cpu")
 	if maxcpu <= 0 {
@@ -62,10 +55,5 @@ func setup() error {
 		gogc = 20
 	}
 	debug.SetGCPercent(gogc)
-
-	if r := config.GetInt("go.sample_rate"); r > 0 {
-		runtime.SetMutexProfileFraction(r)
-		runtime.SetBlockProfileRate(r)
-	}
 	return nil
 }

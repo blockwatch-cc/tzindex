@@ -10,7 +10,15 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
+	"blockwatch.cc/tzindex/rpc"
 )
+
+// Model is the interface all data models must implement.
+type Model interface {
+	TableKey() string
+	TableOpts() pack.Options
+	IndexOpts(string) pack.Options
+}
 
 // BlockCrawler provides an interface to access information about the current
 // state of blockchain crawling.
@@ -19,10 +27,10 @@ type BlockCrawler interface {
 	Table(string) (*pack.Table, error)
 
 	// returns the blockchain params at specified block height
-	ParamsByHeight(height int64) *tezos.Params
+	ParamsByHeight(height int64) *rpc.Params
 
 	// returns the blockchain params for the specified protocol
-	ParamsByProtocol(proto tezos.ProtocolHash) *tezos.Params
+	ParamsByProtocol(proto tezos.ProtocolHash) *rpc.Params
 
 	// returns the current crawler chain tip
 	Tip() *ChainTip
@@ -74,7 +82,7 @@ type BlockBuilder interface {
 	Constants() micheline.ConstantDict
 
 	// return params at specific height
-	Params(int64) *tezos.Params
+	Params(int64) *rpc.Params
 
 	// returns the requested database table if exists or error otherwise
 	Table(string) (*pack.Table, error)

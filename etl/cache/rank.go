@@ -37,6 +37,11 @@ func NewRankCache() *RankCache {
 	}
 }
 
+func (c *RankCache) Expire() *RankCache {
+	c.ts = time.Time{}
+	return c
+}
+
 func (c RankCache) Cap() int {
 	return cap(c.rich)
 }
@@ -61,13 +66,8 @@ func (h RankCache) Time() time.Time {
 	return h.ts
 }
 
-func (c *RankCache) Expire() *RankCache {
-	c.ts = time.Time{}
-	return c
-}
-
 func (h RankCache) Expired() bool {
-	return h.ts.Add(time.Minute).Before(time.Now())
+	return h.ts.Add(time.Hour).Before(time.Now())
 }
 
 func (h *RankCache) TopRich(n, o int) []*model.AccountRank {
@@ -129,19 +129,16 @@ func (h *RankCache) Build(ctx context.Context, accounts, ops *pack.Table) error 
 		SpendableBalance int64           `pack:"s"`
 	}
 	a := &XAcc{}
-	err := pack.NewQuery("build_ranks").
+	err := pack.NewQuery("cache.rank.build").
 		WithTable(accounts).
 		WithoutCache().
 		WithFields("I", "H", "s").
-		AndEqual("is_funded", true).
+		AndGte("spendable_balance", 1000000).
 		Stream(ctx, func(r pack.Row) error {
 			if err := r.Decode(a); err != nil {
 				return err
 			}
 			bal := a.SpendableBalance
-			if bal < 1 {
-				return nil
-			}
 			acc := &model.AccountRank{
 				AccountId: a.RowId,
 				Balance:   bal,
@@ -163,13 +160,15 @@ func (h *RankCache) Build(ctx context.Context, accounts, ops *pack.Table) error 
 		Volume     int64           `pack:"v"`
 	}
 	o := &XOp{}
-	err = pack.NewQuery("rank_ops_24h").
+	err = pack.NewQuery("cache.rank.build").
 		WithTable(ops).
 		WithoutCache().
 		WithFields("S", "R", "v").
 		AndGte("time", h.ts.Add(-24*time.Hour)).
-		AndEqual("type", tezos.OpTypeTransaction).
+		AndEqual("type", model.OpTypeTransaction).
 		AndEqual("is_success", true).
+		AndEqual("is_internal", false).
+		AndGt("volume", 0).
 		Stream(ctx, func(r pack.Row) error {
 			if err := r.Decode(o); err != nil {
 				return err

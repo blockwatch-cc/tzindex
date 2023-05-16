@@ -4,8 +4,21 @@
 package model
 
 import (
+    "errors"
+    "sync"
+
     "blockwatch.cc/packdb/pack"
     "blockwatch.cc/tzindex/rpc"
+)
+
+const EventTableKey = "event"
+
+var (
+    ErrNoEvent = errors.New("event not indexed")
+
+    eventPool = &sync.Pool{
+        New: func() interface{} { return new(Event) },
+    }
 )
 
 type EventID uint64
@@ -30,18 +43,17 @@ type Event struct {
 var _ pack.Item = (*Event)(nil)
 
 // assuming the op was successful!
-func NewEvent(ev rpc.InternalResult, src AccountID, op *Op) *Event {
+func NewEventWithData(ev rpc.InternalResult, src AccountID, op *Op) *Event {
+    e := NewEvent()
     payload, _ := ev.Payload.MarshalBinary()
     typ, _ := ev.Type.MarshalBinary()
-    e := &Event{
-        Height:    op.Height,
-        OpId:      op.Id(),
-        AccountId: src,
-        Type:      typ,
-        Payload:   payload,
-        Tag:       ev.Tag,
-        TypeHash:  ev.Type.CloneNoAnnots().Hash64(),
-    }
+    e.Height = op.Height
+    e.OpId = op.Id()
+    e.AccountId = src
+    e.Type = typ
+    e.Payload = payload
+    e.Tag = ev.Tag
+    e.TypeHash = ev.Type.CloneNoAnnots().Hash64()
     return e
 }
 
@@ -51,4 +63,34 @@ func (e *Event) ID() uint64 {
 
 func (e *Event) SetID(id uint64) {
     e.RowId = EventID(id)
+}
+
+func NewEvent() *Event {
+    return eventPool.Get().(*Event)
+}
+
+func (m *Event) Reset() {
+    *m = Event{}
+}
+
+func (m *Event) Free() {
+    m.Reset()
+    eventPool.Put(m)
+}
+
+func (m Event) TableKey() string {
+    return EventTableKey
+}
+
+func (m Event) TableOpts() pack.Options {
+    return pack.Options{
+        PackSizeLog2:    12,
+        JournalSizeLog2: 12,
+        CacheSize:       2,
+        FillLevel:       100,
+    }
+}
+
+func (m Event) IndexOpts(key string) pack.Options {
+    return pack.NoOptions
 }

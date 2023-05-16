@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -11,6 +11,7 @@ import (
 	"blockwatch.cc/packdb/store"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 )
 
 var (
@@ -91,15 +92,15 @@ type ReportTip struct {
 	LastReportTime time.Time `json:"last_time"` // day of last report generation
 }
 
-func dbLoadDeployments(dbTx store.Tx, tip *model.ChainTip) ([]*tezos.Params, error) {
-	plist := make([]*tezos.Params, 0, len(tip.Deployments))
-	bucket := dbTx.Bucket([]byte(deploymentsBucketName))
+func dbLoadDeployments(dbTx store.Tx, tip *model.ChainTip) ([]*rpc.Params, error) {
+	plist := make([]*rpc.Params, 0, len(tip.Deployments))
+	bucket := dbTx.Bucket(deploymentsBucketName)
 	for _, v := range tip.Deployments {
-		buf := bucket.Get(v.Protocol.Hash.Hash)
+		buf := bucket.Get(v.Protocol[:])
 		if len(buf) == 0 {
 			return nil, fmt.Errorf("missing deployment data for protocol %s", v.Protocol)
 		}
-		p := tezos.NewParams()
+		p := rpc.NewParams()
 		if err := json.Unmarshal(buf, p); err != nil {
 			return nil, err
 		}
@@ -108,12 +109,12 @@ func dbLoadDeployments(dbTx store.Tx, tip *model.ChainTip) ([]*tezos.Params, err
 	return plist, nil
 }
 
-func dbStoreDeployment(dbTx store.Tx, p *tezos.Params) error {
+func dbStoreDeployment(dbTx store.Tx, p *rpc.Params) error {
 	buf, err := json.Marshal(p)
 	if err != nil {
 		return err
 	}
-	bucket := dbTx.Bucket([]byte(deploymentsBucketName))
+	bucket := dbTx.Bucket(deploymentsBucketName)
 	bucket.FillPercent(1.0)
-	return bucket.Put(p.Protocol.Hash.Hash, buf)
+	return bucket.Put(p.Protocol[:], buf)
 }

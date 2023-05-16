@@ -65,15 +65,19 @@ func NewIndexer(cfg IndexerConfig) *Indexer {
 	}
 }
 
-func (m *Indexer) ParamsByHeight(height int64) *tezos.Params {
+func (m *Indexer) ParamsByHeight(height int64) *rpc.Params {
 	return m.reg.GetParamsByHeight(height)
 }
 
-func (m *Indexer) ParamsByProtocol(proto tezos.ProtocolHash) (*tezos.Params, error) {
+func (m *Indexer) ParamsByCycle(cycle int64) *rpc.Params {
+	return m.reg.GetParamsByCycle(cycle)
+}
+
+func (m *Indexer) ParamsByProtocol(proto tezos.ProtocolHash) (*rpc.Params, error) {
 	return m.reg.GetParams(proto)
 }
 
-func (m *Indexer) ParamsByDeployment(v int) (*tezos.Params, error) {
+func (m *Indexer) ParamsByDeployment(v int) (*rpc.Params, error) {
 	return m.reg.GetParamsByDeployment(v)
 }
 
@@ -123,7 +127,7 @@ func (m *Indexer) Init(ctx context.Context, tip *model.ChainTip, mode Mode) erro
 			if err != nil {
 				needCreate = needCreate || err == ErrNoTable
 			}
-			m.tips[string(key)] = tip
+			m.tips[key] = tip
 		}
 		return nil
 	})
@@ -138,9 +142,7 @@ func (m *Indexer) Init(ctx context.Context, tip *model.ChainTip, mode Mode) erro
 			return err
 		}
 		for _, v := range deps {
-			if err := m.reg.Register(v); err != nil {
-				return err
-			}
+			m.reg.Register(v)
 		}
 		return nil
 	})
@@ -163,7 +165,7 @@ func (m *Indexer) Init(ctx context.Context, tip *model.ChainTip, mode Mode) erro
 				if err != nil {
 					return err
 				}
-				m.tips[string(key)] = ttip
+				m.tips[key] = ttip
 			}
 			// create deployments index
 			_, err := dbTx.Root().CreateBucketIfNotExists(deploymentsBucketName)
@@ -188,7 +190,7 @@ func (m *Indexer) Init(ctx context.Context, tip *model.ChainTip, mode Mode) erro
 		}
 	}
 
-	switch true {
+	switch {
 	case nMissing > 0 && !m.lightMode:
 		return fmt.Errorf("Missing database files! Looks like you used --light mode before or you deleted a database file.")
 	case nMissing > 0 && m.lightMode:
@@ -257,8 +259,8 @@ func (m *Indexer) GC(ctx context.Context, ratio float64) error {
 	if err := m.Flush(ctx); err != nil {
 		return err
 	}
-	if interruptRequested(ctx) {
-		return errInterruptRequested
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	for _, idx := range m.indexes {
 		for _, t := range idx.Tables() {
@@ -266,8 +268,8 @@ func (m *Indexer) GC(ctx context.Context, ratio float64) error {
 			if err := t.Compact(ctx); err != nil {
 				return err
 			}
-			if interruptRequested(ctx) {
-				return errInterruptRequested
+			if err := ctx.Err(); err != nil {
+				return err
 			}
 		}
 		db := idx.DB()
@@ -275,8 +277,8 @@ func (m *Indexer) GC(ctx context.Context, ratio float64) error {
 		if err := db.GC(ctx, ratio); err != nil {
 			return err
 		}
-		if interruptRequested(ctx) {
-			return errInterruptRequested
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -296,7 +298,7 @@ func (m *Indexer) Close() error {
 	return nil
 }
 
-func (m *Indexer) ConnectProtocol(ctx context.Context, next, prev *tezos.Params) error {
+func (m *Indexer) ConnectProtocol(ctx context.Context, next, prev *rpc.Params) error {
 	err := m.statedb.Update(func(dbTx store.Tx) error {
 		if prev != nil {
 			if prev.EndHeight < 0 {
@@ -305,25 +307,24 @@ func (m *Indexer) ConnectProtocol(ctx context.Context, next, prev *tezos.Params)
 			if err := dbStoreDeployment(dbTx, prev); err != nil {
 				return err
 			}
-			if err := m.reg.Register(prev); err != nil {
-				return err
-			}
+			m.reg.Register(prev)
 		}
 		return dbStoreDeployment(dbTx, next)
 	})
 	if err != nil {
 		return err
 	}
-	return m.reg.Register(next)
+	m.reg.Register(next)
+	return nil
 }
 
 func (m *Indexer) ConnectBlock(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
 	// insert block into all indexes
 	for _, t := range m.indexes {
 		key := t.Key()
-		tip, ok := m.tips[string(key)]
+		tip, ok := m.tips[key]
 		if !ok {
-			log.Errorf("missing tip for table %s", string(key))
+			log.Errorf("missing tip for table %s", key)
 			continue
 		}
 
@@ -343,8 +344,8 @@ func (m *Indexer) ConnectBlock(ctx context.Context, block *model.Block, builder 
 	}
 
 	// check context
-	if interruptRequested(ctx) {
-		return nil
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	// update live caches
@@ -357,15 +358,16 @@ func (m *Indexer) ConnectBlock(ctx context.Context, block *model.Block, builder 
 	if err := m.updateProposals(ctx, block); err != nil {
 		return err
 	}
+
 	return nil
 }
 
 func (m *Indexer) DisconnectBlock(ctx context.Context, block *model.Block, builder model.BlockBuilder, ignoreErrors bool) error {
 	for _, t := range m.indexes {
 		key := t.Key()
-		tip, ok := m.tips[string(key)]
+		tip, ok := m.tips[key]
 		if !ok {
-			log.Errorf("missing tip for table %s", string(key))
+			log.Errorf("missing tip for table %s", key)
 			continue
 		}
 		if block.Height > 0 && !tip.Hash.Equal(block.Hash) {
@@ -391,9 +393,9 @@ func (m *Indexer) DisconnectBlock(ctx context.Context, block *model.Block, build
 func (m *Indexer) DeleteBlock(ctx context.Context, tz *rpc.Bundle) error {
 	for _, t := range m.indexes {
 		key := t.Key()
-		tip, ok := m.tips[string(key)]
+		tip, ok := m.tips[key]
 		if !ok {
-			log.Errorf("missing tip for table %s", string(key))
+			log.Errorf("missing tip for table %s", key)
 			continue
 		}
 		if tz.Height() != tip.Height {
@@ -412,7 +414,7 @@ func (m *Indexer) DeleteBlock(ctx context.Context, tz *rpc.Bundle) error {
 
 // maybeCreateIndex determines if each of the enabled index indexes has already
 // been created and creates them if not.
-func (m *Indexer) maybeCreateIndex(ctx context.Context, dbTx store.Tx, idx model.BlockIndexer, sym string) error {
+func (m *Indexer) maybeCreateIndex(_ context.Context, dbTx store.Tx, idx model.BlockIndexer, sym string) error {
 	// Create the bucket for the current tips as needed.
 	b, err := dbTx.Root().CreateBucketIfNotExists(tipsBucketName)
 	if err != nil {

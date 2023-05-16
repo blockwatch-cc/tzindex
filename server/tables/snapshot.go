@@ -17,8 +17,8 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -51,7 +51,7 @@ type Snapshot struct {
 	model.Snapshot
 	verbose bool            // cond. marshal
 	columns util.StringList // cond. cols & order when brief
-	params  *tezos.Params   // blockchain amount conversion
+	params  *rpc.Params     // blockchain amount conversion
 	ctx     *server.Context
 }
 
@@ -317,7 +317,7 @@ func StreamSnapshotTable(ctx *server.Context, args *TableRequest) (interface{}, 
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
+					if err != nil && err != model.ErrNoAccount {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					// Note: when not found we insert an always false condition
@@ -337,7 +337,7 @@ func StreamSnapshotTable(ctx *server.Context, args *TableRequest) (interface{}, 
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
+					if err != nil && err != model.ErrNoAccount {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account
@@ -425,11 +425,6 @@ func StreamSnapshotTable(ctx *server.Context, args *TableRequest) (interface{}, 
 			for _, v := range val {
 				// convert amounts from float to int64
 				switch prefix {
-				case "cycle":
-					if v == "head" {
-						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
-						v = strconv.FormatInt(currentCycle, 10)
-					}
 				case "balance", "delegated", "active_stake":
 					fvals := make([]string, 0)
 					for _, vv := range strings.Split(v, ",") {

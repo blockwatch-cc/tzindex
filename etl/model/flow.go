@@ -4,15 +4,22 @@
 package model
 
 import (
+	"errors"
 	"sync"
 	"time"
 
 	"blockwatch.cc/packdb/pack"
 )
 
-var flowPool = &sync.Pool{
-	New: func() interface{} { return new(Flow) },
-}
+const FlowTableKey = "flow"
+
+var (
+	flowPool = &sync.Pool{
+		New: func() interface{} { return new(Flow) },
+	}
+
+	ErrNoFlow = errors.New("flow not indexed")
+)
 
 // Flow captures individual account balance updates.
 //
@@ -75,6 +82,23 @@ func (f *Flow) SetID(id uint64) {
 	f.RowId = id
 }
 
+func (m Flow) TableKey() string {
+	return FlowTableKey
+}
+
+func (m Flow) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    15,
+		JournalSizeLog2: 15,
+		CacheSize:       2,
+		FillLevel:       100,
+	}
+}
+
+func (m Flow) IndexOpts(key string) pack.Options {
+	return pack.NoOptions
+}
+
 // be compatible with time series interface
 func (f Flow) Time() time.Time {
 	return f.Timestamp
@@ -101,26 +125,5 @@ func (f *Flow) Free() {
 }
 
 func (f *Flow) Reset() {
-	f.RowId = 0
-	f.Height = 0
-	f.Cycle = 0
-	f.Timestamp = time.Time{}
-	f.OpN = 0
-	f.OpC = 0
-	f.OpI = 0
-	f.AccountId = 0
-	f.CounterPartyId = 0
-	f.Category = 0
-	f.Operation = 0
-	f.AmountIn = 0
-	f.AmountOut = 0
-	f.IsFee = false
-	f.IsBurned = false
-	f.IsFrozen = false
-	f.IsUnfrozen = false
-	f.IsShielded = false
-	f.IsUnshielded = false
-	f.TokenGenMin = 0
-	f.TokenGenMax = 0
-	f.TokenAge = 0
+	*f = Flow{}
 }

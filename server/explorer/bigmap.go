@@ -13,7 +13,6 @@ import (
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/server"
 )
@@ -103,13 +102,13 @@ func (b Bigmap) RegisterRoutes(r *mux.Router) error {
 
 // bigmap metadata
 type BigmapMeta struct {
-	Contract     tezos.Address  `json:"contract"`
-	BigmapId     int64          `json:"bigmap_id"`
-	UpdateTime   *time.Time     `json:"time,omitempty"`
-	UpdateHeight int64          `json:"height,omitempty"`
-	UpdateOp     *tezos.OpHash  `json:"op,omitempty"`
-	Sender       *tezos.Address `json:"sender,omitempty"`
-	Source       *tezos.Address `json:"source,omitempty"`
+	Contract     tezos.Address `json:"contract"`
+	BigmapId     int64         `json:"bigmap_id"`
+	UpdateTime   time.Time     `json:"time"`
+	UpdateHeight int64         `json:"height"`
+	UpdateOp     tezos.OpHash  `json:"op"`
+	Sender       tezos.Address `json:"sender"`
+	Source       tezos.Address `json:"source"`
 }
 
 // keys
@@ -199,7 +198,7 @@ func loadBigmap(ctx *server.Context) *model.BigmapAlloc {
 		a, err := ctx.Indexer.LookupBigmapAlloc(ctx, i)
 		if err != nil {
 			switch err {
-			case index.ErrNoBigmapAlloc:
+			case model.ErrNoBigmap:
 				panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no such bigmap", err))
 			default:
 				panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
@@ -247,7 +246,7 @@ func ListBigmapKeys(ctx *server.Context) (interface{}, int) {
 	}
 
 	var (
-		items []*model.BigmapKV
+		items []*model.BigmapValue
 		err   error
 	)
 	if r.Since == 0 {
@@ -282,7 +281,7 @@ func ListBigmapKeys(ctx *server.Context) (interface{}, int) {
 				Contract:     contract,
 				BigmapId:     alloc.BigmapId,
 				UpdateHeight: v.Height,
-				UpdateTime:   ctx.Indexer.LookupBlockTimePtr(ctx, v.Height),
+				UpdateTime:   ctx.Indexer.LookupBlockTime(ctx, v.Height),
 			}
 		}
 		if args.WithPrim() {
@@ -315,7 +314,7 @@ func ListBigmapValues(ctx *server.Context) (interface{}, int) {
 	}
 
 	var (
-		items []*model.BigmapKV
+		items []*model.BigmapValue
 		err   error
 	)
 	if r.Since == 0 {
@@ -353,7 +352,7 @@ func ListBigmapValues(ctx *server.Context) (interface{}, int) {
 				Contract:     contract,
 				BigmapId:     alloc.BigmapId,
 				UpdateHeight: v.Height,
-				UpdateTime:   ctx.Indexer.LookupBlockTimePtr(ctx, v.Height),
+				UpdateTime:   ctx.Indexer.LookupBlockTime(ctx, v.Height),
 			}
 		}
 		if args.WithPrim() {
@@ -394,7 +393,7 @@ func ReadBigmapValue(ctx *server.Context) (interface{}, int) {
 	}
 
 	var (
-		items []*model.BigmapKV
+		items []*model.BigmapValue
 		err   error
 	)
 	if r.Since == 0 {
@@ -429,7 +428,7 @@ func ReadBigmapValue(ctx *server.Context) (interface{}, int) {
 			Contract:     ctx.Indexer.LookupAddress(ctx, alloc.AccountId),
 			BigmapId:     alloc.BigmapId,
 			UpdateHeight: v.Height,
-			UpdateTime:   ctx.Indexer.LookupBlockTimePtr(ctx, v.Height),
+			UpdateTime:   ctx.Indexer.LookupBlockTime(ctx, v.Height),
 		}
 	}
 	if args.WithPrim() {
@@ -564,20 +563,19 @@ func ListBigmapUpdates(ctx *server.Context) (interface{}, int) {
 			}
 		}
 		if args.WithMeta() {
-			tm := v.Timestamp
 			upd.BigmapValue.Meta = &BigmapMeta{
 				Contract:     contract,
 				BigmapId:     alloc.BigmapId,
-				UpdateTime:   &tm,
+				UpdateTime:   v.Timestamp,
 				UpdateHeight: v.Height,
 			}
 			if op, ok := opCache[v.OpId]; ok {
-				upd.BigmapValue.Meta.UpdateOp = &op.Hash
+				upd.BigmapValue.Meta.UpdateOp = op.Hash
 				snd := ctx.Indexer.LookupAddress(ctx, op.SenderId)
-				upd.BigmapValue.Meta.Sender = &snd
+				upd.BigmapValue.Meta.Sender = snd
 				if op.CreatorId != 0 {
 					src := ctx.Indexer.LookupAddress(ctx, op.CreatorId)
-					upd.BigmapValue.Meta.Source = &src
+					upd.BigmapValue.Meta.Source = src
 				} else {
 					upd.BigmapValue.Meta.Source = upd.BigmapValue.Meta.Sender
 				}
@@ -646,16 +644,16 @@ func ListBigmapKeyUpdates(ctx *server.Context) (interface{}, int) {
 			upd.BigmapValue.Meta = &BigmapMeta{
 				Contract:     contract,
 				BigmapId:     alloc.BigmapId,
-				UpdateTime:   &v.Timestamp,
+				UpdateTime:   v.Timestamp,
 				UpdateHeight: v.Height,
 			}
 			if op, ok := opCache[v.OpId]; ok {
-				upd.BigmapValue.Meta.UpdateOp = &op.Hash
+				upd.BigmapValue.Meta.UpdateOp = op.Hash
 				snd := ctx.Indexer.LookupAddress(ctx, op.SenderId)
-				upd.BigmapValue.Meta.Sender = &snd
+				upd.BigmapValue.Meta.Sender = snd
 				if op.CreatorId != 0 {
 					src := ctx.Indexer.LookupAddress(ctx, op.CreatorId)
-					upd.BigmapValue.Meta.Source = &src
+					upd.BigmapValue.Meta.Source = src
 				} else {
 					upd.BigmapValue.Meta.Source = upd.BigmapValue.Meta.Sender
 				}

@@ -51,6 +51,7 @@ const (
 	OpTypeIncreasePaidStorage                // 28 v014
 	OpTypeDrainDelegate                      // 29 v015
 	OpTypeUpdateConsensusKey                 // 30 v015
+	OpTypeTransferTicket                     // 31 v013
 	OpTypeBatch                = 254         // API output only
 	OpTypeInvalid              = 255
 )
@@ -89,6 +90,7 @@ var (
 		OpTypeIncreasePaidStorage:  "increase_paid_storage",
 		OpTypeDrainDelegate:        "drain_delegate",
 		OpTypeUpdateConsensusKey:   "update_consensus_key",
+		OpTypeTransferTicket:       "transfer_ticket",
 		OpTypeInvalid:              "",
 	}
 	opTypeReverseStrings = make(map[string]OpType)
@@ -188,29 +190,29 @@ func MapOpType(typ tezos.OpType) OpType {
 		return OpTypeDrainDelegate
 	case tezos.OpTypeUpdateConsensusKey:
 		return OpTypeUpdateConsensusKey
-
-	case tezos.OpTypeToruOrigination, tezos.OpTypeScRollupOriginate:
+	case tezos.OpTypeTransferTicket:
+		return OpTypeTransferTicket
+	case tezos.OpTypeTxRollupOrigination, tezos.OpTypeSmartRollupOriginate:
 		return OpTypeRollupOrigination
 	case
-		tezos.OpTypeToruSubmitBatch,
-		tezos.OpTypeToruCommit,
-		tezos.OpTypeToruReturnBond,
-		tezos.OpTypeToruFinalizeCommitment,
-		tezos.OpTypeToruRemoveCommitment,
-		tezos.OpTypeToruRejection,
-		tezos.OpTypeToruDispatchTickets,
-		tezos.OpTypeTransferTicket,
-		tezos.OpTypeScRollupAddMessages,
-		tezos.OpTypeScRollupCement,
-		tezos.OpTypeScRollupPublish,
-		tezos.OpTypeScRollupRefute,
-		tezos.OpTypeScRollupTimeout,
-		tezos.OpTypeScRollupExecuteOutboxMessage,
-		tezos.OpTypeScRollupRecoverBond,
-		tezos.OpTypeScRollupDalSlotSubscribe,
-		tezos.OpTypeDalSlotAvailability,
-		tezos.OpTypeDalPublishSlotHeader:
+		tezos.OpTypeTxRollupSubmitBatch,
+		tezos.OpTypeTxRollupCommit,
+		tezos.OpTypeTxRollupReturnBond,
+		tezos.OpTypeTxRollupFinalizeCommitment,
+		tezos.OpTypeTxRollupRemoveCommitment,
+		tezos.OpTypeTxRollupRejection,
+		tezos.OpTypeTxRollupDispatchTickets,
+
+		tezos.OpTypeSmartRollupAddMessages,
+		tezos.OpTypeSmartRollupCement,
+		tezos.OpTypeSmartRollupPublish,
+		tezos.OpTypeSmartRollupRefute,
+		tezos.OpTypeSmartRollupTimeout,
+		tezos.OpTypeSmartRollupExecuteOutboxMessage,
+		tezos.OpTypeSmartRollupRecoverBond:
 		return OpTypeRollupTransaction
+	// case OpTypeDalAttestation: // TODO
+	// case OpTypeDalPublishSlotHeader: // TODO
 	default:
 		return OpTypeInvalid
 	}
@@ -250,7 +252,8 @@ func (t OpType) ListId() int {
 		OpTypeRollupOrigination,
 		OpTypeRollupTransaction,
 		OpTypeIncreasePaidStorage,
-		OpTypeUpdateConsensusKey:
+		OpTypeUpdateConsensusKey,
+		OpTypeTransferTicket:
 		return 3
 	default:
 		return -1

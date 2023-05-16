@@ -1,44 +1,27 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/util"
-
 	"blockwatch.cc/tzindex/etl/model"
 )
 
-var (
-	SupplyPackSizeLog2    = 15 // 32k
-	SupplyJournalSizeLog2 = 16 // 64k - can be big, no search required
-	SupplyCacheSize       = 2
-	SupplyFillLevel       = 100
-	SupplyIndexKey        = "supply"
-	SupplyTableKey        = "supply"
-)
-
-var (
-	// ErrNoSupplyEntry is an error that indicates a requested entry does
-	// not exist in the supply table.
-	ErrNoSupplyEntry = errors.New("supply state not found")
-)
+const SupplyIndexKey = "supply"
 
 type SupplyIndex struct {
 	db    *pack.DB
-	opts  pack.Options
 	table *pack.Table
 }
 
 var _ model.BlockIndexer = (*SupplyIndex)(nil)
 
-func NewSupplyIndex(opts pack.Options) *SupplyIndex {
-	return &SupplyIndex{opts: opts}
+func NewSupplyIndex() *SupplyIndex {
+	return &SupplyIndex{}
 }
 
 func (idx *SupplyIndex) DB() *pack.DB {
@@ -58,38 +41,34 @@ func (idx *SupplyIndex) Name() string {
 }
 
 func (idx *SupplyIndex) Create(path, label string, opts interface{}) error {
-	fields, err := pack.Fields(model.Supply{})
-	if err != nil {
-		return err
-	}
 	db, err := pack.CreateDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return fmt.Errorf("creating %s database: %w", idx.Key(), err)
 	}
 	defer db.Close()
 
-	_, err = db.CreateTableIfNotExists(
-		SupplyTableKey,
-		fields,
-		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, SupplyPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, SupplyJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, SupplyCacheSize),
-			FillLevel:       util.NonZero(idx.opts.FillLevel, SupplyFillLevel),
-		})
+	m := model.Supply{}
+	key := m.TableKey()
+	fields, err := pack.Fields(m)
+	if err != nil {
+		return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
+	}
+
+	_, err = db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(readConfigOpts(key)))
 	return err
 }
 
 func (idx *SupplyIndex) Init(path, label string, opts interface{}) error {
-	var err error
-	idx.db, err = pack.OpenDatabase(path, idx.Key(), label, opts)
+	db, err := pack.OpenDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return err
 	}
-	idx.table, err = idx.db.Table(SupplyTableKey, pack.Options{
-		JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, SupplyJournalSizeLog2),
-		CacheSize:       util.NonZero(idx.opts.CacheSize, SupplyCacheSize),
-	})
+	idx.db = db
+
+	m := model.Supply{}
+	key := m.TableKey()
+
+	idx.table, err = idx.db.Table(key, m.TableOpts().Merge(readConfigOpts(key)))
 	if err != nil {
 		idx.Close()
 		return err
@@ -127,7 +106,7 @@ func (idx *SupplyIndex) DisconnectBlock(ctx context.Context, block *model.Block,
 
 func (idx *SupplyIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting supply state at height %d", height)
-	_, err := pack.NewQuery("etl.supply.delete").
+	_, err := pack.NewQuery("etl.delete").
 		WithTable(idx.table).
 		AndEqual("height", height).
 		Delete(ctx)
@@ -136,7 +115,7 @@ func (idx *SupplyIndex) DeleteBlock(ctx context.Context, height int64) error {
 
 func (idx *SupplyIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 	// log.Debugf("Rollback deleting supply for cycle %d", cycle)
-	_, err := pack.NewQuery("etl.supply.delete").
+	_, err := pack.NewQuery("etl.delete").
 		WithTable(idx.table).
 		AndEqual("cycle", cycle).
 		Delete(ctx)
@@ -146,7 +125,7 @@ func (idx *SupplyIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 func (idx *SupplyIndex) Flush(ctx context.Context) error {
 	for _, v := range idx.Tables() {
 		if err := v.Flush(ctx); err != nil {
-			return err
+			log.Errorf("Flushing %s table: %v", v.Name(), err)
 		}
 	}
 	return nil

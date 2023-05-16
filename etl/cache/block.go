@@ -16,25 +16,24 @@ import (
 // NOTE: simple read-mostly cache for timestamps and block hashes
 //
 // Timestamps
-// - 4-8 MB (2021)
-// - block height ->> unix seconds (uint32)
-// - first timestamp is actual time in unix secs, remainder are offsets in seconds
-// - each entry uses 4 bytes per block, safe until June 2017 + 66 years;
-//   by then Tezos may have reached 34M blocks and the cache is 132MB in size
+//   - 4-8 MB (2021)
+//   - block height ->> unix seconds (uint32)
+//   - first timestamp is actual time in unix secs, remainder are offsets in seconds
+//   - each entry uses 4 bytes per block, safe until June 2017 + 66 years;
+//     by then Tezos may have reached 34M blocks and the cache is 132MB in size
 //
 // Block hashes
 // - 32 byte per hash, growth rate is 16MB per year
-//
 type BlockCache struct {
 	times  []uint32 // all block timestamps
 	hashes []byte   // all block hashes
 	stats  Stats
 }
 
-const defaultBlockCacheSize = 1 << 21 // 4M blocks = 150MB
+const defaultBlockCacheSize = 1 << 22 // 4M blocks = 150MB
 
 var (
-	blockHashLen = tezos.HashTypeBlock.Len()
+	blockHashLen = tezos.HashTypeBlock.Len
 )
 
 func NewBlockCache(size int) *BlockCache {
@@ -118,7 +117,7 @@ func (c *BlockCache) Build(ctx context.Context, table *pack.Table) error {
 	}
 	c.stats.CountUpdates(1)
 	b := XBlock{}
-	return pack.NewQuery("init_cache").
+	return pack.NewQuery("cache.init").
 		WithTable(table).
 		WithoutCache().
 		WithFields("time", "hash").
@@ -153,12 +152,12 @@ func (c *BlockCache) Update(block *model.Block) error {
 		c.times = c.times[:int(block.Height+1)]
 
 		// overwrite block hashes element
-		copy(c.hashes[int(block.Height)*blockHashLen:], block.Hash.Hash.Hash)
+		copy(c.hashes[int(block.Height)*blockHashLen:], block.Hash[:])
 		c.hashes = c.hashes[:int(block.Height)*blockHashLen+blockHashLen]
 	} else {
 		// creates an implicit copy when capacity is reached
-		newTimes := append(c.times, tsdiff)
-		newHashes := append(c.hashes, block.Hash.Hash.Hash...)
+		newTimes := append(c.times, tsdiff)             //nolint:gocritic
+		newHashes := append(c.hashes, block.Hash[:]...) //nolint:gocritic
 
 		// lock-free overwrite (this is safe since we have a single writer only)
 		c.times = newTimes

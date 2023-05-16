@@ -5,7 +5,12 @@ package model
 
 import (
     "blockwatch.cc/packdb/pack"
+    "errors"
 )
+
+const BalanceTableKey = "balance"
+
+var ErrNoBalance = errors.New("balance not indexed")
 
 type Balance struct {
     RowId     uint64    `pack:"I,pk"     json:"row_id"`
@@ -27,4 +32,21 @@ func (b *Balance) SetID(id uint64) {
 
 func (b *Balance) Reset() {
     *b = Balance{}
+}
+
+func (m Balance) TableKey() string {
+    return BalanceTableKey
+}
+
+func (m Balance) TableOpts() pack.Options {
+    return pack.Options{
+        PackSizeLog2:    15,
+        JournalSizeLog2: 16,
+        CacheSize:       256,
+        FillLevel:       100,
+    }
+}
+
+func (m Balance) IndexOpts(key string) pack.Options {
+    return pack.NoOptions
 }

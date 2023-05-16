@@ -74,7 +74,7 @@ func (c *AddressCache) Build(ctx context.Context, table *pack.Table) error {
 	}
 	a := XAccount{}
 	c.stats.CountUpdates(1)
-	return pack.NewQuery("init_cache").
+	return pack.NewQuery("cache.init").
 		WithTable(table).
 		WithoutCache().
 		WithFields("row_id", "address").
@@ -87,12 +87,11 @@ func (c *AddressCache) Build(ctx context.Context, table *pack.Table) error {
 				log.Warnf("AddressCache: Skipping %d duplicates/out-of-order ids detected before id %d", -(diff - 1), a.RowId)
 				return nil
 			} else if diff > 1 {
-				log.Warnf("AddressCache: gap size %d decteded before id %d", diff, a.RowId)
+				log.Warnf("AddressCache: gap size %d before id %d", diff, a.RowId)
 				// pad with empty bytes when we detect a gap in account ids
 				c.hashes = append(c.hashes, bytes.Repeat([]byte{0}, int(diff-1)*addrLen)...)
 			}
-			c.hashes = append(c.hashes, byte(a.Address.Type))
-			c.hashes = append(c.hashes, a.Address.Hash...)
+			c.hashes = append(c.hashes, a.Address[:]...)
 			return nil
 		})
 }
@@ -129,9 +128,7 @@ func (c *AddressCache) Update(accounts map[model.AccountID]*model.Account) error
 			// safety skip, should not happen
 			continue
 		}
-		c.hashes[pos] = byte(v.Address.Type)
-		pos++
-		copy(c.hashes[pos:pos+addrLen], v.Address.Hash)
+		copy(c.hashes[pos:], v.Address[:])
 	}
 
 	if len(ins) == 0 {
@@ -155,8 +152,7 @@ func (c *AddressCache) Update(accounts map[model.AccountID]*model.Account) error
 		if pad := int64(v.RowId.Value()) - int64(len(dest)/addrLen) - 1; pad > 0 {
 			dest = append(dest, bytes.Repeat([]byte{0}, int(pad)*addrLen)...)
 		}
-		dest = append(dest, byte(v.Address.Type))
-		dest = append(dest, v.Address.Hash...)
+		dest = append(dest, v.Address[:]...)
 	}
 
 	// replace after append, grow (safe for concurrent use due to single writer)

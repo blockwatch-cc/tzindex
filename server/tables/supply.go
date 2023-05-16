@@ -15,8 +15,8 @@ import (
 	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -41,7 +41,7 @@ type Supply struct {
 	model.Supply
 	verbose bool            // cond. marshal
 	columns util.StringList // cond. cols & order when brief
-	params  *tezos.Params   // blockchain amount conversion
+	params  *rpc.Params     // blockchain amount conversion
 }
 
 func (s *Supply) MarshalJSON() ([]byte, error) {
@@ -391,11 +391,6 @@ func StreamSupplyTable(ctx *server.Context, args *TableRequest) (interface{}, in
 			for _, v := range val {
 
 				switch prefix {
-				case "cycle":
-					if v == "head" {
-						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
-						v = strconv.FormatInt(currentCycle, 10)
-					}
 				case "height", "time":
 					// need no conversion
 				default:

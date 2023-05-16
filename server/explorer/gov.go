@@ -13,7 +13,6 @@ import (
 
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/server"
 
@@ -206,7 +205,7 @@ func NewElection(ctx *server.Context, e *model.Election) *Election {
 	p := ctx.Indexer.ParamsByHeight(e.StartHeight)
 	election := &Election{
 		Id:               int(e.RowId),
-		MaxPeriods:       p.NumVotingPeriods,
+		MaxPeriods:       int(p.NumVotingPeriods),
 		NumPeriods:       e.NumPeriods,
 		NumProposals:     e.NumProposals,
 		StartTime:        e.StartTime,
@@ -224,9 +223,9 @@ func NewElection(ctx *server.Context, e *model.Election) *Election {
 	// estimate end time for open elections
 	tm := ctx.Tip.BestTime
 	if election.IsOpen {
-		diff := int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - (ctx.Tip.BestHeight - e.StartHeight)
+		diff := p.NumVotingPeriods*p.BlocksPerVotingPeriod - (ctx.Tip.BestHeight - e.StartHeight)
 		election.EndTime = tm.Add(time.Duration(diff) * p.BlockTime())
-		election.EndHeight = election.StartHeight + int64(p.NumVotingPeriods)*p.BlocksPerVotingPeriod - 1
+		election.EndHeight = election.StartHeight + p.NumVotingPeriods*p.BlocksPerVotingPeriod - 1
 		election.expires = tm.Add(p.BlockTime())
 	} else {
 		election.MaxPeriods = election.NumPeriods
@@ -284,7 +283,7 @@ func loadElection(ctx *server.Context) *model.Election {
 		switch {
 		case id == "head":
 			election, err = ctx.Indexer.ElectionByHeight(ctx.Context, ctx.Tip.BestHeight)
-		case strings.HasPrefix(id, tezos.HashTypeProtocol.Prefix()):
+		case strings.HasPrefix(id, tezos.HashTypeProtocol.B58Prefix):
 			var p tezos.ProtocolHash
 			p, err = tezos.ParseProtocolHash(id)
 			if err != nil {
@@ -296,7 +295,7 @@ func loadElection(ctx *server.Context) *model.Election {
 				switch err {
 				case etl.ErrNoTable:
 					panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "cannot access proposal table", err))
-				case index.ErrNoProposalEntry:
+				case model.ErrNoProposal:
 					panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no proposal", err))
 				default:
 					panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
@@ -315,7 +314,7 @@ func loadElection(ctx *server.Context) *model.Election {
 			switch err {
 			case etl.ErrNoTable:
 				panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "cannot access election table", err))
-			case index.ErrNoElectionEntry:
+			case model.ErrNoElection:
 				panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no election", err))
 			default:
 				panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
@@ -460,7 +459,7 @@ func ListVoters(ctx *server.Context) (interface{}, int) {
 	ctx.ParseRequestArgs(args)
 	election := loadElection(ctx)
 	params := ctx.Indexer.ParamsByHeight(election.StartHeight)
-	stage := loadStage(ctx, election, params.NumVotingPeriods)
+	stage := loadStage(ctx, election, int(params.NumVotingPeriods))
 
 	r := etl.ListRequest{
 		Since:  election.StartHeight + int64(stage)*params.BlocksPerVotingPeriod,
@@ -500,7 +499,7 @@ func ListBallots(ctx *server.Context) (interface{}, int) {
 	ctx.ParseRequestArgs(args)
 	election := loadElection(ctx)
 	p := ctx.Indexer.ParamsByHeight(election.StartHeight)
-	stage := loadStage(ctx, election, p.NumVotingPeriods)
+	stage := loadStage(ctx, election, int(p.NumVotingPeriods))
 
 	r := etl.ListRequest{
 		Period: election.VotingPeriod + int64(stage),
@@ -523,7 +522,7 @@ func ListBallots(ctx *server.Context) (interface{}, int) {
 
 	// lookup
 	ops, err := ctx.Indexer.LookupOpIds(ctx, vec.UniqueUint64Slice(oids))
-	if err != nil && err != index.ErrNoOpEntry {
+	if err != nil && err != model.ErrNoOp {
 		panic(server.EInternal(server.EC_DATABASE, "cannot read ops for ballots", err))
 	}
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2023 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -19,7 +19,18 @@ type Transaction struct {
 	Parameters  micheline.Parameters `json:"parameters"`
 }
 
-func (t Transaction) FindEmbeddedAddresses(addrs *tezos.AddressSet) {
+// Addresses adds all addresses used in this operation to the set.
+// Implements TypedOperation interface.
+func (t Transaction) Addresses(set *tezos.AddressSet) {
+	set.AddUnique(t.Source)
+	set.AddUnique(t.Destination)
+	for _, v := range t.Meta().InternalResults {
+		set.AddUnique(v.Source)
+		set.AddUnique(v.Destination)
+	}
+}
+
+func (t Transaction) AddEmbeddedAddresses(addUnique func(tezos.Address)) {
 	if !t.Destination.IsContract() {
 		return
 	}
@@ -27,13 +38,13 @@ func (t Transaction) FindEmbeddedAddresses(addrs *tezos.AddressSet) {
 		switch {
 		case len(p.String) == 36 || len(p.String) == 37:
 			if a, err := tezos.ParseAddress(p.String); err == nil {
-				addrs.AddUnique(a)
+				addUnique(a)
 			}
 			return micheline.PrimSkip
 		case tezos.IsAddressBytes(p.Bytes):
 			a := tezos.Address{}
-			if err := a.UnmarshalBinary(p.Bytes); err == nil {
-				addrs.AddUnique(a)
+			if err := a.Decode(p.Bytes); err == nil {
+				addUnique(a)
 			}
 			return micheline.PrimSkip
 		default:
@@ -53,6 +64,13 @@ func (t Transaction) FindEmbeddedAddresses(addrs *tezos.AddressSet) {
 		_ = v.Value.Walk(collect)
 	}
 
+	// from ticket updates
+	for _, it := range t.Metadata.Result.TicketUpdates() {
+		for _, v := range it.Updates {
+			addUnique(v.Account)
+		}
+	}
+
 	// from internal results
 	for _, it := range t.Metadata.InternalResults {
 		if it.Script != nil {
@@ -65,6 +83,12 @@ func (t Transaction) FindEmbeddedAddresses(addrs *tezos.AddressSet) {
 			}
 			_ = v.Key.Walk(collect)
 			_ = v.Value.Walk(collect)
+		}
+		// from ticket updates
+		for _, v := range it.Result.TicketUpdates() {
+			for _, vv := range v.Updates {
+				addUnique(vv.Account)
+			}
 		}
 	}
 }

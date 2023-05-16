@@ -148,7 +148,6 @@ func (c *Constant) MarshalCSV() ([]string, error) {
 }
 
 func StreamConstantTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
-	params := ctx.Params
 	// access table
 	table, err := ctx.Indexer.Table(args.Table)
 	if err != nil {
@@ -216,7 +215,7 @@ func StreamConstantTable(ctx *server.Context, args *TableRequest) (interface{}, 
 				if err != nil || !addr.IsValid() {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
-				q = q.And(field, mode, addr.Bytes22())
+				q = q.And(field, mode, addr[:])
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup (Note: does not check for address type so may
 				// return duplicates)
@@ -226,7 +225,7 @@ func StreamConstantTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					if err != nil || !addr.IsValid() {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
-					hashes = append(hashes, addr.Bytes22())
+					hashes = append(hashes, addr[:])
 				}
 				q = q.And(field, mode, hashes)
 			default:
@@ -266,10 +265,6 @@ func StreamConstantTable(ctx *server.Context, args *TableRequest) (interface{}, 
 			// the same field name may appear multiple times, in which case conditions
 			// are combined like any other condition with logical AND
 			for _, v := range val {
-				if prefix == "cycle" && v == "head" {
-					currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
-					v = strconv.FormatInt(currentCycle, 10)
-				}
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {

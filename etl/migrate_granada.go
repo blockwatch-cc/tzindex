@@ -6,10 +6,10 @@ package etl
 import (
 	"context"
 
-	"blockwatch.cc/tzgo/tezos"
+	"blockwatch.cc/tzindex/rpc"
 )
 
-func (b *Builder) MigrateGranada(ctx context.Context, oldparams, params *tezos.Params) error {
+func (b *Builder) MigrateGranada(ctx context.Context, oldparams, params *rpc.Params) error {
 	// nothing to do in light mode or when chain starts with this proto
 	if b.idx.lightMode || b.block.Height <= 2 {
 		return nil

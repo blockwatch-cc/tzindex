@@ -1,42 +1,27 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/util"
-
 	"blockwatch.cc/tzindex/etl/model"
 )
 
-const (
-	FlowPackSizeLog2    = 15  // 32k packs ~4M
-	FlowJournalSizeLog2 = 16  // 64k - search for spending op, so keep small
-	FlowCacheSize       = 128 // 128=512MB
-	FlowFillLevel       = 100
-	FlowIndexKey        = "flow"
-	FlowTableKey        = "flow"
-)
-
-var (
-	ErrNoFlowEntry = errors.New("flow not indexed")
-)
+const FlowIndexKey = "flow"
 
 type FlowIndex struct {
 	db    *pack.DB
-	opts  pack.Options
 	table *pack.Table
 }
 
 var _ model.BlockIndexer = (*FlowIndex)(nil)
 
-func NewFlowIndex(opts pack.Options) *FlowIndex {
-	return &FlowIndex{opts: opts}
+func NewFlowIndex() *FlowIndex {
+	return &FlowIndex{}
 }
 
 func (idx *FlowIndex) DB() *pack.DB {
@@ -56,38 +41,34 @@ func (idx *FlowIndex) Name() string {
 }
 
 func (idx *FlowIndex) Create(path, label string, opts interface{}) error {
-	fields, err := pack.Fields(model.Flow{})
-	if err != nil {
-		return err
-	}
 	db, err := pack.CreateDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return fmt.Errorf("creating %s database: %w", idx.Key(), err)
 	}
 	defer db.Close()
 
-	_, err = db.CreateTableIfNotExists(
-		FlowTableKey,
-		fields,
-		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, FlowPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, FlowJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, FlowCacheSize),
-			FillLevel:       util.NonZero(idx.opts.FillLevel, FlowFillLevel),
-		})
+	m := model.Flow{}
+	key := m.TableKey()
+	fields, err := pack.Fields(m)
+	if err != nil {
+		return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
+	}
+
+	_, err = db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(readConfigOpts(key)))
 	return err
 }
 
 func (idx *FlowIndex) Init(path, label string, opts interface{}) error {
-	var err error
-	idx.db, err = pack.OpenDatabase(path, idx.Key(), label, opts)
+	db, err := pack.OpenDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return err
 	}
-	idx.table, err = idx.db.Table(FlowTableKey, pack.Options{
-		JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, FlowJournalSizeLog2),
-		CacheSize:       util.NonZero(idx.opts.CacheSize, FlowCacheSize),
-	})
+	idx.db = db
+
+	m := model.Flow{}
+	key := m.TableKey()
+
+	idx.table, err = idx.db.Table(key, m.TableOpts().Merge(readConfigOpts(key)))
 	if err != nil {
 		idx.Close()
 		return err
@@ -129,7 +110,7 @@ func (idx *FlowIndex) DisconnectBlock(ctx context.Context, block *model.Block, _
 
 func (idx *FlowIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting flows at height %d", height)
-	_, err := pack.NewQuery("etl.flow.delete").
+	_, err := pack.NewQuery("etl.delete").
 		WithTable(idx.table).
 		AndEqual("height", height).
 		Delete(ctx)
@@ -138,7 +119,7 @@ func (idx *FlowIndex) DeleteBlock(ctx context.Context, height int64) error {
 
 func (idx *FlowIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 	// log.Debugf("Rollback deleting flow cycle %d", cycle)
-	_, err := pack.NewQuery("etl.flow.delete").
+	_, err := pack.NewQuery("etl.delete").
 		WithTable(idx.table).
 		AndEqual("cycle", cycle).
 		Delete(ctx)
@@ -148,7 +129,7 @@ func (idx *FlowIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 func (idx *FlowIndex) Flush(ctx context.Context) error {
 	for _, v := range idx.Tables() {
 		if err := v.Flush(ctx); err != nil {
-			return err
+			log.Errorf("Flushing %s table: %v", v.Name(), err)
 		}
 	}
 	return nil

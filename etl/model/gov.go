@@ -4,10 +4,39 @@
 package model
 
 import (
+	"errors"
 	"time"
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzgo/tezos"
+)
+
+const (
+	ElectionTableKey = "election"
+	ProposalTableKey = "proposal"
+	VoteTableKey     = "vote"
+	BallotTableKey   = "ballot"
+	StakeTableKey    = "stake"
+)
+
+var (
+	// ErrNoElection is an error that indicates a requested entry does
+	// not exist in the election table.
+	ErrNoElection = errors.New("election not indexed")
+
+	// ErrNoProposal is an error that indicates a requested entry does
+	// not exist in the proposal table.
+	ErrNoProposal = errors.New("proposal not indexed")
+
+	// ErrNoVote is an error that indicates a requested entry does
+	// not exist in the vote table.
+	ErrNoVote = errors.New("vote not indexed")
+
+	// ErrNoBallot is an error that indicates a requested entry does
+	// not exist in the ballot table.
+	ErrNoBallot = errors.New("ballot not indexed")
+
+	ErrInvalidProtocolHash = errors.New("invalid protocol hash")
 )
 
 // An Election represents a unique voting cycle which may be between 1 and 4
@@ -49,6 +78,23 @@ func (e *Election) SetID(id uint64) {
 	e.RowId = ElectionID(id)
 }
 
+func (m Election) TableKey() string {
+	return ElectionTableKey
+}
+
+func (m Election) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    8,
+		JournalSizeLog2: 8,
+		CacheSize:       2,
+		FillLevel:       100,
+	}
+}
+
+func (m Election) IndexOpts(key string) pack.Options {
+	return pack.NoOptions
+}
+
 // Proposal implements unique individual proposals, a baker can choose to publish
 // multiple proposals in one operation, which results in multiple rows been created.
 type ProposalID uint64
@@ -80,6 +126,23 @@ func (p *Proposal) ID() uint64 {
 
 func (p *Proposal) SetID(id uint64) {
 	p.RowId = ProposalID(id)
+}
+
+func (m Proposal) TableKey() string {
+	return ProposalTableKey
+}
+
+func (m Proposal) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    8,
+		JournalSizeLog2: 8,
+		CacheSize:       2,
+		FillLevel:       100,
+	}
+}
+
+func (m Proposal) IndexOpts(key string) pack.Options {
+	return pack.NoOptions
 }
 
 // Vote represent the most recent state of a voting period during elections
@@ -134,6 +197,23 @@ func (v *Vote) SetID(id uint64) {
 	v.RowId = id
 }
 
+func (m Vote) TableKey() string {
+	return VoteTableKey
+}
+
+func (m Vote) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    8,
+		JournalSizeLog2: 8,
+		CacheSize:       2,
+		FillLevel:       100,
+	}
+}
+
+func (m Vote) IndexOpts(key string) pack.Options {
+	return pack.NoOptions
+}
+
 // Ballot represent a single vote cast by a baker during a voting period.
 // Only periods 1, 2 and 4 support casting votes, period 1 uses `proposals`
 // operations to vote on up to 20 proposals, periods 2 and 4 use `ballot`
@@ -164,23 +244,57 @@ func (b *Ballot) SetID(id uint64) {
 	b.RowId = id
 }
 
-// Roll snapshots
-type RollSnapshot struct {
-	RowId     uint64    `pack:"I,pk,snappy"  json:"row_id"`
-	Height    int64     `pack:"h,snappy"     json:"height"`
-	AccountId AccountID `pack:"A,snappy"     json:"account_id"`
-	Rolls     int64     `pack:"r,snappy"     json:"rolls"`
-	Stake     int64     `pack:"s,snappy"     json:"stake"`
+func (m Ballot) TableKey() string {
+	return BallotTableKey
 }
 
-var _ pack.Item = (*RollSnapshot)(nil)
+func (m Ballot) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    8,
+		JournalSizeLog2: 8,
+		CacheSize:       2,
+		FillLevel:       100,
+	}
+}
 
-func (b *RollSnapshot) ID() uint64 {
+func (m Ballot) IndexOpts(key string) pack.Options {
+	return pack.NoOptions
+}
+
+// Stake snapshots
+type Stake struct {
+	RowId     uint64    `pack:"I,pk"  json:"row_id"`
+	Height    int64     `pack:"h"     json:"height"`
+	AccountId AccountID `pack:"A"     json:"account_id"`
+	Rolls     int64     `pack:"r"     json:"rolls"`
+	Stake     int64     `pack:"s"     json:"stake"`
+}
+
+var _ pack.Item = (*Stake)(nil)
+
+func (b *Stake) ID() uint64 {
 	return b.RowId
 }
 
-func (b *RollSnapshot) SetID(id uint64) {
+func (b *Stake) SetID(id uint64) {
 	b.RowId = id
+}
+
+func (m Stake) TableKey() string {
+	return StakeTableKey
+}
+
+func (m Stake) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    8,
+		JournalSizeLog2: 8,
+		CacheSize:       2,
+		FillLevel:       100,
+	}
+}
+
+func (m Stake) IndexOpts(key string) pack.Options {
+	return pack.NoOptions
 }
 
 type Voter struct {

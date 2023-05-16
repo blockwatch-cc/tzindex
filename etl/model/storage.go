@@ -4,8 +4,14 @@
 package model
 
 import (
+    "errors"
+
     "blockwatch.cc/packdb/pack"
 )
+
+const StorageTableKey = "storage"
+
+var ErrNoStorage = errors.New("storage not indexed")
 
 type StorageID uint64
 
@@ -34,9 +40,22 @@ func (s *Storage) SetID(id uint64) {
 }
 
 func (s *Storage) Reset() {
-    s.RowId = 0
-    s.AccountId = 0
-    s.Hash = 0
-    s.Height = 0
-    s.Storage = nil
+    *s = Storage{}
+}
+
+func (m Storage) TableKey() string {
+    return StorageTableKey
+}
+
+func (m Storage) TableOpts() pack.Options {
+    return pack.Options{
+        PackSizeLog2:    10,
+        JournalSizeLog2: 10,
+        CacheSize:       32,
+        FillLevel:       100,
+    }
+}
+
+func (m Storage) IndexOpts(key string) pack.Options {
+    return pack.NoOptions
 }

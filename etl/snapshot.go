@@ -135,8 +135,8 @@ func (c *Crawler) snapshot_locked(ctx context.Context) error {
 		dbs = append(dbs, v.DB())
 	}
 	for _, db := range dbs {
-		if interruptRequested(ctx) {
-			return errInterruptRequested
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		if db == nil {
 			continue

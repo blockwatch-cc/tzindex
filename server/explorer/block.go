@@ -4,15 +4,15 @@
 package explorer
 
 import (
-	"github.com/gorilla/mux"
 	"net/http"
 	"sort"
 	"time"
 
+	"github.com/gorilla/mux"
+
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/server"
 )
@@ -26,8 +26,8 @@ var _ server.Resource = (*Block)(nil)
 
 type Block struct {
 	Hash                 tezos.BlockHash           `json:"hash"`
-	ParentHash           tezos.BlockHash           `json:"predecessor"`
-	FollowerHash         tezos.BlockHash           `json:"successor"`
+	ParentHash           string                    `json:"predecessor,omitempty"`
+	FollowerHash         string                    `json:"successor,omitempty"`
 	Protocol             tezos.ProtocolHash        `json:"protocol"`
 	Baker                tezos.Address             `json:"baker"`
 	Proposer             tezos.Address             `json:"proposer"`
@@ -126,7 +126,7 @@ func NewRight(ctx *server.Context, r model.BaseRight, addFlags bool) Right {
 
 func NewBlock(ctx *server.Context, block *model.Block, args server.Options) *Block {
 	p := ctx.Params
-	if !p.ContainsHeight(block.Height) {
+	if p == nil || !p.ContainsHeight(block.Height) {
 		p = ctx.Crawler.ParamsByHeight(block.Height)
 	}
 	b := &Block{
@@ -176,15 +176,15 @@ func NewBlock(ctx *server.Context, block *model.Block, args server.Options) *Blo
 	}
 
 	// use database lookups here (not cache) to correctly link orphans
-	if prev, err := ctx.Indexer.BlockByID(ctx.Context, block.ParentId); err == nil {
-		b.ParentHash = prev.Hash
+	if prev, err := ctx.Indexer.BlockByID(ctx.Context, block.ParentId); err == nil && prev.Hash.IsValid() {
+		b.ParentHash = prev.Hash.String()
 	}
 	if nowHeight > block.Height {
 		next, err := ctx.Indexer.BlockByParentId(ctx.Context, block.RowId)
 		if err != nil {
 			log.Errorf("explorer: cannot resolve successor for block id %d: %v", block.RowId, err)
-		} else {
-			b.FollowerHash = next.Hash
+		} else if next.Hash.IsValid() {
+			b.FollowerHash = next.Hash.String()
 		}
 	}
 
@@ -278,11 +278,11 @@ func loadBlock(ctx *server.Context) *model.Block {
 		block, err := ctx.Indexer.LookupBlock(ctx, blockIdent)
 		if err != nil {
 			switch err {
-			case index.ErrNoBlockEntry:
+			case model.ErrNoBlock:
 				panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no such block", err))
-			case index.ErrInvalidBlockHeight:
+			case model.ErrInvalidBlockHeight:
 				panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, "invalid block height", err))
-			case index.ErrInvalidBlockHash:
+			case model.ErrInvalidBlockHash:
 				panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, "invalid block hash", err))
 			default:
 				panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))

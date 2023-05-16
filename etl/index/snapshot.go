@@ -5,39 +5,24 @@ package index
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/util"
-
 	"blockwatch.cc/tzindex/etl/model"
 )
 
-const (
-	SnapshotPackSizeLog2    = 15 // =32k packs ~ 3M unpacked
-	SnapshotJournalSizeLog2 = 16 // =64k entries for busy blockchains
-	SnapshotCacheSize       = 2  // minimum
-	SnapshotFillLevel       = 100
-	SnapshotIndexKey        = "snapshot"
-	SnapshotTableKey        = "snapshot"
-)
-
-var (
-	ErrNoSnapshotEntry = errors.New("snapshot not indexed")
-)
+const SnapshotIndexKey = "snapshot"
 
 type SnapshotIndex struct {
 	db    *pack.DB
-	opts  pack.Options
 	table *pack.Table
 }
 
 var _ model.BlockIndexer = (*SnapshotIndex)(nil)
 
-func NewSnapshotIndex(opts pack.Options) *SnapshotIndex {
-	return &SnapshotIndex{opts: opts}
+func NewSnapshotIndex() *SnapshotIndex {
+	return &SnapshotIndex{}
 }
 
 func (idx *SnapshotIndex) DB() *pack.DB {
@@ -57,43 +42,34 @@ func (idx *SnapshotIndex) Name() string {
 }
 
 func (idx *SnapshotIndex) Create(path, label string, opts interface{}) error {
-	fields, err := pack.Fields(model.Snapshot{})
-	if err != nil {
-		return err
-	}
 	db, err := pack.CreateDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return fmt.Errorf("creating %s database: %w", idx.Key(), err)
 	}
 	defer db.Close()
 
-	_, err = db.CreateTableIfNotExists(
-		SnapshotTableKey,
-		fields,
-		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, SnapshotPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, SnapshotJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, SnapshotCacheSize),
-			FillLevel:       util.NonZero(idx.opts.FillLevel, SnapshotFillLevel),
-		})
+	m := model.Snapshot{}
+	key := m.TableKey()
+	fields, err := pack.Fields(m)
 	if err != nil {
-		return err
+		return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
 	}
-	return nil
+
+	_, err = db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(readConfigOpts(key)))
+	return err
 }
 
 func (idx *SnapshotIndex) Init(path, label string, opts interface{}) error {
-	var err error
-	idx.db, err = pack.OpenDatabase(path, idx.Key(), label, opts)
+	db, err := pack.OpenDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return err
 	}
-	idx.table, err = idx.db.Table(
-		SnapshotTableKey,
-		pack.Options{
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, SnapshotJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, SnapshotCacheSize),
-		})
+	idx.db = db
+
+	m := model.Snapshot{}
+	key := m.TableKey()
+
+	idx.table, err = idx.db.Table(key, m.TableOpts().Merge(readConfigOpts(key)))
 	if err != nil {
 		idx.Close()
 		return err
@@ -132,17 +108,17 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 	}
 
 	// skip non-snapshot blocks
-	if block.Height == 0 || !block.Params.IsSnapshotBlock(block.Height) {
+	if block.Height == 0 || !block.TZ.IsSnapshotBlock() {
 		return nil
 	}
 
 	// first snapshot (0 based) is block 255 (0 based index) in a cycle
 	// snapshot 15 is without unfrozen rewards from end-of-cycle block
-	sn := block.Params.SnapshotIndex(block.Height)
-	isCycleEnd := block.Params.IsCycleEnd(block.Height)
+	sn := block.TZ.GetSnapshotIndex()
+	isCycleEnd := block.TZ.IsCycleEnd()
 
 	// snapshot all currently funded accounts and delegates
-	accounts, err := builder.Table(AccountTableKey)
+	accounts, err := builder.Table(model.AccountTableKey)
 	if err != nil {
 		return err
 	}
@@ -152,32 +128,23 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 	rollOwners := make([]uint64, 0, block.Chain.RollOwners)
 	ins := make([]pack.Item, 0, int(block.Chain.FundedAccounts)) // hint
 	for _, b := range builder.Bakers() {
-		stake := b.ActiveStake(block.Params, block.Chain.Rolls)
+		// adjust end-of-cycle snapshot; a positive value of adjust means the
+		// balance will be reduced when calculating stake
+		adjust := b.StakeAdjust(block)
+
+		// predict deactivation at end of cycle
 		isActive := b.IsActive
-		if block.Params.Version < 12 {
-			stake = b.StakingBalance()
-			// adjust end-of-cycle snapshot: reduce balance by unfrozen rewards
-			if isCycleEnd {
-				for _, flow := range block.Flows {
-					if flow.AccountId != b.AccountId {
-						continue
-					}
-					if flow.Category != model.FlowCategoryRewards {
-						continue
-					}
-					if flow.Operation != model.FlowTypeInternal {
-						continue
-					}
-					stake -= flow.AmountOut
-					break
-				}
-				// predict deactivation at end of cycle
-				isActive = isActive && b.GracePeriod > block.Cycle
-			}
+		if isCycleEnd {
+			isActive = isActive && b.GracePeriod > block.Cycle
 		}
 
-		// skip non-roll owners
-		if b.StakingBalance() < block.Params.MinimalStake {
+		// calculate stake and balance with potential adjustment
+		stake := b.ActiveStake(block.Params, adjust)
+		balance := b.TotalBalance() - adjust
+		rolls := b.Rolls(block.Params, adjust)
+
+		// skip bakers below minimum stake (not active stake!)
+		if b.StakingBalance()-adjust < block.Params.MinimalStake {
 			continue
 		}
 
@@ -186,13 +153,13 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 		snap.Cycle = block.Cycle
 		snap.Timestamp = block.Timestamp
 		snap.Index = sn
-		snap.Rolls = b.StakingBalance() / block.Params.MinimalStake
+		snap.Rolls = rolls
 		snap.ActiveStake = stake
 		snap.AccountId = b.AccountId
 		snap.BakerId = b.AccountId
 		snap.IsBaker = true
 		snap.IsActive = isActive
-		snap.Balance = b.TotalBalance()
+		snap.Balance = balance
 		snap.Delegated = b.DelegatedBalance
 		snap.NDelegations = b.ActiveDelegations
 		snap.Since = b.BakerSince
@@ -224,7 +191,7 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 		DelegatedSince   int64           `pack:"delegated_since"`
 	}
 	a := &XAccount{}
-	err = pack.NewQuery("snapshot.delegators").
+	err = pack.NewQuery("etl.delegators").
 		WithTable(accounts).
 		WithoutCache().
 		WithFields("row_id", "baker_id", "spendable_balance", "frozen_bond", "delegated_since").
@@ -274,7 +241,8 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 
 func (idx *SnapshotIndex) DisconnectBlock(ctx context.Context, block *model.Block, _ model.BlockBuilder) error {
 	// skip non-snapshot blocks
-	if block.Height == 0 || !block.Params.IsSnapshotBlock(block.Height) {
+	// if block.Height == 0 || !block.Params.IsSnapshotBlock(block.Height) {
+	if block.Height == 0 || !block.TZ.IsSnapshotBlock() {
 		return nil
 	}
 	return idx.DeleteBlock(ctx, block.Height)
@@ -282,8 +250,9 @@ func (idx *SnapshotIndex) DisconnectBlock(ctx context.Context, block *model.Bloc
 
 func (idx *SnapshotIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting snapshots at height %d", height)
-	_, err := pack.NewQuery("etl.snapshot.delete").
+	_, err := pack.NewQuery("etl.delete").
 		WithTable(idx.table).
+		WithoutCache().
 		AndEqual("height", height).
 		Delete(ctx)
 	return err
@@ -291,8 +260,9 @@ func (idx *SnapshotIndex) DeleteBlock(ctx context.Context, height int64) error {
 
 func (idx *SnapshotIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 	// log.Debugf("Rollback deleting snapshots for cycle %d", cycle)
-	_, err := pack.NewQuery("etl.snapshot.delete").
+	_, err := pack.NewQuery("etl.delete").
 		WithTable(idx.table).
+		WithoutCache().
 		AndEqual("cycle", cycle).
 		Delete(ctx)
 	return err
@@ -313,7 +283,7 @@ func (idx *SnapshotIndex) updateCycleSnapshot(ctx context.Context, block *model.
 	// 	snap.Index, snap.Base, block.Height, block.Cycle)
 
 	upd := make([]pack.Item, 0)
-	err := pack.NewQuery("snapshot.update").
+	err := pack.NewQuery("etl.update").
 		WithTable(idx.table).
 		WithoutCache().
 		AndEqual("cycle", snap.Base).
@@ -340,7 +310,7 @@ func (idx *SnapshotIndex) updateCycleSnapshot(ctx context.Context, block *model.
 	}
 
 	// delete non-selected snapshots
-	_, err = pack.NewQuery("snapshot.delete").
+	_, err = pack.NewQuery("etl.delete").
 		WithTable(idx.table).
 		WithoutCache().
 		AndEqual("cycle", snap.Base).
@@ -357,7 +327,7 @@ func (idx *SnapshotIndex) updateCycleSnapshot(ctx context.Context, block *model.
 func (idx *SnapshotIndex) Flush(ctx context.Context) error {
 	for _, v := range idx.Tables() {
 		if err := v.Flush(ctx); err != nil {
-			return err
+			log.Errorf("Flushing %s table: %v", v.Name(), err)
 		}
 	}
 	return nil

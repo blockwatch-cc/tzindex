@@ -32,9 +32,10 @@ func (c *Client) GetStatus(ctx context.Context) (Status, error) {
 }
 
 type NodeVersion struct {
-	Major          int    `json:"major"`
-	Minor          int    `json:"minor"`
-	AdditionalInfo string `json:"additional_info"`
+	Major int `json:"major"`
+	Minor int `json:"minor"`
+	// AdditionalInfo string `json:"additional_info"` // v015
+	// AdditionalInfo map[string]any `json:"additional_info"` // v016+
 }
 
 type NetworkVersion struct {

@@ -11,7 +11,6 @@ import (
 
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/cache"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 )
 
@@ -223,7 +222,7 @@ func (m *Indexer) getRights(ctx context.Context, height int64) (*cache.RightsCac
 func (m *Indexer) updateRights(ctx context.Context, height int64) error {
 	// check if we need a rebuild
 	params := m.ParamsByHeight(height)
-	startCycle := params.CycleFromHeight(height)
+	startCycle := params.HeightToCycle(height)
 	startHeight := params.CycleStartHeight(startCycle)
 	rights := m.rights.Load()
 	if rights != nil && rights.(*cache.RightsCache).Start() == startHeight {
@@ -232,7 +231,7 @@ func (m *Indexer) updateRights(ctx context.Context, height int64) error {
 
 	// run rebuild
 	startTime := time.Now()
-	table, err := m.Table(index.RightsTableKey)
+	table, err := m.Table(model.RightsTableKey)
 	if err != nil {
 		// ignore not found errors in light mode
 		if m.lightMode {
@@ -275,7 +274,7 @@ func (m *Indexer) updateBlocks(ctx context.Context, block *model.Block) error {
 		return blocks.(*cache.BlockCache).Update(block)
 	}
 	startTime := time.Now()
-	table, err := m.Table(index.BlockTableKey)
+	table, err := m.Table(model.BlockTableKey)
 	if err != nil {
 		return err
 	}
@@ -310,11 +309,11 @@ func (m *Indexer) getRanks(ctx context.Context) (*cache.RankCache, error) {
 
 func (m *Indexer) updateRanks(ctx context.Context) error {
 	startTime := time.Now()
-	accounts, err := m.Table(index.AccountTableKey)
+	accounts, err := m.Table(model.AccountTableKey)
 	if err != nil {
 		return err
 	}
-	ops, err := m.Table(index.OpTableKey)
+	ops, err := m.Table(model.OpTableKey)
 	if err != nil {
 		return err
 	}
@@ -353,7 +352,7 @@ func (m *Indexer) updateAddrs(ctx context.Context, accounts map[model.AccountID]
 		return addrs.(*cache.AddressCache).Update(accounts)
 	}
 	startTime := time.Now()
-	table, err := m.Table(index.AccountTableKey)
+	table, err := m.Table(model.AccountTableKey)
 	if err != nil {
 		return err
 	}
@@ -401,7 +400,7 @@ func (m *Indexer) updateProposals(ctx context.Context, b *model.Block) error {
 	if m.lightMode || (b != nil && !b.HasProposals) {
 		return nil
 	}
-	table, err := m.Table(index.ProposalTableKey)
+	table, err := m.Table(model.ProposalTableKey)
 	if err != nil {
 		return err
 	}

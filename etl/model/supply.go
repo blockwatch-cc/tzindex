@@ -4,12 +4,15 @@
 package model
 
 import (
+	"errors"
 	"time"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/tzgo/tezos"
-	"blockwatch.cc/tzindex/rpc"
 )
+
+const SupplyTableKey = "supply"
+
+var ErrNoSupply = errors.New("supply not indexed")
 
 // Note: removed vesting supply in v9.1, TF vesting time is over
 type Supply struct {
@@ -62,6 +65,27 @@ func (s *Supply) ID() uint64 {
 
 func (s *Supply) SetID(id uint64) {
 	s.RowId = id
+}
+
+func (m Supply) TableKey() string {
+	return SupplyTableKey
+}
+
+func (m Supply) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    15,
+		JournalSizeLog2: 15,
+		CacheSize:       16,
+		FillLevel:       100,
+	}
+}
+
+func (m Supply) IndexOpts(key string) pack.Options {
+	return pack.NoOptions
+}
+
+func (s *Supply) Reset() {
+	*s = Supply{}
 }
 
 // be compatible with time series interface
@@ -167,17 +191,8 @@ func (s *Supply) Update(b *Block, bakers map[AccountID]*Baker) {
 				storageBurn := b.Params.CostPerByte * op.StoragePaid
 				s.BurnedAllocation += op.Burned - storageBurn
 				s.BurnedStorage += storageBurn
-				tx, _ := op.Raw.(*rpc.Transaction)
-				if tx.Destination.Equal(tezos.ZeroAddress) {
+				if op.IsBurnAddress {
 					s.BurnedExplicit += op.Volume
-				}
-				for _, iop := range tx.Metadata.InternalResults {
-					if iop.Kind != tezos.OpTypeTransaction || !iop.Destination.IsValid() {
-						continue
-					}
-					if iop.Destination.Equal(tezos.ZeroAddress) {
-						s.BurnedExplicit += iop.Amount
-					}
 				}
 			}
 
@@ -186,6 +201,17 @@ func (s *Supply) Update(b *Block, bakers map[AccountID]*Baker) {
 
 		case OpTypeRollupTransaction:
 			s.BurnedRollup += op.Burned
+			// output message sends internal tx which can allocate
+			if op.IsSuccess && !op.IsEvent {
+				// general burn is already accounted for in block.BurnedSupply
+				// here we only assign burn to different reasons
+				storageBurn := b.Params.CostPerByte * op.StoragePaid
+				s.BurnedAllocation += op.Burned - storageBurn
+				s.BurnedStorage += storageBurn
+				if op.IsBurnAddress {
+					s.BurnedExplicit += op.Volume
+				}
+			}
 		}
 	}
 
@@ -201,7 +227,8 @@ func (s *Supply) Update(b *Block, bakers map[AccountID]*Baker) {
 		sb, db := bkr.StakingBalance(), bkr.DelegatedBalance
 		s.Staking += sb
 		s.Delegated += db
-		s.ActiveStake += bkr.ActiveStake(b.Params, b.Chain.Rolls)
+		// with adjustment for EOC
+		s.ActiveStake += bkr.ActiveStake(b.Params, bkr.StakeAdjust(b))
 		if bkr.IsActive {
 			s.ActiveStaking += sb
 			s.ActiveDelegated += db

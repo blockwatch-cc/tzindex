@@ -5,35 +5,20 @@ package index
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/big"
 	"sort"
 	"strconv"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/util"
-
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
 )
 
-const (
-	IncomePackSizeLog2    = 15 // =32k packs ~ 3M unpacked
-	IncomeJournalSizeLog2 = 16 // =64k entries for busy blockchains
-	IncomeCacheSize       = 2  // minimum
-	IncomeFillLevel       = 90
-	IncomeIndexKey        = "income"
-	IncomeTableKey        = "income"
-)
-
-var (
-	ErrNoIncomeEntry = errors.New("income not indexed")
-)
+const IncomeIndexKey = "income"
 
 type IncomeIndex struct {
 	db    *pack.DB
-	opts  pack.Options
 	table *pack.Table
 	cache map[model.AccountID]*model.Income
 	cycle int64
@@ -41,8 +26,8 @@ type IncomeIndex struct {
 
 var _ model.BlockIndexer = (*IncomeIndex)(nil)
 
-func NewIncomeIndex(opts pack.Options) *IncomeIndex {
-	return &IncomeIndex{opts: opts}
+func NewIncomeIndex() *IncomeIndex {
+	return &IncomeIndex{}
 }
 
 func (idx *IncomeIndex) DB() *pack.DB {
@@ -62,43 +47,34 @@ func (idx *IncomeIndex) Name() string {
 }
 
 func (idx *IncomeIndex) Create(path, label string, opts interface{}) error {
-	fields, err := pack.Fields(model.Income{})
-	if err != nil {
-		return err
-	}
 	db, err := pack.CreateDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return fmt.Errorf("creating %s database: %w", idx.Key(), err)
 	}
 	defer db.Close()
 
-	_, err = db.CreateTableIfNotExists(
-		IncomeTableKey,
-		fields,
-		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, IncomePackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, IncomeJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, IncomeCacheSize),
-			FillLevel:       util.NonZero(idx.opts.FillLevel, IncomeFillLevel),
-		})
+	m := model.Income{}
+	key := m.TableKey()
+	fields, err := pack.Fields(m)
 	if err != nil {
-		return err
+		return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
 	}
-	return nil
+
+	_, err = db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(readConfigOpts(key)))
+	return err
 }
 
 func (idx *IncomeIndex) Init(path, label string, opts interface{}) error {
-	var err error
-	idx.db, err = pack.OpenDatabase(path, idx.Key(), label, opts)
+	db, err := pack.OpenDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return err
 	}
-	idx.table, err = idx.db.Table(
-		IncomeTableKey,
-		pack.Options{
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, IncomeJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, IncomeCacheSize),
-		})
+	idx.db = db
+
+	m := model.Income{}
+	key := m.TableKey()
+
+	idx.table, err = idx.db.Table(key, m.TableOpts().Merge(readConfigOpts(key)))
 	if err != nil {
 		idx.Close()
 		return err
@@ -142,12 +118,10 @@ func (idx *IncomeIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 	}
 
 	// update expected income/deposits and luck on cycle start when params are known
-	if block.Params.IsCycleStart(block.Height) {
+	if block.TZ.IsCycleStart() {
 		// this only happens during mainnet bootstrap
 		if err := idx.updateCycleIncome(ctx, block, builder); err != nil {
 			log.Error(err)
-			// return err
-			return nil
 		}
 		// reset cache at start of cycle
 		idx.cache = make(map[model.AccountID]*model.Income)
@@ -158,22 +132,17 @@ func (idx *IncomeIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 	if len(block.TZ.Baking) > 0 || len(block.TZ.Endorsing) > 0 {
 		if err := idx.createCycleIncome(ctx, block, builder); err != nil {
 			log.Error(err)
-			// return err
 		}
 	}
 
 	// update income from flows and rights
 	if err := idx.updateBlockIncome(ctx, block, builder, false); err != nil {
 		log.Error(err)
-		// return err
-		return nil
 	}
 
 	// update burn from nonce revelations, if any
 	if err := idx.updateNonceRevelations(ctx, block, builder, false); err != nil {
 		log.Error(err)
-		// return err
-		return nil
 	}
 
 	return nil
@@ -183,23 +152,18 @@ func (idx *IncomeIndex) DisconnectBlock(ctx context.Context, block *model.Block,
 	// rollback current income
 	if err := idx.updateBlockIncome(ctx, block, builder, true); err != nil {
 		log.Error(err)
-		// return err
-		return nil
 	}
 
 	// update burn from nonce revelations, if any
 	if err := idx.updateNonceRevelations(ctx, block, builder, true); err != nil {
 		log.Error(err)
-		// return err
-		return nil
 	}
 
 	// new rights are fetched in cycles
-	if block.Params.IsCycleStart(block.Height) {
+	// if block.Params.IsCycleStart(block.Height) {
+	if block.TZ.IsCycleStart() {
 		if err := idx.DeleteCycle(ctx, block.Cycle+block.Params.PreservedCycles); err != nil {
 			log.Error(err)
-			// return err
-			return nil
 		}
 	}
 	return nil
@@ -211,7 +175,7 @@ func (idx *IncomeIndex) DeleteBlock(ctx context.Context, height int64) error {
 
 func (idx *IncomeIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 	// log.Debugf("Rollback deleting income for cycle %d", cycle)
-	_, err := pack.NewQuery("etl.income.delete").
+	_, err := pack.NewQuery("etl.delete").
 		WithTable(idx.table).
 		AndEqual("cycle", cycle).
 		Delete(ctx)
@@ -232,17 +196,24 @@ func (idx *IncomeIndex) bootstrapIncome(ctx context.Context, block *model.Block,
 	// spillover endorsement rights
 	spillover := make([]rpc.EndorsingRight, 0)
 
-	for cycle := int64(0); cycle < p.PreservedCycles+1; cycle++ {
-		// log.Infof("Income: bootstrap for cycle %d for %d bakers", cycle, len(accs))
+	var cycleEndBlock = p.BlocksPerCycle - 1
+
+	for c := range block.TZ.Baking {
+		log.Debugf("income: bootstrap for cycle %d with %d bakers", c, len(bkrs))
+		bake := block.TZ.Baking[c]
+		endorse := block.TZ.Endorsing[c]
 
 		// new income data for each cycle
 		var totalRolls int64
 		incomeMap := make(map[model.AccountID]*model.Income)
 		for _, v := range bkrs {
+			cycle := int64(c)
 			rolls := v.StakingBalance() / p.MinimalStake
 			totalRolls += rolls
 			incomeMap[v.AccountId] = &model.Income{
-				Cycle:        cycle,
+				Cycle:        int64(c),
+				StartHeight:  p.CycleStartHeight(cycle),
+				EndHeight:    p.CycleEndHeight(cycle),
 				AccountId:    v.AccountId,
 				Rolls:        rolls,
 				Balance:      v.Balance(),
@@ -252,44 +223,44 @@ func (idx *IncomeIndex) bootstrapIncome(ctx context.Context, block *model.Block,
 			}
 		}
 
-		// log.Debugf("New bootstrap income for cycle %d from no snapshot with %d bakers",
-		// 	cycle, len(incomeMap))
-
-		// pre-calculate deposit and reward amounts
+		// pre-calculate reward amounts
 		blockReward, endorseReward := p.BlockReward, p.EndorsementReward
 
 		// assign baking rights
-		cycleEndBlock := p.CycleEndHeight(cycle)
-		for _, v := range block.TZ.Baking[int(cycle)] {
+		for _, v := range bake {
 			if v.Round > 0 || v.Level > cycleEndBlock {
 				continue
 			}
 			acc, ok := builder.AccountByAddress(v.Address())
 			if !ok {
-				return fmt.Errorf("income: missing bootstrap baker %s", v.Address())
+				return fmt.Errorf("income: missing bootstrap baker %s at height %d",
+					v.Address(), v.Level)
 			}
 			ic, ok := incomeMap[acc.RowId]
 			if !ok {
-				return fmt.Errorf("income: missing bootstrap income data for baker %s %d", v.Address(), acc.RowId)
+				return fmt.Errorf("income: missing bootstrap income data for baker %q %d at height %d",
+					v.Address(), acc.RowId, v.Level)
 			}
 			ic.NBakingRights++
 			ic.ExpectedIncome += blockReward
 		}
 
 		// assign from endorsement rights in protos before Ithaca
-		for _, v := range block.TZ.Endorsing[int(cycle)] {
-			// store spillove rrights
+		for _, v := range endorse {
+			// store spillover rights
 			if v.Level >= cycleEndBlock {
 				spillover = append(spillover, v)
 				continue
 			}
 			acc, ok := builder.AccountByAddress(v.Address())
 			if !ok {
-				return fmt.Errorf("income: missing bootstrap endorser %s", v.Address())
+				return fmt.Errorf("income: missing bootstrap endorser %s at height %d",
+					v.Address(), v.Level)
 			}
 			ic, ok := incomeMap[acc.RowId]
 			if !ok {
-				return fmt.Errorf("income: missing bootstrap income data for endorser %s %d", v.Address(), acc.RowId)
+				return fmt.Errorf("income: missing bootstrap income data for endorser %s %d at height %d",
+					v.Address(), acc.RowId, v.Level)
 			}
 			ic.NEndorsingRights += int64(v.Power)
 			if p.Version < 12 {
@@ -301,18 +272,22 @@ func (idx *IncomeIndex) bootstrapIncome(ctx context.Context, block *model.Block,
 		for _, v := range spillover {
 			acc, ok := builder.AccountByAddress(v.Address())
 			if !ok {
-				return fmt.Errorf("income: missing bootstrap endorser %s", v.Address())
+				return fmt.Errorf("income: missing bootstrap endorser %s at height %d",
+					v.Address(), v.Level)
 			}
 			ic, ok := incomeMap[acc.RowId]
 			if !ok {
-				return fmt.Errorf("income: missing bootstrap income data for endorser %s %d", v.Address(), acc.RowId)
+				return fmt.Errorf("income: missing bootstrap income data for endorser %s %d at height %d",
+					v.Address(), acc.RowId, v.Level)
 			}
 			ic.NEndorsingRights += int64(v.Power)
 			if p.Version < 12 {
 				ic.ExpectedIncome += endorseReward * int64(v.Power)
 			}
 		}
+		// prepare for next cycle
 		spillover = spillover[:0]
+		cycleEndBlock += p.BlocksPerCycle
 
 		if p.Version >= 12 {
 			// Endorsement rewards are not distributed at each block anymore but at the end
@@ -377,7 +352,7 @@ func (idx *IncomeIndex) bootstrapIncome(ctx context.Context, block *model.Block,
 //
 // also used to update income after upgrade to v006 an v012 for future cycles due
 // to changes in rights distributions and reward allocation
-func (idx *IncomeIndex) updateCycleIncome(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
+func (idx *IncomeIndex) updateCycleIncome(ctx context.Context, block *model.Block, _ model.BlockBuilder) error {
 	p := block.Params
 	if !p.IsMainnet() {
 		return nil
@@ -398,7 +373,9 @@ func (idx *IncomeIndex) updateCycleIncome(ctx context.Context, block *model.Bloc
 		incomes := make([]*model.Income, 0)
 		var totalRolls int64
 		err := idx.table.Stream(ctx,
-			pack.NewQuery("etl.income.update").AndEqual("cycle", v),
+			pack.NewQuery("etl.update").
+				WithTable(idx.table).
+				AndEqual("cycle", v),
 			func(r pack.Row) error {
 				in := &model.Income{}
 				if err := r.Decode(in); err != nil {
@@ -433,23 +410,30 @@ func (idx *IncomeIndex) createCycleIncome(ctx context.Context, block *model.Bloc
 	incomeMap := make(map[model.AccountID]*model.Income)
 	var totalRolls int64
 
+	if sn == nil {
+		return fmt.Errorf("income: missing snapshot info at block %d", block.Height)
+	}
+
 	if sn.Base < 0 {
 		// build income from current balance values because there is no snapshot yet
 		bkrs := make([]*model.Baker, 0)
 		for _, v := range builder.Bakers() {
+			// skip inactive bakers and bakers with too low staking balance
+			if !v.IsActive || v.StakingBalance() < p.MinimalStake {
+				continue
+			}
 			bkrs = append(bkrs, v)
 		}
 		sort.Slice(bkrs, func(i, j int) bool { return bkrs[i].AccountId < bkrs[j].AccountId })
 
 		for _, v := range bkrs {
-			// skip inactive bakers and bakers with no roll
 			rolls := v.StakingBalance() / p.MinimalStake
-			if !v.IsActive || rolls == 0 {
-				continue
-			}
-			log.Debugf("income: created income record for baker %s %d for cycle %d without snapshot", v, v.AccountId, sn.Cycle)
+			log.Debugf("income: created income for baker %s %d stake %d in cycle %d without snapshot",
+				v, v.AccountId, v.StakingBalance(), sn.Cycle)
 			incomeMap[v.AccountId] = &model.Income{
 				Cycle:        sn.Cycle,
+				StartHeight:  p.CycleStartHeight(sn.Cycle),
+				EndHeight:    p.CycleEndHeight(sn.Cycle),
 				AccountId:    v.AccountId,
 				Rolls:        rolls,
 				Balance:      v.Balance(),
@@ -462,12 +446,12 @@ func (idx *IncomeIndex) createCycleIncome(ctx context.Context, block *model.Bloc
 
 	} else {
 		// build income from snapshot
-		snap, err := builder.Table(SnapshotTableKey)
+		snap, err := builder.Table(model.SnapshotTableKey)
 		if err != nil {
 			return err
 		}
 		s := &model.Snapshot{}
-		err = pack.NewQuery("snapshot.create_income").
+		err = pack.NewQuery("etl.create").
 			WithTable(snap).
 			WithoutCache().
 			AndEqual("cycle", sn.Base).  // source snapshot cycle
@@ -480,6 +464,8 @@ func (idx *IncomeIndex) createCycleIncome(ctx context.Context, block *model.Bloc
 				if s.Rolls > 0 {
 					incomeMap[s.AccountId] = &model.Income{
 						Cycle:        sn.Cycle, // the future cycle
+						StartHeight:  p.CycleStartHeight(sn.Cycle),
+						EndHeight:    p.CycleEndHeight(sn.Cycle),
 						AccountId:    s.AccountId,
 						Rolls:        s.Rolls,
 						Balance:      s.Balance,
@@ -506,14 +492,16 @@ func (idx *IncomeIndex) createCycleIncome(ctx context.Context, block *model.Bloc
 		}
 		bkr, ok := builder.BakerByAddress(v.Address())
 		if !ok {
-			log.Errorf("income: missing baker %s with rights in cycle %d", v.Address(), block.Cycle)
+			log.Warnf("income: missing baker %s with rights in cycle %d", v.Address(), block.Cycle)
 			continue
 		}
 		ic, ok := incomeMap[bkr.AccountId]
 		if !ok {
-			log.Debugf("income: create income record for baker %s %d with rights for cycle %d without snapshot", bkr, bkr.AccountId, sn.Cycle)
+			log.Warnf("income: create income record for baker %s %d with rights for cycle %d without snapshot", bkr, bkr.AccountId, sn.Cycle)
 			ic = &model.Income{
 				Cycle:        sn.Cycle,
+				StartHeight:  p.CycleStartHeight(sn.Cycle),
+				EndHeight:    p.CycleEndHeight(sn.Cycle),
 				AccountId:    bkr.AccountId,
 				Rolls:        bkr.StakingBalance() / p.MinimalStake,
 				Balance:      bkr.Balance(),
@@ -525,7 +513,7 @@ func (idx *IncomeIndex) createCycleIncome(ctx context.Context, block *model.Bloc
 			totalRolls += ic.Rolls
 		}
 		ic.NBakingRights++
-		ic.ExpectedIncome += p.BlockReward
+		ic.ExpectedIncome += p.BlockReward // Ithaca+: block reward + max bonus
 	}
 
 	// Note: expectations about endorsement rewards for the last block in a cycle:
@@ -544,14 +532,16 @@ func (idx *IncomeIndex) createCycleIncome(ctx context.Context, block *model.Bloc
 		}
 		bkr, ok := builder.BakerByAddress(v.Address())
 		if !ok {
-			log.Errorf("income: missing endorser %s with rights in cycle %d", v.Address(), sn.Cycle)
+			log.Warnf("income: missing endorser %s with rights in cycle %d", v.Address(), sn.Cycle)
 			continue
 		}
 		ic, ok := incomeMap[bkr.AccountId]
 		if !ok {
-			log.Debugf("income: create income record for endorser %s %d with rights for cycle %d without snapshot", bkr, bkr.AccountId, sn.Cycle)
+			log.Warnf("income: create income record for endorser %s %d with rights for cycle %d without snapshot", bkr, bkr.AccountId, sn.Cycle)
 			ic = &model.Income{
 				Cycle:        sn.Cycle,
+				StartHeight:  p.CycleStartHeight(sn.Cycle),
+				EndHeight:    p.CycleEndHeight(sn.Cycle),
 				AccountId:    bkr.AccountId,
 				Rolls:        bkr.StakingBalance() / p.MinimalStake,
 				Balance:      bkr.Balance(),
@@ -573,19 +563,21 @@ func (idx *IncomeIndex) createCycleIncome(ctx context.Context, block *model.Bloc
 	// baker may be missing when deactivated or closing
 	for _, v := range block.TZ.PrevEndorsing {
 		if !v.Address().IsValid() {
-			log.Errorf("income: empty endorser in last block rights %#v", block.TZ.PrevEndorsing)
+			log.Warnf("income: empty endorser in last block rights %#v", block.TZ.PrevEndorsing)
 			continue
 		}
 		bkr, ok := builder.BakerByAddress(v.Address())
 		if !ok {
-			log.Errorf("income: missing endorser %s with last block rights in previous cycle %d", v.Address(), sn.Cycle-1)
+			log.Warnf("income: missing endorser %s with last block rights in previous cycle %d", v.Address(), sn.Cycle-1)
 			continue
 		}
 		ic, ok := incomeMap[bkr.AccountId]
 		if !ok {
-			log.Debugf("income: create income record for endorser %s %d with rights for last block in cycle %d without snapshot", bkr, bkr.AccountId, sn.Cycle-1)
+			log.Debugf("income: create for endorser %s %d with rights for last block in cycle %d without snapshot", bkr, bkr.AccountId, sn.Cycle-1)
 			ic = &model.Income{
 				Cycle:        sn.Cycle,
+				StartHeight:  p.CycleStartHeight(sn.Cycle),
+				EndHeight:    p.CycleEndHeight(sn.Cycle),
 				AccountId:    bkr.AccountId,
 				Rolls:        bkr.StakingBalance() / p.MinimalStake,
 				Balance:      bkr.Balance(),
@@ -679,7 +671,7 @@ func (idx *IncomeIndex) updateBlockIncome(ctx context.Context, block *model.Bloc
 	// - post-Ithaca deposits count from frozen deposit balance in accounts
 	// - deposits are processed at end of cycle
 	// - don't run this function during protocol upgrade code (flows == 0)
-	if p.IsCycleEnd(block.Height) && len(block.Flows) > 0 && p.Version >= 12 {
+	if block.TZ.IsCycleEnd() && len(block.Flows) > 0 && p.Version >= 12 {
 		upd := make([]pack.Item, 0)
 		for _, bkr := range builder.Bakers() {
 			if bkr.StakingBalance() < p.MinimalStake {
@@ -692,8 +684,8 @@ func (idx *IncomeIndex) updateBlockIncome(ctx context.Context, block *model.Bloc
 				// exists - we expect multiple deposit events happening on a fresh
 				// baker before he get rights, but income records are only created for
 				// bakers with rights
-				if err != ErrNoIncomeEntry {
-					return fmt.Errorf("income: handling deposit for baker %d at height %d in cycle %d: %w",
+				if err != model.ErrNoIncome {
+					return fmt.Errorf("income: deposit for baker %d at height %d in cycle %d: %w",
 						bkr.AccountId, block.Height, block.Cycle+1, err)
 				}
 				continue
@@ -711,16 +703,14 @@ func (idx *IncomeIndex) updateBlockIncome(ctx context.Context, block *model.Bloc
 		in, ok := incomeMap[block.AbsentBaker]
 		if !ok {
 			in, err = idx.loadIncome(ctx, block.Cycle, block.AbsentBaker)
-			if err != nil {
+			if err == nil {
+				incomeMap[in.AccountId] = in
+			} else {
 				// should not happen
 				// log error (likely from just deactivated bakers or
 				// bakers without rights in cycle)
-				log.Errorf("income: unknown absent baker %d in block %d c%d",
+				log.Debugf("income: unknown absent baker %d in block %d c%d",
 					block.AbsentBaker, block.Height, block.Cycle)
-				// return fmt.Errorf("income: unknown absent baker %d in block %d c%d",
-				// 	block.AbsentBaker, block.Height, block.Cycle)
-			} else {
-				incomeMap[in.AccountId] = in
 			}
 		}
 		if in != nil {
@@ -732,15 +722,14 @@ func (idx *IncomeIndex) updateBlockIncome(ctx context.Context, block *model.Bloc
 		in, ok := incomeMap[v]
 		if !ok {
 			in, err = idx.loadIncome(ctx, block.Cycle, v)
-			if err != nil {
+			if err == nil {
+				incomeMap[in.AccountId] = in
+			} else {
+				// should not happen
 				// ignore error (likely from just deactivated bakers or
 				// bakers without rights in cycle)
 				log.Debugf("income: unknown absent endorser %d in block %d c%d",
 					v, block.Height, block.Cycle)
-				// return fmt.Errorf("income: unknown absent endorser %d in block %d c%d",
-				// 	v, block.Height, block.Cycle)
-			} else {
-				incomeMap[in.AccountId] = in
 			}
 		}
 		if in != nil {
@@ -756,7 +745,7 @@ func (idx *IncomeIndex) updateBlockIncome(ctx context.Context, block *model.Bloc
 		case model.OpTypeDeposit:
 			// the very first mainnet cycle 468 on Ithaca created a deposit
 			// operation at the first cycle block (!)
-			if p.Version < 12 || !p.IsCycleStart(block.Height) {
+			if p.Version < 12 || !block.TZ.IsCycleStart() {
 				continue
 			}
 			in, ok := incomeMap[op.SenderId]
@@ -997,7 +986,7 @@ func (idx *IncomeIndex) updateNonceRevelations(ctx context.Context, block *model
 
 func (idx *IncomeIndex) loadIncome(ctx context.Context, cycle int64, id model.AccountID) (*model.Income, error) {
 	if cycle < 0 && id <= 0 {
-		return nil, ErrNoIncomeEntry
+		return nil, model.ErrNoIncome
 	}
 	// try load from cache
 	in, ok := idx.cache[id]
@@ -1006,13 +995,13 @@ func (idx *IncomeIndex) loadIncome(ctx context.Context, cycle int64, id model.Ac
 	}
 	// load from table
 	in = &model.Income{}
-	err := pack.NewQuery("etl.income.search").
+	err := pack.NewQuery("etl.search").
 		WithTable(idx.table).
 		AndEqual("cycle", cycle).
 		AndEqual("account_id", id).
 		Execute(ctx, in)
 	if err != nil || in.RowId == 0 {
-		return nil, ErrNoIncomeEntry
+		return nil, model.ErrNoIncome
 	}
 	if idx.cache != nil && cycle == idx.cycle {
 		idx.cache[id] = in
@@ -1023,7 +1012,7 @@ func (idx *IncomeIndex) loadIncome(ctx context.Context, cycle int64, id model.Ac
 func (idx *IncomeIndex) Flush(ctx context.Context) error {
 	for _, v := range idx.Tables() {
 		if err := v.Flush(ctx); err != nil {
-			return err
+			log.Errorf("Flushing %s table: %v", v.Name(), err)
 		}
 	}
 	return nil

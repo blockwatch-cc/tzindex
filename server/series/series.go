@@ -17,8 +17,8 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 
-	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -223,7 +223,7 @@ type SeriesBucket interface {
 	BuildQuery(*server.Context, *SeriesRequest) pack.Query
 
 	// series handlers
-	Init(params *tezos.Params, columns []string, verbose bool)
+	Init(params *rpc.Params, columns []string, verbose bool)
 	Add(m SeriesModel)
 	IsEmpty() bool
 	Reset()
@@ -257,8 +257,9 @@ type SeriesRequest struct {
 	To       util.Time       `schema:"end_date"`
 	Limit    uint            `schema:"limit"`
 	Verbose  bool            `schema:"verbose"`
-	Format   string          `schema:"-"`     // from URL
-	Order    pack.OrderType  `schema:"order"` // asc/desc
+	Format   string          `schema:"-"`        // from URL
+	Order    pack.OrderType  `schema:"order"`    // asc/desc
+	Filename string          `schema:"filename"` // for CSV downloads
 
 	// internal
 	count          int

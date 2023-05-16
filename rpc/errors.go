@@ -1,12 +1,15 @@
-// Copyright (c) 2018 ECAD Labs Inc. MIT License
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2023 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"os"
 )
 
 const (
@@ -180,3 +183,38 @@ var (
 	_ Error    = Errors{}
 	_ RPCError = &rpcError{}
 )
+
+func isNetError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// direct type
+	switch err.(type) {
+	case *net.OpError:
+		return true
+	case *net.DNSError:
+		return true
+	case *os.SyscallError:
+		return true
+	case *url.Error:
+		return true
+	}
+	// wrapped
+	var (
+		neterr *net.OpError
+		dnserr *net.DNSError
+		oserr  *os.SyscallError
+		urlerr *url.Error
+	)
+	switch {
+	case errors.As(err, &neterr):
+		return true
+	case errors.As(err, &dnserr):
+		return true
+	case errors.As(err, &oserr):
+		return true
+	case errors.As(err, &urlerr):
+		return true
+	}
+	return false
+}

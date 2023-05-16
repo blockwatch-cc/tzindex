@@ -4,15 +4,16 @@
 package explorer
 
 import (
-	"github.com/gorilla/mux"
+	"errors"
 	"net/http"
 	"time"
+
+	"github.com/gorilla/mux"
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/server"
 )
@@ -28,7 +29,7 @@ type Account struct {
 	RowId              model.AccountID      `json:"row_id"`
 	Address            string               `json:"address"`
 	Type               string               `json:"address_type"`
-	Pubkey             tezos.Key            `json:"pubkey,omitempty"`
+	Pubkey             string               `json:"pubkey,omitempty"`
 	Counter            int64                `json:"counter"`
 	Baker              string               `json:"baker,omitempty"`
 	Creator            string               `json:"creator,omitempty"`
@@ -53,14 +54,14 @@ type Account struct {
 	TotalFeesUsed      float64              `json:"total_fees_used"`
 	UnclaimedBalance   float64              `json:"unclaimed_balance,omitempty"`
 	SpendableBalance   float64              `json:"spendable_balance"`
-	FrozenBond         float64              `json:"frozen_bond"`
-	LostBond           float64              `json:"lost_bond"`
+	FrozenBond         float64              `json:"frozen_bond,omitempty"`
+	LostBond           float64              `json:"lost_bond,omitempty"`
 	IsFunded           bool                 `json:"is_funded"`
-	IsActivated        bool                 `json:"is_activated"`
+	IsActivated        bool                 `json:"is_activated,omitempty"`
 	IsDelegated        bool                 `json:"is_delegated"`
 	IsRevealed         bool                 `json:"is_revealed"`
-	IsBaker            bool                 `json:"is_baker"`
-	IsContract         bool                 `json:"is_contract"`
+	IsBaker            bool                 `json:"is_baker,omitempty"`
+	IsContract         bool                 `json:"is_contract,omitempty"`
 	NTxSuccess         int                  `json:"n_tx_success"`
 	NTxFailed          int                  `json:"n_tx_failed"`
 	NTxOut             int                  `json:"n_tx_out"`
@@ -82,7 +83,7 @@ func NewAccount(ctx *server.Context, a *model.Account, args server.Options) *Acc
 		RowId:            a.RowId,
 		Address:          a.String(),
 		Type:             a.Type.String(),
-		Pubkey:           a.Pubkey,
+		Pubkey:           a.Pubkey.String(),
 		Counter:          a.Counter,
 		FirstIn:          a.FirstIn,
 		FirstOut:         a.FirstOut,
@@ -155,12 +156,7 @@ func NewAccount(ctx *server.Context, a *model.Account, args server.Options) *Acc
 		}
 	}
 
-	// update last-modified header at least once per cycle to reflect closed baker decay
 	acc.lastmod = acc.LastSeenTime
-	if cc := p.CycleFromHeight(tip.BestHeight); p.CycleFromHeight(acc.LastSeen) < cc {
-		acc.lastmod = ctx.Indexer.LookupBlockTime(ctx.Context, p.CycleStartHeight(cc))
-	}
-
 	return acc
 }
 
@@ -219,22 +215,20 @@ func loadAccount(ctx *server.Context) *model.Account {
 		}
 		acc, err := ctx.Indexer.LookupAccount(ctx, addr)
 		if err != nil {
-			switch err {
-			case index.ErrNoAccountEntry:
+			if errors.Is(err, model.ErrNoAccount) {
 				// cross-lookup activated account from blinded address
-				if addr.Type != tezos.AddressTypeBlinded {
+				if addr.Type() != tezos.AddressTypeBlinded {
 					panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no such account", err))
 				}
 				acc, err = ctx.Indexer.FindActivatedAccount(ctx, addr)
 				if err != nil {
-					switch err {
-					case index.ErrNoAccountEntry:
+					if errors.Is(err, model.ErrNoAccount) {
 						panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no such account", err))
-					default:
+					} else {
 						panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
 					}
 				}
-			default:
+			} else {
 				panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
 			}
 		}
@@ -256,7 +250,7 @@ func ReadDeployedContracts(ctx *server.Context) (interface{}, int) {
 	ccs, err := ctx.Indexer.ListContracts(ctx, etl.ListRequest{
 		Account: acc,
 		Offset:  args.Offset,
-		Limit:   args.Limit,
+		Limit:   ctx.Cfg.ClampExplore(args.Limit),
 		Cursor:  args.Cursor,
 		Order:   args.Order,
 	})

@@ -15,8 +15,8 @@ import (
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/tezos"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -32,14 +32,14 @@ type FlowSeries struct {
 	AmountOut int64     `json:"amount_out"`
 
 	columns util.StringList // cond. cols & order when brief
-	params  *tezos.Params
+	params  *rpc.Params
 	verbose bool
 	null    bool
 }
 
 var _ SeriesBucket = (*FlowSeries)(nil)
 
-func (s *FlowSeries) Init(params *tezos.Params, columns []string, verbose bool) {
+func (s *FlowSeries) Init(params *rpc.Params, columns []string, verbose bool) {
 	s.params = params
 	s.columns = columns
 	s.verbose = verbose
@@ -273,7 +273,7 @@ func (s *FlowSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Q
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-				if err != nil && err != index.ErrNoAccountEntry {
+				if err != nil && err != model.ErrNoAccount {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				// Note: when not found we insert an always false condition
@@ -292,7 +292,7 @@ func (s *FlowSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Q
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
+					if err != nil && err != model.ErrNoAccount {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account

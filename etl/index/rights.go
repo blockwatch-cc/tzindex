@@ -1,38 +1,22 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
 )
 
-var (
-	RightsPackSizeLog2    = 13 // 8k
-	RightsJournalSizeLog2 = 14 // 16k
-	RightsCacheSize       = 2
-	RightsFillLevel       = 100
-	RightsIndexKey        = "rights"
-	RightsTableKey        = "rights"
-)
-
-var (
-	// ErrNoRightsEntry is an error that indicates a requested entry does
-	// not exist in the chain table.
-	ErrNoRightsEntry = errors.New("right not found")
-)
+var RightsIndexKey = "rights"
 
 type RightsIndex struct {
 	db    *pack.DB
-	opts  pack.Options
 	table *pack.Table
 	cache map[model.AccountID]*model.Right
 	cycle int64
@@ -40,9 +24,8 @@ type RightsIndex struct {
 
 var _ model.BlockIndexer = (*RightsIndex)(nil)
 
-func NewRightsIndex(opts pack.Options) *RightsIndex {
+func NewRightsIndex() *RightsIndex {
 	return &RightsIndex{
-		opts:  opts,
 		cache: make(map[model.AccountID]*model.Right),
 	}
 }
@@ -64,38 +47,34 @@ func (idx *RightsIndex) Name() string {
 }
 
 func (idx *RightsIndex) Create(path, label string, opts interface{}) error {
-	fields, err := pack.Fields(model.Right{})
-	if err != nil {
-		return err
-	}
 	db, err := pack.CreateDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return fmt.Errorf("creating %s database: %w", idx.Key(), err)
 	}
 	defer db.Close()
 
-	_, err = db.CreateTableIfNotExists(
-		RightsTableKey,
-		fields,
-		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, RightsPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, RightsJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, RightsCacheSize),
-			FillLevel:       util.NonZero(idx.opts.FillLevel, RightsFillLevel),
-		})
+	m := model.Right{}
+	key := m.TableKey()
+	fields, err := pack.Fields(m)
+	if err != nil {
+		return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
+	}
+
+	_, err = db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(readConfigOpts(key)))
 	return err
 }
 
 func (idx *RightsIndex) Init(path, label string, opts interface{}) error {
-	var err error
-	idx.db, err = pack.OpenDatabase(path, idx.Key(), label, opts)
+	db, err := pack.OpenDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return err
 	}
-	idx.table, err = idx.db.Table(RightsTableKey, pack.Options{
-		JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, RightsJournalSizeLog2),
-		CacheSize:       util.NonZero(idx.opts.CacheSize, RightsCacheSize),
-	})
+	idx.db = db
+
+	m := model.Right{}
+	key := m.TableKey()
+
+	idx.table, err = idx.db.Table(key, m.TableOpts().Merge(readConfigOpts(key)))
 	if err != nil {
 		idx.Close()
 		return err
@@ -124,11 +103,12 @@ func (idx *RightsIndex) Close() error {
 }
 
 func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
-	p := block.Params
-
 	// reset cache at start of cycle
-	if block.Params.IsCycleStart(block.Height) {
-		idx.cache = make(map[model.AccountID]*model.Right)
+	if block.TZ.IsCycleStart() {
+		for n, v := range idx.cache {
+			v.Free()
+			delete(idx.cache, n)
+		}
 		idx.cycle = block.Cycle
 	}
 
@@ -150,7 +130,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 				// seed nonces are injected by the current block's baker, but may be sent
 				// by another baker, rights are from cycle - 1 !!
 				right = &model.Right{}
-				err := pack.NewQuery("rights.search_seed").
+				err := pack.NewQuery("etl.search_seed").
 					WithTable(idx.table).
 					AndEqual("cycle", block.Cycle-1).
 					AndEqual("account_id", op.CreatorId).
@@ -162,9 +142,9 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 				upd = append(upd, right)
 			}
 			// use params that were active at the seed block
-			params := p.ForHeight(sop.Level)
-			start := params.CycleStartHeight(params.CycleFromHeight(sop.Level))
-			pos := int((sop.Level - start) / params.BlocksPerCommitment)
+			p := builder.Params(sop.Level)
+			start := block.TZ.GetCycleStart() - p.BlocksPerCycle // -1 cycle!
+			pos := int((sop.Level - start) / p.BlocksPerCommitment)
 			right.Seeded.Set(pos)
 		}
 
@@ -174,16 +154,19 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 		}
 	}
 
+	// use current block params
+	p := block.Params
+
 	// update baking right
 	if block.ProposerId > 0 {
 		right, err := idx.loadRight(ctx, block.Cycle, block.ProposerId)
 		if err != nil {
 			log.Warnf("rights: missing baking right for block %d proposer %d: %v", block.Height, block.ProposerId, err)
 		} else {
-			start := p.CycleStartHeight(block.Cycle)
-			right.Baked.Set(int(block.Height - start))
-			if p.IsSeedRequired(block.Height) {
-				right.Seed.Set(int((block.Height - start) / p.BlocksPerCommitment))
+			pos := int(block.TZ.GetCyclePosition())
+			right.Baked.Set(pos)
+			if block.TZ.IsSeedRequired() {
+				right.Seed.Set(pos / int(p.BlocksPerCommitment))
 			}
 			if err := idx.table.Update(ctx, right); err != nil {
 				return err
@@ -191,7 +174,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 			// update reliability
 			bkr, ok := builder.BakerById(right.AccountId)
 			if ok {
-				bkr.Reliability = right.Reliability(int(p.CyclePosition(block.Height)))
+				bkr.Reliability = right.Reliability(int(block.TZ.GetCyclePosition()))
 			}
 		}
 	}
@@ -207,18 +190,18 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 		}
 		// endorsing rights are for parent block
 		cycle := block.Parent.Cycle
+		params := block.Parent.Params
 
 		// all endorsements are for block - 1, make sure we use the correct settings
 		// for the cycle (in case of first block)
-		param := p.ForCycle(cycle)
-		start := param.CycleStartHeight(cycle)
-		pos := int(block.Height-start) - 1
+		start := block.Parent.TZ.GetCycleStart()
+		pos := int(block.Height - 1 - start)
 		upd := make([]pack.Item, 0)
 		for id := range endorsers {
 			right, err := idx.loadRight(ctx, cycle, id)
 			if err != nil {
 				// on protocol upgrades we may see extra endorsers, create rights here
-				right = model.NewRight(id, cycle, int(param.BlocksPerCycle), int(param.BlocksPerCycle/param.BlocksPerCommitment))
+				right = model.NewRight(id, start, cycle, int(params.BlocksPerCycle), int(params.BlocksPerCycle/params.BlocksPerCommitment))
 				log.Debugf("rights: add extra endorsing right for account %d on block %d (-1)", id, block.Height)
 				if err := idx.table.Insert(ctx, right); err != nil {
 					return fmt.Errorf("rights: adding extra exdorsing right: %v", err)
@@ -229,7 +212,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 			upd = append(upd, right)
 			bkr, ok := builder.BakerById(right.AccountId)
 			if ok {
-				bkr.Reliability = right.Reliability(int(p.CyclePosition(block.Height)))
+				bkr.Reliability = right.Reliability(int(block.TZ.GetCyclePosition()))
 			}
 		}
 
@@ -244,27 +227,34 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 		return nil
 	}
 
-	// get params at last baking block height (this avoids re-adjusting params
-	// for every call to CycleFromHeight() during bootstrap on block 1)
-	pp := p.ForHeight(block.TZ.Baking[0][len(block.TZ.Baking)-1].Level)
+	// we use current block's params as they are the most recent ones,
+	// - during regular block processing this
+	// - during protocol migration this is the set of new params
+	start := block.TZ.Baking[0][0].Level
+	cycle := p.HeightToCycle(start)
 
 	// create new rights data for each baker, add baking and endorsing rights
+	// process cycle by cycle (only during bootstrap/genesis we handle multiple cycles)
 	for c := range block.TZ.Baking {
-		// process cycle by cycle (only during bootstrap/genesis we handle multiple cycles)
-		cycle := pp.CycleFromHeight(block.TZ.Baking[c][0].Level)
-		start := pp.CycleStartHeight(cycle)
+		// advance to next cycle (only on genesis)
+		if c > 0 {
+			start += p.BlocksPerCycle
+			cycle++
+		}
+		bake := block.TZ.Baking[c]
+		endorse := block.TZ.Endorsing[c]
 
-		// sort rights by baker to speed up processing, we don't really care when
+		// sort rights by baker to speed up processing, we don't care when
 		// levels end up unsorted, so we use the faster quicksort
-		sort.Slice(block.TZ.Baking[c], func(i, j int) bool {
-			return block.TZ.Baking[c][i].Delegate < block.TZ.Baking[c][j].Delegate
+		sort.Slice(bake, func(i, j int) bool {
+			return bake[i].Delegate < bake[j].Delegate
 		})
-		sort.Slice(block.TZ.Endorsing[c], func(i, j int) bool {
-			return block.TZ.Endorsing[c][i].Delegate < block.TZ.Endorsing[c][j].Delegate
+		sort.Slice(endorse, func(i, j int) bool {
+			return endorse[i].Delegate < endorse[j].Delegate
 		})
 
 		log.Debugf("rights: adding %d baking and %d endorsing rights for cycle %d starting at %d",
-			len(block.TZ.Baking[c]), len(block.TZ.Endorsing[c]), cycle, start)
+			len(bake), len(endorse), cycle, start)
 
 		// build rights bitmaps for each baker
 		rightsByBaker := make(map[model.AccountID]*model.Right)
@@ -274,7 +264,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 			right      *model.Right
 			ecnt, bcnt int
 		)
-		for _, v := range block.TZ.Baking[c] {
+		for _, v := range bake {
 			if v.Round > 0 {
 				continue
 			}
@@ -286,7 +276,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 					continue
 				}
 				// create a new right and insert its pointer for lookup
-				right = model.NewRight(acc.RowId, cycle, int(pp.BlocksPerCycle), int(pp.BlocksPerCycle/pp.BlocksPerCommitment))
+				right = model.NewRight(acc.RowId, start, cycle, int(p.BlocksPerCycle), int(p.BlocksPerCycle/p.BlocksPerCommitment))
 				rightsByBaker[acc.RowId] = right
 				ins = append(ins, right)
 			}
@@ -296,7 +286,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 
 		// same for endorsing rights
 		baker = ""
-		for _, v := range block.TZ.Endorsing[c] {
+		for _, v := range endorse {
 			if baker != v.Delegate {
 				baker = v.Delegate
 				acc, ok := builder.AccountByAddress(v.Address())
@@ -308,7 +298,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 				right, ok = rightsByBaker[acc.RowId]
 				if !ok {
 					// create a new right for endorsers who are not yet known from above
-					right = model.NewRight(acc.RowId, cycle, int(pp.BlocksPerCycle), int(pp.BlocksPerCycle/pp.BlocksPerCommitment))
+					right = model.NewRight(acc.RowId, start, cycle, int(p.BlocksPerCycle), int(p.BlocksPerCycle/p.BlocksPerCommitment))
 					rightsByBaker[acc.RowId] = right
 					ins = append(ins, right)
 				}
@@ -324,7 +314,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 				return err
 			}
 			s := &model.Snapshot{}
-			err = pack.NewQuery("snapshot.create_rights").
+			err = pack.NewQuery("etl.create_rights").
 				WithTable(snap).
 				WithoutCache().
 				AndEqual("cycle", sn.Base).  // source snapshot cycle
@@ -340,7 +330,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 					if _, ok := rightsByBaker[s.AccountId]; ok {
 						return nil
 					}
-					right = model.NewRight(s.AccountId, cycle, int(pp.BlocksPerCycle), int(pp.BlocksPerCycle/pp.BlocksPerCommitment))
+					right = model.NewRight(s.AccountId, start, cycle, int(p.BlocksPerCycle), int(p.BlocksPerCycle/p.BlocksPerCommitment))
 					rightsByBaker[s.AccountId] = right
 					ins = append(ins, right)
 					return nil
@@ -354,9 +344,12 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 		sort.Slice(ins, func(i, j int) bool { return ins[i].(*model.Right).AccountId < ins[j].(*model.Right).AccountId })
 
 		// insert full cycle worth of rights
-		log.Debugf("Inserting %d records with %d baking and %d endorsing rights", len(ins), bcnt, ecnt)
+		log.Debugf("rights: inserting %d records with %d baking and %d endorsing rights", len(ins), bcnt, ecnt)
 		if err := idx.table.Insert(ctx, ins); err != nil {
 			return err
+		}
+		for _, v := range ins {
+			v.(*model.Right).Free()
 		}
 		ins = ins[:0]
 	}
@@ -371,9 +364,9 @@ func (idx *RightsIndex) DisconnectBlock(ctx context.Context, block *model.Block,
 
 	// on first block of cycle, also clear endorsing rights of previous cycle
 	// and entire last future cycle
-	if block.Params.IsCycleStart(block.Height) && block.Parent != nil {
+	if block.TZ.IsCycleStart() && block.Parent != nil {
 		prevBlocksPerCycle := block.Parent.Params.BlocksPerCycle
-		err := pack.NewQuery("rights.disconnect_start_of_cycle").
+		err := pack.NewQuery("etl.rollback_start").
 			WithTable(idx.table).
 			AndRange("cycle", cycle-1, cycle).
 			Stream(ctx, func(row pack.Row) error {
@@ -391,7 +384,7 @@ func (idx *RightsIndex) DisconnectBlock(ctx context.Context, block *model.Block,
 				return nil
 			})
 		if err != nil {
-			return fmt.Errorf("rights: SOC disconnect for block %d: %w", block.Height, err)
+			return fmt.Errorf("rights: rollback start block %d: %w", block.Height, err)
 		}
 		if err := idx.table.Update(ctx, upd); err != nil {
 			return err
@@ -400,13 +393,12 @@ func (idx *RightsIndex) DisconnectBlock(ctx context.Context, block *model.Block,
 	} else {
 		// on a regular mid-cycle block, clear same-cycle bits only
 		p := block.Params
-		start := p.CycleStartHeight(cycle)
-		bakePos := int(block.Height - start)
+		bakePos := int(block.TZ.GetCyclePosition())
 		seedPos := -1
-		if p.IsSeedRequired(block.Height) {
-			seedPos = int((block.Height - start) / p.BlocksPerCommitment)
+		if block.TZ.IsSeedRequired() {
+			seedPos = bakePos / int(p.BlocksPerCommitment)
 		}
-		err := pack.NewQuery("rights.disconnect_mid_cycle").
+		err := pack.NewQuery("etl.rollback_middle").
 			WithTable(idx.table).
 			AndEqual("cycle", cycle).
 			Stream(ctx, func(row pack.Row) error {
@@ -423,7 +415,7 @@ func (idx *RightsIndex) DisconnectBlock(ctx context.Context, block *model.Block,
 				return nil
 			})
 		if err != nil {
-			return fmt.Errorf("rights: MOC disconnect for block %d: %w", block.Height, err)
+			return fmt.Errorf("rights: rollback block %d: %w", block.Height, err)
 		}
 		return idx.table.Update(ctx, upd)
 	}
@@ -435,7 +427,7 @@ func (idx *RightsIndex) DeleteBlock(ctx context.Context, height int64) error {
 
 func (idx *RightsIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 	// log.Debugf("Rollback deleting rights for cycle %d", cycle)
-	_, err := pack.NewQuery("etl.rights.delete").
+	_, err := pack.NewQuery("etl.delete").
 		WithTable(idx.table).
 		AndEqual("cycle", cycle).
 		Delete(ctx)
@@ -445,7 +437,7 @@ func (idx *RightsIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 func (idx *RightsIndex) Flush(ctx context.Context) error {
 	for _, v := range idx.Tables() {
 		if err := v.Flush(ctx); err != nil {
-			return err
+			log.Errorf("Flushing %s table: %v", v.Name(), err)
 		}
 	}
 	return nil
@@ -456,17 +448,19 @@ func (idx *RightsIndex) loadRight(ctx context.Context, cycle int64, id model.Acc
 	if ok && right.Cycle == cycle {
 		return right, nil
 	}
-	right = &model.Right{}
-	err := pack.NewQuery("rights.search_bake").
+	right = model.AllocRight()
+	err := pack.NewQuery("etl.search_bake").
 		WithTable(idx.table).
 		AndEqual("cycle", cycle).
 		AndEqual("account_id", id).
 		Execute(ctx, right)
 	if err != nil {
+		right.Free()
 		return nil, err
 	}
 	if right.RowId == 0 {
-		return nil, ErrNoRightsEntry
+		right.Free()
+		return nil, model.ErrNoRights
 	}
 	if right.Cycle == idx.cycle {
 		idx.cache[right.AccountId] = right

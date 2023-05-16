@@ -89,6 +89,7 @@ const (
 	FlowTypePayStorage                         // 22 - Kathmandu+
 	FlowTypeUpdateConsensusKey                 // 23 - Lima+
 	FlowTypeDrain                              // 24 - Lima+
+	FlowTypeTransferTicket                     // 25 - Jakarta+
 	FlowTypeInvalid            = 255
 )
 
@@ -119,6 +120,7 @@ var (
 		FlowTypePayStorage:         "pay_storage",
 		FlowTypeUpdateConsensusKey: "update_consensus_key",
 		FlowTypeDrain:              "drain",
+		FlowTypeTransferTicket:     "transfer_ticket",
 		FlowTypeInvalid:            "invalid",
 	}
 	flowTypeReverseStrings = make(map[string]FlowType)
@@ -198,6 +200,8 @@ func MapFlowType(typ OpType) FlowType {
 		return FlowTypeUpdateConsensusKey
 	case OpTypeDrainDelegate:
 		return FlowTypeDrain
+	case OpTypeTransferTicket:
+		return FlowTypeTransferTicket
 	default:
 		return FlowTypeInvalid
 	}

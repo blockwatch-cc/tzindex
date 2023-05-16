@@ -5,17 +5,17 @@ package explorer
 
 import (
 	"encoding/json"
-	"github.com/gorilla/mux"
 	"net/http"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/gorilla/mux"
+
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/vec"
 
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
@@ -135,14 +135,12 @@ func NewCycle(ctx *server.Context, id int64) *Cycle {
 	// get latest params
 	p := ctx.Params
 
-	// get params that were or are active at cycle (future safe, will return latest)
-	if cycleStart := p.CycleStartHeight(id); !p.ContainsHeight(cycleStart) {
-		p = ctx.Crawler.ParamsByHeight(cycleStart)
-	}
-
 	// get current status
 	nowheight := ctx.Tip.BestHeight
-	nowcycle := p.CycleFromHeight(nowheight)
+	nowcycle := p.HeightToCycle(nowheight)
+
+	// get params that were or are active at cycle (future safe, will return latest)
+	p = ctx.Crawler.ParamsByCycle(id)
 
 	// this cycle start/end
 	start, end := p.CycleStartHeight(id), p.CycleEndHeight(id)
@@ -202,16 +200,16 @@ func NewCycle(ctx *server.Context, id int64) *Cycle {
 		maxEndorse = numEndorsers * int(p.BlocksPerCycle)
 		snapHeight = end
 	} else if ec.IsActive {
-		ec.Progress = float64(nowheight%p.BlocksPerCycle*100) / float64(p.BlocksPerCycle)
+		ec.Progress = float64((nowheight-start)*100) / float64(p.BlocksPerCycle)
 		// latest block cannot have an endorsement yet, so we don't require it
 		// otherwise the formula would be (nowheight - start + 1)*p.EndorsersPerBlock
 		maxEndorse = int(nowheight-start) * numEndorsers
-		snapHeight = nowheight - (nowheight % p.SnapshotBlocks())
+		snapHeight = nowheight - (nowheight % p.BlocksPerSnapshot)
 	}
 
 	if snapHeight <= nowheight {
 		// walk all blocks in cycle to update cycle fields and identify snapshot block
-		blocks, err := ctx.Indexer.Table(index.BlockTableKey)
+		blocks, err := ctx.Indexer.Table(model.BlockTableKey)
 		if err != nil {
 			log.Errorf("cycle: block table: %v", err)
 		}
@@ -235,7 +233,7 @@ func NewCycle(ctx *server.Context, id int64) *Cycle {
 				if b.IsCycleSnapshot {
 					snapHeight = b.Height
 					ec.SnapshotHeight = b.Height
-					ec.SnapshotIndex = ((b.Height - start) / p.SnapshotBlocks())
+					ec.SnapshotIndex = ((b.Height - start) / p.BlocksPerSnapshot)
 					ec.SnapshotTime = ctx.Indexer.LookupBlockTime(ctx, b.Height)
 				}
 
@@ -291,7 +289,7 @@ func NewCycle(ctx *server.Context, id int64) *Cycle {
 
 		// load active endorsers from ops
 		uniqueAccountsMap = make(map[model.AccountID]struct{})
-		ends, err := ctx.Indexer.Table(index.EndorseOpTableKey)
+		ends, err := ctx.Indexer.Table(model.EndorseOpTableKey)
 		if err != nil {
 			log.Errorf("cycle: endorsement table: %v", err)
 			return ec
@@ -320,7 +318,7 @@ func NewCycle(ctx *server.Context, id int64) *Cycle {
 		// seed nonces are send as operations and we expect one commitment
 		// for every 32nd block produced in the cycle before, they need to be sent
 		// by the bakers who produced block%32==0 in the previous cycle
-		ops, err := ctx.Indexer.Table(index.OpTableKey)
+		ops, err := ctx.Indexer.Table(model.OpTableKey)
 		if err != nil {
 			log.Errorf("cycle: op table: %v", err)
 			return ec
@@ -447,7 +445,7 @@ func parseCycle(ctx *server.Context) int64 {
 		switch {
 		case id == "head":
 			p := ctx.Params
-			return p.CycleFromHeight(ctx.Tip.BestHeight)
+			return p.HeightToCycle(ctx.Tip.BestHeight)
 		default:
 			cycle, err := strconv.ParseInt(id, 10, 64)
 			if err != nil || cycle < 0 {
@@ -460,12 +458,11 @@ func parseCycle(ctx *server.Context) int64 {
 
 func ReadCycle(ctx *server.Context) (interface{}, int) {
 	id := parseCycle(ctx)
-	p := ctx.Params
+	p := ctx.Indexer.ParamsByCycle(id)
 	tiptime := ctx.Tip.BestTime
 
 	// compose cycle data from N, N-7 and N+7
 	cycle := lookupOrBuildCycle(ctx, id)
-	p = p.ForCycle(id)
 
 	// Ithaca changes the distance
 	var offset int64 = 2

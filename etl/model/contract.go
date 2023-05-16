@@ -5,7 +5,8 @@ package model
 
 import (
 	"encoding/binary"
-	// "fmt"
+	"errors"
+	"fmt"
 	"strconv"
 	"sync"
 
@@ -16,9 +17,15 @@ import (
 	"blockwatch.cc/tzindex/rpc"
 )
 
-var contractPool = &sync.Pool{
-	New: func() interface{} { return new(Contract) },
-}
+const ContractTableKey = "contract"
+
+var (
+	contractPool = &sync.Pool{
+		New: func() interface{} { return new(Contract) },
+	}
+
+	ErrNoContract = errors.New("contract not indexed")
+)
 
 type ContractID uint64
 
@@ -57,7 +64,7 @@ type Contract struct {
 var _ pack.Item = (*Contract)(nil)
 
 // assuming the op was successful!
-func NewContract(acc *Account, oop *rpc.Origination, op *Op, dict micheline.ConstantDict, p *tezos.Params) *Contract {
+func NewContract(acc *Account, oop *rpc.Origination, op *Op, dict micheline.ConstantDict, p *rpc.Params) *Contract {
 	c := AllocContract()
 	c.Address = acc.Address.Clone()
 	c.AccountId = acc.RowId
@@ -95,7 +102,7 @@ func NewContract(acc *Account, oop *rpc.Origination, op *Op, dict micheline.Cons
 	return c
 }
 
-func NewInternalContract(acc *Account, iop rpc.InternalResult, op *Op, dict micheline.ConstantDict, p *tezos.Params) *Contract {
+func NewInternalContract(acc *Account, iop rpc.InternalResult, op *Op, dict micheline.ConstantDict, p *rpc.Params) *Contract {
 	c := AllocContract()
 	c.Address = acc.Address.Clone()
 	c.AccountId = acc.RowId
@@ -128,7 +135,7 @@ func NewInternalContract(acc *Account, iop rpc.InternalResult, op *Op, dict mich
 	return c
 }
 
-func NewImplicitContract(acc *Account, res rpc.ImplicitResult, op *Op, p *tezos.Params) *Contract {
+func NewImplicitContract(acc *Account, res rpc.ImplicitResult, op *Op, p *rpc.Params) *Contract {
 	c := AllocContract()
 	c.Address = acc.Address.Clone()
 	c.AccountId = acc.RowId
@@ -162,7 +169,7 @@ func NewManagerTzContract(a *Account, height int64) (*Contract, error) {
 	c.CreatorId = a.CreatorId
 	c.FirstSeen = a.FirstSeen
 	c.LastSeen = height
-	script, _ := micheline.MakeManagerScript(a.Address.Bytes())
+	script, _ := micheline.MakeManagerScript(a.Address.Encode())
 	c.Script, _ = script.MarshalBinary()
 	c.Storage, _ = script.Storage.MarshalBinary()
 	c.InterfaceHash = script.InterfaceHash()
@@ -179,7 +186,7 @@ func NewManagerTzContract(a *Account, height int64) (*Contract, error) {
 	return c, nil
 }
 
-func NewRollupContract(acc *Account, op *Op, p *tezos.Params) *Contract {
+func NewRollupContract(acc *Account, op *Op, res rpc.OperationResult, p *rpc.Params) *Contract {
 	c := AllocContract()
 	c.Address = acc.Address.Clone()
 	c.AccountId = acc.RowId
@@ -187,11 +194,18 @@ func NewRollupContract(acc *Account, op *Op, p *tezos.Params) *Contract {
 	c.FirstSeen = op.Height
 	c.LastSeen = op.Height
 	c.StorageSize = 4000 // toru fixed, tx_rollup_origination_size
-	c.StoragePaid = 4000 // toru fixed, tx_rollup_origination_size
+	if res.Size != nil {
+		c.StorageSize = res.Size.Int64()
+	}
+	c.StoragePaid = c.StorageSize
 	c.StorageBurn += c.StoragePaid * p.CostPerByte
-	// no script
-	// 7+1 toru ops excl origination are defined
-	// first is the fake `deposit` op for tickets
+	// tx_rollup no script
+	// 7 ops excl origination
+	// +1 first is the fake `deposit` op for tickets
+	//
+	// smart_rollup
+	// TODO: script (wrap pvm kind, kernal, params type, proof)
+	// - 7 ops excl origination
 	c.CallStats = make([]byte, 4*8)
 	c.IsNew = true
 	c.IsDirty = true
@@ -215,36 +229,37 @@ func (c *Contract) SetID(id uint64) {
 	c.RowId = ContractID(id)
 }
 
+func (m Contract) TableKey() string {
+	return ContractTableKey
+}
+
+func (m Contract) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    15,
+		JournalSizeLog2: 15,
+		CacheSize:       256,
+		FillLevel:       80,
+	}
+}
+
+func (m Contract) IndexOpts(key string) pack.Options {
+	return pack.Options{
+		PackSizeLog2:    15,
+		JournalSizeLog2: 15,
+		CacheSize:       8,
+		FillLevel:       90,
+	}
+}
+
 func (c Contract) String() string {
 	return c.Address.String()
 }
 
 func (c *Contract) Reset() {
-	c.RowId = 0
-	c.Address = tezos.Address{}
-	c.AccountId = 0
-	c.CreatorId = 0
-	c.FirstSeen = 0
-	c.LastSeen = 0
-	c.StorageSize = 0
-	c.StoragePaid = 0
-	c.StorageBurn = 0
-	c.Script = nil
-	c.Storage = nil
-	c.InterfaceHash = 0
-	c.CodeHash = 0
-	c.StorageHash = 0
-	c.CallStats = nil
-	c.Features = 0
-	c.Interfaces = nil
-	c.IsDirty = false
-	c.IsNew = false
-	c.script = nil
-	c.params = micheline.Type{}
-	c.storage = micheline.Type{}
+	*c = Contract{}
 }
 
-func (c *Contract) Update(op *Op, p *tezos.Params) bool {
+func (c *Contract) Update(op *Op, p *rpc.Params) bool {
 	c.LastSeen = op.Height
 	c.IncCallStats(op.Entrypoint)
 	c.IsDirty = true
@@ -259,7 +274,7 @@ func (c *Contract) Update(op *Op, p *tezos.Params) bool {
 	return false
 }
 
-func (c *Contract) Rollback(drop, last *Op, p *tezos.Params) {
+func (c *Contract) Rollback(drop, last *Op, p *rpc.Params) {
 	if last != nil {
 		c.LastSeen = last.Height
 		if last.Storage != nil {
@@ -280,6 +295,15 @@ func (c *Contract) Rollback(drop, last *Op, p *tezos.Params) {
 	c.IsDirty = true
 }
 
+func (c Contract) IsRollup() bool {
+	switch c.Address.Type() {
+	case tezos.AddressTypeTxRollup, tezos.AddressTypeSmartRollup:
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *Contract) ListRollupCallStats() map[string]int {
 	res := make(map[string]int, len(c.CallStats)>>2)
 	for i, v := range []string{
@@ -297,9 +321,29 @@ func (c *Contract) ListRollupCallStats() map[string]int {
 	return res
 }
 
+func (c *Contract) ListSmartRollupCallStats() map[string]int {
+	res := make(map[string]int, len(c.CallStats)>>2)
+	for i, v := range []string{
+		"deposit", // fake, /sigh/ :(
+		"smart_rollup_add_messages",
+		"smart_rollup_cement",
+		"smart_rollup_publish",
+		"smart_rollup_refute",
+		"smart_rollup_timeout",
+		"smart_rollup_execute_outbox_message",
+		"smart_rollup_recover_bond",
+	} {
+		res[v] = int(binary.BigEndian.Uint32(c.CallStats[i*4:]))
+	}
+	return res
+}
+
 func (c *Contract) ListCallStats() map[string]int {
-	if c.Address.Type == tezos.AddressTypeToru {
+	switch c.Address.Type() {
+	case tezos.AddressTypeTxRollup:
 		return c.ListRollupCallStats()
+	case tezos.AddressTypeSmartRollup:
+		return c.ListSmartRollupCallStats()
 	}
 	// list entrypoint names first
 	pTyp, _, err := c.LoadType()
@@ -414,8 +458,11 @@ func (c *Contract) DecCallStats(entrypoint int) {
 }
 
 // Loads type data from already unmarshaled script or from optimized unmarshaler
-func (c *Contract) LoadType() (micheline.Type, micheline.Type, error) {
-	var err error
+func (c *Contract) LoadType() (ptyp micheline.Type, styp micheline.Type, err error) {
+	if c.IsRollup() {
+		err = fmt.Errorf("no script for rollup")
+		return
+	}
 	if !c.params.IsValid() {
 		if c.script != nil {
 			c.params = c.script.ParamType()
@@ -424,7 +471,9 @@ func (c *Contract) LoadType() (micheline.Type, micheline.Type, error) {
 			c.params, c.storage, err = micheline.UnmarshalScriptType(c.Script)
 		}
 	}
-	return c.params, c.storage, err
+	ptyp = c.params
+	styp = c.storage
+	return
 }
 
 // loads script and upgrades to babylon on-the-fly if originated earlier
@@ -436,6 +485,11 @@ func (c *Contract) LoadScript() (*micheline.Script, error) {
 
 	// should not happen
 	if len(c.Script) == 0 {
+		return nil, nil
+	}
+
+	// rollups have no script
+	if c.IsRollup() {
 		return nil, nil
 	}
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2023 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -30,7 +30,22 @@ func (o Origination) ManagerAddress() tezos.Address {
 	return o.ManagerPubkey
 }
 
-func (o Origination) FindEmbeddedAddresses(addrs *tezos.AddressSet) {
+// Addresses adds all addresses used in this operation to the set.
+// Implements TypedOperation interface.
+func (o Origination) Addresses(set *tezos.AddressSet) {
+	set.AddUnique(o.Source)
+	if a := o.ManagerAddress(); a.IsValid() {
+		set.AddUnique(a)
+	}
+	if o.Delegate != nil {
+		set.AddUnique(*o.Delegate)
+	}
+	for _, vv := range o.Result().OriginatedContracts {
+		set.AddUnique(vv)
+	}
+}
+
+func (o Origination) AddEmbeddedAddresses(add func(tezos.Address)) {
 	if o.Script == nil || !o.Script.Storage.IsValid() {
 		return
 	}
@@ -38,13 +53,13 @@ func (o Origination) FindEmbeddedAddresses(addrs *tezos.AddressSet) {
 		switch {
 		case len(p.String) == 36 || len(p.String) == 37:
 			if a, err := tezos.ParseAddress(p.String); err == nil {
-				addrs.AddUnique(a)
+				add(a)
 			}
 			return micheline.PrimSkip
 		case tezos.IsAddressBytes(p.Bytes):
 			a := tezos.Address{}
-			if err := a.UnmarshalBinary(p.Bytes); err == nil {
-				addrs.AddUnique(a)
+			if err := a.Decode(p.Bytes); err == nil {
+				add(a)
 			}
 			return micheline.PrimSkip
 		default:

@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 Blockwatch Data Inc.
+// Copyright (c) 2018 - 2020 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -10,7 +10,6 @@ import (
 
 	"blockwatch.cc/packdb/store"
 	"blockwatch.cc/packdb/util"
-
 	"blockwatch.cc/tzindex/etl/model"
 )
 
@@ -65,7 +64,7 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *model.Blo
 		lastDetachBlock := detach.Back().Value.(*model.Block)
 		firstParentHash := firstAttachBlock.TZ.ParentHash()
 		lastParentHash := lastDetachBlock.TZ.ParentHash()
-		if !firstParentHash.Equal(lastParentHash) {
+		if firstParentHash != lastParentHash {
 			return fmt.Errorf("REORGANIZE blocks do not have the "+
 				"same fork point -- first attach parent %s, last detach "+
 				"parent %s", firstParentHash, lastParentHash)
@@ -175,8 +174,8 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *model.Blo
 	}
 
 	for e := attach.Front(); e != nil; e = e.Next() {
-		if interruptRequested(ctx) {
-			return errInterruptRequested
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 
 		// build from RPC block on forward reorg
@@ -201,8 +200,8 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *model.Blo
 			block.ParentId = pid
 		}
 
-		if interruptRequested(ctx) {
-			return errInterruptRequested
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 
 		// update indexes; this will also generate a unique block id
@@ -307,7 +306,7 @@ func (c *Crawler) getReorganizeBlocks(ctx context.Context, tip *model.Block, bes
 findfork:
 	for i, side := range sidechain[0] {
 		for j, main := range mainchain[0] {
-			if side.Equal(main) {
+			if side == main {
 				// discount the best block (will be appended after reorg finishes
 				forkDepthMain = j - 1
 				forkDepthSide = i
@@ -351,8 +350,8 @@ findfork:
 		ancestor = parent
 	}
 
-	if interruptRequested(ctx) {
-		return nil, nil, nil, errInterruptRequested
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nil, err
 	}
 
 	// Now start from the end of the valid main chain and work backwards

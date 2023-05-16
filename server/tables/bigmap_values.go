@@ -29,7 +29,7 @@ var (
 )
 
 func init() {
-	fields, err := pack.Fields(&model.BigmapKV{})
+	fields, err := pack.Fields(&model.BigmapValue{})
 	if err != nil {
 		log.Fatalf("bigmap value field type error: %v\n", err)
 	}
@@ -45,7 +45,7 @@ func init() {
 
 // configurable marshalling helper
 type BigmapValueItem struct {
-	model.BigmapKV
+	model.BigmapValue
 	verbose bool            // cond. marshal
 	columns util.StringList // cond. cols & order when brief
 	ctx     *server.Context

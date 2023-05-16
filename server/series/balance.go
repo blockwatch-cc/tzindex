@@ -15,8 +15,8 @@ import (
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -40,7 +40,7 @@ type BalanceSeries struct {
 	Balance   int64     `json:"balance"`
 
 	columns util.StringList // cond. cols & order when brief
-	params  *tezos.Params
+	params  *rpc.Params
 	verbose bool
 	null    bool
 	empty   bool
@@ -48,7 +48,7 @@ type BalanceSeries struct {
 
 var _ SeriesBucket = (*BalanceSeries)(nil)
 
-func (s *BalanceSeries) Init(params *tezos.Params, columns []string, verbose bool) {
+func (s *BalanceSeries) Init(params *rpc.Params, columns []string, verbose bool) {
 	s.params = params
 	s.columns = columns
 	s.verbose = verbose
@@ -246,7 +246,7 @@ func (s *BalanceSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pac
 				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 			}
 			acc, err = ctx.Indexer.LookupAccount(ctx, addr)
-			if err != nil && err != index.ErrNoAccountEntry {
+			if err != nil && err != model.ErrNoAccount {
 				panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("address not found '%s'", val[0]), err))
 			}
 			// fail if not found

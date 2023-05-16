@@ -15,7 +15,7 @@ import (
 	"blockwatch.cc/tzindex/rpc"
 )
 
-func (b *Builder) MigrateProtocol(ctx context.Context, prevparams, nextparams *tezos.Params) error {
+func (b *Builder) MigrateProtocol(ctx context.Context, prevparams, nextparams *rpc.Params) error {
 	if b.block.Height <= 1 || prevparams.Version == nextparams.Version {
 		return nil
 	}
@@ -56,6 +56,12 @@ func (b *Builder) MigrateProtocol(ctx context.Context, prevparams, nextparams *t
 		// - remove and reload future rights
 		// - remove and rebuild future income data
 		return b.MigrateLima(ctx, prevparams, nextparams)
+
+	case nextparams.Protocol.Equal(tezos.PtMumbai):
+		// Mumbai changes cycle length and rights
+		// - remove and reload future rights
+		// - remove and rebuild future income data
+		return b.MigrateMumbai(ctx, prevparams, nextparams)
 	}
 
 	return nil
@@ -125,7 +131,7 @@ func (b *Builder) PatchBigmapEvents(ctx context.Context, diff micheline.BigmapEv
 	// check if bigmap is allocated
 	var needAlloc bool
 	if _, err := b.idx.LookupBigmapAlloc(ctx, id); err != nil {
-		if err != index.ErrNoBigmapAlloc {
+		if err != model.ErrNoBigmap {
 			return nil, err
 		}
 		needAlloc = true
@@ -165,7 +171,7 @@ func (b *Builder) PatchBigmapEvents(ctx context.Context, diff micheline.BigmapEv
 	return diff, nil
 }
 
-func (b *Builder) RebuildFutureRightsAndIncome(ctx context.Context, params *tezos.Params) error {
+func (b *Builder) RebuildFutureRightsAndIncome(ctx context.Context, params *rpc.Params) error {
 	// we need to update rights and income indexes
 	income, err := b.idx.Index(index.IncomeIndexKey)
 	if err != nil {
@@ -214,7 +220,10 @@ func (b *Builder) RebuildFutureRightsAndIncome(ctx context.Context, params *tezo
 		log.Infof("Migrate v%03d: processing cycle %d", params.Version, cycle)
 
 		// 2.1 fetch new rights
-		bundle := &rpc.Bundle{}
+		bundle := &rpc.Bundle{
+			Block:  b.block.TZ.Block,
+			Params: params,
+		}
 		err := b.rpc.FetchRightsByCycle(ctx, b.block.Height, cycle, bundle)
 		if err != nil {
 			return fmt.Errorf("migrate: %v", err)
@@ -223,7 +232,7 @@ func (b *Builder) RebuildFutureRightsAndIncome(ctx context.Context, params *tezo
 			params.Version, len(bundle.Baking[0]), len(bundle.Endorsing[0]), cycle)
 
 		// strip pre-cycle rights if current block is not start of cycle
-		if !params.IsCycleStart(b.block.Height) {
+		if !b.block.TZ.IsCycleStart() {
 			bundle.PrevEndorsing = nil
 		}
 

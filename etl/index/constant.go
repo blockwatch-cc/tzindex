@@ -1,47 +1,28 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
 )
 
-const (
-	ConstantPackSizeLog2         = 12 // 4k packs
-	ConstantJournalSizeLog2      = 13 // 8k
-	ConstantCacheSize            = 2  // minimum
-	ConstantFillLevel            = 100
-	ConstantIndexPackSizeLog2    = 15 // 16k packs (32k split size) ~256k
-	ConstantIndexJournalSizeLog2 = 16 // 64k
-	ConstantIndexCacheSize       = 2  // minimum
-	ConstantIndexFillLevel       = 90
-	ConstantIndexKey             = "constant"
-	ConstantTableKey             = "constant"
-)
-
-var (
-	ErrNoConstantEntry = errors.New("constant not indexed")
-)
+const ConstantIndexKey = "constant"
 
 type ConstantIndex struct {
 	db    *pack.DB
-	opts  pack.Options
-	iopts pack.Options
 	table *pack.Table
 }
 
 var _ model.BlockIndexer = (*ConstantIndex)(nil)
 
-func NewConstantIndex(opts, iopts pack.Options) *ConstantIndex {
-	return &ConstantIndex{opts: opts, iopts: iopts}
+func NewConstantIndex() *ConstantIndex {
+	return &ConstantIndex{}
 }
 
 func (idx *ConstantIndex) DB() *pack.DB {
@@ -61,66 +42,60 @@ func (idx *ConstantIndex) Name() string {
 }
 
 func (idx *ConstantIndex) Create(path, label string, opts interface{}) error {
-	fields, err := pack.Fields(model.Constant{})
-	if err != nil {
-		return err
-	}
 	db, err := pack.CreateDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return fmt.Errorf("creating database: %w", err)
 	}
 	defer db.Close()
 
-	table, err := db.CreateTableIfNotExists(
-		ConstantTableKey,
-		fields,
-		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, ConstantPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, ConstantJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, ConstantCacheSize),
-			FillLevel:       util.NonZero(idx.opts.FillLevel, ConstantFillLevel),
-		})
+	m := model.Constant{}
+	key := m.TableKey()
+	fields, err := pack.Fields(m)
+	if err != nil {
+		return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
+	}
+
+	table, err := db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(readConfigOpts(key)))
 	if err != nil {
 		return err
 	}
-
-	_, err = table.CreateIndexIfNotExists(
-		"hash",
-		fields.Find("H"),   // constant hash field (32 byte expr hashes)
-		pack.IndexTypeHash, // hash table, index stores hash(field) -> pk value
-		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.iopts.PackSizeLog2, ConstantIndexPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.iopts.JournalSizeLog2, ConstantIndexJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.iopts.CacheSize, ConstantIndexCacheSize),
-			FillLevel:       util.NonZero(idx.iopts.FillLevel, ConstantIndexFillLevel),
-		})
-	if err != nil {
-		return err
+	for _, f := range fields.Indexed() {
+		ikey := f.Alias
+		opts := m.IndexOpts(ikey).Merge(readConfigOpts(key, ikey+"_index"))
+		if _, err := table.CreateIndexIfNotExists(ikey, f, pack.IndexTypeHash, opts); err != nil {
+			return err
+		}
 	}
-
 	return nil
 }
 
 func (idx *ConstantIndex) Init(path, label string, opts interface{}) error {
-	var err error
-	idx.db, err = pack.OpenDatabase(path, idx.Key(), label, opts)
+	db, err := pack.OpenDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return err
 	}
-	idx.table, err = idx.db.Table(
-		ConstantTableKey,
-		pack.Options{
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, ConstantJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, ConstantCacheSize),
-		},
-		pack.Options{
-			JournalSizeLog2: util.NonZero(idx.iopts.JournalSizeLog2, ConstantIndexJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.iopts.CacheSize, ConstantIndexCacheSize),
-		})
+	idx.db = db
+
+	m := model.Constant{}
+	key := m.TableKey()
+	fields, err := pack.Fields(m)
+	if err != nil {
+		return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
+	}
+	topts := m.TableOpts().Merge(readConfigOpts(key))
+	var ikey string
+	for _, v := range fields.Indexed() {
+		ikey = v.Alias
+		break
+	}
+	iopts := m.IndexOpts(ikey).Merge(readConfigOpts(key, ikey+"_index"))
+	table, err := idx.db.Table(key, topts, iopts)
 	if err != nil {
 		idx.Close()
 		return err
 	}
+	idx.table = table
+
 	return nil
 }
 
@@ -175,7 +150,7 @@ func (idx *ConstantIndex) DisconnectBlock(ctx context.Context, block *model.Bloc
 
 func (idx *ConstantIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting contracts at height %d", height)
-	_, err := pack.NewQuery("etl.constant.delete").
+	_, err := pack.NewQuery("etl.delete").
 		WithTable(idx.table).
 		AndEqual("height", height).
 		Delete(ctx)
@@ -189,7 +164,7 @@ func (idx *ConstantIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 func (idx *ConstantIndex) Flush(ctx context.Context) error {
 	for _, v := range idx.Tables() {
 		if err := v.Flush(ctx); err != nil {
-			return err
+			log.Errorf("Flushing %s table: %v", v.Name(), err)
 		}
 	}
 	return nil

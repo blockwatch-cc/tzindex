@@ -4,22 +4,31 @@
 package model
 
 import (
+	"errors"
 	"math"
 	"sync"
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzgo/tezos"
+	"blockwatch.cc/tzindex/rpc"
 )
 
-var incomePool = &sync.Pool{
-	New: func() interface{} { return new(Income) },
-}
+const IncomeTableKey = "income"
+
+var (
+	incomePool = &sync.Pool{
+		New: func() interface{} { return new(Income) },
+	}
+
+	ErrNoIncome = errors.New("income not indexed")
+)
 
 // Income is a per-cycle income sheet for baker accounts.
 type Income struct {
 	RowId                  uint64    `pack:"I,pk,snappy" json:"row_id"`
 	Cycle                  int64     `pack:"c,snappy"    json:"cycle"`
+	StartHeight            int64     `knox:"h,snappy"    json:"start_height"`
+	EndHeight              int64     `knox:"e,snappy"    json:"end_height"`
 	AccountId              AccountID `pack:"A,snappy"    json:"account_id"`
 	Rolls                  int64     `pack:"o,snappy"    json:"rolls"`         // @snapshot
 	Balance                int64     `pack:"B,snappy"    json:"balance"`       // @snapshot
@@ -82,48 +91,28 @@ func (s *Income) SetID(id uint64) {
 	s.RowId = id
 }
 
-func (s *Income) Reset() {
-	s.RowId = 0
-	s.Cycle = 0
-	s.AccountId = 0
-	s.Rolls = 0
-	s.Balance = 0
-	s.Delegated = 0
-	s.ActiveStake = 0
-	s.NDelegations = 0
-	s.NBakingRights = 0
-	s.NEndorsingRights = 0
-	s.Luck = 0
-	s.LuckPct = 0
-	s.ContributionPct = 0
-	s.PerformancePct = 0
-	s.NBlocksBaked = 0
-	s.NBlocksProposed = 0
-	s.NBlocksNotBaked = 0
-	s.NBlocksEndorsed = 0
-	s.NBlocksNotEndorsed = 0
-	s.NSlotsEndorsed = 0
-	s.NSeedsRevealed = 0
-	s.ExpectedIncome = 0
-	s.TotalIncome = 0
-	s.TotalDeposits = 0
-	s.BakingIncome = 0
-	s.EndorsingIncome = 0
-	s.AccusationIncome = 0
-	s.SeedIncome = 0
-	s.FeesIncome = 0
-	s.TotalLoss = 0
-	s.AccusationLoss = 0
-	s.SeedLoss = 0
-	s.EndorsingLoss = 0
-	s.LostAccusationFees = 0
-	s.LostAccusationRewards = 0
-	s.LostAccusationDeposits = 0
-	s.LostSeedFees = 0
-	s.LostSeedRewards = 0
+func (m Income) TableKey() string {
+	return IncomeTableKey
 }
 
-func (s *Income) UpdateLuck(totalRolls int64, p *tezos.Params) {
+func (m Income) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    12,
+		JournalSizeLog2: 12,
+		CacheSize:       32,
+		FillLevel:       100,
+	}
+}
+
+func (m Income) IndexOpts(key string) pack.Options {
+	return pack.NoOptions
+}
+
+func (s *Income) Reset() {
+	*s = Income{}
+}
+
+func (s *Income) UpdateLuck(totalRolls int64, p *rpc.Params) {
 	// fraction of all rolls
 	rollsShare := float64(s.Rolls) / float64(totalRolls)
 

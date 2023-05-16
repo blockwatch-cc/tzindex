@@ -1,50 +1,28 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/util"
 
 	"blockwatch.cc/tzindex/etl/model"
 )
 
-const (
-	BlockPackSizeLog2    = 15 // 32k packs
-	BlockJournalSizeLog2 = 16 // 64k - search only on rollback and lookup
-	BlockCacheSize       = 2
-	BlockFillLevel       = 100
-	BlockIndexKey        = "block"
-	BlockTableKey        = "block"
-)
-
-var (
-	// ErrNoBlockEntry is an error that indicates a requested entry does
-	// not exist in the block bucket.
-	ErrNoBlockEntry = errors.New("block not indexed")
-
-	// ErrInvalidBlockHeight
-	ErrInvalidBlockHeight = errors.New("invalid block height")
-
-	// ErrInvalidBlockHash
-	ErrInvalidBlockHash = errors.New("invalid block hash")
-)
+const BlockIndexKey = "block"
 
 type BlockIndex struct {
 	db    *pack.DB
-	opts  pack.Options
 	table *pack.Table
 }
 
 var _ model.BlockIndexer = (*BlockIndex)(nil)
 
-func NewBlockIndex(opts pack.Options) *BlockIndex {
-	return &BlockIndex{opts: opts}
+func NewBlockIndex() *BlockIndex {
+	return &BlockIndex{}
 }
 
 func (idx *BlockIndex) DB() *pack.DB {
@@ -64,44 +42,33 @@ func (idx *BlockIndex) Name() string {
 }
 
 func (idx *BlockIndex) Create(path, label string, opts interface{}) error {
-	fields, err := pack.Fields(model.Block{})
-	if err != nil {
-		return err
-	}
 	db, err := pack.CreateDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return fmt.Errorf("creating %s database: %w", idx.Key(), err)
 	}
 	defer db.Close()
 
-	_, err = db.CreateTableIfNotExists(
-		BlockTableKey,
-		fields,
-		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, BlockPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, BlockJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, BlockCacheSize),
-			FillLevel:       util.NonZero(idx.opts.FillLevel, BlockFillLevel),
-		})
+	m := model.Block{}
+	key := m.TableKey()
+	fields, err := pack.Fields(m)
 	if err != nil {
-		return err
+		return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
 	}
-	return nil
+	_, err = db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(readConfigOpts(key)))
+	return err
 }
 
 func (idx *BlockIndex) Init(path, label string, opts interface{}) error {
-	var err error
-	idx.db, err = pack.OpenDatabase(path, idx.Key(), label, opts)
+	db, err := pack.OpenDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return err
 	}
-	idx.table, err = idx.db.Table(
-		BlockTableKey,
-		pack.Options{
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, BlockJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, BlockCacheSize),
-		},
-	)
+	idx.db = db
+
+	m := model.Block{}
+	key := m.TableKey()
+
+	idx.table, err = idx.db.Table(key, m.TableOpts().Merge(readConfigOpts(key)))
 	if err != nil {
 		idx.Close()
 		return err
@@ -138,7 +105,7 @@ func (idx *BlockIndex) ConnectBlock(ctx context.Context, block *model.Block, b m
 	}
 
 	// fetch and update snapshot block
-	if snap := block.TZ.Snapshot; snap != nil {
+	if snap := block.TZ.Snapshot; snap != nil && block.Height > 1 {
 		// protocol upgrades happen 1 block before cycle end. when changes to
 		// cycle lenth happen, we miss snapshot 15
 		p := block.Params
@@ -146,10 +113,10 @@ func (idx *BlockIndex) ConnectBlock(ctx context.Context, block *model.Block, b m
 			p = block.Parent.Params
 		}
 		snapHeight := p.SnapshotBlock(snap.Cycle, snap.Index)
-		log.Debugf("Marking block %d [%d] index %d as roll snapshot for cycle %d",
-			snapHeight, block.Params.CycleFromHeight(snapHeight), snap.Index, snap.Cycle)
+		log.Debugf("block: marking %d cycle %d index %d as roll snapshot for cycle %d",
+			snapHeight, block.Params.HeightToCycle(snapHeight), snap.Index, snap.Cycle)
 		snapBlock := &model.Block{}
-		err := pack.NewQuery("block_height.search").
+		err := pack.NewQuery("etl.update").
 			WithTable(idx.table).
 			WithoutCache().
 			WithLimit(1).
@@ -179,7 +146,7 @@ func (idx *BlockIndex) DisconnectBlock(ctx context.Context, block *model.Block, 
 
 func (idx *BlockIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting block at height %d", height)
-	_, err := pack.NewQuery("etl.block.delete").
+	_, err := pack.NewQuery("etl.delete").
 		WithTable(idx.table).
 		AndEqual("height", height).
 		Delete(ctx)
@@ -188,7 +155,7 @@ func (idx *BlockIndex) DeleteBlock(ctx context.Context, height int64) error {
 
 func (idx *BlockIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 	// log.Debugf("Rollback deleting block cycle %d", cycle)
-	_, err := pack.NewQuery("etl.block.delete").
+	_, err := pack.NewQuery("etl.delete").
 		WithTable(idx.table).
 		AndEqual("cycle", cycle).
 		Delete(ctx)
@@ -198,7 +165,7 @@ func (idx *BlockIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 func (idx *BlockIndex) Flush(ctx context.Context) error {
 	for _, v := range idx.Tables() {
 		if err := v.Flush(ctx); err != nil {
-			return err
+			log.Errorf("Flushing %s table: %v", v.Name(), err)
 		}
 	}
 	return nil

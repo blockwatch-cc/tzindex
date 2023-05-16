@@ -18,8 +18,8 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -50,7 +50,7 @@ type Contract struct {
 	model.Contract
 	verbose bool            // cond. marshal
 	columns util.StringList // cond. cols & order when brief
-	params  *tezos.Params   // blockchain amount conversion
+	params  *rpc.Params     // blockchain amount conversion
 	ctx     *server.Context
 }
 
@@ -304,10 +304,10 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 				if err != nil || !addr.IsValid() {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
-				if addr.Type != tezos.AddressTypeContract {
+				if addr.Type() != tezos.AddressTypeContract {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid contract address '%s'", val[0]), err))
 				}
-				q = q.And(field, mode, addr.Bytes22())
+				q = q.And(field, mode, addr[:])
 			case pack.FilterModeIn, pack.FilterModeNotIn:
 				// multi-address lookup (Note: does not check for address type so may
 				// return duplicates)
@@ -317,10 +317,10 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					if err != nil || !addr.IsValid() {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
-					if addr.Type != tezos.AddressTypeContract {
+					if addr.Type() != tezos.AddressTypeContract {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid contract address '%s'", v), err))
 					}
-					hashes = append(hashes, addr.Bytes22())
+					hashes = append(hashes, addr[:])
 				}
 				q = q.And(field, mode, hashes)
 			default:
@@ -332,7 +332,7 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 			bestHeight := ctx.Tip.BestHeight
 			cond, err := pack.ParseCondition(key, val[0], pack.FieldList{
 				pack.Field{
-					Name: "time",
+					Name: prefix,
 					Type: pack.FieldTypeDatetime,
 				},
 			})
@@ -386,7 +386,7 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-				if err != nil && err != index.ErrNoAccountEntry {
+				if err != nil && err != model.ErrNoAccount {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				// Note: when not found we insert an always false condition
@@ -405,7 +405,7 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
+					if err != nil && err != model.ErrNoAccount {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account

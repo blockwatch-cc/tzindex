@@ -11,8 +11,8 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
-	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -37,14 +37,14 @@ type SupplySeries struct {
 	bucketTime time.Time
 
 	columns util.StringList // cond. cols & order when brief
-	params  *tezos.Params   // blockchain amount conversion
+	params  *rpc.Params     // blockchain amount conversion
 	verbose bool            // cond. marshal
 	null    bool
 }
 
 var _ SeriesBucket = (*SupplySeries)(nil)
 
-func (s *SupplySeries) Init(params *tezos.Params, columns []string, verbose bool) {
+func (s *SupplySeries) Init(params *rpc.Params, columns []string, verbose bool) {
 	s.params = params
 	s.columns = columns
 	s.verbose = verbose

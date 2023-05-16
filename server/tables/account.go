@@ -18,8 +18,8 @@ import (
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/tezos"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -67,7 +67,7 @@ type Account struct {
 	model.Account
 	verbose bool            // cond. marshal
 	columns util.StringList // cond. cols & order when brief
-	params  *tezos.Params   // blockchain amount conversion
+	params  *rpc.Params     // blockchain amount conversion
 	ctx     *server.Context
 }
 
@@ -81,51 +81,51 @@ func (a *Account) MarshalJSON() ([]byte, error) {
 
 func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 	acc := struct {
-		RowId              uint64    `json:"row_id"`
-		Address            string    `json:"address"`
-		AddressType        string    `json:"address_type"`
-		Pubkey             tezos.Key `json:"pubkey"`
-		Counter            int64     `json:"counter"`
-		Baker              string    `json:"baker"`
-		Creator            string    `json:"creator"`
-		FirstIn            int64     `json:"first_in"`
-		FirstOut           int64     `json:"first_out"`
-		FirstSeen          int64     `json:"first_seen"`
-		LastIn             int64     `json:"last_in"`
-		LastOut            int64     `json:"last_out"`
-		LastSeen           int64     `json:"last_seen"`
-		DelegatedSince     int64     `json:"delegated_since"`
-		TotalReceived      float64   `json:"total_received"`
-		TotalSent          float64   `json:"total_sent"`
-		TotalBurned        float64   `json:"total_burned"`
-		TotalFeesPaid      float64   `json:"total_fees_paid"`
-		TotalFeesUsed      float64   `json:"total_fees_used"`
-		UnclaimedBalance   float64   `json:"unclaimed_balance"`
-		SpendableBalance   float64   `json:"spendable_balance"`
-		FrozenBond         float64   `json:"frozen_bond"`
-		LostBond           float64   `json:"lost_bond"`
-		IsFunded           bool      `json:"is_funded"`
-		IsActivated        bool      `json:"is_activated"`
-		IsDelegated        bool      `json:"is_delegated"`
-		IsRevealed         bool      `json:"is_revealed"`
-		IsBaker            bool      `json:"is_baker"`
-		IsContract         bool      `json:"is_contract"`
-		NTxSuccess         int       `json:"n_tx_success"`
-		NTxFailed          int       `json:"n_tx_failed"`
-		NTxOut             int       `json:"n_tx_out"`
-		NTxIn              int       `json:"n_tx_in"`
-		FirstSeenTime      int64     `json:"first_seen_time"`
-		LastSeenTime       int64     `json:"last_seen_time"`
-		FirstInTime        int64     `json:"first_in_time"`
-		LastInTime         int64     `json:"last_in_time"`
-		FirstOutTime       int64     `json:"first_out_time"`
-		LastOutTime        int64     `json:"last_out_time"`
-		DelegatedSinceTime int64     `json:"delegated_since_time"`
+		RowId              uint64  `json:"row_id"`
+		Address            string  `json:"address"`
+		AddressType        string  `json:"address_type"`
+		Pubkey             string  `json:"pubkey"`
+		Counter            int64   `json:"counter"`
+		Baker              string  `json:"baker"`
+		Creator            string  `json:"creator"`
+		FirstIn            int64   `json:"first_in"`
+		FirstOut           int64   `json:"first_out"`
+		FirstSeen          int64   `json:"first_seen"`
+		LastIn             int64   `json:"last_in"`
+		LastOut            int64   `json:"last_out"`
+		LastSeen           int64   `json:"last_seen"`
+		DelegatedSince     int64   `json:"delegated_since"`
+		TotalReceived      float64 `json:"total_received"`
+		TotalSent          float64 `json:"total_sent"`
+		TotalBurned        float64 `json:"total_burned"`
+		TotalFeesPaid      float64 `json:"total_fees_paid"`
+		TotalFeesUsed      float64 `json:"total_fees_used"`
+		UnclaimedBalance   float64 `json:"unclaimed_balance"`
+		SpendableBalance   float64 `json:"spendable_balance"`
+		FrozenBond         float64 `json:"frozen_bond"`
+		LostBond           float64 `json:"lost_bond"`
+		IsFunded           bool    `json:"is_funded"`
+		IsActivated        bool    `json:"is_activated"`
+		IsDelegated        bool    `json:"is_delegated"`
+		IsRevealed         bool    `json:"is_revealed"`
+		IsBaker            bool    `json:"is_baker"`
+		IsContract         bool    `json:"is_contract"`
+		NTxSuccess         int     `json:"n_tx_success"`
+		NTxFailed          int     `json:"n_tx_failed"`
+		NTxOut             int     `json:"n_tx_out"`
+		NTxIn              int     `json:"n_tx_in"`
+		FirstSeenTime      int64   `json:"first_seen_time"`
+		LastSeenTime       int64   `json:"last_seen_time"`
+		FirstInTime        int64   `json:"first_in_time"`
+		LastInTime         int64   `json:"last_in_time"`
+		FirstOutTime       int64   `json:"first_out_time"`
+		LastOutTime        int64   `json:"last_out_time"`
+		DelegatedSinceTime int64   `json:"delegated_since_time"`
 	}{
 		RowId:              a.RowId.Value(),
 		Address:            a.String(),
 		AddressType:        a.Type.String(),
-		Pubkey:             a.Pubkey,
+		Pubkey:             a.Pubkey.String(),
 		Counter:            a.Counter,
 		Baker:              a.ctx.Indexer.LookupAddress(a.ctx, a.BakerId).String(),
 		Creator:            a.ctx.Indexer.LookupAddress(a.ctx, a.CreatorId).String(),
@@ -478,7 +478,7 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-				if err != nil && err != index.ErrNoAccountEntry {
+				if err != nil && err != model.ErrNoAccount {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				// Note: when not found we insert an always false condition
@@ -497,7 +497,7 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 					if err != nil || !addr.IsValid() {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
-					hashes = append(hashes, addr.Bytes22())
+					hashes = append(hashes, addr[:])
 				}
 				q = q.And("H", mode, hashes)
 			default:
@@ -532,7 +532,7 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
+					if err != nil && err != model.ErrNoAccount {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					// Note: when not found we insert an always false condition
@@ -552,7 +552,7 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
+					if err != nil && err != model.ErrNoAccount {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account

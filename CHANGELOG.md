@@ -1,5 +1,72 @@
 # Changelog
 
+### v16.1.5 (v016-2023-02-26)
+
+Mumabi Release
+- NEW: add Mumbai operations wrapped into `rollup_origination` and `rollup_transaction`
+    - `smart_rollup_add_messages`
+    - `smart_rollup_cement`
+    - `smart_rollup_originate`
+    - `smart_rollup_execute_outbox_message`
+    - `smart_rollup_publish`
+    - `smart_rollup_recover_bond`
+    - `smart_rollup_refute`
+    - `smart_rollup_timeout`
+- NEW: add `transfer_ticket` op as explict operation (previously this was part of the rollup package and wrapped inside rollup_transaction)
+- NEW: op model added fields
+  - `ticket_updates` on eligible transaction between tz accounts (previously ticket transfer was limited to contracts)
+  - `staker`, `loser`, `winner` as participants in smart rollup refutation games
+- NEW: add block model `NTickets`
+- NEW: add chain model `TotalTicketTransfers`
+- NEW: extended list of metadata alias categories
+- NEW: detect and track protocol activations independently of hard-coded block heights
+
+Fixes
+- crash on broken call params
+- micheline type compare for nested unions, this fixes detecting allocated bigmap types
+- decoding bootstrap deposits on testnets
+- Exclude unknown fields from endorsement table query
+- entrypoint detection, continue on data decode errors
+- take delegation volume from flows instead of previous balance
+- parsing block height
+- micheline translate bugs
+- some entrypoint param decoding
+- nil response crash
+- account n_tx_success column name
+- gov vote index
+- stake in post-Ithaca index 15 snapshots
+- contract table lookup, limit to successful originations
+- rollup call stats query
+- Handle storage burn on transfer ticket op
+- Use staking balance for gov snapshots
+- Handle internal results on rollup output message execution
+
+Improvements
+- List internal ops sent by a contract
+- Raise default op limit to max
+- Sanitize API requests to reject zero hashes and negative heights
+- Add virtual start|end_time columns to income API
+- Store height in rights and income tables
+- Process internal transaction after ticket transfer
+- Protect against high memory usage when loading from (zero) op hash
+- Prevent indexer stop on unexpected rollup data
+- Protect against unexpected rollup calls
+- Use spendable balance for audit
+- Skip internal tx when building traffic ranks
+- Add more verbose init errors
+- Add auto retries to RPC client
+- List factory created contracts
+- CLI: change log system config names
+  - `log.blockchain` to `log.etl`
+  - `log.database` to `log.db`
+- Upgrade to Go 1.20 and TzGo to v1.16
+
+
+
+### v16.0.0 - v16.1.4
+
+(unreleased)
+
 ### untagged
 
 - FIX: Add missing delegation flow to drain op

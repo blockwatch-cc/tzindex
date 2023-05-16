@@ -23,7 +23,6 @@ import (
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/metadata"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/server"
@@ -233,7 +232,7 @@ func loadMetadata(ctx *server.Context) error {
 	idMap := make(metaByIdMap)
 	payMap := make(payoutByBakerMap)
 
-	table, err := ctx.Indexer.Table(index.MetadataTableKey)
+	table, err := ctx.Indexer.Table(model.MetadataTableKey)
 	if err != nil {
 		return fmt.Errorf("metadata: %w", err)
 	}
@@ -799,9 +798,9 @@ func DescribeMetadata(ctx *server.Context) (interface{}, int) {
 		ops, err := ctx.Indexer.LookupOp(ctx, num, etl.ListRequest{})
 		if err != nil {
 			switch err {
-			case index.ErrNoOpEntry:
+			case model.ErrNoOp:
 				panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no such operation", err))
-			case index.ErrInvalidOpID:
+			case model.ErrInvalidOpID:
 				panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, "invalid event id", err))
 			default:
 				panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))
@@ -829,7 +828,7 @@ func DescribeMetadata(ctx *server.Context) (interface{}, int) {
 		} else if _, err := strconv.ParseInt(ident, 10, 64); err == nil {
 			desc = DescribeBlock(ctx, ident)
 		} else if _, err := tezos.ParseOpHash(ident); err == nil {
-			ops := loadOps(ctx, &OpsRequest{})
+			ops := loadOps(ctx, &OpsRequest{}, 1)
 			desc = DescribeOp(ctx, ops)
 		} else {
 			panic(server.EBadRequest(server.EC_RESOURCE_ID_MALFORMED, "unsupported identifier", nil))
@@ -856,7 +855,7 @@ func DescribeMetadata(ctx *server.Context) (interface{}, int) {
 
 func DescribeAddress(ctx *server.Context, addr tezos.Address) MetadataDescriptor {
 	d := MetadataDescriptor{
-		Title: addr.Short(),
+		Title: tezos.Short(addr.String()),
 		Image: config.GetString("metadata.describe.logo"),
 	}
 	meta, ok := lookupMetadataByAddress(ctx, addr, 0, false)
@@ -868,7 +867,7 @@ func DescribeAddress(ctx *server.Context, addr tezos.Address) MetadataDescriptor
 			d.Image = meta.Logo
 		}
 		if d.Title == "" {
-			d.Title = addr.Short()
+			d.Title = tezos.Short(addr.String())
 		}
 		if d.Description == "" {
 			switch meta.Kind {
@@ -942,12 +941,12 @@ func DescribeOp(ctx *server.Context, ops []*model.Op) MetadataDescriptor {
 		op = ops[0]
 	}
 
-	sender := ctx.Indexer.LookupAddress(ctx, op.SenderId).Short()
+	sender := tezos.Short(ctx.Indexer.LookupAddress(ctx, op.SenderId).String())
 	if meta, ok := lookupMetadataById(ctx, op.SenderId, 0, false); ok {
 		sender = meta.Name
 		d.Image = meta.Logo
 	}
-	receiver := ctx.Indexer.LookupAddress(ctx, op.ReceiverId).Short()
+	receiver := tezos.Short(ctx.Indexer.LookupAddress(ctx, op.ReceiverId).String())
 	if meta, ok := lookupMetadataById(ctx, op.ReceiverId, 0, false); ok {
 		receiver = meta.Name
 	}
@@ -965,7 +964,7 @@ func DescribeOp(ctx *server.Context, ops []*model.Op) MetadataDescriptor {
 		)
 
 	case model.OpTypeDoubleBaking:
-		d.Title = fmt.Sprintf("Tezos Double Baking Evidence %s", op.Hash.Short())
+		d.Title = fmt.Sprintf("Tezos Double Baking Evidence %s", tezos.Short(op.Hash.String()))
 		d.Description = fmt.Sprintf("Evidence of double baking in block %s on %s. Offender: %s. Lost %s XTZ.",
 			util.PrettyInt64(op.Height),
 			op.Timestamp.Format(metaDateTime),
@@ -974,7 +973,7 @@ func DescribeOp(ctx *server.Context, ops []*model.Op) MetadataDescriptor {
 		)
 
 	case model.OpTypeDoubleEndorsement:
-		d.Title = fmt.Sprintf("Tezos Double Endorsement Evidence %s", op.Hash.Short())
+		d.Title = fmt.Sprintf("Tezos Double Endorsement Evidence %s", tezos.Short(op.Hash.String()))
 		d.Description = fmt.Sprintf("Evidence of double endorsing in block %s on %s. Offender: %s. Lost %s XTZ.",
 			util.PrettyInt64(op.Height),
 			op.Timestamp.Format(metaDateTime),
@@ -983,7 +982,7 @@ func DescribeOp(ctx *server.Context, ops []*model.Op) MetadataDescriptor {
 		)
 
 	case model.OpTypeDoublePreendorsement:
-		d.Title = fmt.Sprintf("Tezos Double Preendorsement Evidence %s", op.Hash.Short())
+		d.Title = fmt.Sprintf("Tezos Double Preendorsement Evidence %s", tezos.Short(op.Hash.String()))
 		d.Description = fmt.Sprintf("Evidence of double preendorsing in block %s on %s. Offender: %s. Lost %s XTZ.",
 			util.PrettyInt64(op.Height),
 			op.Timestamp.Format(metaDateTime),
@@ -992,7 +991,7 @@ func DescribeOp(ctx *server.Context, ops []*model.Op) MetadataDescriptor {
 		)
 
 	case model.OpTypeNonceRevelation:
-		d.Title = fmt.Sprintf("Tezos Seed-Nonce Revelation %s", op.Hash.Short())
+		d.Title = fmt.Sprintf("Tezos Seed-Nonce Revelation %s", tezos.Short(op.Hash.String()))
 		d.Description = fmt.Sprintf("Seed nonce revealed by %s on %s (block %s in cycle %s). Baked by %s, reward: %s XTZ.",
 			receiver,
 			op.Timestamp.Format(metaDateTime),
@@ -1005,7 +1004,7 @@ func DescribeOp(ctx *server.Context, ops []*model.Op) MetadataDescriptor {
 	case model.OpTypeTransaction:
 		switch {
 		case op.IsContract:
-			d.Title = fmt.Sprintf("Tezos Contract Call %s", op.Hash.Short())
+			d.Title = fmt.Sprintf("Tezos Contract Call %s", tezos.Short(op.Hash.String()))
 			d.Description = fmt.Sprintf("Called %s in contract %s on %s. Status: %s.",
 				op.Data,
 				receiver,
@@ -1017,7 +1016,7 @@ func DescribeOp(ctx *server.Context, ops []*model.Op) MetadataDescriptor {
 			for _, v := range ops {
 				sum += v.Volume
 			}
-			d.Title = fmt.Sprintf("Tezos Batch Operation %s", op.Hash.Short())
+			d.Title = fmt.Sprintf("Tezos Batch Operation %s", tezos.Short(op.Hash.String()))
 			d.Description = fmt.Sprintf("Batch-sent %s XTZ from %s on %s. Status: %s.",
 				util.PrettyFloat64(ctx.Params.ConvertValue(sum)),
 				sender,
@@ -1025,7 +1024,7 @@ func DescribeOp(ctx *server.Context, ops []*model.Op) MetadataDescriptor {
 				op.Status,
 			)
 		default:
-			d.Title = fmt.Sprintf("Tezos Transaction %s", op.Hash.Short())
+			d.Title = fmt.Sprintf("Tezos Transaction %s", tezos.Short(op.Hash.String()))
 			d.Description = fmt.Sprintf("Sent %s XTZ from %s to %s on %s. Status: %s.",
 				util.PrettyFloat64(ctx.Params.ConvertValue(op.Volume)),
 				sender,
@@ -1036,7 +1035,7 @@ func DescribeOp(ctx *server.Context, ops []*model.Op) MetadataDescriptor {
 		}
 
 	case model.OpTypeOrigination:
-		d.Title = fmt.Sprintf("Tezos Origination %s", op.Hash.Short())
+		d.Title = fmt.Sprintf("Tezos Origination %s", tezos.Short(op.Hash.String()))
 		d.Description = fmt.Sprintf("Sender: %s. Contract: %s. Time %s. Status %s.",
 			sender,
 			receiver,
@@ -1047,7 +1046,7 @@ func DescribeOp(ctx *server.Context, ops []*model.Op) MetadataDescriptor {
 	case model.OpTypeDelegation:
 		switch {
 		case op.SenderId == op.BakerId:
-			d.Title = fmt.Sprintf("Tezos Baker Registration %s", op.Hash.Short())
+			d.Title = fmt.Sprintf("Tezos Baker Registration %s", tezos.Short(op.Hash.String()))
 			d.Description = fmt.Sprintf("New baker %s registered on %s (cycle %s). Status: %s.",
 				sender,
 				op.Timestamp.Format(metaDateTime),
@@ -1055,7 +1054,7 @@ func DescribeOp(ctx *server.Context, ops []*model.Op) MetadataDescriptor {
 				op.Status,
 			)
 		case op.BakerId == 0:
-			d.Title = fmt.Sprintf("Tezos Delegation Removal %s", op.Hash.Short())
+			d.Title = fmt.Sprintf("Tezos Delegation Removal %s", tezos.Short(op.Hash.String()))
 			d.Description = fmt.Sprintf("Delegator %s left %s on %s (cycle %s). Status: %s.",
 				sender,
 				receiver,
@@ -1064,11 +1063,11 @@ func DescribeOp(ctx *server.Context, ops []*model.Op) MetadataDescriptor {
 				op.Status,
 			)
 		default:
-			baker := ctx.Indexer.LookupAddress(ctx, op.BakerId).Short()
+			baker := tezos.Short(ctx.Indexer.LookupAddress(ctx, op.BakerId).String())
 			if meta, ok := lookupMetadataById(ctx, op.BakerId, 0, false); ok {
 				baker = meta.Name
 			}
-			d.Title = fmt.Sprintf("Tezos Delegation %s", op.Hash.Short())
+			d.Title = fmt.Sprintf("Tezos Delegation %s", tezos.Short(op.Hash.String()))
 			d.Description = fmt.Sprintf("Delegation from %s to %s on %s (cycle %s). Status: %s.",
 				sender,
 				baker,
@@ -1079,7 +1078,7 @@ func DescribeOp(ctx *server.Context, ops []*model.Op) MetadataDescriptor {
 		}
 
 	case model.OpTypeReveal:
-		d.Title = fmt.Sprintf("Tezos Public Key Revelation %s", op.Hash.Short())
+		d.Title = fmt.Sprintf("Tezos Public Key Revelation %s", tezos.Short(op.Hash.String()))
 		d.Description = fmt.Sprintf("Public key revealed by %s on %s (block %s). Key: %s.",
 			sender,
 			op.Timestamp.Format(metaDateTime),
@@ -1089,7 +1088,7 @@ func DescribeOp(ctx *server.Context, ops []*model.Op) MetadataDescriptor {
 
 	case model.OpTypeEndorsement:
 		mask, _ := strconv.ParseUint(op.Data, 10, 64)
-		d.Title = fmt.Sprintf("Tezos Endorsement %s", op.Hash.Short())
+		d.Title = fmt.Sprintf("Tezos Endorsement %s", tezos.Short(op.Hash.String()))
 		d.Description = fmt.Sprintf("%s endorsed %d slots in block %s on %s. Deposit: %s XTZ. Reward: %s XTZ.",
 			sender,
 			bits.OnesCount64(mask),
@@ -1100,7 +1099,7 @@ func DescribeOp(ctx *server.Context, ops []*model.Op) MetadataDescriptor {
 		)
 
 	case model.OpTypeProposal:
-		d.Title = fmt.Sprintf("Tezos Proposal Vote %s", op.Hash.Short())
+		d.Title = fmt.Sprintf("Tezos Proposal Vote %s", tezos.Short(op.Hash.String()))
 		d.Description = fmt.Sprintf("%s upvoted %s on %s.",
 			sender,
 			op.Data,
@@ -1109,7 +1108,7 @@ func DescribeOp(ctx *server.Context, ops []*model.Op) MetadataDescriptor {
 
 	case model.OpTypeBallot:
 		data := strings.Split(op.Data, ",")
-		d.Title = fmt.Sprintf("Tezos Ballot %s", op.Hash.Short())
+		d.Title = fmt.Sprintf("Tezos Ballot %s", tezos.Short(op.Hash.String()))
 		d.Description = fmt.Sprintf("%s voted %s for %s on %s.",
 			sender,
 			data[1],
@@ -1185,7 +1184,7 @@ func DescribeElection(ctx *server.Context, id int64) MetadataDescriptor {
 		switch err {
 		case etl.ErrNoTable:
 			panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "cannot access election table", err))
-		case index.ErrNoElectionEntry:
+		case model.ErrNoElection:
 			panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no election", err))
 		default:
 			panic(server.EInternal(server.EC_DATABASE, err.Error(), nil))

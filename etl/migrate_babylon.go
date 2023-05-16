@@ -12,12 +12,11 @@ import (
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
 
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
 )
 
-func (b *Builder) MigrateBabylon(ctx context.Context, oldparams, nextparams *tezos.Params) error {
+func (b *Builder) MigrateBabylon(ctx context.Context, oldparams, nextparams *rpc.Params) error {
 	log.Infof("Migrate v%03d: inserting invoices", nextparams.Version)
 	var count int
 	for n, amount := range map[string]int64{
@@ -37,7 +36,9 @@ func (b *Builder) MigrateBabylon(ctx context.Context, oldparams, nextparams *tez
 			b.accMap[acc.RowId] = acc
 			b.accHashMap[b.accCache.AccountHashKey(acc)] = acc
 		}
-		b.AppendInvoiceOp(ctx, acc, amount, count)
+		if err := b.AppendInvoiceOp(ctx, acc, amount, count); err != nil {
+			return err
+		}
 		count++
 	}
 
@@ -57,9 +58,9 @@ func (b *Builder) MigrateBabylon(ctx context.Context, oldparams, nextparams *tez
 }
 
 // v005 airdrops 1 mutez to unfunded manager accounts to avoid origination burn
-func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *tezos.Params) (int, error) {
+func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *rpc.Params) (int, error) {
 	// collect all eligible addresses and inject airdrop flows
-	table, err := b.idx.Table(index.AccountTableKey)
+	table, err := b.idx.Table(model.AccountTableKey)
 	if err != nil {
 		return 0, err
 	}
@@ -79,7 +80,7 @@ func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *tezos.Params) (
 	// find eligible KT1 contracts where we need to check the manager
 	managers := make([]uint64, 0)
 	acc := &model.Account{}
-	err = pack.NewQuery("etl.addr.babylon_airdrop_eligible").
+	err = pack.NewQuery("etl.migrate.airdrop_find").
 		WithTable(table).
 		AndEqual("address_type", tezos.AddressTypeContract).
 		Stream(ctx, func(r pack.Row) error {
@@ -100,9 +101,9 @@ func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *tezos.Params) (
 	}
 	// log.Infof("Upgrade: found %d eligible managers", len(vec.Uint64.Unique(managers)))
 
-	// find unfunded managers who are not reqistered as delegates
+	// find unfunded managers who are not registered as baker
 	var count int
-	err = pack.NewQuery("etl.addr.babylon_airdrop").
+	err = pack.NewQuery("etl.migrate.airdrop").
 		WithTable(table).
 		AndEqual("is_funded", false).
 		AndEqual("is_baker", false).
@@ -114,7 +115,9 @@ func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *tezos.Params) (
 				return err
 			}
 			// airdrop 1 mutez
-			b.AppendAirdropOp(ctx, acc, 1, count)
+			if err := b.AppendAirdropOp(ctx, acc, 1, count); err != nil {
+				return err
+			}
 			count++
 			// log.Debugf("%04d airdrop: %s %f", count, acc, params.ConvertValue(1))
 			// add account to builder map if not exist
@@ -132,9 +135,9 @@ func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *tezos.Params) (
 	return count, nil
 }
 
-func (b *Builder) RunBabylonUpgrade(ctx context.Context, params *tezos.Params, n int) error {
+func (b *Builder) RunBabylonUpgrade(ctx context.Context, params *rpc.Params, n int) error {
 	// collect all eligible addresses and inject airdrop flows
-	table, err := b.idx.Table(index.AccountTableKey)
+	table, err := b.idx.Table(model.AccountTableKey)
 	if err != nil {
 		return err
 	}
@@ -142,7 +145,7 @@ func (b *Builder) RunBabylonUpgrade(ctx context.Context, params *tezos.Params, n
 	// Note: these are KT1 accounts distinct from the tz1/2/3 airdrop
 	// accounts above
 	var count int
-	err = pack.NewQuery("etl.account.babylon_upgrade").
+	err = pack.NewQuery("etl.migrate.upgrade").
 		WithTable(table).
 		WithoutCache().
 		AndEqual("address_type", tezos.AddressTypeContract).
@@ -179,7 +182,9 @@ func (b *Builder) RunBabylonUpgrade(ctx context.Context, params *tezos.Params, n
 			b.conMap[acc.RowId] = contract
 
 			// create migration op
-			b.AppendContractMigrationOp(ctx, acc, contract, n+count)
+			if err := b.AppendContractMigrationOp(ctx, acc, contract, n+count); err != nil {
+				return err
+			}
 			count++
 			return nil
 		})
@@ -191,7 +196,7 @@ func (b *Builder) RunBabylonUpgrade(ctx context.Context, params *tezos.Params, n
 	// find eligible smart KT1 contracts to upgrade
 	var smart int
 	acc := &model.Account{}
-	err = pack.NewQuery("etl.contract.babylon_upgrade").
+	err = pack.NewQuery("etl.migrate.upgrade").
 		WithTable(table).
 		WithoutCache().
 		AndEqual("address_type", tezos.AddressTypeContract).
@@ -228,7 +233,9 @@ func (b *Builder) RunBabylonUpgrade(ctx context.Context, params *tezos.Params, n
 			b.accMap[acc.RowId] = acc
 
 			// create migration op
-			b.AppendContractMigrationOp(ctx, acc, con, n+count+smart)
+			if err := b.AppendContractMigrationOp(ctx, acc, con, n+count+smart); err != nil {
+				return err
+			}
 			smart++
 			return nil
 		})
@@ -239,13 +246,13 @@ func (b *Builder) RunBabylonUpgrade(ctx context.Context, params *tezos.Params, n
 	return nil
 }
 
-func NeedsBabylonUpgradeAccount(a *model.Account, p *tezos.Params) bool {
+func NeedsBabylonUpgradeAccount(a *model.Account, p *rpc.Params) bool {
 	isEligible := a.Type == tezos.AddressTypeContract && !a.IsContract
 	isEligible = isEligible && rpc.BabylonFlags(a.UnclaimedBalance).CanUpgrade()
 	return isEligible && p.Version >= 5
 }
 
-func UpgradeToBabylonAccount(a *model.Account, p *tezos.Params) {
+func UpgradeToBabylonAccount(a *model.Account, p *rpc.Params) {
 	if !NeedsBabylonUpgradeAccount(a, p) {
 		return
 	}
@@ -258,7 +265,7 @@ func UpgradeToBabylonAccount(a *model.Account, p *tezos.Params) {
 // - patch code and storage
 // - only applies to mainnet contracts originated before babylon
 // - don't upgrade when query height < babylon to return old params/storage format
-func NeedsBabylonUpgradeContract(c *model.Contract, p *tezos.Params) bool {
+func NeedsBabylonUpgradeContract(c *model.Contract, p *rpc.Params) bool {
 	// babylon activation
 	isEligible := p.IsPostBabylon() && p.IsPreBabylonHeight(c.FirstSeen)
 	// contract upgrade criteria
@@ -268,7 +275,7 @@ func NeedsBabylonUpgradeContract(c *model.Contract, p *tezos.Params) bool {
 	return isEligible
 }
 
-func UpgradeToBabylon(c *model.Contract, p *tezos.Params, a *model.Account) error {
+func UpgradeToBabylon(c *model.Contract, p *rpc.Params, a *model.Account) error {
 	if !NeedsBabylonUpgradeContract(c, p) {
 		return nil
 	}
@@ -292,10 +299,10 @@ func UpgradeToBabylon(c *model.Contract, p *tezos.Params, a *model.Account) erro
 	}
 
 	// need manager (creator)
-	mgrHash := a.Address.Bytes()
+	mgrHash := a.Address.Encode()
 
 	// migrate script
-	switch true {
+	switch {
 	case isSpendable:
 		script.MigrateToBabylonAddDo(mgrHash)
 		c.InterfaceHash = script.InterfaceHash()
@@ -324,6 +331,7 @@ func UpgradeToBabylon(c *model.Contract, p *tezos.Params, a *model.Account) erro
 	if err != nil {
 		return err
 	}
+	c.StorageHash = storage.Hash64()
 
 	c.IsDirty = true
 	return nil

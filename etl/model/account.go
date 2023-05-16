@@ -6,6 +6,7 @@ package model
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -15,12 +16,18 @@ import (
 )
 
 const (
-	DustLimit int64 = 10_000 // 0.01 tez
+	DustLimit       int64 = 10_000 // 0.01 tez
+	AccountTableKey       = "account"
 )
 
-var accountPool = &sync.Pool{
-	New: func() interface{} { return new(Account) },
-}
+var (
+	accountPool = &sync.Pool{
+		New: func() interface{} { return new(Account) },
+	}
+
+	ErrNoAccount      = errors.New("account not indexed")
+	ErrInvalidAddress = errors.New("invalid address")
+)
 
 type AccountID uint64
 
@@ -90,7 +97,7 @@ var _ pack.Item = (*Account)(nil)
 
 func NewAccount(addr tezos.Address) *Account {
 	acc := AllocAccount()
-	acc.Type = addr.Type
+	acc.Type = addr.Type()
 	acc.Address = addr.Clone()
 	acc.IsNew = true
 	acc.IsDirty = true
@@ -116,6 +123,28 @@ func (a Account) ID() uint64 {
 
 func (a *Account) SetID(id uint64) {
 	a.RowId = AccountID(id)
+}
+
+func (m Account) TableKey() string {
+	return AccountTableKey
+}
+
+func (m Account) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    14,
+		JournalSizeLog2: 17,
+		CacheSize:       512,
+		FillLevel:       100,
+	}
+}
+
+func (m Account) IndexOpts(key string) pack.Options {
+	return pack.Options{
+		PackSizeLog2:    14,
+		JournalSizeLog2: 17,
+		CacheSize:       64,
+		FillLevel:       90,
+	}
 }
 
 func (a Account) String() string {
@@ -158,7 +187,8 @@ func (a *Account) UpdateBalance(f *Flow) error {
 			a.TotalReceived += f.AmountIn
 
 		case FlowTypeTransaction, FlowTypeOrigination, FlowTypeDelegation,
-			FlowTypeReveal, FlowTypeRegisterConstant, FlowTypeDepositsLimit:
+			FlowTypeReveal, FlowTypeRegisterConstant, FlowTypeDepositsLimit,
+			FlowTypeUpdateConsensusKey, FlowTypeDrain, FlowTypeTransferTicket:
 			// can pay fee, can pay burn, can send and receive
 			if !f.IsBurned && !f.IsFee {
 				// count send/received only for non-fee and non-burn flows
@@ -237,6 +267,7 @@ func (a *Account) RollbackBalanceN(flows []*Flow) error {
 func (a *Account) RollbackBalance(f *Flow) error {
 	a.IsDirty = true
 	a.IsNew = a.FirstSeen == f.Height
+	wasEmpty := a.Balance() == 0
 
 	switch f.Category {
 
@@ -251,7 +282,8 @@ func (a *Account) RollbackBalance(f *Flow) error {
 			a.TotalReceived -= f.AmountIn
 
 		case FlowTypeTransaction, FlowTypeOrigination, FlowTypeDelegation,
-			FlowTypeReveal, FlowTypeRegisterConstant, FlowTypeDepositsLimit:
+			FlowTypeReveal, FlowTypeRegisterConstant, FlowTypeDepositsLimit,
+			FlowTypeUpdateConsensusKey, FlowTypeDrain, FlowTypeTransferTicket:
 			// can pay fee, can pay burn, can send and receive
 			if !f.IsBurned && !f.IsFee {
 				// count send/received only for non-fee and non-burn flows
@@ -287,6 +319,11 @@ func (a *Account) RollbackBalance(f *Flow) error {
 		}
 	}
 
+	// reset revealed flag
+	if a.IsFunded && wasEmpty && !a.IsRevealed && a.Pubkey.IsValid() {
+		a.IsRevealed = true
+	}
+
 	// skip activity updates (too complex to track previous in/out heights)
 	// and rely on subsequent block updates, we still set LastSeen to the current block
 	a.IsFunded = a.Balance() > 0
@@ -298,11 +335,10 @@ func (a Account) MarshalBinary() ([]byte, error) {
 	le := binary.LittleEndian
 	buf := bytes.NewBuffer(make([]byte, 0, 2048))
 	_ = binary.Write(buf, le, a.RowId)
-	b := a.Address.Bytes22()
-	_, _ = buf.Write(b)
-	b = a.Pubkey.Bytes()
+	_, _ = buf.Write(a.Address[:])
+	b := a.Pubkey.Bytes()
 	_ = binary.Write(buf, le, int32(len(b)))
-	buf.Write(b)
+	_, _ = buf.Write(b)
 	_ = binary.Write(buf, le, a.Counter)
 	_ = binary.Write(buf, le, a.BakerId)
 	_ = binary.Write(buf, le, a.CreatorId)
@@ -339,8 +375,8 @@ func (a *Account) UnmarshalBinary(data []byte) error {
 	le := binary.LittleEndian
 	buf := bytes.NewBuffer(data)
 	_ = binary.Read(buf, le, &a.RowId)
-	_ = a.Address.UnmarshalBinary(buf.Next(22))
-	a.Type = a.Address.Type
+	_ = a.Address.UnmarshalBinary(buf.Next(21))
+	a.Type = a.Address.Type()
 	var l int32
 	_ = binary.Read(buf, le, &l)
 	_ = a.Pubkey.UnmarshalBinary(buf.Next(int(l)))

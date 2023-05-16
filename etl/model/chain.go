@@ -4,9 +4,18 @@
 package model
 
 import (
+	"errors"
 	"time"
 
 	"blockwatch.cc/packdb/pack"
+)
+
+const ChainTableKey = "chain"
+
+var (
+	// ErrNoChain is an error that indicates a requested entry does
+	// not exist in the chain table.
+	ErrNoChain = errors.New("chain state not indexed")
 )
 
 type Chain struct {
@@ -37,6 +46,7 @@ type Chain struct {
 	TotalConstants       int64     `pack:"n,snappy"      json:"total_constants"`           // registered global constants
 	TotalSetLimits       int64     `pack:"L,snappy"      json:"total_set_limits"`          // registered global constants
 	TotalStorageBytes    int64     `pack:"S,snappy"      json:"total_storage_bytes"`       //
+	TotalTicketTransfers int64     `pack:"Z,snappy"      json:"total_ticket_transfers"`    // transfer ticket
 	FundedAccounts       int64     `pack:"f,snappy"      json:"funded_accounts"`           // total number of accounts qith non-zero balance
 	DustAccounts         int64     `pack:"d,snappy"      json:"dust_accounts"`             // accounts with a balance < 1 tez
 	GhostAccounts        int64     `pack:"H,snappy"      json:"ghost_accounts"`            // unfunded L2 accounts (who own tokens, but cannot move them)
@@ -65,6 +75,23 @@ func (c *Chain) ID() uint64 {
 
 func (c *Chain) SetID(id uint64) {
 	c.RowId = id
+}
+
+func (m Chain) TableKey() string {
+	return ChainTableKey
+}
+
+func (m Chain) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    15,
+		JournalSizeLog2: 15,
+		CacheSize:       2,   // max MB
+		FillLevel:       100, // boltdb fill level to limit reallocations
+	}
+}
+
+func (m Chain) IndexOpts(key string) pack.Options {
+	return pack.NoOptions
 }
 
 // be compatible with time series interface
@@ -125,6 +152,8 @@ func (c *Chain) Update(b *Block, accounts map[AccountID]*Account, bakers map[Acc
 			c.TotalSetLimits++
 		case OpTypeRollupOrigination:
 			c.TotalRollups++
+		case OpTypeTransferTicket:
+			c.TotalTicketTransfers++
 		}
 	}
 
@@ -219,7 +248,7 @@ func (c *Chain) Update(b *Block, accounts map[AccountID]*Account, bakers map[Acc
 		} else {
 			// if we're at the last block of a cycle we need to adjust down the
 			// balance by unfrozen rewards since Tezos snapshots rolls before unfreeze
-			if b.Params.IsCycleEnd(b.Height) {
+			if b.TZ.IsCycleEnd() {
 				// find the reward unfreeze flow for this baker
 				for _, flow := range b.Flows {
 					if flow.AccountId != acc.RowId {

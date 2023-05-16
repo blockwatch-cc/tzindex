@@ -4,10 +4,18 @@
 package model
 
 import (
+	"errors"
+
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/rpc"
+)
+
+const ConstantTableKey = "constant"
+
+var (
+	ErrNoConstant = errors.New("constant not indexed")
 )
 
 type ConstantID uint64
@@ -52,4 +60,26 @@ func (g *Constant) ID() uint64 {
 
 func (g *Constant) SetID(id uint64) {
 	g.RowId = ConstantID(id)
+}
+
+func (m Constant) TableKey() string {
+	return ConstantTableKey
+}
+
+func (m Constant) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    10,
+		JournalSizeLog2: 10,
+		CacheSize:       2,
+		FillLevel:       100,
+	}
+}
+
+func (m Constant) IndexOpts(key string) pack.Options {
+	return pack.Options{
+		PackSizeLog2:    10,
+		JournalSizeLog2: 10,
+		CacheSize:       2,
+		FillLevel:       90,
+	}
 }

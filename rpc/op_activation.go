@@ -21,3 +21,9 @@ type Activation struct {
 func (a Activation) Fees() BalanceUpdates {
 	return a.Metadata.BalanceUpdates
 }
+
+// Addresses adds all addresses used in this operation to the set.
+// Implements TypedOperation interface.
+func (a Activation) Addresses(set *tezos.AddressSet) {
+	set.AddUnique(a.Pkh)
+}

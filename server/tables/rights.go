@@ -17,8 +17,8 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -40,9 +40,7 @@ func init() {
 
 	// add extra translations
 	rightSourceNames["address"] = "A"
-	rightSourceNames["height"] = "c"
 	rightAllAliases = append(rightAllAliases, "address")
-	rightAllAliases = append(rightAllAliases, "height")
 }
 
 // configurable marshalling helper
@@ -51,7 +49,7 @@ type Right struct {
 	verbose bool            // cond. marshal
 	columns util.StringList // cond. cols & order when brief
 	ctx     *server.Context
-	params  *tezos.Params
+	params  *rpc.Params
 }
 
 func (r *Right) MarshalJSON() ([]byte, error) {
@@ -78,7 +76,7 @@ func (r *Right) MarshalJSONVerbose() ([]byte, error) {
 	}{
 		RowId:     r.RowId,
 		Cycle:     r.Cycle,
-		Height:    r.params.CycleStartHeight(r.Cycle),
+		Height:    r.Height,
 		AccountId: r.AccountId.Value(),
 		Address:   r.ctx.Indexer.LookupAddress(r.ctx, r.AccountId).String(),
 		Bake:      hex.EncodeToString(r.Bake.Bytes()),
@@ -101,7 +99,7 @@ func (r *Right) MarshalJSONBrief() ([]byte, error) {
 		case "cycle":
 			buf = strconv.AppendInt(buf, r.Cycle, 10)
 		case "height":
-			buf = strconv.AppendInt(buf, r.params.CycleStartHeight(r.Cycle), 10)
+			buf = strconv.AppendInt(buf, r.Height, 10)
 		case "account_id":
 			buf = strconv.AppendUint(buf, r.AccountId.Value(), 10)
 		case "address":
@@ -138,7 +136,7 @@ func (r *Right) MarshalCSV() ([]string, error) {
 		case "cycle":
 			res[i] = strconv.FormatInt(r.Cycle, 10)
 		case "height":
-			res[i] = strconv.FormatInt(r.params.CycleStartHeight(r.Cycle), 10)
+			res[i] = strconv.FormatInt(r.Height, 10)
 		case "account_id":
 			res[i] = strconv.FormatUint(r.AccountId.Value(), 10)
 		case "address":
@@ -240,7 +238,7 @@ func StreamRightsTable(ctx *server.Context, args *TableRequest) (interface{}, in
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-				if err != nil && err != index.ErrNoAccountEntry {
+				if err != nil && err != model.ErrNoAccount {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				// Note: when not found we insert an always false condition
@@ -259,7 +257,7 @@ func StreamRightsTable(ctx *server.Context, args *TableRequest) (interface{}, in
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
+					if err != nil && err != model.ErrNoAccount {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account
@@ -286,10 +284,6 @@ func StreamRightsTable(ctx *server.Context, args *TableRequest) (interface{}, in
 			// the same field name may appear multiple times, in which case conditions
 			// are combined like any other condition with logical AND
 			for _, v := range val {
-				if prefix == "cycle" && v == "head" {
-					currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
-					v = strconv.FormatInt(currentCycle, 10)
-				}
 				if cond, err := pack.ParseCondition(key, v, table.Fields()); err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", key, v), err))
 				} else {

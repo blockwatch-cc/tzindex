@@ -16,8 +16,8 @@ import (
 )
 
 var (
-	BigmapHistoryMaxCacheSize = 1024  // entries
-	BigmapMaxCacheSize        = 16384 // entries
+	BigmapHistoryMaxCacheSize = 2048    // full bigmaps (all keys + values)
+	BigmapMaxCacheSize        = 1 << 20 // 1M entries
 )
 
 type BigmapCache struct {
@@ -95,7 +95,7 @@ func (h BigmapHistory) Len() int {
 	return len(h.KeyOffsets)
 }
 
-func (h BigmapHistory) Get(key tezos.ExprHash) *model.BigmapKV {
+func (h BigmapHistory) Get(key tezos.ExprHash) *model.BigmapValue {
 	var found int = -1
 	for i, v := range h.KeyOffsets {
 		kStart, kEnd := v, h.ValueOffsets[i]
@@ -113,7 +113,7 @@ func (h BigmapHistory) Get(key tezos.ExprHash) *model.BigmapKV {
 	if found < h.Len()-1 {
 		vEnd = int(h.KeyOffsets[found+1])
 	}
-	return &model.BigmapKV{
+	return &model.BigmapValue{
 		RowId:    uint64(found + 1),
 		BigmapId: h.BigmapId,
 		KeyId:    model.GetKeyId(h.BigmapId, micheline.KeyHash(h.Data[kStart:kEnd])),
@@ -122,14 +122,14 @@ func (h BigmapHistory) Get(key tezos.ExprHash) *model.BigmapKV {
 	}
 }
 
-func (h BigmapHistory) Range(from, to int) []*model.BigmapKV {
+func (h BigmapHistory) Range(from, to int) []*model.BigmapValue {
 	if to < 0 || to >= h.Len() {
 		to = h.Len() - 1
 	}
 	if to <= from {
 		return nil
 	}
-	items := make([]*model.BigmapKV, to-from)
+	items := make([]*model.BigmapValue, to-from)
 	for i := 0; i < len(items); i++ {
 		kStart, vStart := int(h.KeyOffsets[i+from]), int(h.ValueOffsets[i+from])
 		kEnd, vEnd := vStart, len(h.Data)
@@ -138,7 +138,7 @@ func (h BigmapHistory) Range(from, to int) []*model.BigmapKV {
 		}
 
 		// log.Infof("Item %d: key [%d:%d] value[%d:%d] max=%d", i, kStart, kEnd, vStart, vEnd, len(h.Data))
-		items[i] = &model.BigmapKV{
+		items[i] = &model.BigmapValue{
 			RowId:    uint64(i + from + 1),
 			BigmapId: h.BigmapId,
 			KeyId:    model.GetKeyId(h.BigmapId, micheline.KeyHash(h.Data[kStart:kEnd])),
@@ -214,12 +214,12 @@ func (c *BigmapHistoryCache) GetBest(id, height int64) (*BigmapHistory, bool) {
 }
 
 func (c *BigmapHistoryCache) Build(ctx context.Context, updates *pack.Table, id, height int64) (*BigmapHistory, error) {
-	kvStore := make(map[uint64]*model.BigmapKV)
+	kvStore := make(map[uint64]*model.BigmapValue)
 	upd := &model.BigmapUpdate{}
-	var count int
-	err := pack.NewQuery("build_history_cache").
+	var count, size int
+	err := pack.NewQuery("cache.build").
 		WithTable(updates).
-		WithFields("a", "K", "k", "v").
+		WithFields("action", "key_id", "key", "value").
 		AndEqual("bigmap_id", id).
 		AndLte("height", height).
 		Stream(ctx, func(r pack.Row) error {
@@ -231,8 +231,12 @@ func (c *BigmapHistoryCache) Build(ctx context.Context, updates *pack.Table, id,
 			case micheline.DiffActionAlloc, micheline.DiffActionCopy:
 				// ignore
 			case micheline.DiffActionUpdate:
+				size += len(upd.Key) + len(upd.Value)
 				kvStore[upd.KeyId] = upd.ToKV()
 			case micheline.DiffActionRemove:
+				if v, ok := kvStore[upd.KeyId]; ok {
+					size -= len(v.Key) + len(v.Value)
+				}
 				delete(kvStore, upd.KeyId)
 			}
 			return nil
@@ -250,7 +254,7 @@ func (c *BigmapHistoryCache) Build(ctx context.Context, updates *pack.Table, id,
 		Height:       height,
 		KeyOffsets:   make([]uint32, len(kvStore)),
 		ValueOffsets: make([]uint32, len(kvStore)),
-		Data:         make([]byte, 0, len(kvStore)*16), // guess
+		Data:         make([]byte, 0, size),
 	}
 	count = 0
 	for _, v := range kvStore {
@@ -268,7 +272,7 @@ func (c *BigmapHistoryCache) Build(ctx context.Context, updates *pack.Table, id,
 
 func (c *BigmapHistoryCache) Update(ctx context.Context, hist *BigmapHistory, updates *pack.Table, height int64) (*BigmapHistory, error) {
 	// unpack all cached values into kvStore map (cached store is read-only)
-	kvStore := make(map[uint64]*model.BigmapKV, len(hist.KeyOffsets))
+	kvStore := make(map[uint64]*model.BigmapValue, len(hist.KeyOffsets))
 	for i, v := range hist.KeyOffsets {
 		kStart, kEnd := v, hist.ValueOffsets[i]
 		vStart, vEnd := kEnd, len(hist.Data)
@@ -276,7 +280,7 @@ func (c *BigmapHistoryCache) Update(ctx context.Context, hist *BigmapHistory, up
 			vEnd = int(hist.KeyOffsets[i+1])
 		}
 		kid := model.GetKeyId(hist.BigmapId, micheline.KeyHash(hist.Data[kStart:kEnd]))
-		kvStore[kid] = &model.BigmapKV{
+		kvStore[kid] = &model.BigmapValue{
 			RowId:    uint64(i + 1),
 			BigmapId: hist.BigmapId,
 			KeyId:    kid,
@@ -287,10 +291,10 @@ func (c *BigmapHistoryCache) Update(ctx context.Context, hist *BigmapHistory, up
 
 	// apply updates between hist.Height+1 and request height
 	upd := &model.BigmapUpdate{}
-	var count int
-	err := pack.NewQuery("update_history_cache").
+	var count, size int
+	err := pack.NewQuery("cache.update").
 		WithTable(updates).
-		WithFields("a", "k", "v").
+		WithFields("action", "key_id", "key", "value").
 		AndEqual("bigmap_id", hist.BigmapId).
 		AndGt("height", hist.Height).
 		AndLte("height", height).
@@ -303,8 +307,12 @@ func (c *BigmapHistoryCache) Update(ctx context.Context, hist *BigmapHistory, up
 			case micheline.DiffActionAlloc, micheline.DiffActionCopy:
 				// ignore
 			case micheline.DiffActionUpdate:
+				size += len(upd.Key) + len(upd.Value)
 				kvStore[upd.KeyId] = upd.ToKV()
 			case micheline.DiffActionRemove:
+				if v, ok := kvStore[upd.KeyId]; ok {
+					size -= len(v.Key) + len(v.Value)
+				}
 				delete(kvStore, upd.KeyId)
 			}
 			return nil
@@ -322,7 +330,7 @@ func (c *BigmapHistoryCache) Update(ctx context.Context, hist *BigmapHistory, up
 		Height:       height,
 		KeyOffsets:   make([]uint32, len(kvStore)),
 		ValueOffsets: make([]uint32, len(kvStore)),
-		Data:         make([]byte, 0, len(hist.Data)+(len(kvStore)-len(hist.KeyOffsets))*16), // guess
+		Data:         make([]byte, 0, len(hist.Data)+size),
 	}
 	count = 0
 	for _, v := range kvStore {

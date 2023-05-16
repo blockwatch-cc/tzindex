@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2023 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -8,52 +8,56 @@ import (
 	"sync"
 
 	"blockwatch.cc/tzgo/tezos"
+	"blockwatch.cc/tzindex/rpc"
 )
 
 type Registry struct {
 	sync.RWMutex
-	byProtocol   map[string]*tezos.Params
-	byDeployment map[int]*tezos.Params
-	inOrder      []*tezos.Params
+	byProtocol   map[tezos.ProtocolHash]*rpc.Params
+	byDeployment map[int]*rpc.Params
+	inOrder      []*rpc.Params
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
-		byProtocol:   make(map[string]*tezos.Params),
-		byDeployment: make(map[int]*tezos.Params),
-		inOrder:      make([]*tezos.Params, 0),
+		byProtocol:   make(map[tezos.ProtocolHash]*rpc.Params),
+		byDeployment: make(map[int]*rpc.Params),
+		inOrder:      make([]*rpc.Params, 0),
 	}
 }
 
 // Register registers network parameters for a Tezos network.
-func (r *Registry) Register(p *tezos.Params) error {
-	if !p.Protocol.IsValid() {
-		return fmt.Errorf("invalid protocol hash %s", p.Protocol)
+func (r *Registry) Register(p *rpc.Params) {
+	if p == nil {
+		return
 	}
 	r.Lock()
 	defer r.Unlock()
-	_, isUpdate := r.byProtocol[p.Protocol.String()]
-	r.byProtocol[p.Protocol.String()] = p
-	r.byDeployment[p.Deployment] = p
-	if !isUpdate {
-		r.inOrder = append(r.inOrder, p)
+	_, isUpdate := r.byProtocol[p.Protocol]
+	if isUpdate {
+		for i := range r.inOrder {
+			if r.inOrder[i].Protocol == p.Protocol {
+				r.inOrder[i] = p
+			}
+		}
 	} else {
-		r.inOrder[len(r.inOrder)-1] = p
+		r.inOrder = append(r.inOrder, p)
+		r.byProtocol[p.Protocol] = p
+		r.byDeployment[p.Deployment] = p
 	}
-	return nil
 }
 
-func (r *Registry) GetParams(h tezos.ProtocolHash) (*tezos.Params, error) {
+func (r *Registry) GetParams(h tezos.ProtocolHash) (*rpc.Params, error) {
 	r.RLock()
 	defer r.RUnlock()
-	if p, ok := r.byProtocol[h.String()]; !ok {
-		return nil, fmt.Errorf("unknown protocol %s", h)
+	if p, ok := r.byProtocol[h]; !ok {
+		return nil, fmt.Errorf("unknown protocol %q", h)
 	} else {
 		return p, nil
 	}
 }
 
-func (r *Registry) GetParamsByHeight(height int64) *tezos.Params {
+func (r *Registry) GetParamsByHeight(height int64) *rpc.Params {
 	r.RLock()
 	for _, v := range r.inOrder {
 		if height >= v.StartHeight && (v.EndHeight < 0 || height <= v.EndHeight) {
@@ -65,7 +69,20 @@ func (r *Registry) GetParamsByHeight(height int64) *tezos.Params {
 	return r.GetParamsLatest()
 }
 
-func (r *Registry) GetParamsByDeployment(v int) (*tezos.Params, error) {
+func (r *Registry) GetParamsByCycle(cycle int64) *rpc.Params {
+	r.RLock()
+	for i := len(r.inOrder) - 1; i >= 0; i-- {
+		p := r.inOrder[i]
+		if cycle >= p.StartCycle {
+			r.RUnlock()
+			return p
+		}
+	}
+	r.RUnlock()
+	return r.GetParamsLatest()
+}
+
+func (r *Registry) GetParamsByDeployment(v int) (*rpc.Params, error) {
 	r.RLock()
 	defer r.RUnlock()
 	if p, ok := r.byDeployment[v]; !ok {
@@ -75,15 +92,15 @@ func (r *Registry) GetParamsByDeployment(v int) (*tezos.Params, error) {
 	}
 }
 
-func (r *Registry) GetAllParams() []*tezos.Params {
+func (r *Registry) GetAllParams() []*rpc.Params {
 	r.RLock()
 	defer r.RUnlock()
-	ret := make([]*tezos.Params, len(r.inOrder))
+	ret := make([]*rpc.Params, len(r.inOrder))
 	copy(ret, r.inOrder)
 	return ret
 }
 
-func (r *Registry) GetParamsLatest() *tezos.Params {
+func (r *Registry) GetParamsLatest() *rpc.Params {
 	r.RLock()
 	defer r.RUnlock()
 	l := len(r.inOrder)

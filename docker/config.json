@@ -124,10 +124,10 @@
 		"backend": "stdout",
 		"flags": "date,time,micro,utc",
 		"level": "info",
-		"blockchain": "info",
+		"etl": "info",
 		"db": "info",
 		"rpc": "info",
-		"server": "info",
+		"api": "info",
 		"micheline": "info"
 	}
 }

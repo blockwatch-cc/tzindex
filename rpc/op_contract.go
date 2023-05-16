@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2023 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -48,4 +48,11 @@ func (t IncreasePaidStorage) Costs() tezos.Costs {
 		cost.StorageBurn += -burn
 	}
 	return cost
+}
+
+// Addresses adds all addresses used in this operation to the set.
+// Implements TypedOperation interface.
+func (t IncreasePaidStorage) Addresses(set *tezos.AddressSet) {
+	set.AddUnique(t.Source)
+	set.AddUnique(t.Destination)
 }

@@ -17,8 +17,8 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -61,11 +61,11 @@ func init() {
 // configurable marshalling helper
 type Block struct {
 	model.Block
-	Predecessor tezos.BlockHash `pack:"predecessor" json:"predecessor"`
+	Predecessor tezos.BlockHash `knox:"predecessor" json:"predecessor"`
 
 	verbose bool            // cond. marshal
 	columns util.StringList // cond. cols & order when brief
-	params  *tezos.Params   // blockchain amount conversion
+	params  *rpc.Params     // blockchain amount conversion
 	ctx     *server.Context
 }
 
@@ -133,7 +133,6 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		RowId:                  b.RowId,
 		ParentId:               b.ParentId,
 		Hash:                   b.Hash.String(),
-		Predecessor:            b.Predecessor.String(),
 		Timestamp:              util.UnixMilliNonZero(b.Timestamp),
 		Height:                 b.Height,
 		Cycle:                  b.Cycle,
@@ -177,6 +176,9 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		ProposerConsensusKey:   b.ctx.Indexer.LookupAddress(b.ctx, b.ProposerConsensusKeyId).String(),
 		BakerConsensusKey:      b.ctx.Indexer.LookupAddress(b.ctx, b.BakerConsensusKeyId).String(),
 	}
+	if b.Predecessor.IsValid() {
+		block.Predecessor = b.Predecessor.String()
+	}
 	if b.SeenAccounts > 0 {
 		block.PctAccountsReused = float64(b.SeenAccounts-b.NewAccounts) / float64(b.SeenAccounts) * 100
 	}
@@ -199,7 +201,11 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 		case "hash":
 			buf = strconv.AppendQuote(buf, b.Hash.String())
 		case "predecessor":
-			buf = strconv.AppendQuote(buf, b.Predecessor.String())
+			if b.Predecessor.IsValid() {
+				buf = strconv.AppendQuote(buf, b.Predecessor.String())
+			} else {
+				buf = append(buf, []byte(`""`)...)
+			}
 		case "time":
 			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(b.Timestamp), 10)
 		case "height":
@@ -320,7 +326,9 @@ func (b *Block) MarshalCSV() ([]string, error) {
 		case "hash":
 			res[i] = strconv.Quote(b.Hash.String())
 		case "predecessor":
-			res[i] = strconv.Quote(b.Predecessor.String())
+			if b.Predecessor.IsValid() {
+				res[i] = strconv.Quote(b.Predecessor.String())
+			}
 		case "time":
 			res[i] = strconv.Quote(b.Timestamp.Format(time.RFC3339))
 		case "height":
@@ -503,7 +511,7 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 				if err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid block hash '%s'", val), err))
 				}
-				hashes[i] = h.Hash.Hash
+				hashes[i] = h[:]
 			}
 			if len(hashes) == 1 {
 				q = q.AndEqual(field, hashes[0])
@@ -518,7 +526,7 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 				}
 				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-				if err != nil && err != index.ErrNoAccountEntry {
+				if err != nil && err != model.ErrNoAccount {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 				}
 				if err == nil && acc.RowId > 0 {
@@ -579,7 +587,7 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
+					if err != nil && err != model.ErrNoAccount {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					// Note: when not found we insert an always false condition
@@ -598,7 +606,7 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
+					if err != nil && err != model.ErrNoAccount {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account
@@ -636,11 +644,6 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 			for _, v := range val {
 				// convert amounts from float to int64
 				switch prefix {
-				case "cycle":
-					if v == "head" {
-						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
-						v = strconv.FormatInt(currentCycle, 10)
-					}
 				case "volume", "reward", "fee", "deposit",
 					"minted_supply", "burned_supply", "activated_supply":
 					fvals := make([]string, 0)

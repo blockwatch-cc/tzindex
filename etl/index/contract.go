@@ -1,46 +1,27 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2021 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzindex/etl/model"
 )
 
-const (
-	ContractPackSizeLog2         = 15 // 32k packs
-	ContractJournalSizeLog2      = 16 // 64k
-	ContractCacheSize            = 8
-	ContractFillLevel            = 80
-	ContractIndexPackSizeLog2    = 15 // 16k packs (32k split size)
-	ContractIndexJournalSizeLog2 = 16 // 64k
-	ContractIndexCacheSize       = 8
-	ContractIndexFillLevel       = 90
-	ContractIndexKey             = "contract"
-	ContractTableKey             = "contract"
-)
-
-var (
-	ErrNoContractEntry = errors.New("contract not indexed")
-)
+const ContractIndexKey = "contract"
 
 type ContractIndex struct {
-	db        *pack.DB
-	opts      pack.Options
-	iopts     pack.Options
-	contracts *pack.Table
+	db    *pack.DB
+	table *pack.Table
 }
 
 var _ model.BlockIndexer = (*ContractIndex)(nil)
 
-func NewContractIndex(opts, iopts pack.Options) *ContractIndex {
-	return &ContractIndex{opts: opts, iopts: iopts}
+func NewContractIndex() *ContractIndex {
+	return &ContractIndex{}
 }
 
 func (idx *ContractIndex) DB() *pack.DB {
@@ -48,7 +29,7 @@ func (idx *ContractIndex) DB() *pack.DB {
 }
 
 func (idx *ContractIndex) Tables() []*pack.Table {
-	return []*pack.Table{idx.contracts}
+	return []*pack.Table{idx.table}
 }
 
 func (idx *ContractIndex) Key() string {
@@ -60,62 +41,60 @@ func (idx *ContractIndex) Name() string {
 }
 
 func (idx *ContractIndex) Create(path, label string, opts interface{}) error {
-	fields, err := pack.Fields(model.Contract{})
-	if err != nil {
-		return err
-	}
 	db, err := pack.CreateDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return fmt.Errorf("creating database: %w", err)
 	}
 	defer db.Close()
 
-	contracts, err := db.CreateTableIfNotExists(
-		ContractTableKey,
-		fields,
-		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.opts.PackSizeLog2, ContractPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, ContractJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, ContractCacheSize),
-			FillLevel:       util.NonZero(idx.opts.FillLevel, ContractFillLevel),
-		})
+	m := model.Contract{}
+	key := m.TableKey()
+	fields, err := pack.Fields(m)
+	if err != nil {
+		return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
+	}
+
+	table, err := db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(readConfigOpts(key)))
 	if err != nil {
 		return err
 	}
-
-	_, err = contracts.CreateIndexIfNotExists(
-		"hash",
-		fields.Find("H"),   // contract address field (20 byte address hashes)
-		pack.IndexTypeHash, // hash table, index stores hash(field) -> pk value
-		pack.Options{
-			PackSizeLog2:    util.NonZero(idx.iopts.PackSizeLog2, ContractIndexPackSizeLog2),
-			JournalSizeLog2: util.NonZero(idx.iopts.JournalSizeLog2, ContractIndexJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.iopts.CacheSize, ContractIndexCacheSize),
-			FillLevel:       util.NonZero(idx.iopts.FillLevel, ContractIndexFillLevel),
-		})
-	return err
+	for _, f := range fields.Indexed() {
+		ikey := f.Alias
+		opts := m.IndexOpts(ikey).Merge(readConfigOpts(key, ikey+"_index"))
+		if _, err := table.CreateIndexIfNotExists(ikey, f, pack.IndexTypeHash, opts); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (idx *ContractIndex) Init(path, label string, opts interface{}) error {
-	var err error
-	idx.db, err = pack.OpenDatabase(path, idx.Key(), label, opts)
+	db, err := pack.OpenDatabase(path, idx.Key(), label, opts)
 	if err != nil {
 		return err
 	}
-	idx.contracts, err = idx.db.Table(
-		ContractTableKey,
-		pack.Options{
-			JournalSizeLog2: util.NonZero(idx.opts.JournalSizeLog2, ContractJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.opts.CacheSize, ContractCacheSize),
-		},
-		pack.Options{
-			JournalSizeLog2: util.NonZero(idx.iopts.JournalSizeLog2, ContractIndexJournalSizeLog2),
-			CacheSize:       util.NonZero(idx.iopts.CacheSize, ContractIndexCacheSize),
-		})
+	idx.db = db
+
+	m := model.Contract{}
+	key := m.TableKey()
+	fields, err := pack.Fields(m)
+	if err != nil {
+		return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
+	}
+	topts := m.TableOpts().Merge(readConfigOpts(key))
+	var ikey string
+	for _, v := range fields.Indexed() {
+		ikey = v.Alias
+		break
+	}
+	iopts := m.IndexOpts(ikey).Merge(readConfigOpts(key, ikey+"_index"))
+	table, err := idx.db.Table(key, topts, iopts)
 	if err != nil {
 		idx.Close()
 		return err
 	}
+	idx.table = table
+
 	return nil
 }
 
@@ -131,7 +110,7 @@ func (idx *ContractIndex) Close() error {
 			}
 		}
 	}
-	idx.contracts = nil
+	idx.table = nil
 	return nil
 }
 
@@ -145,9 +124,15 @@ func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 		}
 
 		switch op.Type {
+		case model.OpTypeRollupTransaction:
+			// add message has no receiver!
+			if op.ReceiverId == 0 {
+				continue
+			}
+			fallthrough
+
 		case model.OpTypeTransaction,
-			model.OpTypeSubsidy,
-			model.OpTypeRollupTransaction:
+			model.OpTypeSubsidy:
 			// load from builder cache
 			contract, ok := builder.ContractById(op.ReceiverId)
 			if !ok {
@@ -185,11 +170,11 @@ func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 	}
 
 	// insert, will generate unique row ids
-	if err := idx.contracts.Insert(ctx, ins); err != nil {
+	if err := idx.table.Insert(ctx, ins); err != nil {
 		return fmt.Errorf("contract: insert: %w", err)
 	}
 
-	if err := idx.contracts.Update(ctx, upd); err != nil {
+	if err := idx.table.Update(ctx, upd); err != nil {
 		return fmt.Errorf("contract: update: %w", err)
 	}
 	return nil
@@ -204,7 +189,7 @@ func (idx *ContractIndex) DisconnectBlock(ctx context.Context, block *model.Bloc
 		}
 		upd = append(upd, v)
 	}
-	if err := idx.contracts.Update(ctx, upd); err != nil {
+	if err := idx.table.Update(ctx, upd); err != nil {
 		return fmt.Errorf("contract: update: %w", err)
 	}
 
@@ -214,8 +199,8 @@ func (idx *ContractIndex) DisconnectBlock(ctx context.Context, block *model.Bloc
 
 func (idx *ContractIndex) DeleteBlock(ctx context.Context, height int64) error {
 	// log.Debugf("Rollback deleting contracts at height %d", height)
-	_, err := pack.NewQuery("etl.contract.delete").
-		WithTable(idx.contracts).
+	_, err := pack.NewQuery("etl.delete").
+		WithTable(idx.table).
 		AndEqual("first_seen", height).
 		Delete(ctx)
 	return err
@@ -226,5 +211,8 @@ func (idx *ContractIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 }
 
 func (idx *ContractIndex) Flush(ctx context.Context) error {
-	return idx.contracts.Flush(ctx)
+	if err := idx.table.Flush(ctx); err != nil {
+		log.Errorf("Flushing %s table: %v", idx.table.Name(), err)
+	}
+	return nil
 }

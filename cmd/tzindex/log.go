@@ -26,10 +26,10 @@ import (
 
 var (
 	log     = logpkg.NewLogger("MAIN") // main program
-	blocLog = logpkg.NewLogger("BLOC") // blockchain
+	blocLog = logpkg.NewLogger("ETL ") // blockchain
 	dataLog = logpkg.NewLogger("DATA") // database
-	jrpcLog = logpkg.NewLogger("JRPC") // json rpc client
-	srvrLog = logpkg.NewLogger("SRVR") // api server
+	jrpcLog = logpkg.NewLogger("RPC ") // json rpc client
+	srvrLog = logpkg.NewLogger("API ") // api server
 	michLog = logpkg.NewLogger("MICH") // micheline
 )
 
@@ -57,10 +57,10 @@ func init() {
 // subsystemLoggers maps each subsystem identifier to its associated logger.
 var subsystemLoggers = map[string]logpkg.Logger{
 	"MAIN": log,
-	"BLOC": blocLog,
+	"ETL ": blocLog,
 	"DATA": dataLog,
-	"JRPC": jrpcLog,
-	"SRVR": srvrLog,
+	"RPC ": jrpcLog,
+	"API ": srvrLog,
 	"MICH": michLog,
 }
 
@@ -79,14 +79,14 @@ func initLogging() {
 	log = logpkg.NewLogger("MAIN") // command level
 
 	// create loggers with configured backend
-	blocLog = logpkg.NewLogger("BLOC") // blockchain
-	blocLog.SetLevel(logpkg.ParseLevel(config.GetString("log.blockchain")))
+	blocLog = logpkg.NewLogger("ETL ") // blockchain
+	blocLog.SetLevel(logpkg.ParseLevel(config.GetString("log.etl")))
 	dataLog = logpkg.NewLogger("DATA") // database
 	dataLog.SetLevel(logpkg.ParseLevel(config.GetString("log.db")))
-	jrpcLog = logpkg.NewLogger("JRPC") // json rpc client
+	jrpcLog = logpkg.NewLogger("RPC ") // json rpc client
 	jrpcLog.SetLevel(logpkg.ParseLevel(config.GetString("log.rpc")))
-	srvrLog = logpkg.NewLogger("SRVR") // api server
-	srvrLog.SetLevel(logpkg.ParseLevel(config.GetString("log.server")))
+	srvrLog = logpkg.NewLogger("API ") // api server
+	srvrLog.SetLevel(logpkg.ParseLevel(config.GetString("log.api")))
 	michLog = logpkg.NewLogger("MICH") // micheline
 	michLog.SetLevel(logpkg.ParseLevel(config.GetString("log.micheline")))
 
@@ -108,10 +108,10 @@ func initLogging() {
 	// store loggers in map
 	subsystemLoggers = map[string]logpkg.Logger{
 		"MAIN": log,
-		"BLOC": blocLog,
+		"ETL ": blocLog,
 		"DATA": dataLog,
-		"JRPC": jrpcLog,
-		"SRVR": srvrLog,
+		"RPC ": jrpcLog,
+		"API ": srvrLog,
 		"MICH": michLog,
 	}
 

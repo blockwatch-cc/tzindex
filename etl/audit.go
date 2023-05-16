@@ -13,7 +13,6 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
 )
@@ -25,7 +24,7 @@ func (b *Builder) AuditState(ctx context.Context, offset int64) error {
 		return nil
 	}
 
-	isCycleEnd := b.block.Params.IsCycleEnd(b.block.Height)
+	isCycleEnd := b.block.TZ.IsCycleEnd()
 
 	plog := logpkg.NewProgressLogger(log).SetAction("Verified").SetEvent("account")
 
@@ -60,16 +59,21 @@ aloop:
 		if !acc.IsDirty {
 			continue
 		}
-		// skip non-activated accounts
-		if acc.Type == tezos.AddressTypeBlinded {
-			return nil
+		// skip non-activated accounts and rollups
+		var skip bool
+		switch acc.Type {
+		case tezos.AddressTypeBlinded, tezos.AddressTypeTxRollup, tezos.AddressTypeSmartRollup:
+			skip = true
+		}
+		if skip {
+			continue
 		}
 		// run a sanity check
 		if acc.IsRevealed && acc.Type != tezos.AddressTypeContract {
 			if !acc.Pubkey.IsValid() {
 				log.Errorf("Audit: invalid pubkey: acc=%s key=%s", acc, acc.Pubkey.String())
 			}
-			if !acc.Address.Equal(acc.Pubkey.Address()) {
+			if acc.Address != acc.Pubkey.Address() {
 				log.Errorf("Audit: key mismatch: acc=%s type=%s bad-key=%s", acc, acc.Pubkey.Type, acc.Pubkey)
 			}
 		}
@@ -84,8 +88,8 @@ aloop:
 			continue
 		}
 		// use vesting balance too
-		if state.Balance != acc.Balance() {
-			log.Errorf("Audit: balance mismatch for %s: index=%d node=%d", acc, acc.Balance(), state.Balance)
+		if state.Balance != acc.SpendableBalance {
+			log.Errorf("Audit: balance mismatch for %s: index=%d node=%d", acc, acc.SpendableBalance, state.Balance)
 			failed++
 		}
 		plog.Log(1)
@@ -126,7 +130,7 @@ bloop:
 		if !acc.Pubkey.IsValid() {
 			log.Errorf("Audit: invalid pubkey: acc=%s key=%s", acc, acc.Pubkey)
 		}
-		if !acc.Address.Equal(acc.Pubkey.Address()) {
+		if acc.Address != acc.Pubkey.Address() {
 			log.Errorf("Audit: baker key mismatch: acc=%s type=%s bad-key=%s", acc, acc.Pubkey.Type, acc.Pubkey)
 		}
 		// check balance against node rpc
@@ -183,7 +187,7 @@ bloop:
 	}
 
 	// every cycle check all stored accounts
-	if !b.block.Params.IsCycleStart(b.block.Height) {
+	if !b.block.TZ.IsCycleStart() {
 		if failed > 0 {
 			return fmt.Errorf("Account audit failed")
 		}
@@ -246,7 +250,7 @@ bloop:
 			log.Errorf("Audit: invalid baker pubkey: acc=%s key=%s", acc, acc.Pubkey)
 			failed++
 		}
-		if !acc.Address.Equal(acc.Pubkey.Address()) {
+		if acc.Address != acc.Pubkey.Address() {
 			log.Errorf("Audit: baker key mismatch: acc=%s type=%s bad-key=%s", acc, acc.Pubkey.Type, acc.Pubkey)
 			failed++
 		}
@@ -312,8 +316,8 @@ bloop:
 
 	// Note: we're at the end of a block here and the account database has not been updated
 	seen := make(map[uint64]*model.Account)
-	table, _ := b.idx.Table(index.AccountTableKey)
-	err := pack.NewQuery("validate.accounts").
+	table, _ := b.idx.Table(model.AccountTableKey)
+	err := pack.NewQuery("audit.accounts").
 		WithTable(table).
 		WithoutCache().
 		WithFields("I", "H", "t", "k", "s").
@@ -329,7 +333,7 @@ bloop:
 			}
 			// check duplicates in DB
 			hash := b.accCache.AccountHashKey(acc)
-			if n, ok := seen[hash]; ok && acc.Address.Equal(n.Address) {
+			if n, ok := seen[hash]; ok && acc.Address == n.Address {
 				log.Errorf("Duplicate account %s in database at id %d", acc.Address, acc.RowId)
 			} else {
 				seen[hash] = acc
@@ -350,6 +354,16 @@ aloop:
 		default:
 		}
 
+		// skip non-activated accounts and rollups
+		var skip bool
+		switch acc.Type {
+		case tezos.AddressTypeBlinded, tezos.AddressTypeTxRollup, tezos.AddressTypeSmartRollup:
+			skip = true
+		}
+		if skip {
+			continue
+		}
+
 		// key and balance to check
 		key := acc.Pubkey
 		indexedBalance := acc.Balance()
@@ -358,12 +372,12 @@ aloop:
 		// has not been written yet
 		if dacc, ok := b.AccountById(acc.RowId); ok && dacc.IsDirty {
 			key = dacc.Pubkey
-			indexedBalance = dacc.Balance()
+			indexedBalance = dacc.SpendableBalance
 		}
 
 		// check key matches address
 		if acc.IsRevealed && acc.Type != tezos.AddressTypeContract {
-			if key.IsValid() && !acc.Address.Equal(key.Address()) {
+			if key.IsValid() && acc.Address != key.Address() {
 				if nofail {
 					log.Errorf("pubkey mismatch: acc=%s type=%s bad-key=%s", acc.Address, key.Type, key)
 					failed++
@@ -416,5 +430,37 @@ aloop:
 }
 
 func (b *Builder) DumpState() {
-	// not implemented
+	// log.Infof("Builder dump at block %d", b.block.Height)
+	// for n, v := range b.accHashMap { // map[uint64]*Account
+	// 	log.Infof("HashMap %x -> %s %s %t", n, v, v.Key(), v.IsRevealed)
+	// }
+	// for n, v := range b.accMap { //   map[AccountID]*Account
+	// 	log.Infof("AccMap %d -> %s %s %t", n, v, v.Key(), v.IsRevealed)
+	// }
+	// for n, v := range b.dlgHashMap { // map[uint64]*Account
+	// 	log.Infof("DlgHashMap %x -> %s %s %t", n, v, v.Key(), v.IsRevealed)
+	// }
+	// for n, v := range b.dlgMap { //    map[AccountID]*Account
+	// 	log.Infof("DlgMap %d -> %s %s %t", n, v, v.Key(), v.IsRevealed)
+	// }
+	// for n, v := range b.conMap { //   map[AccountID]*Contract
+	// 	log.Infof("ContractMap %d -> %s", n, v)
+	// }
+	// if f, err := os.OpenFile("cache-dump.json", os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644); err == nil {
+	// 	enc := json.NewEncoder(f)
+	// 	err := b.accCache.Walk(func(key uint64, acc *model.Account) error {
+	// 		if err := enc.Encode(acc); err != nil {
+	// 			return err
+	// 		}
+	// 		f.Write([]byte{','})
+	// 		f.Write([]byte{'\n'})
+	// 		return nil
+	// 	})
+	// 	f.Close()
+	// 	if err != nil {
+	// 		log.Errorf("Cache dump error: %s", err)
+	// 	}
+	// } else {
+	// 	log.Errorf("Cache dump failed: %s", err)
+	// }
 }

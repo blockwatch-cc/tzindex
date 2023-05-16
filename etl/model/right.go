@@ -4,14 +4,28 @@
 package model
 
 import (
+	"errors"
+	"sync"
+
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/tezos"
 )
 
+const RightsTableKey = "rights"
+
+var (
+	rightPool = &sync.Pool{
+		New: func() interface{} { return new(Right) },
+	}
+
+	ErrNoRights = errors.New("rights not indexed")
+)
+
 type Right struct {
 	RowId     uint64     `pack:"I,pk"      json:"row_id"`           // unique id
 	Cycle     int64      `pack:"c"         json:"cycle"`            // cycle
+	Height    int64      `pack:"h"         json:"height"`           // height
 	AccountId AccountID  `pack:"A"         json:"account_id"`       // rights holder
 	Bake      vec.BitSet `pack:"B,snappy"  json:"baking_rights"`    // bits for every block
 	Endorse   vec.BitSet `pack:"E,snappy"  json:"endorsing_rights"` // bits for every block
@@ -43,11 +57,32 @@ func (r *Right) SetID(id uint64) {
 	r.RowId = id
 }
 
-func NewRight(acc AccountID, cycle int64, nBlocks, nSeeds int) *Right {
-	r := &Right{
-		Cycle:     cycle,
-		AccountId: acc,
+func (m Right) TableKey() string {
+	return RightsTableKey
+}
+
+func (m Right) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    12,
+		JournalSizeLog2: 16,
+		CacheSize:       32,
+		FillLevel:       100,
 	}
+}
+
+func (m Right) IndexOpts(key string) pack.Options {
+	return pack.NoOptions
+}
+
+func AllocRight() *Right {
+	return rightPool.Get().(*Right)
+}
+
+func NewRight(acc AccountID, height, cycle int64, nBlocks, nSeeds int) *Right {
+	r := AllocRight()
+	r.Cycle = cycle
+	r.Height = height
+	r.AccountId = acc
 	r.Bake.Resize(nBlocks)
 	r.Endorse.Resize(nBlocks)
 	r.Baked.Resize(nBlocks)
@@ -57,9 +92,15 @@ func NewRight(acc AccountID, cycle int64, nBlocks, nSeeds int) *Right {
 	return r
 }
 
+func (r *Right) Free() {
+	r.Reset()
+	rightPool.Put(r)
+}
+
 func (r *Right) Reset() {
 	r.RowId = 0
 	r.Cycle = 0
+	r.Height = 0
 	r.AccountId = 0
 	r.Bake.Reset()
 	r.Endorse.Reset()

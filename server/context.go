@@ -25,7 +25,6 @@ import (
 
 	logpkg "github.com/echa/log"
 
-	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
@@ -56,15 +55,18 @@ type Context struct {
 	Indexer        *etl.Indexer
 	Client         *rpc.Client
 	Tip            *model.ChainTip
-	Params         *tezos.Params
+	Params         *rpc.Params
 
 	// QoS and Debugging
 	RequestID string
 	Log       logpkg.Logger
+	// - operation priority     X-Priority
+	// - network QoS label      X-QoS-Label
 
 	// Statistics
 	Now         time.Time
 	Performance *PerformanceCounter
+	// Quota int
 
 	// input
 	name string
@@ -226,15 +228,13 @@ func (api *Context) handleError(e error) {
 				if b, _ := api.jsonStack(); len(b) > 0 {
 					api.Log.Error(string(b))
 				}
-				re = EInternal(EC_SERVER, err.Error(), nil).(*Error)
+				re = EInternal(EC_SERVER, reflect.TypeOf(e).String(), err).(*Error)
 			}
 		}
 	}
-	re.SetScope(api.name)
-	re.RequestId = api.RequestID
-	re.Reason = "" // clear internal error
-	api.err = re
-	api.status = re.Status
+	// clear internal error
+	api.err = re.WithScope(api.name).WithRequestId(api.RequestID).WithReason("")
+	api.status = api.err.Status
 }
 
 func (api *Context) jsonStack() ([]byte, error) {
@@ -456,6 +456,30 @@ func (api *Context) writeResponseBody() {
 		case []byte:
 			_, _ = api.ResponseWriter.Write(t)
 		default:
+			// catch marshal panics
+			defer func() {
+				if err := recover(); err != nil {
+					if debugHttp {
+						if api.Request.Header.Get("Content-Type") == "application/json" {
+							d, _ := httputil.DumpRequest(api.Request, true)
+							api.Log.Trace(string(d))
+						} else {
+							d, _ := httputil.DumpRequest(api.Request, false)
+							api.Log.Trace(string(d))
+						}
+					}
+					path := strings.Join([]string{
+						api.Request.Method,
+						api.Request.RequestURI,
+						api.Request.Proto,
+					}, " ")
+					api.Log.Errorf("Response Error %s: %v in struct %T", path, err, api.result)
+					if b, _ := api.jsonStack(); len(b) > 0 {
+						api.Log.Error(string(b))
+					}
+				}
+			}()
+
 			// marshal and write the result to the HTTP body
 			if b, err := json.Marshal(api.result); err != nil {
 				path := strings.Join([]string{

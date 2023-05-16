@@ -4,15 +4,22 @@
 package model
 
 import (
+	"errors"
 	"sync"
 	"time"
 
 	"blockwatch.cc/packdb/pack"
 )
 
-var snapshotPool = &sync.Pool{
-	New: func() interface{} { return new(Snapshot) },
-}
+const SnapshotTableKey = "snapshot"
+
+var (
+	snapshotPool = &sync.Pool{
+		New: func() interface{} { return new(Snapshot) },
+	}
+
+	ErrNoSnapshot = errors.New("snapshot not indexed")
+)
 
 // Snapshot is an account balance snapshot made at a snapshot block.
 type Snapshot struct {
@@ -58,21 +65,23 @@ func (s *Snapshot) SetID(id uint64) {
 	s.RowId = id
 }
 
+func (m Snapshot) TableKey() string {
+	return SnapshotTableKey
+}
+
+func (m Snapshot) TableOpts() pack.Options {
+	return pack.Options{
+		PackSizeLog2:    15,
+		JournalSizeLog2: 20,
+		CacheSize:       128,
+		FillLevel:       100,
+	}
+}
+
+func (m Snapshot) IndexOpts(key string) pack.Options {
+	return pack.NoOptions
+}
+
 func (s *Snapshot) Reset() {
-	s.RowId = 0
-	s.Height = 0
-	s.Cycle = 0
-	s.IsSelected = false
-	s.Timestamp = time.Time{}
-	s.Index = 0
-	s.Rolls = 0
-	s.ActiveStake = 0
-	s.AccountId = 0
-	s.BakerId = 0
-	s.IsBaker = false
-	s.IsActive = false
-	s.Balance = 0
-	s.Delegated = 0
-	s.NDelegations = 0
-	s.Since = 0
+	*s = Snapshot{}
 }

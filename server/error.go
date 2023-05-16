@@ -169,6 +169,21 @@ func (e *Error) SetScope(s string) {
 	}
 }
 
+func (e *Error) WithScope(s string) *Error {
+	e.SetScope(s)
+	return e
+}
+
+func (e *Error) WithRequestId(i string) *Error {
+	e.RequestId = i
+	return e
+}
+
+func (e *Error) WithReason(r string) *Error {
+	e.Reason = r
+	return e
+}
+
 func (e *Error) MarshalIndent() []byte {
 	errResp := ErrorResponse{
 		Errors: ErrorList{e},

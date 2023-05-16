@@ -13,12 +13,13 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"time"
 
 	"blockwatch.cc/tzgo/tezos"
 )
 
 const (
-	libraryVersion = "v12"
+	libraryVersion = "v16"
 	userAgent      = "tzindex/v" + libraryVersion
 	mediaType      = "application/json"
 )
@@ -28,15 +29,19 @@ type Client struct {
 	// HTTP client used to communicate with the Tezos node API.
 	client *http.Client
 	// Base URL for API requests.
-	BaseURL *url.URL
+	baseURL *url.URL
 	// User agent name for client.
-	UserAgent string
+	userAgent string
 	// Optional API key for protected endpoints
-	ApiKey string
+	apiKey string
 	// The chain the client will query.
-	ChainId tezos.ChainIdHash
+	chainId tezos.ChainIdHash
 	// The current chain configuration.
-	Params *tezos.Params
+	params *Params
+	// Number of retries
+	numRetries int
+	// Time between retries
+	retryDelay time.Duration
 }
 
 // NewClient returns a new Tezos RPC client.
@@ -58,10 +63,12 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 		u.RawQuery = q.Encode()
 	}
 	c := &Client{
-		client:    httpClient,
-		BaseURL:   u,
-		UserAgent: userAgent,
-		ApiKey:    key,
+		client:     httpClient,
+		baseURL:    u,
+		userAgent:  userAgent,
+		apiKey:     key,
+		numRetries: 3,
+		retryDelay: time.Second,
 	}
 	return c, nil
 }
@@ -70,12 +77,36 @@ func (c *Client) Init(ctx context.Context) error {
 	return c.ResolveChainConfig(ctx)
 }
 
-func (c *Client) SetChainId(id tezos.ChainIdHash) {
-	c.ChainId = id.Clone()
+func (c *Client) IsInitialized() bool {
+	return c.chainId.IsValid()
 }
 
-func (c *Client) SetChainParams(p *tezos.Params) {
-	c.Params = p
+func (c *Client) Params() *Params {
+	return c.params
+}
+
+func (c *Client) WithChainId(id tezos.ChainIdHash) *Client {
+	c.chainId = id.Clone()
+	return c
+}
+
+func (c *Client) WithParams(p *Params) *Client {
+	c.params = p
+	return c
+}
+
+func (c *Client) WithUserAgent(s string) *Client {
+	c.userAgent = s
+	return c
+}
+
+func (c *Client) WithRetry(num int, delay time.Duration) *Client {
+	c.numRetries = num
+	if num < 0 {
+		c.numRetries = int(^uint(0)>>1) - 1 // max int - 1
+	}
+	c.retryDelay = delay
+	return c
 }
 
 func (c *Client) ResolveChainConfig(ctx context.Context) error {
@@ -83,12 +114,12 @@ func (c *Client) ResolveChainConfig(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	c.ChainId = id
+	c.chainId = id
 	p, err := c.GetParams(ctx, Head)
 	if err != nil {
 		return err
 	}
-	c.Params = p
+	c.params = p
 	return nil
 }
 
@@ -115,7 +146,7 @@ func (c *Client) NewRequest(ctx context.Context, method, urlStr string, body int
 		return nil, err
 	}
 
-	u := c.BaseURL.ResolveReference(rel)
+	u := c.baseURL.ResolveReference(rel)
 
 	buf := new(bytes.Buffer)
 	if body != nil {
@@ -133,9 +164,9 @@ func (c *Client) NewRequest(ctx context.Context, method, urlStr string, body int
 
 	req.Header.Add("Content-Type", mediaType)
 	req.Header.Add("Accept", mediaType)
-	req.Header.Add("User-Agent", c.UserAgent)
-	if c.ApiKey != "" {
-		req.Header.Add("X-Api-Key", c.ApiKey)
+	req.Header.Add("User-Agent", c.userAgent)
+	if c.apiKey != "" {
+		req.Header.Add("X-Api-Key", c.apiKey)
 	}
 
 	log.Debug(newLogClosure(func() string {
@@ -190,10 +221,35 @@ func (c *Client) handleResponseMonitor(ctx context.Context, resp *http.Response,
 
 // Do retrieves values from the API and marshals them into the provided interface.
 func (c *Client) Do(req *http.Request, v interface{}) error {
-	resp, err := c.client.Do(req)
+	var (
+		resp *http.Response
+		err  error
+	)
+	for retries := c.numRetries + 1; retries > 0; retries-- {
+		resp, err = c.client.Do(req)
+		if err == nil && resp != nil && resp.StatusCode <= 500 {
+			break
+		}
+		retryable := isNetError(err) || (resp != nil && resp.StatusCode > 500)
+		if err != nil && !retryable {
+			log.Warnf("rpc: %T %v", err, err)
+			return err
+		}
+		if resp != nil {
+			resp.Body.Close()
+			resp = nil
+		}
+		select {
+		case <-req.Context().Done():
+			return req.Context().Err()
+		case <-time.After(c.retryDelay):
+			// continue
+		}
+	}
 	if err != nil {
 		return err
 	}
+
 	mustClear := true
 	defer func() {
 		if mustClear {

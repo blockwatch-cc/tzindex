@@ -17,8 +17,8 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -39,10 +39,10 @@ func init() {
 
 	// add extra translations
 	incomeSourceNames["address"] = "A"
-	incomeSourceNames["time"] = "c"
-	incomeSourceNames["start_time"] = "c"
-	incomeSourceNames["end_time"] = "c"
-	incomeAllAliases = append(incomeAllAliases, "address", "start_time", "end_time")
+	incomeSourceNames["time"] = "h"
+	incomeSourceNames["start_time"] = "h"
+	incomeSourceNames["end_time"] = "e"
+	incomeAllAliases = append(incomeAllAliases, "address")
 }
 
 // configurable marshalling helper
@@ -50,7 +50,7 @@ type Income struct {
 	model.Income
 	verbose bool            // cond. marshal
 	columns util.StringList // cond. cols & order when brief
-	params  *tezos.Params   // blockchain amount conversion
+	params  *rpc.Params     // blockchain amount conversion
 	ctx     *server.Context
 }
 
@@ -145,8 +145,8 @@ func (c *Income) MarshalJSONVerbose() ([]byte, error) {
 		LostAccusationDeposits: c.params.ConvertValue(c.LostAccusationDeposits),
 		LostSeedFees:           c.params.ConvertValue(c.LostSeedFees),
 		LostSeedRewards:        c.params.ConvertValue(c.LostSeedRewards),
-		StartTime:              c.ctx.Indexer.LookupBlockTime(c.ctx.Context, c.params.CycleStartHeight(c.Cycle)),
-		EndTime:                c.ctx.Indexer.LookupBlockTime(c.ctx.Context, c.params.CycleEndHeight(c.Cycle)),
+		StartTime:              c.ctx.Indexer.LookupBlockTime(c.ctx.Context, c.StartHeight),
+		EndTime:                c.ctx.Indexer.LookupBlockTime(c.ctx.Context, c.EndHeight),
 	}
 	return json.Marshal(inc)
 }
@@ -236,9 +236,9 @@ func (c *Income) MarshalJSONBrief() ([]byte, error) {
 		case "lost_seed_rewards":
 			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.LostSeedRewards), 'f', dec, 64)
 		case "start_time":
-			buf = strconv.AppendInt(buf, c.ctx.Indexer.LookupBlockTimeMs(c.ctx.Context, c.params.CycleStartHeight(c.Cycle)), 10)
+			buf = strconv.AppendInt(buf, c.ctx.Indexer.LookupBlockTimeMs(c.ctx.Context, c.StartHeight), 10)
 		case "end_time":
-			buf = strconv.AppendInt(buf, c.ctx.Indexer.LookupBlockTimeMs(c.ctx.Context, c.params.CycleEndHeight(c.Cycle)), 10)
+			buf = strconv.AppendInt(buf, c.ctx.Indexer.LookupBlockTimeMs(c.ctx.Context, c.EndHeight), 10)
 		default:
 			continue
 		}
@@ -334,9 +334,9 @@ func (c *Income) MarshalCSV() ([]string, error) {
 		case "lost_seed_rewards":
 			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.LostSeedRewards), 'f', dec, 64)
 		case "start_time":
-			res[i] = strconv.Quote(c.ctx.Indexer.LookupBlockTime(c.ctx.Context, c.params.CycleStartHeight(c.Cycle)).Format(time.RFC3339))
+			res[i] = strconv.Quote(c.ctx.Indexer.LookupBlockTime(c.ctx.Context, c.StartHeight).Format(time.RFC3339))
 		case "end_time":
-			res[i] = strconv.Quote(c.ctx.Indexer.LookupBlockTime(c.ctx.Context, c.params.CycleEndHeight(c.Cycle)).Format(time.RFC3339))
+			res[i] = strconv.Quote(c.ctx.Indexer.LookupBlockTime(c.ctx.Context, c.EndHeight).Format(time.RFC3339))
 		default:
 			continue
 		}
@@ -421,7 +421,7 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-				if err != nil && err != index.ErrNoAccountEntry {
+				if err != nil && err != model.ErrNoAccount {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 				}
 				// Note: when not found we insert an always false condition
@@ -440,7 +440,7 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
+					if err != nil && err != model.ErrNoAccount {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					// skip not found account
@@ -488,19 +488,18 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 					nDiff := int64(to.Sub(bestTime) / params.BlockTime())
 					toBlock = bestHeight + nDiff
 				}
-				q = q.AndRange(field, params.CycleFromHeight(fromBlock), params.CycleFromHeight(toBlock))
+				q = q.AndGte("end_height", fromBlock).AndLte("start_height", toBlock)
 			default:
 				// cond.Value is time.Time
 				valueTime := cond.Value.(time.Time)
-				var valueCycle int64
+				var height int64
 				if !valueTime.After(bestTime) {
-					height := ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, valueTime)
-					valueCycle = params.CycleFromHeight(height)
+					height = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, valueTime)
 				} else {
 					nDiff := int64(valueTime.Sub(bestTime) / params.BlockTime())
-					valueCycle = params.CycleFromHeight(bestHeight + nDiff)
+					height = bestHeight + nDiff
 				}
-				q = q.And(field, cond.Mode, valueCycle)
+				q = q.And("start_height", cond.Mode, height)
 			}
 
 		default:
@@ -514,16 +513,9 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 			// the same field name may appear multiple times, in which case conditions
 			// are combined like any other condition with logical AND
 			for _, v := range val {
-				// convert amounts from float to int64
 				switch prefix {
-				case "cycle":
-					if v == "head" {
-						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
-						v = strconv.FormatInt(currentCycle, 10)
-					}
-
 				case "start_time", "end_time":
-					// convert time -> block -> cycle
+					// convert time -> block
 					if mode != pack.FilterModeEqual {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid filter mode for column '%s'", prefix), nil))
 					}
@@ -532,10 +524,12 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid %s filter value '%s'", prefix, v), err))
 					}
 					cmode := pack.FilterModeLte
+					field := "start_height"
 					if prefix == "start_time" {
 						cmode = pack.FilterModeGte
+						field = "end_height"
 					}
-					q = q.And("c", cmode, params.CycleFromHeight(ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, tm.Time())))
+					q = q.And(field, cmode, ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, tm.Time()))
 					// skip further parsing
 					continue
 

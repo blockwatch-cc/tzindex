@@ -8,6 +8,7 @@ import (
 
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
+	"blockwatch.cc/tzindex/rpc"
 )
 
 // ChainTip reflects the blockchain state at the currently indexed height.
@@ -32,7 +33,7 @@ type Deployment struct {
 	EndHeight   int64              `json:"end_height"`   // last block on indexed chain or -1
 }
 
-func (t *ChainTip) AddDeployment(p *tezos.Params) {
+func (t *ChainTip) AddDeployment(p *rpc.Params) {
 	// set end height for previous deployment
 	if l := len(t.Deployments); l > 0 {
 		t.Deployments[l-1].EndHeight = util.Max64(0, p.StartHeight-1)

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2023 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -16,7 +16,11 @@ type Delegation struct {
 	Delegate tezos.Address `json:"delegate,omitempty"`
 }
 
-// Fees returns fee-related balance updates to implement TypedOperation interface.
-func (d Delegation) Fees() BalanceUpdates {
-	return d.Metadata.BalanceUpdates
+// Addresses adds all addresses used in this operation to the set.
+// Implements TypedOperation interface.
+func (d Delegation) Addresses(set *tezos.AddressSet) {
+	set.AddUnique(d.Source)
+	if d.Delegate.IsValid() {
+		set.AddUnique(d.Delegate)
+	}
 }

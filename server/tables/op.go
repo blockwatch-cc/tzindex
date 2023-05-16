@@ -20,8 +20,8 @@ import (
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/packdb/vec"
 	"blockwatch.cc/tzgo/tezos"
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -59,7 +59,7 @@ func init() {
 	opSourceNames["entrypoint_id"] = "-" // ignore, internal
 	opSourceNames["address"] = "-"       // any address
 	opSourceNames["code_hash"] = "R"     // need receiver id to find contract in cache
-	opSourceNames["id"] = "h"            //
+	opSourceNames["id"] = "h"            // need height to calculate id
 	opAllAliases = append(opAllAliases,
 		"sender",
 		"receiver",
@@ -87,7 +87,7 @@ type Op struct {
 	model.Op
 	verbose bool            // cond. marshal
 	columns util.StringList // cond. cols & order when brief
-	params  *tezos.Params   // blockchain amount conversion
+	params  *rpc.Params     // blockchain amount conversion
 	ctx     *server.Context
 }
 
@@ -456,11 +456,7 @@ func (o *Op) MarshalCSV() ([]string, error) {
 				res[i] = `""`
 			}
 		case "parameters":
-			if len(o.Parameters) > 0 {
-				res[i] = strconv.Quote(hex.EncodeToString(o.Parameters))
-			} else {
-				res[i] = `""`
-			}
+			res[i] = strconv.Quote(hex.EncodeToString(o.Parameters))
 		case "storage_hash":
 			if o.IsContract {
 				res[i] = strconv.Quote(util.U64String(o.StorageHash).Hex())
@@ -608,7 +604,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				if err != nil {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid operation hash '%s'", v), err))
 				}
-				hashes[i] = h.Hash.Hash
+				hashes[i] = h[:]
 			}
 			if len(hashes) == 1 {
 				q = q.AndEqual(field, hashes[0])
@@ -689,7 +685,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 				}
 				acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-				if err != nil && err != index.ErrNoAccountEntry {
+				if err != nil && err != model.ErrNoAccount {
 					panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 				}
 				if err == nil && acc.RowId > 0 {
@@ -763,7 +759,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
+					if err != nil && err != model.ErrNoAccount {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					// Note: when not found we insert an always false condition
@@ -783,7 +779,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
+					if err != nil && err != model.ErrNoAccount {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", val[0]), err))
 					}
 					// skip not found account
@@ -812,11 +808,6 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 			for _, v := range val {
 				// convert amounts from float to int64
 				switch prefix {
-				case "cycle":
-					if v == "head" {
-						currentCycle := params.CycleFromHeight(ctx.Tip.BestHeight)
-						v = strconv.FormatInt(currentCycle, 10)
-					}
 				case "volume", "reward", "fee", "deposit", "burned":
 					fvals := make([]string, 0)
 					for _, vv := range strings.Split(v, ",") {
@@ -843,27 +834,25 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 		panic(server.EInternal(server.EC_DATABASE, "cannot read ops", err))
 	}
 	ops := make([]*model.Op, 0, res.Rows())
-	err = res.Walk(func(r pack.Row) error {
+	_ = res.Walk(func(r pack.Row) error {
 		o := model.AllocOp()
-		err = r.Decode(o)
+		_ = r.Decode(o)
 		ops = append(ops, o)
-		return err
+		return nil
 	})
 	res.Close()
-	if err != nil {
-		panic(server.EInternal(server.EC_DATABASE, "cannot parse ops", err))
-	}
 
-	// join bigmap events
+	// join bigmap events (we don't know if type/is_success/is_contract fields are present
+	// so we can't optimize the lookup here)
 	if needBigmapEvents {
 		ids := make([]uint64, len(ops))
 		for i, v := range ops {
 			ids[i] = v.RowId.Value()
 		}
 		ids = vec.UniqueUint64Slice(ids)
-		bigmaps, err := ctx.Indexer.Table(index.BigmapUpdateTableKey)
+		bigmaps, err := ctx.Indexer.Table(model.BigmapUpdateTableKey)
 		if err != nil {
-			panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", index.BigmapUpdateTableKey), err))
+			panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", model.BigmapUpdateTableKey), err))
 		}
 		var (
 			upd                model.BigmapUpdate
@@ -907,9 +896,9 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 
 	// join endorsements
 	if needEndorse {
-		endorse, err := ctx.Indexer.Table(index.EndorseOpTableKey)
+		endorse, err := ctx.Indexer.Table(model.EndorseOpTableKey)
 		if err != nil {
-			panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", index.EndorseOpTableKey), err))
+			panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("cannot access table '%s'", model.EndorseOpTableKey), err))
 		}
 		q = pack.NewQuery(ctx.RequestID).
 			WithTable(endorse).
@@ -931,10 +920,10 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 			case "columns", "limit", "order", "verbose", "filename":
 				// skip these fields
 			case "receiver", "creator", "baker", "status",
-				"is_success", "is_contract", "is_internal", "is_event",
+				"is_success", "is_contract", "is_internal", "is_event", "is_rollup",
 				"counter", "gas_limit", "gas_used", "storage_limit", "storage_used", "volume", "fee",
 				"receiver_id", "creator_id", "baker_id", "data", "parameters", "storage_hash",
-				"errors", "days_destroyed", "entrypoint_id":
+				"errors", "entrypoint_id":
 				// ignore these op fields as they are not part of endorsements
 				// also skip loading endorsements if any of these args is present
 				needEndorse = false
@@ -984,7 +973,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 					if err != nil {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid operation hash '%s'", v), err))
 					}
-					hashes[i] = h.Hash.Hash
+					hashes[i] = h[:]
 				}
 				if len(hashes) == 1 {
 					q = q.AndEqual("hash", hashes[0])
@@ -1037,7 +1026,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					acc, err := ctx.Indexer.LookupAccount(ctx, addr)
-					if err != nil && err != index.ErrNoAccountEntry {
+					if err != nil && err != model.ErrNoAccount {
 						panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid address '%s'", v), err))
 					}
 					if err == nil && acc.RowId > 0 {
@@ -1110,15 +1099,12 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				panic(server.EInternal(server.EC_DATABASE, "cannot read endorsements", err))
 			}
 			// merge results
-			err = res2.Walk(func(r pack.Row) error {
+			_ = res2.Walk(func(r pack.Row) error {
 				e := &model.Endorsement{}
-				err = r.Decode(e)
+				_ = r.Decode(e)
 				ops = append(ops, e.ToOp())
-				return err
+				return nil
 			})
-			if err != nil {
-				panic(server.EInternal(server.EC_DATABASE, "cannot parse endorsements", err))
-			}
 			res2.Close()
 			if q.Order == pack.OrderDesc {
 				sort.Sort(sort.Reverse(OpSorter(ops)))

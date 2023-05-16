@@ -7,9 +7,6 @@ import (
 	"context"
 	"fmt"
 
-	"blockwatch.cc/tzgo/tezos"
-
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
 )
@@ -29,7 +26,7 @@ import (
 //
 // Correctly registered bakers (via self delegation) are not affected since their
 // baker_id is set.
-func (b *Builder) FixOriginationBug(ctx context.Context, params *tezos.Params) error {
+func (b *Builder) FixOriginationBug(ctx context.Context, params *rpc.Params) error {
 	var count int
 	var err error
 
@@ -39,7 +36,9 @@ func (b *Builder) FixOriginationBug(ctx context.Context, params *tezos.Params) e
 		if bkr.ActiveDelegations > 0 {
 			if bkr.Account.BakerId == 0 {
 				bkr.Account.BakerId = bkr.Account.RowId
-				b.AppendMagicBakerRegistrationOp(ctx, bkr, 0)
+				if err := b.AppendMagicBakerRegistrationOp(ctx, bkr, 0); err != nil {
+					return err
+				}
 			}
 			bkr.InitGracePeriod(b.block.Cycle, b.block.Params)
 			count++
@@ -65,12 +64,12 @@ func (b *Builder) FixOriginationBug(ctx context.Context, params *tezos.Params) e
 	// remove baker records
 	delIds := make([]uint64, 0)
 	for _, v := range drop {
-		log.Debugf("Migrate v%03d: deregistering baker %s", params.Version, v)
+		log.Tracef("Migrate v%03d: deregistering baker %s", params.Version, v)
 		delIds = append(delIds, v.RowId.Value())
 		b.UnregisterBaker(v)
 	}
 
-	bakers, err := b.idx.Table(index.BakerTableKey)
+	bakers, err := b.idx.Table(model.BakerTableKey)
 	if err == nil {
 		_ = bakers.DeleteIds(ctx, delIds)
 	}

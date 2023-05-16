@@ -8,8 +8,6 @@ import (
 	"fmt"
 
 	"blockwatch.cc/packdb/pack"
-
-	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
 )
@@ -23,7 +21,7 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 
 	// register new protocol (will save as new deployment)
 	b.block.Params.StartHeight = b.block.Height
-	if err := b.idx.ConnectProtocol(ctx, b.block.Params, nil); err != nil {
+	if err := b.idx.ConnectProtocol(ctx, b.block.Params, b.parent.Params); err != nil {
 		return nil, err
 	}
 
@@ -57,7 +55,9 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 			acc.IsBaker = true
 			acc.BakerId = acc.RowId
 			bkr := b.RegisterBaker(acc, true)
-			b.AppendMagicBakerRegistrationOp(ctx, bkr, i)
+			if err := b.AppendMagicBakerRegistrationOp(ctx, bkr, i); err != nil {
+				return nil, err
+			}
 
 			// update supply counters
 			b.block.Supply.ActiveStaking += v.Value
@@ -70,7 +70,9 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		b.block.FundedAccounts++
 		b.block.NewAccounts++
 		b.block.SeenAccounts++
+		b.block.NEvents++
 		b.block.ActivatedSupply += v.Value
+		b.block.MintedSupply += v.Value
 		b.block.Supply.Activated += v.Value
 
 		// register activation flows (will not be applied, just saved!)
@@ -80,7 +82,7 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 			L:    model.OPL_PROTOCOL_UPGRADE,
 			P:    flowCounter,
 		}
-		f := model.NewFlow(b.block, acc, nil, id)
+		f := model.NewFlow(b.block, acc, acc, id)
 		f.Category = model.FlowCategoryBalance
 		f.Operation = model.FlowTypeActivation
 		f.AmountIn = acc.SpendableBalance
@@ -88,7 +90,7 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		flowCounter++
 
 		// register implicit activation ops
-		op := model.NewEventOp(b.block, 0, id)
+		op := model.NewEventOp(b.block, acc.RowId, id)
 		op.SenderId = acc.RowId
 		op.Counter = int64(opCounter)
 		op.Volume = acc.SpendableBalance
@@ -132,7 +134,9 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		b.block.SeenAccounts++
 		b.block.NewContracts++
 		b.block.FundedAccounts++
+		b.block.NEvents++
 		b.block.ActivatedSupply += v.Value
+		b.block.MintedSupply += v.Value
 
 		// update supply counters
 		b.block.Supply.Activated += v.Value
@@ -157,6 +161,7 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		op.ReceiverId = acc.RowId
 		op.Counter = int64(opCounter)
 		op.Volume = acc.Balance()
+		op.IsContract = true
 		b.block.Ops = append(b.block.Ops, op)
 		opCounter++
 
@@ -181,6 +186,7 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		op.StorageHash = con.StorageHash
 		op.Contract = con
 		contracts = append(contracts, con)
+		b.conMap[op.ReceiverId] = con
 
 		// link to and update baker
 		bkr, _ := b.BakerByAddress(v.Delegate)
@@ -214,6 +220,7 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		op.Counter = int64(opCounter)
 		op.Volume = acc.Balance()
 		b.block.Ops = append(b.block.Ops, op)
+		b.block.NEvents++
 		opCounter++
 
 		log.Debug(newLogClosure(func() string {
@@ -250,6 +257,7 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 
 		// count unclaimed supply
 		b.block.Supply.Unclaimed += acc.UnclaimedBalance
+		b.block.MintedSupply += acc.UnclaimedBalance
 
 		// prepare for insert
 		accounts = append(accounts, acc)
@@ -257,14 +265,14 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 
 	// insert accounts to create rows (later the indexer will update all accounts again,
 	// but we need to properly init the table row_id counter here)
-	table, err := b.idx.Table(index.AccountTableKey)
+	table, err := b.idx.Table(model.AccountTableKey)
 	if err != nil {
 		return nil, err
 	}
 	if err := table.Insert(ctx, accounts); err != nil {
 		return nil, err
 	}
-	table, err = b.idx.Table(index.ContractTableKey)
+	table, err = b.idx.Table(model.ContractTableKey)
 	if err != nil {
 		return nil, err
 	}
