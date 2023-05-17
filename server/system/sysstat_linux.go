@@ -70,7 +70,7 @@ func GetSysStat(ctx context.Context) (SysStat, error) {
 	s.CpuTotal = s.CpuUser + s.CpuSys
 
 	// Disk
-	pDisk, _ := linux.ReadDisk(config.GetString("database.path"))
+	pDisk, _ := linux.ReadDisk(config.GetString("db.path"))
 	s.DiskSize = pDisk.All
 	s.DiskUsed = pDisk.Used
 	s.DiskFree = pDisk.Free
