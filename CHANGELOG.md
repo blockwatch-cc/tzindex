@@ -2,7 +2,7 @@
 
 ### v16.1.5 (v016-2023-02-26)
 
-Mumabi Release
+Mumbai Release
 - NEW: add Mumbai operations wrapped into `rollup_origination` and `rollup_transaction`
     - `smart_rollup_add_messages`
     - `smart_rollup_cement`
@@ -12,7 +12,7 @@ Mumabi Release
     - `smart_rollup_recover_bond`
     - `smart_rollup_refute`
     - `smart_rollup_timeout`
-- NEW: add `transfer_ticket` op as explict operation (previously this was part of the rollup package and wrapped inside rollup_transaction)
+- NEW: add `transfer_ticket` op as explict operation (previously this was part of the rollup package and wrapped inside `rollup_transaction`)
 - NEW: op model added fields
   - `ticket_updates` on eligible transaction between tz accounts (previously ticket transfer was limited to contracts)
   - `staker`, `loser`, `winner` as participants in smart rollup refutation games
@@ -25,7 +25,7 @@ Fixes
 - crash on broken call params
 - micheline type compare for nested unions, this fixes detecting allocated bigmap types
 - decoding bootstrap deposits on testnets
-- Exclude unknown fields from endorsement table query
+- exclude unknown fields from endorsement table query
 - entrypoint detection, continue on data decode errors
 - take delegation volume from flows instead of previous balance
 - parsing block height
@@ -37,9 +37,9 @@ Fixes
 - stake in post-Ithaca index 15 snapshots
 - contract table lookup, limit to successful originations
 - rollup call stats query
-- Handle storage burn on transfer ticket op
-- Use staking balance for gov snapshots
-- Handle internal results on rollup output message execution
+- handle storage burn on transfer ticket op
+- use staking balance for gov snapshots
+- handle internal results on rollup output message execution
 
 Improvements
 - List internal ops sent by a contract
