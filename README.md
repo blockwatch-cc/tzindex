@@ -1,10 +1,10 @@
-# Blockwatch Tezos Indexer
+# Blockwatch TzIndex - Tezos Indexer
 
 © 2020-2023 Blockwatch Data Inc., All rights reserved.
 
-All-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resource friendly way to gain tactical insights and build dapps on top of Tezos. Supported by [Blockwatch Data](https://blockwatch.cc), Pro version available on request.
+TzIndex is [Blockwatch](https://blockwatch.cc)'s all-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resource-friendly way to gain tactical insights and build dapps on top of Tezos. Pro version available on request, see [License](https://github.com/blockwatch-cc/tzindex#license).
 
-For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](https://discord.gg/D5e98Hw).
+For support, talk to us on [Discord](https://discord.gg/D5e98Hw) or [Twitter](https://twitter.com/blockwatch_data).
 
 **Core Features**
 
