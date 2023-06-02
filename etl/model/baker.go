@@ -20,7 +20,7 @@ var ErrNoBaker = errors.New("baker not indexed")
 
 type BakerID uint64
 
-func (id BakerID) Value() uint64 {
+func (id BakerID) U64() uint64 {
 	return uint64(id)
 }
 

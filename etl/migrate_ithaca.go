@@ -232,7 +232,7 @@ func (b *Builder) RebuildIthacaSnapshotsRightsAndIncome(ctx context.Context, par
 					NDelegations: bkr.ActiveDelegations,
 					Since:        bkr.BakerSince,
 				})
-				rollOwners = append(rollOwners, bkr.AccountId.Value())
+				rollOwners = append(rollOwners, bkr.AccountId.U64())
 			}
 
 			// sort and insert

@@ -137,20 +137,20 @@ func NewAccount(ctx *server.Context, a *model.Account, args server.Options) *Acc
 	if args.WithMeta() {
 		// add metadata
 		acc.Metadata = make(map[string]*Metadata)
-		if md, ok := lookupMetadataById(ctx, a.RowId, 0, false); ok {
+		if md, ok := lookupAddressIdMetadata(ctx, a.RowId); ok {
 			acc.Metadata[acc.Address] = md
 		}
 
 		// baker metadata for delegators
 		if a.IsDelegated {
-			if md, ok := lookupMetadataById(ctx, a.BakerId, 0, false); ok {
+			if md, ok := lookupAddressIdMetadata(ctx, a.BakerId); ok {
 				acc.Metadata[acc.Baker] = md
 			}
 		}
 
 		// manager/creator metadata for contracts
 		if a.CreatorId > 0 {
-			if md, ok := lookupMetadataById(ctx, a.CreatorId, 0, false); ok {
+			if md, ok := lookupAddressIdMetadata(ctx, a.CreatorId); ok {
 				acc.Metadata[acc.Creator] = md
 			}
 		}
@@ -261,10 +261,10 @@ func ReadDeployedContracts(ctx *server.Context) (interface{}, int) {
 	// we also need the account data for contracts
 	ids := make([]uint64, 0, len(ccs))
 	for _, v := range ccs {
-		ids = append(ids, v.AccountId.Value())
+		ids = append(ids, v.AccountId.U64())
 	}
 	ids = vec.UniqueUint64Slice(ids)
-	accs, err := ctx.Indexer.LookupAccountIds(ctx.Context, ids)
+	accs, err := ctx.Indexer.LookupAccountsById(ctx.Context, ids)
 	if err != nil {
 		panic(server.EInternal(server.EC_DATABASE, "cannot read contract accounts", err))
 	}

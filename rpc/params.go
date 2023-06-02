@@ -98,16 +98,28 @@ func (p *Params) WithChainId(id tezos.ChainIdHash) *Params {
 			p.Network = "Limanet"
 		case Mumbainet:
 			p.Network = "Mumbainet"
-		default:
-			p.Network = "Sandbox"
+		case Nairobinet:
+			p.Network = "Nairobinet"
 		}
 	}
 	return p
 }
 
 func (p *Params) WithProtocol(h tezos.ProtocolHash) *Params {
+	var ok bool
 	p.Protocol = h
-	p.Version = Versions[h]
+	p.Version, ok = Versions[h]
+	if !ok {
+		var max int
+		for _, v := range Versions {
+			if v < max {
+				continue
+			}
+			max = v
+		}
+		p.Version = max + 1
+		Versions[h] = p.Version
+	}
 	if p.Version < 8 {
 		p.NumVotingPeriods = 4
 	}
@@ -120,7 +132,9 @@ func (p *Params) WithDeployment(v int) *Params {
 }
 
 func (p *Params) WithNetwork(n string) *Params {
-	p.Network = n
+	if p.Network == "unknown" {
+		p.Network = n
+	}
 	return p
 }
 

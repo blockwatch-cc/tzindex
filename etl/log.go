@@ -14,7 +14,12 @@ import (
 // log is a logger that is initialized with no output filters.  This
 // means the package will not perform any logging by default until the caller
 // requests it.
-var log logpkg.Logger = logpkg.Log
+var (
+	log            logpkg.Logger = logpkg.Log
+	MinLogInterval time.Duration = 10 * time.Second
+)
+
+const logTruncate = 10 * time.Millisecond
 
 // The default amount of logging is none.
 func init() {
@@ -73,14 +78,14 @@ func NewBlockProgressLogger(msg string) *BlockProgressLogger {
 // LogBlockHeight logs a new block height as an information message to show
 // progress to the user. In order to prevent spam, it limits logging to one
 // message every 10 seconds with duration and totals included.
-func (b *BlockProgressLogger) LogBlockHeight(block *model.Block, qlen int, state State, d time.Duration) {
+func (b *BlockProgressLogger) LogBlockHeight(block *model.Block, qlen int, state State, d time.Duration, flush bool) {
 	b.Lock()
 	defer b.Unlock()
 	b.nBlocks++
 	b.nTx += int64(len(block.Ops))
 	now := time.Now()
 	duration := now.Sub(b.lastTime)
-	if duration < time.Second*10 {
+	if duration < MinLogInterval && !flush {
 		return
 	}
 
@@ -99,7 +104,7 @@ func (b *BlockProgressLogger) LogBlockHeight(block *model.Block, qlen int, state
 	}
 
 	log.Infof("%s %d %s in %s (%d %s, height %d, %s, q=%d, t=%s, s=%s)",
-		b.action, b.nBlocks, blockStr, duration.Truncate(10*time.Millisecond),
+		b.action, b.nBlocks, blockStr, duration.Truncate(logTruncate),
 		b.nTx, txStr, block.Height,
 		block.Timestamp,
 		qlen, d, state)

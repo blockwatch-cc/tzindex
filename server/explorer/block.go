@@ -45,10 +45,11 @@ type Block struct {
 	NSlotsEndorsed       int                       `json:"n_endorsed_slots"`
 	NOps                 int                       `json:"n_ops_applied"`
 	NOpsFailed           int                       `json:"n_ops_failed"`
-	NEvents              int                       `json:"n_events"`
 	NContractCalls       int                       `json:"n_calls"`
 	NRollupCalls         int                       `json:"n_rollup_calls"`
 	NTx                  int                       `json:"n_tx"`
+	NEvents              int                       `json:"n_events"`
+	NTickets             int                       `json:"n_tickets"`
 	Volume               float64                   `json:"volume"`
 	Fee                  float64                   `json:"fee"`
 	Reward               float64                   `json:"reward"`
@@ -145,10 +146,11 @@ func NewBlock(ctx *server.Context, block *model.Block, args server.Options) *Blo
 		NSlotsEndorsed:       block.NSlotsEndorsed,
 		NOps:                 model.Int16Correct(block.NOpsApplied),
 		NOpsFailed:           model.Int16Correct(block.NOpsFailed),
-		NEvents:              model.Int16Correct(block.NEvents),
 		NContractCalls:       model.Int16Correct(block.NContractCalls),
 		NRollupCalls:         model.Int16Correct(block.NRollupCalls),
 		NTx:                  model.Int16Correct(block.NTx),
+		NEvents:              model.Int16Correct(block.NEvents),
+		NTickets:             model.Int16Correct(block.NTickets),
 		Volume:               p.ConvertValue(block.Volume),
 		Fee:                  p.ConvertValue(block.Fee),
 		Reward:               p.ConvertValue(block.Reward),
@@ -210,7 +212,7 @@ func NewBlock(ctx *server.Context, block *model.Block, args server.Options) *Blo
 		b.Metadata = make(map[string]*ShortMetadata)
 
 		// add baker
-		if md, ok := lookupMetadataById(ctx, block.BakerId, 0, false); ok {
+		if md, ok := lookupAddressIdMetadata(ctx, block.BakerId); ok {
 			b.Metadata[b.Baker.String()] = md.Short()
 		}
 
@@ -219,7 +221,7 @@ func NewBlock(ctx *server.Context, block *model.Block, args server.Options) *Blo
 			if _, ok := b.Metadata[v.Address.String()]; ok {
 				continue
 			}
-			if md, ok := lookupMetadataById(ctx, v.AccountId, 0, false); ok {
+			if md, ok := lookupAddressIdMetadata(ctx, v.AccountId); ok {
 				b.Metadata[v.Address.String()] = md.Short()
 			}
 		}

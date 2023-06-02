@@ -20,7 +20,7 @@ var (
 
 type ConstantID uint64
 
-func (id ConstantID) Value() uint64 {
+func (id ConstantID) U64() uint64 {
 	return uint64(id)
 }
 

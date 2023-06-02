@@ -17,28 +17,19 @@ const (
 	"$schema": "http://json-schema.org/draft/2019-09/schema#",
 	"$id": "https://api.tzstats.com/metadata/schemas/payout.json",
 	"title": "Payout Info",
-    "description": "Baker reference(s) for payout addresses.",
-	"type": "object",
-	"required": ["from"],
-	"properties": {
-		"from": {
-		  "type": "array",
-		  "description": "List of Tezos baker addresses this payout address is related to.",
-		  "uniqueItems": true,
-		  "minItems": 1,
-		  "items": {
-		  	"type": "string",
-		  	"format": "tzaddress"
-		  }
-		}
+    "description": "List of Tezos baker addresses this payout address is related to.",
+	"type": "array",
+	"uniqueItems": true,
+	"minItems": 1,
+	"items": {
+		"type": "string",
+		"format": "tzaddress"
 	}
 }`
 )
 
 // reference to baker
-type Payout struct {
-	From []tezos.Address `json:"from,omitempty"`
-}
+type Payout []tezos.Address
 
 func (d Payout) Namespace() string {
 	return payoutNs

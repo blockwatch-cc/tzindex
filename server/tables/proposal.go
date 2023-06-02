@@ -79,15 +79,15 @@ func (p *Proposal) MarshalJSONVerbose() ([]byte, error) {
 		Stake        float64 `json:"stake"`
 		Voters       int64   `json:"voters"`
 	}{
-		RowId:        p.RowId.Value(),
+		RowId:        p.RowId.U64(),
 		Hash:         p.Hash.String(),
 		Height:       p.Height,
 		Timestamp:    util.UnixMilliNonZero(p.Time),
-		SourceId:     p.SourceId.Value(),
+		SourceId:     p.SourceId.U64(),
 		Source:       p.ctx.Indexer.LookupAddress(p.ctx, p.SourceId).String(),
-		OpId:         p.OpId.Value(),
+		OpId:         p.OpId.U64(),
 		Op:           p.ops[p.OpId].String(),
-		ElectionId:   p.ElectionId.Value(),
+		ElectionId:   p.ElectionId.U64(),
 		VotingPeriod: p.VotingPeriod,
 		Rolls:        p.Rolls,
 		Stake:        p.ctx.Params.ConvertValue(p.Stake),
@@ -103,7 +103,7 @@ func (p *Proposal) MarshalJSONBrief() ([]byte, error) {
 	for i, v := range p.columns {
 		switch v {
 		case "row_id":
-			buf = strconv.AppendUint(buf, p.RowId.Value(), 10)
+			buf = strconv.AppendUint(buf, p.RowId.U64(), 10)
 		case "hash":
 			buf = strconv.AppendQuote(buf, p.Hash.String())
 		case "height":
@@ -111,15 +111,15 @@ func (p *Proposal) MarshalJSONBrief() ([]byte, error) {
 		case "time":
 			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(p.Time), 10)
 		case "source_id":
-			buf = strconv.AppendUint(buf, p.SourceId.Value(), 10)
+			buf = strconv.AppendUint(buf, p.SourceId.U64(), 10)
 		case "source":
 			buf = strconv.AppendQuote(buf, p.ctx.Indexer.LookupAddress(p.ctx, p.SourceId).String())
 		case "op_id":
-			buf = strconv.AppendUint(buf, p.OpId.Value(), 10)
+			buf = strconv.AppendUint(buf, p.OpId.U64(), 10)
 		case "op":
 			buf = strconv.AppendQuote(buf, p.ops[p.OpId].String())
 		case "election_id":
-			buf = strconv.AppendUint(buf, p.ElectionId.Value(), 10)
+			buf = strconv.AppendUint(buf, p.ElectionId.U64(), 10)
 		case "voting_period":
 			buf = strconv.AppendInt(buf, p.VotingPeriod, 10)
 		case "rolls":
@@ -145,7 +145,7 @@ func (p *Proposal) MarshalCSV() ([]string, error) {
 	for i, v := range p.columns {
 		switch v {
 		case "row_id":
-			res[i] = strconv.FormatUint(p.RowId.Value(), 10)
+			res[i] = strconv.FormatUint(p.RowId.U64(), 10)
 		case "hash":
 			res[i] = strconv.Quote(p.Hash.String())
 		case "height":
@@ -153,15 +153,15 @@ func (p *Proposal) MarshalCSV() ([]string, error) {
 		case "time":
 			res[i] = strconv.Quote(p.Time.Format(time.RFC3339))
 		case "source_id":
-			res[i] = strconv.FormatUint(p.SourceId.Value(), 10)
+			res[i] = strconv.FormatUint(p.SourceId.U64(), 10)
 		case "source":
 			res[i] = strconv.Quote(p.ctx.Indexer.LookupAddress(p.ctx, p.SourceId).String())
 		case "op_id":
-			res[i] = strconv.FormatUint(p.OpId.Value(), 10)
+			res[i] = strconv.FormatUint(p.OpId.U64(), 10)
 		case "op":
 			res[i] = strconv.Quote(p.ops[p.OpId].String())
 		case "election_id":
-			res[i] = strconv.FormatUint(p.ElectionId.Value(), 10)
+			res[i] = strconv.FormatUint(p.ElectionId.U64(), 10)
 		case "voting_period":
 			res[i] = strconv.FormatInt(p.VotingPeriod, 10)
 		case "rolls":
@@ -305,7 +305,7 @@ func StreamProposalTable(ctx *server.Context, args *TableRequest) (interface{}, 
 						continue
 					}
 					// collect list of account ids
-					ids = append(ids, acc.RowId.Value())
+					ids = append(ids, acc.RowId.U64())
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
@@ -367,7 +367,7 @@ func StreamProposalTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					// collect list of op ids (use first slice balue only since
 					// we're looking for proposals which are always single-op)
 					opMap[op[0].RowId] = op[0].Hash.Clone()
-					ids = append(ids, op[0].RowId.Value())
+					ids = append(ids, op[0].RowId.U64())
 				}
 				// Note: when list is empty (no ops were found, the match will
 				//       always be false and return no result as expected)
@@ -501,7 +501,7 @@ func StreamProposalTable(ctx *server.Context, args *TableRequest) (interface{}, 
 				return err
 			}
 			count++
-			lastId = proposal.RowId.Value()
+			lastId = proposal.RowId.U64()
 			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
@@ -528,7 +528,7 @@ func StreamProposalTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					return err
 				}
 				count++
-				lastId = proposal.RowId.Value()
+				lastId = proposal.RowId.U64()
 				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}

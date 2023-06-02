@@ -205,7 +205,7 @@ func NewBaker(ctx *server.Context, b *model.Baker, args server.Options) *Baker {
 		}
 
 		// add metadata
-		if md, ok := lookupMetadataById(ctx, b.AccountId, 0, false); ok {
+		if md, ok := lookupAddressIdMetadata(ctx, b.AccountId); ok {
 			baker.Metadata = md.Short()
 		}
 	}
@@ -306,17 +306,13 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 	tip := getTip(ctx)
 	netStake := tip.Supply.ActiveStake
 
-	// get current alias data
-	meta := allMetadataById(ctx)
-
-	// prepare response lists
-	ads := make([]Baker, 0)
+	// prepare response
 	bkr := make([]Baker, 0)
 
 	// filter bakers
 	for _, v := range bakers {
 		// filter by alias attributes
-		alias, hasAlias := meta[v.AccountId.Value()]
+		alias, hasAlias := lookupAddressIdMetadata(ctx, v.AccountId)
 		if hasAlias {
 			if args.Status != nil && *args.Status != alias.Status {
 				// log.Infof("Skip %s status %s", v, alias.Status)
@@ -372,7 +368,7 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 				args.Offset--
 				continue
 			}
-			if args.Cursor > 0 && v.RowId.Value() <= args.Cursor {
+			if args.Cursor > 0 && v.RowId.U64() <= args.Cursor {
 				// log.Infof("Skip %s cursor %d", v, v.RowId)
 				continue
 			}
@@ -432,20 +428,16 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 			baker.StakingShare = 0
 		}
 
-		// attach alias and append to lists
+		// attach alias and append to list
 		if hasAlias {
 			baker.Metadata = alias.Short()
-			if alias.IsSponsored && args.WithSponsored {
-				ads = append(ads, baker)
-			} else {
-				bkr = append(bkr, baker)
-			}
+			bkr = append(bkr, baker)
 		} else {
 			bkr = append(bkr, baker)
 		}
 
 		// apply limit only when not in suggest mode (need all results for randomization)
-		if suggest == nil && args.Limit > 0 && len(ads)+len(bkr) == int(args.Limit) {
+		if suggest == nil && args.Limit > 0 && len(bkr) == int(args.Limit) {
 			break
 		}
 	}
@@ -466,23 +458,15 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 
 	// randomize suggestion: <=50% sponsored
 	if args.Limit > 0 && suggest != nil {
-		for args.Limit > 0 && len(ads)+len(bkr) > 0 {
-			if len(resp.list) < int(args.Limit) && len(ads) > 0 {
-				// draw random from sponsored
-				idx := rand.Intn(len(ads))
-				resp.list = append(resp.list, ads[idx])
-				ads = append(ads[:idx], ads[idx+1:]...)
-			} else {
-				// draw random from other
-				idx := rand.Intn(len(bkr))
-				resp.list = append(resp.list, bkr[idx])
-				bkr = append(bkr[:idx], bkr[idx+1:]...)
-			}
+		for args.Limit > 0 && len(bkr) > 0 {
+			// draw random from other
+			idx := rand.Intn(len(bkr))
+			resp.list = append(resp.list, bkr[idx])
+			bkr = append(bkr[:idx], bkr[idx+1:]...)
 			args.Limit--
 		}
 	} else {
-		resp.list = ads
-		resp.list = append(resp.list, bkr...)
+		resp.list = bkr
 		if args.Limit > 0 {
 			resp.list = resp.list[:util.Min(int(args.Limit), len(resp.list))]
 		}
@@ -566,7 +550,7 @@ func ListBakerVotes(ctx *server.Context) (interface{}, int) {
 	// fetch op hashes for each ballot
 	oids := make([]uint64, 0)
 	for _, v := range ballots {
-		oids = append(oids, v.OpId.Value())
+		oids = append(oids, v.OpId.U64())
 	}
 
 	// lookup
@@ -922,11 +906,11 @@ func GetBakerSnapshot(ctx *server.Context) (interface{}, int) {
 	// list funding state
 	ids := make([]uint64, len(snaps))
 	for i, v := range snaps {
-		ids[i] = v.AccountId.Value()
+		ids[i] = v.AccountId.U64()
 	}
 	type XAcc struct {
-		RowId    model.AccountID `knox:"I"`
-		IsFunded bool            `knox:"f"`
+		RowId    model.AccountID `pack:"I"`
+		IsFunded bool            `pack:"f"`
 	}
 	accs := make([]*XAcc, 0)
 	accountTable, err := ctx.Indexer.Table(model.AccountTableKey)

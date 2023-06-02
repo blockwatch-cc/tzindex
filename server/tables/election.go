@@ -78,8 +78,8 @@ func (e *Election) MarshalJSONVerbose() ([]byte, error) {
 		NoProposal       bool   `json:"no_proposal"`
 		VotingPeriodKind string `json:"last_voting_period"`
 	}{
-		RowId:            e.RowId.Value(),
-		ProposalId:       e.ProposalId.Value(),
+		RowId:            e.RowId.U64(),
+		ProposalId:       e.ProposalId.U64(),
 		NumPeriods:       e.NumPeriods,
 		NumProposals:     e.NumProposals,
 		VotingPeriod:     e.VotingPeriod,
@@ -116,9 +116,9 @@ func (e *Election) MarshalJSONBrief() ([]byte, error) {
 	for i, v := range e.columns {
 		switch v {
 		case "row_id":
-			buf = strconv.AppendUint(buf, e.RowId.Value(), 10)
+			buf = strconv.AppendUint(buf, e.RowId.U64(), 10)
 		case "proposal_id":
-			buf = strconv.AppendUint(buf, e.ProposalId.Value(), 10)
+			buf = strconv.AppendUint(buf, e.ProposalId.U64(), 10)
 		case "proposal":
 			if p := e.ctx.Indexer.LookupProposalHash(e.ctx, e.ProposalId); p.IsValid() {
 				buf = strconv.AppendQuote(buf, p.String())
@@ -206,9 +206,9 @@ func (e *Election) MarshalCSV() ([]string, error) {
 	for i, v := range e.columns {
 		switch v {
 		case "row_id":
-			res[i] = strconv.FormatUint(e.RowId.Value(), 10)
+			res[i] = strconv.FormatUint(e.RowId.U64(), 10)
 		case "proposal_id":
-			res[i] = strconv.FormatUint(e.ProposalId.Value(), 10)
+			res[i] = strconv.FormatUint(e.ProposalId.U64(), 10)
 		case "proposal":
 			if p := e.ctx.Indexer.LookupProposalHash(e.ctx, e.ProposalId); p.IsValid() {
 				res[i] = strconv.Quote(p.String())
@@ -368,7 +368,7 @@ func StreamElectionTable(ctx *server.Context, args *TableRequest) (interface{}, 
 						continue
 					}
 					// collect list of proposal ids
-					ids = append(ids, prop.RowId.Value())
+					ids = append(ids, prop.RowId.U64())
 				}
 				// Note: when list is empty (no proposal was found, the match will
 				//       always be false and return no result as expected)
@@ -456,7 +456,7 @@ func StreamElectionTable(ctx *server.Context, args *TableRequest) (interface{}, 
 				return err
 			}
 			count++
-			lastId = election.RowId.Value()
+			lastId = election.RowId.U64()
 			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
@@ -483,7 +483,7 @@ func StreamElectionTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					return err
 				}
 				count++
-				lastId = election.RowId.Value()
+				lastId = election.RowId.U64()
 				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}

@@ -166,6 +166,7 @@ func (idx *ContractIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 				// update patched smart contracts on migration (only once is guaranteed)
 				upd = append(upd, contract)
 			}
+			contract.IsDirty = false
 		}
 	}
 
@@ -187,6 +188,7 @@ func (idx *ContractIndex) DisconnectBlock(ctx context.Context, block *model.Bloc
 		if !v.IsDirty || v.RowId == 0 {
 			continue
 		}
+		v.IsDirty = false
 		upd = append(upd, v)
 	}
 	if err := idx.table.Update(ctx, upd); err != nil {

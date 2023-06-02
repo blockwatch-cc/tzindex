@@ -54,13 +54,10 @@ func (c AddressCache) Stats() Stats {
 }
 
 func (c *AddressCache) GetAddress(id model.AccountID) tezos.Address {
-	offs := int(id.Value()-1) * addrLen
+	offs := int(id.U64()-1) * addrLen
 	if len(c.hashes) > offs {
 		c.stats.CountHits(1)
-		return tezos.NewAddress(
-			tezos.AddressType(c.hashes[offs]),
-			c.hashes[offs+1:offs+21],
-		)
+		return tezos.Address(c.hashes[offs:]).Clone()
 	}
 	c.stats.CountMisses(1)
 	return tezos.InvalidAddress
@@ -82,7 +79,7 @@ func (c *AddressCache) Build(ctx context.Context, table *pack.Table) error {
 			if err := r.Decode(&a); err != nil {
 				return err
 			}
-			diff := int64(a.RowId.Value()) - int64(c.Len())
+			diff := int64(a.RowId.U64()) - int64(c.Len())
 			if diff <= 0 {
 				log.Warnf("AddressCache: Skipping %d duplicates/out-of-order ids detected before id %d", -(diff - 1), a.RowId)
 				return nil
@@ -123,7 +120,7 @@ func (c *AddressCache) Update(accounts map[model.AccountID]*model.Account) error
 
 	// update
 	for _, v := range upd {
-		pos := int(v.RowId.Value()-1) * addrLen
+		pos := int(v.RowId.U64()-1) * addrLen
 		if pos > len(c.hashes) {
 			// safety skip, should not happen
 			continue
@@ -149,7 +146,7 @@ func (c *AddressCache) Update(accounts map[model.AccountID]*model.Account) error
 	// append new address data
 	for _, v := range ins {
 		// pad with empty bytes when we detect a gap in account ids
-		if pad := int64(v.RowId.Value()) - int64(len(dest)/addrLen) - 1; pad > 0 {
+		if pad := int64(v.RowId.U64()) - int64(len(dest)/addrLen) - 1; pad > 0 {
 			dest = append(dest, bytes.Repeat([]byte{0}, int(pad)*addrLen)...)
 		}
 		dest = append(dest, v.Address[:]...)

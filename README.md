@@ -4,11 +4,11 @@
 
 All-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resource friendly way to gain tactical insights and build dapps on top of Tezos. Supported by [Blockwatch Data](https://blockwatch.cc), Pro version available on request.
 
-For support, talk to us on [Twitter](https://twitter.com/tzstats) or [Discord](https://discord.gg/D5e98Hw).
+For support, talk to us on [Twitter](https://twitter.com/blockwatch_data) or [Discord](https://discord.gg/D5e98Hw).
 
 **Core Features**
 
-- supports protocols up to Mumbai (v016)
+- supports protocols up to Nairobi (v017)
 - indexes and cross-checks full on-chain state
 - feature-rich [REST API](https://tzstats.com/docs/api/index.html) with objects, bulk tables and time-series
 - auto-detects and locks Tezos network (never mixes data from different networks)

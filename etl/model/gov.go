@@ -46,7 +46,7 @@ var (
 // supermajority was reached. Period 3 always ends successfully.
 type ElectionID uint64
 
-func (id ElectionID) Value() uint64 {
+func (id ElectionID) U64() uint64 {
 	return uint64(id)
 }
 
@@ -99,7 +99,7 @@ func (m Election) IndexOpts(key string) pack.Options {
 // multiple proposals in one operation, which results in multiple rows been created.
 type ProposalID uint64
 
-func (id ProposalID) Value() uint64 {
+func (id ProposalID) U64() uint64 {
 	return uint64(id)
 }
 

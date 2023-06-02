@@ -30,7 +30,7 @@ func (m *Indexer) LookupBaker(ctx context.Context, addr tezos.Address) (*model.B
 	if err != nil {
 		return nil, err
 	}
-	acc, err := m.LookupAccountId(ctx, bkr.AccountId)
+	acc, err := m.LookupAccountById(ctx, bkr.AccountId)
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +39,7 @@ func (m *Indexer) LookupBaker(ctx context.Context, addr tezos.Address) (*model.B
 }
 
 func (m *Indexer) LookupBakerId(ctx context.Context, id model.AccountID) (*model.Baker, error) {
-	acc, err := m.LookupAccountId(ctx, id)
+	acc, err := m.LookupAccountById(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +80,7 @@ func (m *Indexer) ListBakers(ctx context.Context, activeOnly bool) ([]*model.Bak
 	accIds := make([]uint64, 0)
 	for _, v := range bkrs {
 		bkrMap[v.AccountId] = v
-		accIds = append(accIds, v.AccountId.Value())
+		accIds = append(accIds, v.AccountId.U64())
 	}
 	accounts, err := m.Table(model.AccountTableKey)
 	if err != nil {

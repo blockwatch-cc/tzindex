@@ -93,9 +93,9 @@ func (s *Snapshot) MarshalJSONVerbose() ([]byte, error) {
 		Index:        s.Snapshot.Index,
 		Rolls:        s.Snapshot.Rolls,
 		ActiveStake:  s.params.ConvertValue(s.ActiveStake),
-		AccountId:    s.AccountId.Value(),
+		AccountId:    s.AccountId.U64(),
 		Account:      s.ctx.Indexer.LookupAddress(s.ctx, s.AccountId).String(),
-		BakerId:      s.BakerId.Value(),
+		BakerId:      s.BakerId.U64(),
 		Baker:        s.ctx.Indexer.LookupAddress(s.ctx, s.BakerId).String(),
 		IsBaker:      s.IsBaker,
 		IsActive:     s.IsActive,
@@ -135,7 +135,7 @@ func (s *Snapshot) MarshalJSONBrief() ([]byte, error) {
 		case "active_stake":
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.ActiveStake), 'f', dec, 64)
 		case "account_id":
-			buf = strconv.AppendUint(buf, s.AccountId.Value(), 10)
+			buf = strconv.AppendUint(buf, s.AccountId.U64(), 10)
 		case "address":
 			if s.AccountId > 0 {
 				buf = strconv.AppendQuote(buf, s.ctx.Indexer.LookupAddress(s.ctx, s.AccountId).String())
@@ -143,7 +143,7 @@ func (s *Snapshot) MarshalJSONBrief() ([]byte, error) {
 				buf = append(buf, null...)
 			}
 		case "baker_id":
-			buf = strconv.AppendUint(buf, s.BakerId.Value(), 10)
+			buf = strconv.AppendUint(buf, s.BakerId.U64(), 10)
 		case "baker":
 			if s.BakerId > 0 {
 				buf = strconv.AppendQuote(buf, s.ctx.Indexer.LookupAddress(s.ctx, s.BakerId).String())
@@ -205,11 +205,11 @@ func (s *Snapshot) MarshalCSV() ([]string, error) {
 		case "active_stake":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.ActiveStake), 'f', dec, 64)
 		case "account_id":
-			res[i] = strconv.FormatUint(s.AccountId.Value(), 10)
+			res[i] = strconv.FormatUint(s.AccountId.U64(), 10)
 		case "address":
 			res[i] = strconv.Quote(s.ctx.Indexer.LookupAddress(s.ctx, s.AccountId).String())
 		case "baker_id":
-			res[i] = strconv.FormatUint(s.BakerId.Value(), 10)
+			res[i] = strconv.FormatUint(s.BakerId.U64(), 10)
 		case "baker":
 			res[i] = strconv.Quote(s.ctx.Indexer.LookupAddress(s.ctx, s.BakerId).String())
 		case "is_baker":
@@ -345,7 +345,7 @@ func StreamSnapshotTable(ctx *server.Context, args *TableRequest) (interface{}, 
 						continue
 					}
 					// collect list of account ids
-					ids = append(ids, acc.RowId.Value())
+					ids = append(ids, acc.RowId.U64())
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)

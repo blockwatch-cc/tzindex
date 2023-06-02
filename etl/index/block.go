@@ -120,6 +120,7 @@ func (idx *BlockIndex) ConnectBlock(ctx context.Context, block *model.Block, b m
 			WithTable(idx.table).
 			WithoutCache().
 			WithLimit(1).
+			WithDesc().
 			AndEqual("height", snapHeight).
 			Execute(ctx, snapBlock)
 		if err != nil {

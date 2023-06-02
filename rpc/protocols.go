@@ -33,21 +33,23 @@ var (
 	ProtoV015      = ParseProto("PtLimaPtLMwfNinJi9rCfDPWea8dFgTZ1MeJ9f1m2SRic6ayiwW")
 	ProtoV016      = ParseProto("PtMumbaiiFFEGbew1rRjzSPyzRbA51Tm3RVZL5suHPxSZYDhCEc")
 	ProtoV016_2    = ParseProto("PtMumbai2TmsJHNGRkD8v8YDbtao7BLUC3wjASn1inAKLFCjaH1")
+	ProtoV017      = ParseProto("PtNairobiyssHuh87hEhfVBGCVrK3WnS8Z2FT4ymB5tAa4r1nQf")
 
 	// aliases
-	PtAthens = ProtoV004
-	PsBabyM1 = ProtoV005_2
-	PsCARTHA = ProtoV006_2
-	PsDELPH1 = ProtoV007
-	PtEdo2Zk = ProtoV008_2
-	PsFLoren = ProtoV009
-	PtGRANAD = ProtoV010
-	PtHangz2 = ProtoV011_2
-	Psithaca = ProtoV012_2
-	PtJakart = ProtoV013_2
-	PtKathma = ProtoV014
-	PtLimaPt = ProtoV015
-	PtMumbai = ProtoV016_2
+	PtAthens  = ProtoV004
+	PsBabyM1  = ProtoV005_2
+	PsCARTHA  = ProtoV006_2
+	PsDELPH1  = ProtoV007
+	PtEdo2Zk  = ProtoV008_2
+	PsFLoren  = ProtoV009
+	PtGRANAD  = ProtoV010
+	PtHangz2  = ProtoV011_2
+	Psithaca  = ProtoV012_2
+	PtJakart  = ProtoV013_2
+	PtKathma  = ProtoV014
+	PtLimaPt  = ProtoV015
+	PtMumbai  = ProtoV016_2
+	PtNairobi = ProtoV017
 
 	Mainnet      = ParseChain("NetXdQprcVkpaWU")
 	Ghostnet     = ParseChain("NetXnHfVqm9iesp")
@@ -55,6 +57,7 @@ var (
 	Kathmandunet = ParseChain("NetXi2ZagzEsXbZ")
 	Limanet      = ParseChain("NetXizpkH94bocH")
 	Mumbainet    = ParseChain("NetXgbcrNtXD2yA")
+	Nairobinet   = ParseChain("NetXyuzvDo2Ugzb")
 
 	Versions = map[tezos.ProtocolHash]int{
 		ProtoGenesis:   0,
@@ -76,6 +79,7 @@ var (
 		ProtoV015:      15,
 		ProtoV016:      16,
 		ProtoV016_2:    16,
-		ProtoAlpha:     17,
+		ProtoV017:      17,
+		ProtoAlpha:     18,
 	}
 )

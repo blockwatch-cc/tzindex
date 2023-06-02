@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"sync"
 
@@ -25,11 +26,13 @@ var (
 	}
 
 	ErrNoContract = errors.New("contract not indexed")
+
+	contractSize = int(reflect.TypeOf(Contract{}).Size())
 )
 
 type ContractID uint64
 
-func (id ContractID) Value() uint64 {
+func (id ContractID) U64() uint64 {
 	return uint64(id)
 }
 
@@ -58,6 +61,14 @@ type Contract struct {
 	script  *micheline.Script `pack:"-" json:"-"` // cached decoded script
 	params  micheline.Type    `pack:"-" json:"-"` // cached param type
 	storage micheline.Type    `pack:"-" json:"-"` // cached storage type
+}
+
+func (c *Contract) HeapSize() int {
+	sz := contractSize + len(c.Script) + len(c.Storage) + len(c.CallStats)
+	if c.script != nil {
+		sz += len(c.Script) * 2 // approx
+	}
+	return sz
 }
 
 // Ensure Contract implements the pack.Item interface.

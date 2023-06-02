@@ -164,7 +164,7 @@ func (idx *SnapshotIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 		snap.NDelegations = b.ActiveDelegations
 		snap.Since = b.BakerSince
 		ins = append(ins, snap)
-		rollOwners = append(rollOwners, b.AccountId.Value())
+		rollOwners = append(rollOwners, b.AccountId.U64())
 	}
 
 	// log.Infof("snapshot: creating snapshot c%d/%d with %d bakers at block %d",

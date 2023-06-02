@@ -84,16 +84,16 @@ func (b *Ballot) MarshalJSONVerbose() ([]byte, error) {
 		Ballot           string  `json:"ballot"`
 	}{
 		RowId:            b.RowId,
-		ElectionId:       b.ElectionId.Value(),
-		ProposalId:       b.ProposalId.Value(),
+		ElectionId:       b.ElectionId.U64(),
+		ProposalId:       b.ProposalId.U64(),
 		Proposal:         b.ctx.Indexer.LookupProposalHash(b.ctx, b.ProposalId).String(),
 		VotingPeriod:     b.VotingPeriod,
 		VotingPeriodKind: b.VotingPeriodKind.String(),
 		Height:           b.Height,
 		Time:             util.UnixMilliNonZero(b.Time),
-		SourceId:         b.SourceId.Value(),
+		SourceId:         b.SourceId.U64(),
 		Source:           b.ctx.Indexer.LookupAddress(b.ctx, b.SourceId).String(),
-		OpId:             b.OpId.Value(),
+		OpId:             b.OpId.U64(),
 		Op:               b.ops[b.OpId].String(),
 		Rolls:            b.Rolls,
 		Stake:            b.ctx.Params.ConvertValue(b.Stake),
@@ -111,9 +111,9 @@ func (b *Ballot) MarshalJSONBrief() ([]byte, error) {
 		case "row_id":
 			buf = strconv.AppendUint(buf, b.RowId, 10)
 		case "election_id":
-			buf = strconv.AppendUint(buf, b.ElectionId.Value(), 10)
+			buf = strconv.AppendUint(buf, b.ElectionId.U64(), 10)
 		case "proposal_id":
-			buf = strconv.AppendUint(buf, b.ProposalId.Value(), 10)
+			buf = strconv.AppendUint(buf, b.ProposalId.U64(), 10)
 		case "proposal":
 			buf = strconv.AppendQuote(buf, b.ctx.Indexer.LookupProposalHash(b.ctx, b.ProposalId).String())
 		case "voting_period":
@@ -125,11 +125,11 @@ func (b *Ballot) MarshalJSONBrief() ([]byte, error) {
 		case "time":
 			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(b.Time), 10)
 		case "source_id":
-			buf = strconv.AppendUint(buf, b.SourceId.Value(), 10)
+			buf = strconv.AppendUint(buf, b.SourceId.U64(), 10)
 		case "source":
 			buf = strconv.AppendQuote(buf, b.ctx.Indexer.LookupAddress(b.ctx, b.SourceId).String())
 		case "op_id":
-			buf = strconv.AppendUint(buf, b.OpId.Value(), 10)
+			buf = strconv.AppendUint(buf, b.OpId.U64(), 10)
 		case "op":
 			buf = strconv.AppendQuote(buf, b.ops[b.OpId].String())
 		case "rolls":
@@ -157,9 +157,9 @@ func (b *Ballot) MarshalCSV() ([]string, error) {
 		case "row_id":
 			res[i] = strconv.FormatUint(b.RowId, 10)
 		case "election_id":
-			res[i] = strconv.FormatUint(b.ElectionId.Value(), 10)
+			res[i] = strconv.FormatUint(b.ElectionId.U64(), 10)
 		case "proposal_id":
-			res[i] = strconv.FormatUint(b.ProposalId.Value(), 10)
+			res[i] = strconv.FormatUint(b.ProposalId.U64(), 10)
 		case "proposal":
 			res[i] = strconv.Quote(b.ctx.Indexer.LookupProposalHash(b.ctx, b.ProposalId).String())
 		case "voting_period":
@@ -171,11 +171,11 @@ func (b *Ballot) MarshalCSV() ([]string, error) {
 		case "time":
 			res[i] = strconv.Quote(b.Time.Format(time.RFC3339))
 		case "source_id":
-			res[i] = strconv.FormatUint(b.SourceId.Value(), 10)
+			res[i] = strconv.FormatUint(b.SourceId.U64(), 10)
 		case "source":
 			res[i] = strconv.Quote(b.ctx.Indexer.LookupAddress(b.ctx, b.SourceId).String())
 		case "op_id":
-			res[i] = strconv.FormatUint(b.OpId.Value(), 10)
+			res[i] = strconv.FormatUint(b.OpId.U64(), 10)
 		case "op":
 			res[i] = strconv.Quote(b.ops[b.OpId].String())
 		case "rolls":
@@ -333,7 +333,7 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 					// keep for output
 					accMap[acc.RowId] = acc.Address.Clone()
 					// collect list of account ids
-					ids = append(ids, acc.RowId.Value())
+					ids = append(ids, acc.RowId.U64())
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
@@ -399,7 +399,7 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 					// collect list of op ids (use first slice balue only since
 					// we're looking for ballots which are always single-op)
 					opMap[op[0].RowId] = op[0].Hash.Clone()
-					ids = append(ids, op[0].RowId.Value())
+					ids = append(ids, op[0].RowId.U64())
 				}
 				// Note: when list is empty (no ops were found, the match will
 				//       always be false and return no result as expected)

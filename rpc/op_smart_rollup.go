@@ -30,6 +30,7 @@ type SmartRollupResult struct {
 	StakedHash       *tezos.SmartRollupCommitHash `json:"staked_hash,omitempty"`        // v016, smart_rollup_publish
 	PublishedAtLevel int64                        `json:"published_at_level,omitempty"` // v016, smart_rollup_publish
 	GameStatus       *GameStatus                  `json:"game_status,omitempty"`        // v016, smart_rollup_refute, smart_rollup_timeout
+	Commitment       *tezos.SmartRollupCommitHash `json:"commitment_hash,omitempty"`    // v017, smart_rollup_cement
 }
 
 func (r SmartRollupResult) Encode() []byte {
@@ -87,8 +88,8 @@ func (o SmartRollupAddMessages) Encode() []byte {
 
 type SmartRollupCement struct {
 	Manager
-	Rollup     tezos.Address               `json:"rollup"`
-	Commitment tezos.SmartRollupCommitHash `json:"commitment"`
+	Rollup     tezos.Address                `json:"rollup"`
+	Commitment *tezos.SmartRollupCommitHash `json:"commitment,omitempty"` // deprecated in v17
 }
 
 // Addresses adds all addresses used in this operation to the set.
@@ -100,7 +101,7 @@ func (o SmartRollupCement) Addresses(set *tezos.AddressSet) {
 
 func (o SmartRollupCement) Encode() []byte {
 	type alias struct {
-		Commitment tezos.SmartRollupCommitHash `json:"commitment"`
+		Commitment *tezos.SmartRollupCommitHash `json:"commitment,omitempty"`
 	}
 	a := alias{
 		Commitment: o.Commitment,

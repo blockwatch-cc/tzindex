@@ -20,10 +20,11 @@ type Builder struct {
 	idx             *Indexer                            // storage reference
 	accHashMap      map[uint64]*model.Account           // hash(acc_hash) -> *Account (both known and new accounts)
 	accMap          map[model.AccountID]*model.Account  // id -> *Account (both known and new accounts)
+	conMap          map[model.AccountID]*model.Contract // id -> *Contract contracts seen this block
 	accCache        *cache.AccountCache                 // cache for binary encodings of regular accounts
+	conCache        *cache.ContractCache                // cache for smart contracts
 	bakerHashMap    map[uint64]*model.Baker             // bakers by hash
 	bakerMap        map[model.AccountID]*model.Baker    // bakers by id
-	conMap          map[model.AccountID]*model.Contract // smart contracts by account id
 	constDict       micheline.ConstantDict              // global constants used in smart contracts this block
 	bakeRights      map[model.AccountID]*vec.BitSet
 	endorseRights   map[model.AccountID]*vec.BitSet
@@ -38,15 +39,16 @@ type Builder struct {
 
 const buildMapSizeHint = 1024
 
-func NewBuilder(idx *Indexer, cachesz int, c *rpc.Client, validate bool) *Builder {
+func NewBuilder(idx *Indexer, c *rpc.Client, validate bool) *Builder {
 	return &Builder{
 		idx:             idx,
 		accHashMap:      make(map[uint64]*model.Account, buildMapSizeHint),
 		accMap:          make(map[model.AccountID]*model.Account, buildMapSizeHint),
-		accCache:        cache.NewAccountCache(cachesz),
+		conMap:          make(map[model.AccountID]*model.Contract, buildMapSizeHint),
+		accCache:        cache.NewAccountCache(0),
+		conCache:        cache.NewContractCache(0),
 		bakerMap:        make(map[model.AccountID]*model.Baker, buildMapSizeHint),
 		bakerHashMap:    make(map[uint64]*model.Baker, buildMapSizeHint),
-		conMap:          make(map[model.AccountID]*model.Contract, buildMapSizeHint),
 		bakeRights:      make(map[model.AccountID]*vec.BitSet),
 		endorseRights:   make(map[model.AccountID]*vec.BitSet),
 		absentEndorsers: make(map[model.AccountID]struct{}),
@@ -65,11 +67,13 @@ func (b *Builder) IsLightMode() bool {
 
 func (b *Builder) ClearCache() {
 	b.accCache.Purge()
+	b.conCache.Purge()
 }
 
 func (b *Builder) CacheStats() map[string]interface{} {
 	stats := make(map[string]interface{})
 	stats["accounts"] = b.accCache.Stats()
+	stats["contracts"] = b.conCache.Stats()
 	return stats
 }
 
@@ -187,11 +191,15 @@ func (b *Builder) LoadContractByAccountId(ctx context.Context, id model.AccountI
 	if con, ok := b.conMap[id]; ok {
 		return con, nil
 	}
+	if con, ok := b.conCache.Get(id); ok {
+		return con, nil
+	}
 	con, err := b.idx.LookupContractId(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	b.conMap[id] = con
+	b.conCache.Add(con)
 	return con, nil
 }
 
@@ -243,7 +251,6 @@ func (b *Builder) Init(ctx context.Context, tip *model.ChainTip, c *rpc.Client) 
 	// to the next protocol
 	version := b.parent.Version
 	p := b.idx.ParamsByHeight(tip.BestHeight)
-	// if p.IsCycleEnd(tip.BestHeight) && version > 0 {
 	if tip.BestHeight == p.EndHeight && version > 0 {
 		version--
 	}
@@ -265,7 +272,6 @@ func (b *Builder) Init(ctx context.Context, tip *model.ChainTip, c *rpc.Client) 
 	if bkrs, err := b.idx.ListBakers(ctx, false); err != nil {
 		return err
 	} else {
-		// log.Debugf("Loaded %d total bakers", len(bkrs))
 		for _, bkr := range bkrs {
 			b.bakerMap[bkr.AccountId] = bkr
 			b.bakerHashMap[b.accCache.AccountHashKey(bkr.Account)] = bkr
@@ -364,15 +370,12 @@ func (b *Builder) Clean() {
 	for n := range b.accMap {
 		delete(b.accMap, n)
 	}
-	for _, v := range b.conMap {
-		v.IsDirty = false
+	for n := range b.conMap {
+		delete(b.conMap, n)
 	}
 	for n := range b.absentEndorsers {
 		delete(b.absentEndorsers, n)
 	}
-	// for n, _ := range b.conMap {
-	// 	delete(b.conMap, n)
-	// }
 	b.constDict = nil
 
 	// drop block contents
@@ -391,6 +394,7 @@ func (b *Builder) Clean() {
 func (b *Builder) Purge() {
 	// flush cash
 	b.accCache.Purge()
+	b.conCache.Purge()
 
 	// clear build state
 	b.accHashMap = make(map[uint64]*model.Account, buildMapSizeHint)

@@ -15,24 +15,27 @@ import (
 	"blockwatch.cc/tzindex/etl/model"
 )
 
-var AccountCacheSizeLog2 = 17 // 128k
+var AccountCacheSizeMaxSize = 16384 // entries
 
 type AccountCache struct {
-	idmap map[model.AccountID]uint64 // account id -> cache key
-	cache *lru.TwoQueueCache         // key := xxhash64(typ:hash)
+	idmap map[uint32]uint64  // short account id -> cache key (switch to uint64 when > 4Bn accounts)
+	cache *lru.TwoQueueCache // key := xxhash64(typ:hash)
 	size  int64
 	stats Stats
 }
 
 func NewAccountCache(sz int) *AccountCache {
-	c := &AccountCache{
-		idmap: make(map[model.AccountID]uint64),
+	if sz <= 0 {
+		sz = AccountCacheSizeMaxSize
 	}
-	c.cache, _ = lru.New2QWithEvict(1<<uint(sz), func(_, v interface{}) {
+	c := &AccountCache{
+		idmap: make(map[uint32]uint64),
+	}
+	c.cache, _ = lru.New2QWithEvict(sz, func(_, v interface{}) {
 		buf := v.([]byte)
 		// first 8 bytes is row id
-		delete(c.idmap, model.AccountID(binary.LittleEndian.Uint64(buf)))
-		c.size -= int64(len(buf))
+		delete(c.idmap, uint32(binary.LittleEndian.Uint64(buf)))
+		c.size -= int64(len(buf)) + 4
 		atomic.AddInt64(&c.stats.Evictions, 1)
 	})
 	return c
@@ -56,7 +59,7 @@ func (c *AccountCache) Add(a *model.Account) {
 		return
 	}
 	key := c.AccountHashKey(a)
-	c.idmap[a.RowId] = key
+	c.idmap[a.RowId.U32()] = key
 	buf, _ := a.MarshalBinary()
 	updated, _ := c.cache.Add(key, buf)
 	if updated {
@@ -65,7 +68,7 @@ func (c *AccountCache) Add(a *model.Account) {
 		atomic.AddInt64(&c.stats.Updates, 1)
 	} else {
 		// log.Infof("Cache insert %s %s revealed=%t", a, a.Key(), a.IsRevealed)
-		c.size += int64(len(buf))
+		c.size += int64(len(buf)) + 4
 		atomic.AddInt64(&c.stats.Inserts, 1)
 	}
 }
@@ -77,8 +80,10 @@ func (c *AccountCache) Drop(a *model.Account) {
 
 func (c *AccountCache) Purge() {
 	c.cache.Purge()
-	c.size = 0
-	c.idmap = make(map[model.AccountID]uint64)
+	c.size = int64(len(c.idmap) * 4)
+	for n := range c.idmap {
+		delete(c.idmap, n)
+	}
 }
 
 func (c *AccountCache) GetAddress(addr tezos.Address) (uint64, *model.Account, bool) {
@@ -91,7 +96,7 @@ func (c *AccountCache) GetAddress(addr tezos.Address) (uint64, *model.Account, b
 	acc := model.AllocAccount()
 	_ = acc.UnmarshalBinary(val.([]byte))
 	// cross-check for hash collisions
-	if acc.RowId == 0 || !acc.Address.Equal(addr) {
+	if acc.RowId == 0 || acc.Address != addr {
 		acc.Free()
 		atomic.AddInt64(&c.stats.Misses, 1)
 		return key, nil, false
@@ -102,7 +107,7 @@ func (c *AccountCache) GetAddress(addr tezos.Address) (uint64, *model.Account, b
 }
 
 func (c *AccountCache) GetId(id model.AccountID) (uint64, *model.Account, bool) {
-	key, ok := c.idmap[id]
+	key, ok := c.idmap[id.U32()]
 	if !ok {
 		atomic.AddInt64(&c.stats.Misses, 1)
 		return key, nil, false
@@ -137,6 +142,7 @@ func (c AccountCache) Stats() Stats {
 			}
 			c.size += int64(len(val.([]byte)))
 		}
+		c.size += int64(len(c.idmap) * 4)
 	}
 	s.Bytes = c.size
 	return s

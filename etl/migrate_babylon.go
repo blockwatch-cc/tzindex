@@ -91,7 +91,7 @@ func (b *Builder) RunBabylonAirdrop(ctx context.Context, params *rpc.Params) (in
 			if acc.IsContract && !rpc.BabylonFlags(acc.UnclaimedBalance).CanUpgrade() {
 				return nil
 			}
-			if id := acc.CreatorId.Value(); id > 0 {
+			if id := acc.CreatorId.U64(); id > 0 {
 				managers = append(managers, id)
 			}
 			return nil

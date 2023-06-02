@@ -140,6 +140,7 @@ func (c *ChainSeries) MarshalJSONVerbose() ([]byte, error) {
 		TotalConstants       int64     `json:"total_constants"`
 		TotalSetLimits       int64     `json:"total_set_limits"`
 		TotalStorageBytes    int64     `json:"total_storage_bytes"`
+		TotalTicketTransfers int64     `json:"total_ticket_transfers"`
 		FundedAccounts       int64     `json:"funded_accounts"`
 		DustAccounts         int64     `json:"dust_accounts"`
 		GhostAccounts        int64     `json:"ghost_accounts"`
@@ -185,6 +186,7 @@ func (c *ChainSeries) MarshalJSONVerbose() ([]byte, error) {
 		TotalConstants:       c.TotalConstants,
 		TotalSetLimits:       c.TotalSetLimits,
 		TotalStorageBytes:    c.TotalStorageBytes,
+		TotalTicketTransfers: c.TotalTicketTransfers,
 		FundedAccounts:       c.FundedAccounts,
 		DustAccounts:         c.DustAccounts,
 		GhostAccounts:        c.GhostAccounts,
@@ -273,6 +275,8 @@ func (c *ChainSeries) MarshalJSONBrief() ([]byte, error) {
 				buf = strconv.AppendInt(buf, c.TotalSetLimits, 10)
 			case "total_storage_bytes":
 				buf = strconv.AppendInt(buf, c.TotalStorageBytes, 10)
+			case "total_ticket_transfers":
+				buf = strconv.AppendInt(buf, c.TotalTicketTransfers, 10)
 			case "funded_accounts":
 				buf = strconv.AppendInt(buf, c.FundedAccounts, 10)
 			case "dust_accounts":
@@ -385,6 +389,8 @@ func (c *ChainSeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(c.TotalSetLimits, 10)
 		case "total_storage_bytes":
 			res[i] = strconv.FormatInt(c.TotalStorageBytes, 10)
+		case "total_ticket_transfers":
+			res[i] = strconv.FormatInt(c.TotalTicketTransfers, 10)
 		case "funded_accounts":
 			res[i] = strconv.FormatInt(c.FundedAccounts, 10)
 		case "dust_accounts":

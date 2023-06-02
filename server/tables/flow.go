@@ -95,9 +95,9 @@ func (f *Flow) MarshalJSONVerbose() ([]byte, error) {
 		OpN:            f.OpN,
 		OpC:            f.OpC,
 		OpI:            f.OpI,
-		AccountId:      f.AccountId.Value(),
+		AccountId:      f.AccountId.U64(),
 		Account:        f.ctx.Indexer.LookupAddress(f.ctx, f.AccountId).String(),
-		CounterPartyId: f.CounterPartyId.Value(),
+		CounterPartyId: f.CounterPartyId.U64(),
 		CounterParty:   f.ctx.Indexer.LookupAddress(f.ctx, f.CounterPartyId).String(),
 		Category:       f.Category.String(),
 		Operation:      f.Operation.String(),
@@ -135,11 +135,11 @@ func (f *Flow) MarshalJSONBrief() ([]byte, error) {
 		case "op_i":
 			buf = strconv.AppendInt(buf, int64(f.OpI), 10)
 		case "account_id":
-			buf = strconv.AppendUint(buf, f.AccountId.Value(), 10)
+			buf = strconv.AppendUint(buf, f.AccountId.U64(), 10)
 		case "address":
 			buf = strconv.AppendQuote(buf, f.ctx.Indexer.LookupAddress(f.ctx, f.AccountId).String())
 		case "counterparty_id":
-			buf = strconv.AppendUint(buf, f.CounterPartyId.Value(), 10)
+			buf = strconv.AppendUint(buf, f.CounterPartyId.U64(), 10)
 		case "counterparty":
 			buf = strconv.AppendQuote(buf, f.ctx.Indexer.LookupAddress(f.ctx, f.CounterPartyId).String())
 		case "category":
@@ -219,11 +219,11 @@ func (f *Flow) MarshalCSV() ([]string, error) {
 		case "op_ni":
 			res[i] = strconv.FormatInt(int64(f.OpI), 10)
 		case "account_id":
-			res[i] = strconv.FormatUint(f.AccountId.Value(), 10)
+			res[i] = strconv.FormatUint(f.AccountId.U64(), 10)
 		case "address":
 			res[i] = strconv.Quote(f.ctx.Indexer.LookupAddress(f.ctx, f.AccountId).String())
 		case "counterparty_id":
-			res[i] = strconv.FormatUint(f.CounterPartyId.Value(), 10)
+			res[i] = strconv.FormatUint(f.CounterPartyId.U64(), 10)
 		case "counterparty":
 			res[i] = strconv.Quote(f.ctx.Indexer.LookupAddress(f.ctx, f.CounterPartyId).String())
 		case "category":
@@ -360,7 +360,7 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 						continue
 					}
 					// collect list of account ids
-					ids = append(ids, acc.RowId.Value())
+					ids = append(ids, acc.RowId.U64())
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)

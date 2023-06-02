@@ -82,7 +82,7 @@ func (b *BigmapUpdateItem) MarshalJSONVerbose() ([]byte, error) {
 		BigmapId:  b.BigmapId,
 		KeyId:     b.KeyId,
 		Action:    b.Action.String(),
-		OpId:      b.OpId.Value(),
+		OpId:      b.OpId.U64(),
 		Op:        b.ops[b.OpId].String(),
 		Height:    b.Height,
 		Timestamp: b.ctx.Indexer.LookupBlockTime(b.ctx, b.Height),
@@ -107,7 +107,7 @@ func (b *BigmapUpdateItem) MarshalJSONBrief() ([]byte, error) {
 		case "action":
 			buf = strconv.AppendQuote(buf, b.Action.String())
 		case "op_id":
-			buf = strconv.AppendUint(buf, b.OpId.Value(), 10)
+			buf = strconv.AppendUint(buf, b.OpId.U64(), 10)
 		case "op":
 			buf = strconv.AppendQuote(buf, b.ops[b.OpId].String())
 		case "height":
@@ -144,7 +144,7 @@ func (b *BigmapUpdateItem) MarshalCSV() ([]string, error) {
 		case "action":
 			res[i] = strconv.Quote(b.Action.String())
 		case "op_id":
-			res[i] = strconv.FormatUint(b.OpId.Value(), 10)
+			res[i] = strconv.FormatUint(b.OpId.U64(), 10)
 		case "op":
 			res[i] = strconv.Quote(b.ops[b.OpId].String())
 		case "height":
@@ -350,7 +350,7 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 					if mode == pack.FilterModeIn {
 						needOpT = false
 						opMap[op[0].RowId] = op[0].Hash.Clone()
-						ids = append(ids, op[0].RowId.Value())
+						ids = append(ids, op[0].RowId.U64())
 					}
 				}
 				// Note: when list is empty (no ops were found, the match will

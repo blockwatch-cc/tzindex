@@ -167,13 +167,13 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		Reward:       o.params.ConvertValue(o.Reward),
 		Deposit:      o.params.ConvertValue(o.Deposit),
 		Burned:       o.params.ConvertValue(o.Burned),
-		SenderId:     o.SenderId.Value(),
+		SenderId:     o.SenderId.U64(),
 		Sender:       o.ctx.Indexer.LookupAddress(o.ctx, o.SenderId).String(),
-		ReceiverId:   o.ReceiverId.Value(),
+		ReceiverId:   o.ReceiverId.U64(),
 		Receiver:     o.ctx.Indexer.LookupAddress(o.ctx, o.ReceiverId).String(),
-		CreatorId:    o.CreatorId.Value(),
+		CreatorId:    o.CreatorId.U64(),
 		Creator:      o.ctx.Indexer.LookupAddress(o.ctx, o.CreatorId).String(),
-		BakerId:      o.BakerId.Value(),
+		BakerId:      o.BakerId.U64(),
 		Baker:        o.ctx.Indexer.LookupAddress(o.ctx, o.BakerId).String(),
 		Data:         o.Data,
 		Parameters:   hex.EncodeToString(o.Parameters),
@@ -286,11 +286,11 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 		case "burned":
 			buf = strconv.AppendFloat(buf, o.params.ConvertValue(o.Burned), 'f', dec, 64)
 		case "sender_id":
-			buf = strconv.AppendUint(buf, o.SenderId.Value(), 10)
+			buf = strconv.AppendUint(buf, o.SenderId.U64(), 10)
 		case "sender":
 			buf = strconv.AppendQuote(buf, o.ctx.Indexer.LookupAddress(o.ctx, o.SenderId).String())
 		case "receiver_id":
-			buf = strconv.AppendUint(buf, o.ReceiverId.Value(), 10)
+			buf = strconv.AppendUint(buf, o.ReceiverId.U64(), 10)
 		case "receiver":
 			if o.ReceiverId > 0 {
 				buf = strconv.AppendQuote(buf, o.ctx.Indexer.LookupAddress(o.ctx, o.ReceiverId).String())
@@ -298,7 +298,7 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 				buf = append(buf, null...)
 			}
 		case "creator_id":
-			buf = strconv.AppendUint(buf, o.CreatorId.Value(), 10)
+			buf = strconv.AppendUint(buf, o.CreatorId.U64(), 10)
 		case "creator":
 			if o.CreatorId > 0 {
 				buf = strconv.AppendQuote(buf, o.ctx.Indexer.LookupAddress(o.ctx, o.CreatorId).String())
@@ -306,7 +306,7 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 				buf = append(buf, null...)
 			}
 		case "baker_id":
-			buf = strconv.AppendUint(buf, o.BakerId.Value(), 10)
+			buf = strconv.AppendUint(buf, o.BakerId.U64(), 10)
 		case "baker":
 			if o.BakerId > 0 {
 				buf = strconv.AppendQuote(buf, o.ctx.Indexer.LookupAddress(o.ctx, o.BakerId).String())
@@ -434,19 +434,19 @@ func (o *Op) MarshalCSV() ([]string, error) {
 		case "burned":
 			res[i] = strconv.FormatFloat(o.params.ConvertValue(o.Burned), 'f', dec, 64)
 		case "sender_id":
-			res[i] = strconv.FormatUint(o.SenderId.Value(), 10)
+			res[i] = strconv.FormatUint(o.SenderId.U64(), 10)
 		case "sender":
 			res[i] = strconv.Quote(o.ctx.Indexer.LookupAddress(o.ctx, o.SenderId).String())
 		case "receiver_id":
-			res[i] = strconv.FormatUint(o.ReceiverId.Value(), 10)
+			res[i] = strconv.FormatUint(o.ReceiverId.U64(), 10)
 		case "receiver":
 			res[i] = strconv.Quote(o.ctx.Indexer.LookupAddress(o.ctx, o.ReceiverId).String())
 		case "creator_id":
-			res[i] = strconv.FormatUint(o.CreatorId.Value(), 10)
+			res[i] = strconv.FormatUint(o.CreatorId.U64(), 10)
 		case "creator":
 			res[i] = strconv.Quote(o.ctx.Indexer.LookupAddress(o.ctx, o.CreatorId).String())
 		case "baker_id":
-			res[i] = strconv.FormatUint(o.BakerId.Value(), 10)
+			res[i] = strconv.FormatUint(o.BakerId.U64(), 10)
 		case "baker":
 			res[i] = strconv.Quote(o.ctx.Indexer.LookupAddress(o.ctx, o.BakerId).String())
 		case "data":
@@ -787,7 +787,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 						continue
 					}
 					// collect list of account ids
-					ids = append(ids, acc.RowId.Value())
+					ids = append(ids, acc.RowId.U64())
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
@@ -847,7 +847,7 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 	if needBigmapEvents {
 		ids := make([]uint64, len(ops))
 		for i, v := range ops {
-			ids[i] = v.RowId.Value()
+			ids[i] = v.RowId.U64()
 		}
 		ids = vec.UniqueUint64Slice(ids)
 		bigmaps, err := ctx.Indexer.Table(model.BigmapUpdateTableKey)

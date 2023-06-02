@@ -96,8 +96,8 @@ func (v *Vote) MarshalJSONVerbose() ([]byte, error) {
 		NoMajority       bool    `json:"no_majority"`
 	}{
 		RowId:            v.RowId,
-		ElectionId:       v.ElectionId.Value(),
-		ProposalId:       v.ProposalId.Value(),
+		ElectionId:       v.ElectionId.U64(),
+		ProposalId:       v.ProposalId.U64(),
 		Proposal:         v.ctx.Indexer.LookupProposalHash(v.ctx, v.ProposalId).String(),
 		VotingPeriod:     v.VotingPeriod,
 		VotingPeriodKind: v.VotingPeriodKind.String(),
@@ -145,9 +145,9 @@ func (v *Vote) MarshalJSONBrief() ([]byte, error) {
 		case "row_id":
 			buf = strconv.AppendUint(buf, v.RowId, 10)
 		case "election_id":
-			buf = strconv.AppendUint(buf, v.ElectionId.Value(), 10)
+			buf = strconv.AppendUint(buf, v.ElectionId.U64(), 10)
 		case "proposal_id":
-			buf = strconv.AppendUint(buf, v.ProposalId.Value(), 10)
+			buf = strconv.AppendUint(buf, v.ProposalId.U64(), 10)
 		case "proposal":
 			buf = strconv.AppendQuote(buf, v.ctx.Indexer.LookupProposalHash(v.ctx, v.ProposalId).String())
 		case "voting_period":
@@ -269,9 +269,9 @@ func (v *Vote) MarshalCSV() ([]string, error) {
 		case "row_id":
 			res[i] = strconv.FormatUint(v.RowId, 10)
 		case "election_id":
-			res[i] = strconv.FormatUint(v.ElectionId.Value(), 10)
+			res[i] = strconv.FormatUint(v.ElectionId.U64(), 10)
 		case "proposal_id":
-			res[i] = strconv.FormatUint(v.ProposalId.Value(), 10)
+			res[i] = strconv.FormatUint(v.ProposalId.U64(), 10)
 		case "proposal":
 			res[i] = strconv.Quote(v.ctx.Indexer.LookupProposalHash(v.ctx, v.ProposalId).String())
 		case "voting_period":
@@ -461,7 +461,7 @@ func StreamVoteTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 						continue
 					}
 					// collect list of proposal ids
-					ids = append(ids, prop.RowId.Value())
+					ids = append(ids, prop.RowId.U64())
 				}
 				// Note: when list is empty (no proposal was found, the match will
 				//       always be false and return no result as expected)

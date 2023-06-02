@@ -54,6 +54,7 @@ const (
 	STATE_SYNCHRONIZING State = "syncing"    // sync in progress
 	STATE_SYNCHRONIZED  State = "synced"     // in sync with blockchain
 	STATE_FAILED        State = "failed"     // sync stopped due to index error
+	STATE_STALLED       State = "stalled"    // temporary state when no new block in 1 min
 )
 
 type CrawlerConfig struct {
@@ -62,7 +63,6 @@ type CrawlerConfig struct {
 	Client        *rpc.Client
 	Queue         int
 	Delay         int
-	CacheSizeLog2 int
 	StopBlock     int64
 	Snapshot      *SnapshotConfig
 	EnableMonitor bool
@@ -123,7 +123,7 @@ func NewCrawler(cfg CrawlerConfig) *Crawler {
 		stopHeight:    cfg.StopBlock,
 		db:            cfg.DB,
 		rpc:           cfg.Client,
-		builder:       NewBuilder(cfg.Indexer, cfg.CacheSizeLog2, cfg.Client, cfg.Validate),
+		builder:       NewBuilder(cfg.Indexer, cfg.Client, cfg.Validate),
 		indexer:       cfg.Indexer,
 		finalized:     queue,
 		filter:        NewReorgDelayFilter(cfg.Delay, queue),
@@ -236,23 +236,25 @@ func (c *Crawler) CacheStats() map[string]interface{} {
 }
 
 type CrawlerStatus struct {
-	Mode      Mode    `json:"mode"`
-	Status    State   `json:"status"`
-	Blocks    int64   `json:"blocks"`
-	Finalized int64   `json:"finalized"`
-	Indexed   int64   `json:"indexed"`
-	Progress  float64 `json:"progress"`
+	Mode       Mode      `json:"mode"`
+	Status     State     `json:"status"`
+	Blocks     int64     `json:"blocks"`
+	Finalized  int64     `json:"finalized"`
+	Indexed    int64     `json:"indexed"`
+	Progress   float64   `json:"progress"`
+	LastUpdate time.Time `json:"last_update"`
 }
 
 func (c *Crawler) Status() CrawlerStatus {
 	tip := c.Tip()
 	state, _ := c.getState()
 	s := CrawlerStatus{
-		Mode:      c.mode,
-		Status:    state,
-		Blocks:    -1,
-		Finalized: -1,
-		Indexed:   tip.BestHeight,
+		Mode:       c.mode,
+		Status:     state,
+		Blocks:     -1,
+		Finalized:  -1,
+		Indexed:    tip.BestHeight,
+		LastUpdate: tip.BestTime,
 	}
 	if c.indexer.lightMode {
 		s.Mode = MODE_LIGHT
@@ -264,6 +266,9 @@ func (c *Crawler) Status() CrawlerStatus {
 		if s.Progress == 1.0 && s.Indexed < s.Finalized {
 			s.Progress = 0.999999
 		}
+	}
+	if time.Since(s.LastUpdate) > time.Minute {
+		s.Status = STATE_STALLED
 	}
 	return s
 }
@@ -1042,7 +1047,7 @@ func (c *Crawler) syncBlockchain() {
 		}
 
 		// log progress once every 10sec
-		c.plog.LogBlockHeight(block, len(c.finalized), state, time.Since(blockstart))
+		c.plog.LogBlockHeight(block, len(c.finalized), state, time.Since(blockstart), state == STATE_SYNCHRONIZED)
 
 		// update state every 256 blocks or every block when synchronized
 		if state == STATE_SYNCHRONIZED || block.Height&0xff == 0 {

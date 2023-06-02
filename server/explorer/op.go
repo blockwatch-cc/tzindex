@@ -354,8 +354,7 @@ func (o *Op) AddAccounts(ctx *server.Context, op *model.Op, args server.Options)
 			if v == 0 {
 				continue
 			}
-			if md, ok := lookupMetadataById(ctx, v, 0, false); ok {
-				// a := ctx.Indexer.LookupAddress(ctx, v)
+			if md, ok := lookupAddressIdMetadata(ctx, v); ok {
 				meta[md.Address.String()] = md.Short()
 			}
 		}
@@ -594,7 +593,7 @@ func (o *Op) AddContractData(ctx *server.Context, op *model.Op, cc *model.Contra
 			// storage type is patched post-Babylon, but pre-Babylon ops are unpatched,
 			// we always output post-babylon storage
 			if etl.NeedsBabylonUpgradeContract(cc, ctx.Params) && ctx.Params.IsPreBabylonHeight(op.Height) {
-				if acc, err := ctx.Indexer.LookupAccountId(ctx, cc.CreatorId); err == nil {
+				if acc, err := ctx.Indexer.LookupAccountById(ctx, cc.CreatorId); err == nil {
 					prim := micheline.Prim{}
 					if err := prim.UnmarshalBinary(op.Storage); err == nil {
 						prim = prim.MigrateToBabylonStorage(acc.Address.Encode())

@@ -77,16 +77,23 @@ func (b *Builder) AppendProposalOp(ctx context.Context, oh *rpc.Operation, id mo
 	if !ok {
 		return Errorf("unexpected type %T ", o)
 	}
+	var acc *model.Account
 	bkr, ok := b.BakerByAddress(pop.Source)
 	if !ok {
-		return Errorf("missing account %s ", pop.Source)
+		// dictator feature on testnets does not require a baker to inject a proposal
+		acc, ok = b.AccountByAddress(pop.Source)
+		if !ok {
+			return Errorf("missing account %s ", pop.Source)
+		}
+	} else {
+		acc = bkr.Account
 	}
 
 	// build op, proposals have no fees, volume, gas, etc
 	op := model.NewOp(b.block, id)
 	op.Status = tezos.OpStatusApplied
 	op.IsSuccess = true
-	op.SenderId = bkr.AccountId
+	op.SenderId = acc.RowId
 
 	// store proposals as comma separated base58 strings (same format as in JSON RPC)
 	buf := bytes.NewBuffer(make([]byte, 0))
@@ -101,18 +108,22 @@ func (b *Builder) AppendProposalOp(ctx context.Context, oh *rpc.Operation, id mo
 
 	// update account
 	if !rollback {
-		bkr.NBakerOps++
-		bkr.NProposal++
-		bkr.IsDirty = true
-		bkr.Account.LastSeen = b.block.Height
-		bkr.Account.IsDirty = true
+		if bkr != nil {
+			bkr.NBakerOps++
+			bkr.NProposal++
+			bkr.IsDirty = true
+		}
+		acc.LastSeen = b.block.Height
+		acc.IsDirty = true
 	} else {
-		bkr.NBakerOps--
-		bkr.NProposal--
-		bkr.IsDirty = true
+		if bkr != nil {
+			bkr.NBakerOps--
+			bkr.NProposal--
+			bkr.IsDirty = true
+		}
 		// approximation only
-		bkr.Account.LastSeen = util.Max64N(bkr.Account.LastSeen, bkr.Account.LastIn, bkr.Account.LastOut)
-		bkr.Account.IsDirty = true
+		acc.LastSeen = util.Max64N(acc.LastSeen, acc.LastIn, acc.LastOut)
+		acc.IsDirty = true
 	}
 	return nil
 }

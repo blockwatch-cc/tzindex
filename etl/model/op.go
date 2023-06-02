@@ -58,7 +58,7 @@ var opPool = &sync.Pool{
 
 type OpID uint64
 
-func (id OpID) Value() uint64 {
+func (id OpID) U64() uint64 {
 	return uint64(id)
 }
 

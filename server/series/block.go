@@ -30,6 +30,7 @@ var (
 		"n_rollup_calls",
 		"n_events",
 		"n_tx",
+		"n_tickets",
 		"volume",
 		"fee",
 		"reward",
@@ -58,6 +59,7 @@ type BlockSeries struct {
 	NRollupCalls    int64     `json:"n_rollup_calls"`
 	NEvents         int64     `json:"n_events"`
 	NTx             int64     `json:"n_tx"`
+	NTickets        int64     `json:"n_tickets"`
 	Volume          int64     `json:"volume"`
 	Fee             int64     `json:"fee"`
 	Reward          int64     `json:"reward"`
@@ -99,6 +101,7 @@ func (s *BlockSeries) Add(m SeriesModel) {
 	s.NRollupCalls += int64(model.Int16Correct(b.NRollupCalls))
 	s.NEvents += int64(model.Int16Correct(b.NEvents))
 	s.NTx += int64(model.Int16Correct(b.NTx))
+	s.NTickets += int64(model.Int16Correct(b.NTickets))
 	s.Volume += b.Volume
 	s.Fee += b.Fee
 	s.Reward += b.Reward
@@ -124,6 +127,7 @@ func (s *BlockSeries) Reset() {
 	s.NRollupCalls = 0
 	s.NEvents = 0
 	s.NTx = 0
+	s.NTickets = 0
 	s.Volume = 0
 	s.Fee = 0
 	s.Reward = 0
@@ -173,6 +177,7 @@ func (s *BlockSeries) Clone() SeriesBucket {
 		NRollupCalls:    s.NRollupCalls,
 		NEvents:         s.NEvents,
 		NTx:             s.NTx,
+		NTickets:        s.NTickets,
 		Volume:          s.Volume,
 		Fee:             s.Fee,
 		Reward:          s.Reward,
@@ -212,6 +217,7 @@ func (s *BlockSeries) Interpolate(m SeriesBucket, ts time.Time) SeriesBucket {
 			NContractCalls:  s.NContractCalls + int64(weight*float64(b.NContractCalls-s.NContractCalls)),
 			NRollupCalls:    s.NRollupCalls + int64(weight*float64(b.NRollupCalls-s.NRollupCalls)),
 			NTx:             s.NTx + int64(weight*float64(b.NTx-s.NTx)),
+			NTickets:        s.NTickets + int64(weight*float64(b.NTickets-s.NTickets)),
 			Volume:          s.Volume + int64(weight*float64(b.Volume-s.Volume)),
 			Fee:             s.Fee + int64(weight*float64(b.Fee-s.Fee)),
 			Reward:          s.Reward + int64(weight*float64(b.Reward-s.Reward)),
@@ -253,6 +259,7 @@ func (b *BlockSeries) MarshalJSONVerbose() ([]byte, error) {
 		NRollupCalls    int64     `json:"n_rollup_calls"`
 		NEvents         int64     `json:"n_events"`
 		NTx             int64     `json:"n_tx"`
+		NTickets        int64     `json:"n_tickets"`
 		Volume          float64   `json:"volume"`
 		Fee             float64   `json:"fee"`
 		Reward          float64   `json:"reward"`
@@ -276,6 +283,7 @@ func (b *BlockSeries) MarshalJSONVerbose() ([]byte, error) {
 		NRollupCalls:    b.NRollupCalls,
 		NEvents:         b.NEvents,
 		NTx:             b.NTx,
+		NTickets:        b.NTickets,
 		Volume:          b.params.ConvertValue(b.Volume),
 		Fee:             b.params.ConvertValue(b.Fee),
 		Reward:          b.params.ConvertValue(b.Reward),
@@ -325,6 +333,8 @@ func (b *BlockSeries) MarshalJSONBrief() ([]byte, error) {
 				buf = strconv.AppendInt(buf, b.NEvents, 10)
 			case "n_tx":
 				buf = strconv.AppendInt(buf, b.NTx, 10)
+			case "n_tickets":
+				buf = strconv.AppendInt(buf, b.NTickets, 10)
 			case "volume":
 				buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Volume), 'f', dec, 64)
 			case "fee":
@@ -394,6 +404,8 @@ func (b *BlockSeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(b.NEvents, 10)
 		case "n_tx":
 			res[i] = strconv.FormatInt(b.NTx, 10)
+		case "n_tickets":
+			res[i] = strconv.FormatInt(b.NTickets, 10)
 		case "volume":
 			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Volume), 'f', dec, 64)
 		case "fee":
@@ -529,7 +541,7 @@ func (s *BlockSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.
 						continue
 					}
 					// collect list of account ids
-					ids = append(ids, acc.RowId.Value())
+					ids = append(ids, acc.RowId.U64())
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)

@@ -68,6 +68,7 @@ aloop:
 		if skip {
 			continue
 		}
+
 		// run a sanity check
 		if acc.IsRevealed && acc.Type != tezos.AddressTypeContract {
 			if !acc.Pubkey.IsValid() {
@@ -87,7 +88,7 @@ aloop:
 			}
 			continue
 		}
-		// use vesting balance too
+		// use vesting balance too, but without rollup bond
 		if state.Balance != acc.SpendableBalance {
 			log.Errorf("Audit: balance mismatch for %s: index=%d node=%d", acc, acc.SpendableBalance, state.Balance)
 			failed++
@@ -119,9 +120,11 @@ bloop:
 			if b.block.Params.Version < 2 {
 				continue
 			}
-			return fmt.Errorf("Audit: baker %s with zero baker id link", acc)
+			log.Errorf("Audit: baker %s with zero baker id link", acc)
+			failed++
 		} else if acc.BakerId != acc.RowId {
-			return fmt.Errorf("Audit: baker %s with non-self baker id link", acc)
+			log.Errorf("Audit: baker %s with non-self baker id link", acc)
+			failed++
 		}
 		if !acc.IsRevealed {
 			log.Errorf("Audit: baker %s with unrevealed key", acc)
@@ -136,7 +139,8 @@ bloop:
 		// check balance against node rpc
 		bal, err := b.rpc.GetContract(ctx, acc.Address, rpc.BlockLevel(b.block.Height-offset))
 		if err != nil {
-			return fmt.Errorf("Audit: fetching balance for %s: %v", acc, err)
+			log.Warnf("Audit: fetching balance for %s: %v", acc, err)
+			continue
 		}
 		// only use spendable balance here!
 		if bal.Balance != acc.SpendableBalance {
@@ -145,8 +149,9 @@ bloop:
 		}
 		// check baker status against node rpc
 		state, err := b.rpc.GetDelegate(ctx, acc.Address, rpc.BlockLevel(b.block.Height-offset))
-		if err != nil {
-			return fmt.Errorf("Audit: fetching baker state for %s: %v", acc, err)
+		if err != nil && bkr.IsActive {
+			log.Warnf("Audit: fetching baker state for %s: %v", acc, err)
+			continue
 		}
 		// the indexer deactivates bakers at start of cycle, when we run this check at the
 		// last block of a cycle where the node has already deactivated the baker, we
@@ -269,7 +274,12 @@ bloop:
 		// check baker status against node rpc
 		state, err := b.rpc.GetDelegate(ctx, acc.Address, rpc.BlockLevel(b.block.Height))
 		if err != nil {
-			log.Errorf("Audit: fetching baker state for %s: %v", acc, err)
+			if bkr.IsActive {
+				log.Errorf("Audit: fetching baker state for %s: %v", acc, err)
+				failed++
+			} else {
+				log.Warnf("Audit: fetching baker state for %s: %v", acc, err)
+			}
 			continue
 		}
 		if bkr.IsActive && state.Deactivated {
@@ -365,13 +375,15 @@ aloop:
 		}
 
 		// key and balance to check
+		// without frozen rollup bond!
 		key := acc.Pubkey
-		indexedBalance := acc.Balance()
+		indexedBalance := acc.SpendableBalance
 
 		// for dirty accounts, use the builder value because the block update
 		// has not been written yet
 		if dacc, ok := b.AccountById(acc.RowId); ok && dacc.IsDirty {
 			key = dacc.Pubkey
+			// without frozen rollup bond!
 			indexedBalance = dacc.SpendableBalance
 		}
 

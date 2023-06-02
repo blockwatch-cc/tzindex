@@ -77,7 +77,7 @@ func (r *Right) MarshalJSONVerbose() ([]byte, error) {
 		RowId:     r.RowId,
 		Cycle:     r.Cycle,
 		Height:    r.Height,
-		AccountId: r.AccountId.Value(),
+		AccountId: r.AccountId.U64(),
 		Address:   r.ctx.Indexer.LookupAddress(r.ctx, r.AccountId).String(),
 		Bake:      hex.EncodeToString(r.Bake.Bytes()),
 		Endorse:   hex.EncodeToString(r.Endorse.Bytes()),
@@ -101,7 +101,7 @@ func (r *Right) MarshalJSONBrief() ([]byte, error) {
 		case "height":
 			buf = strconv.AppendInt(buf, r.Height, 10)
 		case "account_id":
-			buf = strconv.AppendUint(buf, r.AccountId.Value(), 10)
+			buf = strconv.AppendUint(buf, r.AccountId.U64(), 10)
 		case "address":
 			buf = strconv.AppendQuote(buf, r.ctx.Indexer.LookupAddress(r.ctx, r.AccountId).String())
 		case "baking_rights":
@@ -138,7 +138,7 @@ func (r *Right) MarshalCSV() ([]string, error) {
 		case "height":
 			res[i] = strconv.FormatInt(r.Height, 10)
 		case "account_id":
-			res[i] = strconv.FormatUint(r.AccountId.Value(), 10)
+			res[i] = strconv.FormatUint(r.AccountId.U64(), 10)
 		case "address":
 			res[i] = strconv.Quote(r.ctx.Indexer.LookupAddress(r.ctx, r.AccountId).String())
 		case "baking_rights":
@@ -265,7 +265,7 @@ func StreamRightsTable(ctx *server.Context, args *TableRequest) (interface{}, in
 						continue
 					}
 					// collect list of account ids
-					ids = append(ids, acc.RowId.Value())
+					ids = append(ids, acc.RowId.U64())
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)

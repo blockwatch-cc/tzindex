@@ -193,7 +193,7 @@ func (idx *AccountIndex) DisconnectBlock(ctx context.Context, block *model.Block
 	// regular accounts
 	for _, acc := range builder.Accounts() {
 		if acc.MustDelete {
-			accdel = append(accdel, acc.RowId.Value())
+			accdel = append(accdel, acc.RowId.U64())
 		} else if acc.IsDirty {
 			accupd = append(accupd, acc)
 		}
@@ -202,8 +202,8 @@ func (idx *AccountIndex) DisconnectBlock(ctx context.Context, block *model.Block
 	// delegate accounts
 	for _, bkr := range builder.Bakers() {
 		if bkr.Account.MustDelete {
-			accdel = append(accdel, bkr.Account.RowId.Value())
-			bkrdel = append(bkrdel, bkr.RowId.Value())
+			accdel = append(accdel, bkr.Account.RowId.U64())
+			bkrdel = append(bkrdel, bkr.RowId.U64())
 		} else if bkr.Account.IsDirty {
 			accupd = append(accupd, bkr.Account)
 		}

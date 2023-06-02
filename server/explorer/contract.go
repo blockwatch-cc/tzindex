@@ -5,12 +5,13 @@ package explorer
 
 import (
 	"fmt"
-	"github.com/gorilla/mux"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gorilla/mux"
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
@@ -94,16 +95,16 @@ func NewContract(ctx *server.Context, c *model.Contract, a *model.Account, args 
 	// add metadata
 	if args.WithMeta() {
 		cc.Metadata = make(map[string]*ShortMetadata)
-		if md, ok := lookupMetadataById(ctx, a.RowId, 0, false); ok {
+		if md, ok := lookupAddressIdMetadata(ctx, a.RowId); ok {
 			cc.Metadata[cc.Address] = md.Short()
 		}
 		// fetch baker metadata for delegators
 		if a.IsDelegated {
-			if md, ok := lookupMetadataById(ctx, a.BakerId, 0, false); ok {
+			if md, ok := lookupAddressIdMetadata(ctx, a.BakerId); ok {
 				cc.Metadata[cc.Baker] = md.Short()
 			}
 		}
-		if md, ok := lookupMetadataById(ctx, c.CreatorId, 0, false); ok {
+		if md, ok := lookupAddressIdMetadata(ctx, c.CreatorId); ok {
 			cc.Metadata[cc.Creator] = md.Short()
 		}
 	}
@@ -271,7 +272,7 @@ func ReadContract(ctx *server.Context) (interface{}, int) {
 	args := &AccountRequest{}
 	ctx.ParseRequestArgs(args)
 	cc := loadContract(ctx)
-	acc, err := ctx.Indexer.LookupAccountId(ctx, cc.AccountId)
+	acc, err := ctx.Indexer.LookupAccountById(ctx, cc.AccountId)
 	if err != nil {
 		switch err {
 		case model.ErrNoContract, model.ErrNoAccount:
@@ -293,7 +294,7 @@ func ReadContractCalls(ctx *server.Context) (interface{}, int) {
 	args := &ContractRequest{}
 	ctx.ParseRequestArgs(args)
 	cc := loadContract(ctx)
-	acc, err := ctx.Indexer.LookupAccountId(ctx, cc.AccountId)
+	acc, err := ctx.Indexer.LookupAccountById(ctx, cc.AccountId)
 	if err != nil {
 		switch err {
 		case model.ErrNoAccount:

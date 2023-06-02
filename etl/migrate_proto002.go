@@ -65,7 +65,7 @@ func (b *Builder) FixOriginationBug(ctx context.Context, params *rpc.Params) err
 	delIds := make([]uint64, 0)
 	for _, v := range drop {
 		log.Tracef("Migrate v%03d: deregistering baker %s", params.Version, v)
-		delIds = append(delIds, v.RowId.Value())
+		delIds = append(delIds, v.RowId.U64())
 		b.UnregisterBaker(v)
 	}
 

@@ -67,9 +67,9 @@ func (c *Constant) MarshalJSONVerbose() ([]byte, error) {
 		StorageSize int64  `json:"storage_size"`
 		Features    string `json:"features"`
 	}{
-		RowId:       c.RowId.Value(),
+		RowId:       c.RowId.U64(),
 		Address:     c.Address.String(),
-		CreatorId:   c.CreatorId.Value(),
+		CreatorId:   c.CreatorId.U64(),
 		Creator:     c.ctx.Indexer.LookupAddress(c.ctx, c.CreatorId).String(),
 		Value:       hex.EncodeToString(c.Value),
 		Height:      c.Height,
@@ -86,11 +86,11 @@ func (c *Constant) MarshalJSONBrief() ([]byte, error) {
 	for i, v := range c.columns {
 		switch v {
 		case "row_id":
-			buf = strconv.AppendUint(buf, c.RowId.Value(), 10)
+			buf = strconv.AppendUint(buf, c.RowId.U64(), 10)
 		case "address":
 			buf = strconv.AppendQuote(buf, c.Address.String())
 		case "creator_id":
-			buf = strconv.AppendUint(buf, c.CreatorId.Value(), 10)
+			buf = strconv.AppendUint(buf, c.CreatorId.U64(), 10)
 		case "creator":
 			buf = strconv.AppendQuote(buf, c.ctx.Indexer.LookupAddress(c.ctx, c.CreatorId).String())
 		case "value":
@@ -123,11 +123,11 @@ func (c *Constant) MarshalCSV() ([]string, error) {
 	for i, v := range c.columns {
 		switch v {
 		case "row_id":
-			res[i] = strconv.FormatUint(c.RowId.Value(), 10)
+			res[i] = strconv.FormatUint(c.RowId.U64(), 10)
 		case "address":
 			res[i] = strconv.Quote(c.Address.String())
 		case "creator_id":
-			res[i] = strconv.FormatUint(c.CreatorId.Value(), 10)
+			res[i] = strconv.FormatUint(c.CreatorId.U64(), 10)
 		case "creator":
 			res[i] = strconv.Quote(c.ctx.Indexer.LookupAddress(c.ctx, c.CreatorId).String())
 		case "value":
@@ -326,7 +326,7 @@ func StreamConstantTable(ctx *server.Context, args *TableRequest) (interface{}, 
 				return err
 			}
 			count++
-			lastId = val.RowId.Value()
+			lastId = val.RowId.U64()
 			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
@@ -352,7 +352,7 @@ func StreamConstantTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					return err
 				}
 				count++
-				lastId = val.RowId.Value()
+				lastId = val.RowId.U64()
 				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}

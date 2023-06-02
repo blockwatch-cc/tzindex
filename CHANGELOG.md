@@ -1,8 +1,35 @@
 # Changelog
 
+### v17.0.0 (v016-2023-02-26)
+
+Nairobi release
+- Add Nairobi hashes, calc max proto version when unknown
+- Add smart rollup data changes for cement operation
+
+Improvements
+- Log every block when in sync
+- Strip unused hashes and sigs from endorsements (big decoding speed up)
+- Improve internal cache memory usage
+- Add listing internal operations sent by a contract
+- Add `total_ticket_transfers` to chain model
+- Add new block field `n_tickets` to API
+- Add new block series field `n_tickets` to API
+- Add new chain series field `total_ticket_transfers` to API
+- Rename `server` log system to `api` (this applies also to config options e.g. new: `log.api`)
+- Change metadata payout list to array
+- Update country codes
+- Add `stalled` status to crawler
+- Add contract cache, clear builder contract map at end of block
+
+Fixes
+- Fix testnet dictator may not be a baker
+- Fix audit mode false positive errors for inactive bakers
+- Fix using delegation volume from flows instead of previous balance
+
 ### v16.1.5 (v016-2023-02-26)
 
 Mumbai Release
+
 - NEW: add Mumbai operations wrapped into `rollup_origination` and `rollup_transaction`
     - `smart_rollup_add_messages`
     - `smart_rollup_cement`

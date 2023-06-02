@@ -10,43 +10,51 @@ func init() {
 const (
 	aliasNs     = "alias"
 	aliasSchema = `{
-	"$schema": "http://json-schema.org/draft/2019-09/schema#",
-	"$id": "https://api.tzstats.com/metadata/schemas/alias.json",
-	"title": "Alias",
-	"type": "object",
-	"required": [ "name", "kind" ],
-	"properties": {
-   	"name": {
-   		"type": "string",
-  		"description": "Display name for this address or asset."
-  	},
+  "$schema": "http://json-schema.org/draft/2019-09/schema#",
+  "$id": "https://api.tzstats.com/metadata/schemas/alias.json",
+  "title": "Alias",
+  "type": "object",
+  "required": [ "name", "kind" ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Display name for this address or asset."
+    },
     "kind": {
-      	"type": "string",
-      	"enum": [
-			"validator",
-			"miner",
-			"foundation",
-			"payout",
-			"merchant",
-			"exchange",
-			"custodian",
-			"token",
-			"dex",
-			"infra",
-			"oracle",
-			"issuer",
-			"registry",
-			"charity",
-			"defi",
-			"nft",
-			"game",
-			"event",
-			"dao",
-			"treasury",
-			"ico",
-			"other"
-      	],
-      	"description": "A structured type used for filtering."
+      "type": "string",
+      "enum": [
+        "validator",
+        "tf",
+        "payout",
+        "merchant",
+        "exchange",
+        "custodian",
+        "token",
+        "dex",
+        "factory",
+        "mintery",
+        "oracle",
+        "admin",
+        "deployer",
+        "registry",
+        "charity",
+        "nft",
+        "game",
+        "dao",
+        "treasury",
+        "bridge",
+        "lending",
+        "farm",
+        "insurance",
+        "multisig",
+        "market",
+        "crowdsale",
+        "user",
+        "contract",
+        "collection",
+        "other"
+      ],
+      "description": "A structured type used for filtering."
     },
     "description": {
       "description": "A brief description.",
@@ -67,7 +75,7 @@ const (
         "type": "string"
       }
     }
-	}
+  }
 }`
 )
 

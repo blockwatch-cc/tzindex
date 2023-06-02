@@ -85,10 +85,10 @@ func (c *Contract) MarshalJSONVerbose() ([]byte, error) {
 		Features      string  `json:"features"`
 		Interfaces    string  `json:"interfaces"`
 	}{
-		RowId:         c.RowId.Value(),
-		AccountId:     c.AccountId.Value(),
+		RowId:         c.RowId.U64(),
+		AccountId:     c.AccountId.U64(),
 		Address:       c.String(),
-		CreatorId:     c.CreatorId.Value(),
+		CreatorId:     c.CreatorId.U64(),
 		Creator:       c.ctx.Indexer.LookupAddress(c.ctx, c.CreatorId).String(),
 		FirstSeen:     c.FirstSeen,
 		LastSeen:      c.LastSeen,
@@ -115,13 +115,13 @@ func (c *Contract) MarshalJSONBrief() ([]byte, error) {
 	for i, v := range c.columns {
 		switch v {
 		case "row_id":
-			buf = strconv.AppendUint(buf, c.RowId.Value(), 10)
+			buf = strconv.AppendUint(buf, c.RowId.U64(), 10)
 		case "account_id":
-			buf = strconv.AppendUint(buf, c.AccountId.Value(), 10)
+			buf = strconv.AppendUint(buf, c.AccountId.U64(), 10)
 		case "address":
 			buf = strconv.AppendQuote(buf, c.String())
 		case "creator_id":
-			buf = strconv.AppendUint(buf, c.CreatorId.Value(), 10)
+			buf = strconv.AppendUint(buf, c.CreatorId.U64(), 10)
 		case "creator":
 			buf = strconv.AppendQuote(buf, c.ctx.Indexer.LookupAddress(c.ctx, c.CreatorId).String())
 		case "first_seen":
@@ -180,13 +180,13 @@ func (c *Contract) MarshalCSV() ([]string, error) {
 	for i, v := range c.columns {
 		switch v {
 		case "row_id":
-			res[i] = strconv.FormatUint(c.RowId.Value(), 10)
+			res[i] = strconv.FormatUint(c.RowId.U64(), 10)
 		case "account_id":
-			res[i] = strconv.FormatUint(c.AccountId.Value(), 10)
+			res[i] = strconv.FormatUint(c.AccountId.U64(), 10)
 		case "address":
 			res[i] = strconv.Quote(c.String())
 		case "creator_id":
-			res[i] = strconv.FormatUint(c.CreatorId.Value(), 10)
+			res[i] = strconv.FormatUint(c.CreatorId.U64(), 10)
 		case "creator":
 			res[i] = strconv.Quote(c.ctx.Indexer.LookupAddress(c.ctx, c.CreatorId).String())
 		case "first_seen":
@@ -413,7 +413,7 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 						continue
 					}
 					// collect list of account ids
-					ids = append(ids, acc.RowId.Value())
+					ids = append(ids, acc.RowId.U64())
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
@@ -537,7 +537,7 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 				return err
 			}
 			count++
-			lastId = contract.RowId.Value()
+			lastId = contract.RowId.U64()
 			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
@@ -564,7 +564,7 @@ func StreamContractTable(ctx *server.Context, args *TableRequest) (interface{}, 
 					return err
 				}
 				count++
-				lastId = contract.RowId.Value()
+				lastId = contract.RowId.U64()
 				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}

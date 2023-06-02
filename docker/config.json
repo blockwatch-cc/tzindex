@@ -27,7 +27,6 @@
 	"crawler": {
 		"queue": 100,
 		"delay": 1,
-		"cache_size_log2": 12,
 		"snapshot_path": "./db/xtz/snapshots",
 		"snapshot_blocks": [],
 		"snapshot_interval": 0

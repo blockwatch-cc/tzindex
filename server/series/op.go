@@ -403,7 +403,7 @@ func (s *OpSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Que
 						continue
 					}
 					// collect list of account ids
-					ids = append(ids, acc.RowId.Value())
+					ids = append(ids, acc.RowId.U64())
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)

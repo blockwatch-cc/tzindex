@@ -11,7 +11,8 @@ import (
 	"blockwatch.cc/tzgo/tezos"
 )
 
-// Block holds information about a Tezos block
+// Block holds information about a Tezos block. This is a
+// stripped version for indexing without signatures.
 type Block struct {
 	Protocol   tezos.ProtocolHash `json:"protocol"`
 	ChainId    tezos.ChainIdHash  `json:"chain_id"`

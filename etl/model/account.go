@@ -31,8 +31,13 @@ var (
 
 type AccountID uint64
 
-func (id AccountID) Value() uint64 {
+func (id AccountID) U64() uint64 {
 	return uint64(id)
+}
+
+// Handle with care, this is OK as long as number of accounts < 4,294,967,295
+func (id AccountID) U32() uint32 {
+	return uint32(id)
 }
 
 type AccountRank struct {

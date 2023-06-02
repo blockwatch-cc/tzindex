@@ -35,7 +35,32 @@ func (m *Indexer) LookupAccount(ctx context.Context, addr tezos.Address) (*model
 	return acc, nil
 }
 
-func (m *Indexer) LookupAccountId(ctx context.Context, id model.AccountID) (*model.Account, error) {
+func (m *Indexer) LookupAccountId(ctx context.Context, addr tezos.Address) (model.AccountID, error) {
+	if !addr.IsValid() {
+		return 0, model.ErrInvalidAddress
+	}
+	table, err := m.Table(model.AccountTableKey)
+	if err != nil {
+		return 0, err
+	}
+	type Alias struct {
+		RowId model.AccountID `knox:"row_id"`
+	}
+	id := &Alias{}
+	err = pack.NewQuery("api.accountid_by_hash").
+		WithTable(table).
+		AndEqual("address", addr[:]).
+		Execute(ctx, id)
+	if id.RowId == 0 {
+		err = model.ErrNoAccount
+	}
+	if err != nil {
+		return 0, err
+	}
+	return id.RowId, nil
+}
+
+func (m *Indexer) LookupAccountById(ctx context.Context, id model.AccountID) (*model.Account, error) {
 	table, err := m.Table(model.AccountTableKey)
 	if err != nil {
 		return nil, err
@@ -54,7 +79,7 @@ func (m *Indexer) LookupAccountId(ctx context.Context, id model.AccountID) (*mod
 	return acc, nil
 }
 
-func (m *Indexer) LookupAccountIds(ctx context.Context, ids []uint64) ([]*model.Account, error) {
+func (m *Indexer) LookupAccountsById(ctx context.Context, ids []uint64) ([]*model.Account, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -130,7 +155,7 @@ func (m *Indexer) FindActivatedAccount(ctx context.Context, addr tezos.Address) 
 	}
 	// lookup account by id
 	if o.CreatorId != 0 {
-		return m.LookupAccountId(ctx, o.CreatorId)
+		return m.LookupAccountById(ctx, o.CreatorId)
 	}
-	return m.LookupAccountId(ctx, o.SenderId)
+	return m.LookupAccountById(ctx, o.SenderId)
 }

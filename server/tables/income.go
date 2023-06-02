@@ -108,7 +108,7 @@ func (c *Income) MarshalJSONVerbose() ([]byte, error) {
 	}{
 		RowId:                  c.RowId,
 		Cycle:                  c.Cycle,
-		AccountId:              c.AccountId.Value(),
+		AccountId:              c.AccountId.U64(),
 		Address:                c.ctx.Indexer.LookupAddress(c.ctx, c.AccountId).String(),
 		Rolls:                  c.Rolls,
 		Balance:                c.params.ConvertValue(c.Balance),
@@ -162,7 +162,7 @@ func (c *Income) MarshalJSONBrief() ([]byte, error) {
 		case "cycle":
 			buf = strconv.AppendInt(buf, c.Cycle, 10)
 		case "account_id":
-			buf = strconv.AppendUint(buf, c.AccountId.Value(), 10)
+			buf = strconv.AppendUint(buf, c.AccountId.U64(), 10)
 		case "address":
 			buf = strconv.AppendQuote(buf, c.ctx.Indexer.LookupAddress(c.ctx, c.AccountId).String())
 		case "rolls":
@@ -260,7 +260,7 @@ func (c *Income) MarshalCSV() ([]string, error) {
 		case "cycle":
 			res[i] = strconv.FormatInt(c.Cycle, 10)
 		case "account_id":
-			res[i] = strconv.FormatUint(c.AccountId.Value(), 10)
+			res[i] = strconv.FormatUint(c.AccountId.U64(), 10)
 		case "address":
 			res[i] = strconv.Quote(c.ctx.Indexer.LookupAddress(c.ctx, c.AccountId).String())
 		case "rolls":
@@ -448,7 +448,7 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 						continue
 					}
 					// collect list of account ids
-					ids = append(ids, acc.RowId.Value())
+					ids = append(ids, acc.RowId.U64())
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)

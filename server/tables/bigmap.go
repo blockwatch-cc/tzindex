@@ -98,7 +98,7 @@ func (b *BigmapAllocItem) MarshalJSONVerbose() ([]byte, error) {
 	}{
 		RowId:        b.RowId,
 		BigmapId:     b.BigmapId,
-		AccountId:    b.AccountId.Value(),
+		AccountId:    b.AccountId.U64(),
 		Contract:     b.ctx.Indexer.LookupAddress(b.ctx, b.AccountId).String(),
 		AllocHeight:  b.Height,
 		AllocTime:    b.ctx.Indexer.LookupBlockTime(b.ctx, b.Height),
@@ -129,7 +129,7 @@ func (b *BigmapAllocItem) MarshalJSONBrief() ([]byte, error) {
 		case "bigmap_id":
 			buf = strconv.AppendInt(buf, b.BigmapId, 10)
 		case "account_id":
-			buf = strconv.AppendUint(buf, b.AccountId.Value(), 10)
+			buf = strconv.AppendUint(buf, b.AccountId.U64(), 10)
 		case "contract":
 			buf = strconv.AppendQuote(buf, b.ctx.Indexer.LookupAddress(b.ctx, b.AccountId).String())
 		case "alloc_height":
@@ -178,7 +178,7 @@ func (b *BigmapAllocItem) MarshalCSV() ([]string, error) {
 		case "bigmap_id":
 			res[i] = strconv.FormatInt(b.BigmapId, 10)
 		case "account_id":
-			res[i] = strconv.FormatUint(b.AccountId.Value(), 10)
+			res[i] = strconv.FormatUint(b.AccountId.U64(), 10)
 		case "contract":
 			res[i] = strconv.Quote(b.ctx.Indexer.LookupAddress(b.ctx, b.AccountId).String())
 		case "alloc_height":
@@ -330,7 +330,7 @@ func StreamBigmapAllocTable(ctx *server.Context, args *TableRequest) (interface{
 						continue
 					}
 					// collect list of account ids
-					ids = append(ids, acc.RowId.Value())
+					ids = append(ids, acc.RowId.U64())
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)

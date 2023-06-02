@@ -160,7 +160,6 @@ func (idx *IncomeIndex) DisconnectBlock(ctx context.Context, block *model.Block,
 	}
 
 	// new rights are fetched in cycles
-	// if block.Params.IsCycleStart(block.Height) {
 	if block.TZ.IsCycleStart() {
 		if err := idx.DeleteCycle(ctx, block.Cycle+block.Params.PreservedCycles); err != nil {
 			log.Error(err)

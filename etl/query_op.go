@@ -848,7 +848,7 @@ func (m *Indexer) joinStorage(ctx context.Context, ops []*model.Op) {
 		if skip {
 			continue
 		}
-		opRowIds = append(opRowIds, v.RowId.Value())
+		opRowIds = append(opRowIds, v.RowId.U64())
 		opIds = append(opIds, v.Id())
 	}
 

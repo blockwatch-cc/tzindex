@@ -122,7 +122,7 @@ func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 		LastOutTime        int64   `json:"last_out_time"`
 		DelegatedSinceTime int64   `json:"delegated_since_time"`
 	}{
-		RowId:              a.RowId.Value(),
+		RowId:              a.RowId.U64(),
 		Address:            a.String(),
 		AddressType:        a.Type.String(),
 		Pubkey:             a.Pubkey.String(),
@@ -173,7 +173,7 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 	for i, v := range a.columns {
 		switch v {
 		case "row_id":
-			buf = strconv.AppendUint(buf, a.RowId.Value(), 10)
+			buf = strconv.AppendUint(buf, a.RowId.U64(), 10)
 		case "address":
 			buf = strconv.AppendQuote(buf, a.String())
 		case "address_type":
@@ -305,7 +305,7 @@ func (a *Account) MarshalCSV() ([]string, error) {
 	for i, v := range a.columns {
 		switch v {
 		case "row_id":
-			res[i] = strconv.FormatUint(a.RowId.Value(), 10)
+			res[i] = strconv.FormatUint(a.RowId.U64(), 10)
 		case "address":
 			res[i] = strconv.Quote(a.String())
 		case "address_type":
@@ -560,7 +560,7 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 						continue
 					}
 					// collect list of account ids
-					ids = append(ids, acc.RowId.Value())
+					ids = append(ids, acc.RowId.U64())
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)
@@ -680,7 +680,7 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 				return err
 			}
 			count++
-			lastId = acc.RowId.Value()
+			lastId = acc.RowId.U64()
 			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
@@ -706,7 +706,7 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 					return err
 				}
 				count++
-				lastId = acc.RowId.Value()
+				lastId = acc.RowId.U64()
 				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}

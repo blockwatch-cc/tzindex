@@ -5,11 +5,12 @@ package explorer
 
 import (
 	"encoding/json"
-	"github.com/gorilla/mux"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gorilla/mux"
 
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl"
@@ -517,7 +518,7 @@ func ListBallots(ctx *server.Context) (interface{}, int) {
 	// fetch op hashes for each ballot
 	oids := make([]uint64, 0)
 	for _, v := range ballots {
-		oids = append(oids, v.OpId.Value())
+		oids = append(oids, v.OpId.U64())
 	}
 
 	// lookup

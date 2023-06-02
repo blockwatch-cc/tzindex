@@ -5,10 +5,11 @@ package explorer
 
 import (
 	"encoding/json"
-	"github.com/gorilla/mux"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/gorilla/mux"
 
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
@@ -474,7 +475,7 @@ func ListBigmapUpdates(ctx *server.Context) (interface{}, int) {
 	if args.WithMeta() && len(items) > 0 {
 		opIds := make([]uint64, 0)
 		for _, v := range items {
-			opIds = append(opIds, v.OpId.Value())
+			opIds = append(opIds, v.OpId.U64())
 		}
 		ops, err := ctx.Indexer.LookupOpIds(ctx, opIds)
 		if err != nil {
@@ -617,7 +618,7 @@ func ListBigmapKeyUpdates(ctx *server.Context) (interface{}, int) {
 	if args.WithMeta() && len(items) > 0 {
 		opIds := make([]uint64, 0)
 		for _, v := range items {
-			opIds = append(opIds, v.OpId.Value())
+			opIds = append(opIds, v.OpId.U64())
 		}
 		ops, err := ctx.Indexer.LookupOpIds(ctx, opIds)
 		if err != nil {

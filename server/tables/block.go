@@ -106,6 +106,7 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		NContractCalls         int                    `json:"n_calls"`
 		NRollupCalls           int                    `json:"n_rollup_calls"`
 		NTx                    int                    `json:"n_tx"`
+		NTickets               int                    `json:"n_tickets"`
 		Volume                 float64                `json:"volume"`
 		Fee                    float64                `json:"fee"`
 		Reward                 float64                `json:"reward"`
@@ -142,9 +143,9 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		Round:                  b.Round,
 		Nonce:                  util.U64String(b.Nonce).Hex(),
 		VotingPeriodKind:       b.VotingPeriodKind,
-		BakerId:                b.BakerId.Value(),
+		BakerId:                b.BakerId.U64(),
 		Baker:                  b.ctx.Indexer.LookupAddress(b.ctx, b.BakerId).String(),
-		ProposerId:             b.ProposerId.Value(),
+		ProposerId:             b.ProposerId.U64(),
 		Proposer:               b.ctx.Indexer.LookupAddress(b.ctx, b.ProposerId).String(),
 		NSlotsEndorsed:         b.NSlotsEndorsed,
 		NOpsApplied:            model.Int16Correct(b.NOpsApplied),
@@ -153,6 +154,7 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		NContractCalls:         model.Int16Correct(b.NContractCalls),
 		NRollupCalls:           model.Int16Correct(b.NRollupCalls),
 		NTx:                    model.Int16Correct(b.NTx),
+		NTickets:               model.Int16Correct(b.NTickets),
 		Volume:                 b.params.ConvertValue(b.Volume),
 		Fee:                    b.params.ConvertValue(b.Fee),
 		Reward:                 b.params.ConvertValue(b.Reward),
@@ -171,8 +173,8 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		LbEscapeVote:           b.LbEscapeVote,
 		LbEscapeEma:            b.LbEscapeEma,
 		Protocol:               b.params.Protocol,
-		ProposerConsensusKeyId: b.ProposerConsensusKeyId.Value(),
-		BakerConsensusKeyId:    b.BakerConsensusKeyId.Value(),
+		ProposerConsensusKeyId: b.ProposerConsensusKeyId.U64(),
+		BakerConsensusKeyId:    b.BakerConsensusKeyId.U64(),
 		ProposerConsensusKey:   b.ctx.Indexer.LookupAddress(b.ctx, b.ProposerConsensusKeyId).String(),
 		BakerConsensusKey:      b.ctx.Indexer.LookupAddress(b.ctx, b.BakerConsensusKeyId).String(),
 	}
@@ -229,11 +231,11 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 		case "voting_period_kind":
 			buf = strconv.AppendQuote(buf, b.VotingPeriodKind.String())
 		case "baker_id":
-			buf = strconv.AppendUint(buf, b.BakerId.Value(), 10)
+			buf = strconv.AppendUint(buf, b.BakerId.U64(), 10)
 		case "baker":
 			buf = strconv.AppendQuote(buf, b.ctx.Indexer.LookupAddress(b.ctx, b.BakerId).String())
 		case "proposer_id":
-			buf = strconv.AppendUint(buf, b.ProposerId.Value(), 10)
+			buf = strconv.AppendUint(buf, b.ProposerId.U64(), 10)
 		case "proposer":
 			buf = strconv.AppendQuote(buf, b.ctx.Indexer.LookupAddress(b.ctx, b.ProposerId).String())
 		case "n_endorsed_slots":
@@ -250,6 +252,8 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NEvents)), 10)
 		case "n_tx":
 			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NTx)), 10)
+		case "n_tickets":
+			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NTickets)), 10)
 		case "volume":
 			buf = strconv.AppendFloat(buf, b.params.ConvertValue(b.Volume), 'f', dec, 64)
 		case "fee":
@@ -293,11 +297,11 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 		case "protocol":
 			buf = strconv.AppendQuote(buf, b.params.Protocol.String())
 		case "proposer_consensus_key_id":
-			buf = strconv.AppendUint(buf, b.ProposerConsensusKeyId.Value(), 10)
+			buf = strconv.AppendUint(buf, b.ProposerConsensusKeyId.U64(), 10)
 		case "proposer_consensus_key":
 			buf = strconv.AppendQuote(buf, b.ctx.Indexer.LookupAddress(b.ctx, b.ProposerConsensusKeyId).String())
 		case "baker_consensus_key_id":
-			buf = strconv.AppendUint(buf, b.BakerConsensusKeyId.Value(), 10)
+			buf = strconv.AppendUint(buf, b.BakerConsensusKeyId.U64(), 10)
 		case "baker_consensus_key":
 			buf = strconv.AppendQuote(buf, b.ctx.Indexer.LookupAddress(b.ctx, b.BakerConsensusKeyId).String())
 		default:
@@ -348,11 +352,11 @@ func (b *Block) MarshalCSV() ([]string, error) {
 		case "voting_period_kind":
 			res[i] = strconv.Quote(b.VotingPeriodKind.String())
 		case "baker_id":
-			res[i] = strconv.FormatUint(b.BakerId.Value(), 10)
+			res[i] = strconv.FormatUint(b.BakerId.U64(), 10)
 		case "baker":
 			res[i] = strconv.Quote(b.ctx.Indexer.LookupAddress(b.ctx, b.BakerId).String())
 		case "proposer_id":
-			res[i] = strconv.FormatUint(b.ProposerId.Value(), 10)
+			res[i] = strconv.FormatUint(b.ProposerId.U64(), 10)
 		case "proposer":
 			res[i] = strconv.Quote(b.ctx.Indexer.LookupAddress(b.ctx, b.ProposerId).String())
 		case "n_endorsed_slots":
@@ -369,6 +373,8 @@ func (b *Block) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NEvents)), 10)
 		case "n_tx":
 			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NTx)), 10)
+		case "n_tickets":
+			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NTickets)), 10)
 		case "volume":
 			res[i] = strconv.FormatFloat(b.params.ConvertValue(b.Volume), 'f', dec, 64)
 		case "fee":
@@ -412,11 +418,11 @@ func (b *Block) MarshalCSV() ([]string, error) {
 		case "protocol":
 			res[i] = strconv.Quote(b.params.Protocol.String())
 		case "proposer_consensus_key_id":
-			res[i] = strconv.FormatUint(b.ProposerConsensusKeyId.Value(), 10)
+			res[i] = strconv.FormatUint(b.ProposerConsensusKeyId.U64(), 10)
 		case "proposer_consensus_key":
 			res[i] = strconv.Quote(b.ctx.Indexer.LookupAddress(b.ctx, b.ProposerConsensusKeyId).String())
 		case "baker_consensus_key_id":
-			res[i] = strconv.FormatUint(b.BakerConsensusKeyId.Value(), 10)
+			res[i] = strconv.FormatUint(b.BakerConsensusKeyId.U64(), 10)
 		case "baker_consensus_key":
 			res[i] = strconv.Quote(b.ctx.Indexer.LookupAddress(b.ctx, b.BakerConsensusKeyId).String())
 		default:
@@ -614,7 +620,7 @@ func StreamBlockTable(ctx *server.Context, args *TableRequest) (interface{}, int
 						continue
 					}
 					// collect list of account ids
-					ids = append(ids, acc.RowId.Value())
+					ids = append(ids, acc.RowId.U64())
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)

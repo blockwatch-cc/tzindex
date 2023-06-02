@@ -66,9 +66,9 @@ func (e *Event) MarshalJSONVerbose() ([]byte, error) {
 		Tag       string `json:"tag"`
 		TypeHash  string `json:"type_hash"`
 	}{
-		RowId:     e.RowId.Value(),
+		RowId:     e.RowId.U64(),
 		Contract:  e.ctx.Indexer.LookupAddress(e.ctx, e.AccountId).String(),
-		AccountId: e.AccountId.Value(),
+		AccountId: e.AccountId.U64(),
 		Height:    e.Height,
 		OpId:      e.OpId,
 		Type:      hex.EncodeToString(e.Type),
@@ -85,11 +85,11 @@ func (e *Event) MarshalJSONBrief() ([]byte, error) {
 	for i, v := range e.columns {
 		switch v {
 		case "row_id":
-			buf = strconv.AppendUint(buf, e.RowId.Value(), 10)
+			buf = strconv.AppendUint(buf, e.RowId.U64(), 10)
 		case "contract":
 			buf = strconv.AppendQuote(buf, e.ctx.Indexer.LookupAddress(e.ctx, e.AccountId).String())
 		case "account_id":
-			buf = strconv.AppendUint(buf, e.AccountId.Value(), 10)
+			buf = strconv.AppendUint(buf, e.AccountId.U64(), 10)
 		case "height":
 			buf = strconv.AppendInt(buf, e.Height, 10)
 		case "op_id":
@@ -126,11 +126,11 @@ func (e *Event) MarshalCSV() ([]string, error) {
 	for i, v := range e.columns {
 		switch v {
 		case "row_id":
-			res[i] = strconv.FormatUint(e.RowId.Value(), 10)
+			res[i] = strconv.FormatUint(e.RowId.U64(), 10)
 		case "contract":
 			res[i] = strconv.Quote(e.ctx.Indexer.LookupAddress(e.ctx, e.AccountId).String())
 		case "account_id":
-			res[i] = strconv.FormatUint(e.AccountId.Value(), 10)
+			res[i] = strconv.FormatUint(e.AccountId.U64(), 10)
 		case "height":
 			res[i] = strconv.FormatInt(e.Height, 10)
 		case "op_id":
@@ -331,7 +331,7 @@ func StreamEventTable(ctx *server.Context, args *TableRequest) (interface{}, int
 				return err
 			}
 			count++
-			lastId = val.RowId.Value()
+			lastId = val.RowId.U64()
 			if args.Limit > 0 && count == int(args.Limit) {
 				return io.EOF
 			}
@@ -357,7 +357,7 @@ func StreamEventTable(ctx *server.Context, args *TableRequest) (interface{}, int
 					return err
 				}
 				count++
-				lastId = val.RowId.Value()
+				lastId = val.RowId.U64()
 				if args.Limit > 0 && count == int(args.Limit) {
 					return io.EOF
 				}

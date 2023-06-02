@@ -80,7 +80,6 @@ func init() {
 	config.SetDefault("db.log_slow_queries", time.Second)
 
 	// crawling
-	config.SetDefault("crawler.cache_size_log2", 15)
 	config.SetDefault("crawler.queue", 100)
 	config.SetDefault("crawler.delay", 1)
 	config.SetDefault("crawler.snapshot.path", "./db/snapshots/")

@@ -90,7 +90,6 @@ func runServer() error {
 		DB:            statedb,
 		Indexer:       indexer,
 		Client:        rpcclient,
-		CacheSizeLog2: config.GetInt("crawler.cache_size_log2"),
 		Queue:         config.GetInt("crawler.queue"),
 		Delay:         config.GetInt("crawler.delay"),
 		EnableMonitor: !nomonitor,

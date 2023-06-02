@@ -74,7 +74,7 @@ func (b *Balance) MarshalJSONVerbose() ([]byte, error) {
 		ValidFromTime time.Time `json:"valid_from_time"`
 	}{
 		RowId:         b.RowId,
-		AccountId:     b.AccountId.Value(),
+		AccountId:     b.AccountId.U64(),
 		Account:       b.ctx.Indexer.LookupAddress(b.ctx, b.AccountId).String(),
 		Balance:       b.params.ConvertValue(b.Balance.Balance),
 		ValidFrom:     b.ValidFrom,
@@ -92,7 +92,7 @@ func (b *Balance) MarshalJSONBrief() ([]byte, error) {
 		case "row_id":
 			buf = strconv.AppendUint(buf, b.RowId, 10)
 		case "account_id":
-			buf = strconv.AppendUint(buf, b.AccountId.Value(), 10)
+			buf = strconv.AppendUint(buf, b.AccountId.U64(), 10)
 		case "address":
 			buf = strconv.AppendQuote(buf, b.ctx.Indexer.LookupAddress(b.ctx, b.AccountId).String())
 		case "balance":
@@ -120,7 +120,7 @@ func (b *Balance) MarshalCSV() ([]string, error) {
 		case "row_id":
 			res[i] = strconv.FormatUint(b.RowId, 10)
 		case "account_id":
-			res[i] = strconv.FormatUint(b.AccountId.Value(), 10)
+			res[i] = strconv.FormatUint(b.AccountId.U64(), 10)
 		case "address":
 			res[i] = strconv.Quote(b.ctx.Indexer.LookupAddress(b.ctx, b.AccountId).String())
 		case "balance":
@@ -236,7 +236,7 @@ func StreamBalanceTable(ctx *server.Context, args *TableRequest) (interface{}, i
 						continue
 					}
 					// collect list of account ids
-					ids = append(ids, acc.RowId.Value())
+					ids = append(ids, acc.RowId.U64())
 				}
 				// Note: when list is empty (no accounts were found, the match will
 				//       always be false and return no result as expected)

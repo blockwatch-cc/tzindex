@@ -68,7 +68,7 @@ func main() {
 			fmt.Printf("  baker.min_payout      (float) minimum payout amount\n")
 			fmt.Printf("  baker.min_delegation  (float) minimum delegation requirement\n")
 			fmt.Printf("  baker.non_delegatable (bool) baker does not support public delegation\n")
-			fmt.Printf("  payout.from           ([]string) list of related baker addresses, only for kind payout\n")
+			fmt.Printf("  payout                ([]string) list of related baker addresses, only for kind payout\n")
 			fmt.Printf("  location.country      (enum) ISO 2-letter country code\n")
 			fmt.Printf("  location.city         (enum) IATA 3-letter airport code\n")
 			fmt.Printf("  location.lat          (float) GPS latitude\n")
