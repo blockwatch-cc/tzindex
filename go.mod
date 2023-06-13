@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	blockwatch.cc/packdb v0.0.0-20230516155931-1ab52e217822
-	blockwatch.cc/tzgo v1.16.7-0.20230531094254-8f320cfb7f88
+	blockwatch.cc/tzgo v1.17.0
 	blockwatch.cc/tzpro-go v0.17.0
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d
 	github.com/awesome-gocui/gocui v1.1.0
@@ -26,8 +26,7 @@ require (
 )
 
 require (
-	github.com/decred/dcrd/dcrec/secp256k1 v1.0.3 // indirect
-	github.com/decred/dcrd/dcrec/secp256k1/v2 v2.0.0 // indirect
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.2.0 // indirect
 	github.com/ericlagergren/decimal v0.0.0-20221120152707-495c53812d05 // indirect
 	github.com/gdamore/encoding v1.0.0 // indirect
 	github.com/gdamore/tcell/v2 v2.6.0 // indirect
@@ -43,8 +42,8 @@ require (
 	github.com/rogpeppe/go-internal v1.9.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
-	golang.org/x/crypto v0.9.0 // indirect
-	golang.org/x/sys v0.8.0 // indirect
-	golang.org/x/term v0.8.0 // indirect
-	golang.org/x/text v0.9.0 // indirect
+	golang.org/x/crypto v0.10.0 // indirect
+	golang.org/x/sys v0.9.0 // indirect
+	golang.org/x/term v0.9.0 // indirect
+	golang.org/x/text v0.10.0 // indirect
 )
