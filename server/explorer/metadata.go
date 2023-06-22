@@ -63,6 +63,7 @@ func lookupAddressIdMetadata(ctx *server.Context, id model.AccountID) (*Metadata
 	err = pack.NewQuery("metadata.find").
 		WithTable(table).
 		AndEqual("account_id", id).
+		AndEqual("is_asset", false).
 		Execute(ctx.Context, md)
 	if err != nil || md.RowId == 0 {
 		return nil, false
@@ -93,6 +94,7 @@ func lookupTokenIdMetadata(ctx *server.Context, id model.AccountID, tid tezos.Z)
 		WithTable(table).
 		AndEqual("account_id", id).
 		AndEqual("asset_id", tid.Int64()).
+		AndEqual("is_asset", true).
 		Execute(ctx.Context, md)
 	if err != nil || md.RowId == 0 {
 		return nil, false
