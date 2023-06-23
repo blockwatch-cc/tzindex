@@ -2,9 +2,9 @@
 
 © 2020-2023 Blockwatch Data Inc., All rights reserved.
 
-All-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resource friendly way to gain tactical insights and build dapps on top of Tezos. Supported by [Blockwatch Data](https://blockwatch.cc), Pro version available on request.
+TzIndex is [Blockwatch](https://blockwatch.cc)'s all-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resource-friendly way to gain tactical insights and build dapps on top of Tezos. Pro version available on request, see [License](https://github.com/blockwatch-cc/tzindex#license).
 
-For support, talk to us on [Twitter](https://twitter.com/blockwatch_data) or [Discord](https://discord.gg/D5e98Hw).
+For support, talk to us on [Discord](https://discord.gg/D5e98Hw) or [Twitter](https://twitter.com/blockwatch_data).
 
 **Core Features**
 
@@ -259,7 +259,7 @@ Logging
 
 This Software is available under two different licenses, the open-source **MIT** license with limited support / best-effort updates and a **PRO** license with professional support and scheduled updates. The professional license is meant for businesses such as dapps, marketplaces, staking services, wallet providers, exchanges, asset issuers, and auditors who would like to use this software for their internal operations or bundle it with their commercial services.
 
-The PRO licenses helps us pay for software updates and maintenance and operate the free community services on tzstats.com.
+The PRO licenses helps us pay for software updates and maintenance and operate the free community services on [TzStats](https://tzstats.com).
 
 The following table may help you pick the right license for your intended use-case. If in doubt, send an email to license@blockwatch.cc and we'll get back to you.
 
