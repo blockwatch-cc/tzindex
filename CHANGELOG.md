@@ -1,5 +1,11 @@
 # Changelog
 
+### v17.0.1 (v016-2023-02-26)
+
+* Track addresses in transfer tickets ops
+* Upgrade TzPro SDK
+* Fix indexing broken rollups
+
 ### v17.0.0 (v016-2023-02-26)
 
 Nairobi release
