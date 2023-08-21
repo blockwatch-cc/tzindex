@@ -275,7 +275,12 @@ func (b *Builder) AppendSmartRollupTransactionOp(ctx context.Context, oh *rpc.Op
 	if dst != nil {
 		rCon, err = b.LoadContractByAccountId(ctx, dst.RowId)
 		if err != nil {
-			return Errorf("loading contract %s %d: %v", dst, dst.RowId, err)
+			if res.IsSuccess() {
+				return Errorf("loading contract %s %d: %v", dst, dst.RowId, err)
+			} else {
+				log.Warnf("%d %s [%d:%d:%d]: cannot load rollup model %s %d: %v",
+					b.block.Height, o.Kind(), id.L, id.P, id.C, dst, dst.RowId, err)
+			}
 		}
 	}
 
