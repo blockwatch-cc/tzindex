@@ -4,8 +4,8 @@ go 1.20
 
 require (
 	blockwatch.cc/packdb v0.0.0-20230516155931-1ab52e217822
-	blockwatch.cc/tzgo v1.17.0
-	blockwatch.cc/tzpro-go v0.17.0
+	blockwatch.cc/tzgo v1.17.2-0.20230816072533-df23743f304f
+	blockwatch.cc/tzpro-go v0.17.3-0.20230707115210-8d35c406340f
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d
 	github.com/awesome-gocui/gocui v1.1.0
 	github.com/cespare/xxhash v1.1.0

@@ -18,6 +18,7 @@ import (
 
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzpro-go/tzpro"
+	"blockwatch.cc/tzpro-go/tzpro/index"
 	"github.com/echa/config"
 	"github.com/echa/log"
 )
@@ -105,13 +106,12 @@ func main() {
 		log.Warnf("Missing config file, using default values.")
 	}
 
-	tzpro.UseLogger(log.Log)
 	if verbose {
 		log.SetLevel(log.LevelDebug)
 	}
 
 	if err := run(); err != nil {
-		if e, ok := tzpro.IsApiError(err); ok {
+		if e, ok := tzpro.IsErrApi(err); ok {
 			log.Errorf("%s: %s", e.Errors[0].Message, e.Errors[0].Detail)
 		} else {
 			log.Error(err)
@@ -129,10 +129,7 @@ func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	client, err := tzpro.NewClient(apiurl, nil)
-	if err != nil {
-		return err
-	}
+	client := tzpro.NewClient(apiurl, nil).WithLogger(log.Log)
 
 	switch cmd {
 	case "export":
@@ -180,7 +177,7 @@ func makeFilename() string {
 
 func exportAliases(ctx context.Context, c *tzpro.Client) error {
 	fname := makeFilename()
-	aliases, err := c.ListMetadata(ctx)
+	aliases, err := c.Metadata.List(ctx)
 	if err != nil {
 		return err
 	}
@@ -192,7 +189,7 @@ func exportAliases(ctx context.Context, c *tzpro.Client) error {
 	defer f.Close()
 
 	// change format to map
-	mapped := make(map[string]tzpro.Metadata)
+	mapped := make(map[string]index.Metadata)
 	for _, v := range SortedAliases(aliases) {
 		mapped[v.ID()] = v
 	}
@@ -239,24 +236,24 @@ func importAliases(ctx context.Context, c *tzpro.Client) error {
 		return fmt.Errorf("%s: %v", fname, err)
 	}
 
-	content := make(map[string]tzpro.Metadata)
+	content := make(map[string]index.Metadata)
 	if err := json.Unmarshal(buf, &content); err != nil {
 		return fmt.Errorf("%s: %v", fname, err)
 	}
 
-	aliases, err := c.ListMetadata(ctx)
+	aliases, err := c.Metadata.List(ctx)
 	if err != nil {
 		return err
 	}
 
-	mapped := make(map[string]tzpro.Metadata)
+	mapped := make(map[string]index.Metadata)
 	for _, v := range aliases {
 		mapped[v.ID()] = v
 	}
 
 	log.Infof("Importing %d aliases", len(content))
 	count := 0
-	ins := make([]tzpro.Metadata, 0)
+	ins := make([]index.Metadata, 0)
 	for n, v := range content {
 		v.Address, v.AssetId, err = parseAddressAndAssetId(n)
 		if err != nil {
@@ -270,7 +267,7 @@ func importAliases(ctx context.Context, c *tzpro.Client) error {
 		count++
 	}
 	if len(ins) > 0 {
-		if _, err := c.CreateMetadata(ctx, ins); err != nil {
+		if _, err := c.Metadata.Create(ctx, ins); err != nil {
 			return err
 		}
 	}
@@ -285,7 +282,7 @@ func purgeAliases(ctx context.Context, c *tzpro.Client) error {
 			return err
 		}
 	}
-	if err := c.PurgeMetadata(ctx); err != nil {
+	if err := c.Metadata.Purge(ctx); err != nil {
 		return err
 	}
 	log.Info("Purged all aliases")
@@ -297,11 +294,11 @@ func inspectAlias(ctx context.Context, c *tzpro.Client) error {
 	if err != nil {
 		return err
 	}
-	var alias tzpro.Metadata
+	var alias index.Metadata
 	if id == nil {
-		alias, err = c.GetAccountMetadata(ctx, addr)
+		alias, err = c.Metadata.GetWallet(ctx, addr)
 	} else {
-		alias, err = c.GetAssetMetadata(ctx, addr, *id)
+		alias, err = c.Metadata.GetAsset(ctx, tezos.NewToken(addr, tezos.NewZ(*id)))
 	}
 	if err != nil {
 		return fmt.Errorf("%s/%d: %v", addr, id, err)
@@ -325,11 +322,11 @@ func addAlias(ctx context.Context, c *tzpro.Client) error {
 	}
 
 	// load existing alias, ignore errors
-	var alias tzpro.Metadata
+	var alias index.Metadata
 	if id == nil {
-		alias, _ = c.GetAccountMetadata(ctx, addr)
+		alias, _ = c.Metadata.GetWallet(ctx, addr)
 	} else {
-		alias, _ = c.GetAssetMetadata(ctx, addr, *id)
+		alias, _ = c.Metadata.GetAsset(ctx, tezos.NewToken(addr, tezos.NewZ(*id)))
 	}
 
 	// always set identifier
@@ -339,7 +336,7 @@ func addAlias(ctx context.Context, c *tzpro.Client) error {
 		return err
 	}
 	log.Debugf("Add %#v", alias)
-	_, err = c.CreateMetadata(ctx, []tzpro.Metadata{alias})
+	_, err = c.Metadata.Create(ctx, []index.Metadata{alias})
 	if err != nil {
 		return err
 	}
@@ -356,11 +353,11 @@ func updateAlias(ctx context.Context, c *tzpro.Client) error {
 	if err != nil {
 		return err
 	}
-	var alias tzpro.Metadata
+	var alias index.Metadata
 	if id == nil {
-		alias, err = c.GetAccountMetadata(ctx, addr)
+		alias, err = c.Metadata.GetWallet(ctx, addr)
 	} else {
-		alias, err = c.GetAssetMetadata(ctx, addr, *id)
+		alias, err = c.Metadata.GetAsset(ctx, tezos.NewToken(addr, tezos.NewZ(*id)))
 	}
 	if err != nil {
 		return fmt.Errorf("%s/%d: %v", addr, id, err)
@@ -378,7 +375,7 @@ func updateAlias(ctx context.Context, c *tzpro.Client) error {
 			return err
 		}
 	}
-	alias, err = c.UpdateMetadata(ctx, alias)
+	alias, err = c.Metadata.Update(ctx, alias)
 	if err != nil {
 		return err
 	}
@@ -402,9 +399,9 @@ func removeAlias(ctx context.Context, c *tzpro.Client) error {
 		return err
 	}
 	if id == nil {
-		err = c.RemoveAccountMetadata(ctx, addr)
+		err = c.Metadata.RemoveWallet(ctx, addr)
 	} else {
-		err = c.RemoveAssetMetadata(ctx, addr, *id)
+		err = c.Metadata.RemoveAsset(ctx, tezos.NewToken(addr, tezos.NewZ(*id)))
 	}
 	if err != nil {
 		return err
@@ -413,10 +410,10 @@ func removeAlias(ctx context.Context, c *tzpro.Client) error {
 	return nil
 }
 
-type SortedAliases []tzpro.Metadata
+type SortedAliases []index.Metadata
 
 func (s SortedAliases) MarshalJSON() ([]byte, error) {
-	sorted := make([]tzpro.Metadata, 0, len(s))
+	sorted := make([]index.Metadata, 0, len(s))
 	canSort := true
 	for _, v := range s {
 		sorted = append(sorted, v)
@@ -458,12 +455,12 @@ func validateAliases(ctx context.Context, c *tzpro.Client) error {
 		return fmt.Errorf("%s: %w", fname, err)
 	}
 
-	content := make(map[string]tzpro.Metadata)
+	content := make(map[string]index.Metadata)
 	if err := json.Unmarshal(buf, &content); err != nil {
 		return fmt.Errorf("%s: %w", fname, err)
 	}
 
-	ss, err := c.GetAllMetadataSchemas(ctx)
+	ss, err := c.Metadata.GetSchemas(ctx)
 	if err != nil {
 		return err
 	}

@@ -1,9 +1,9 @@
 blockwatch.cc/packdb v0.0.0-20230516155931-1ab52e217822 h1:riXeuvYuaf3GF4FhMh/eWVO3W34/Mf+lLXhGABTTbfc=
 blockwatch.cc/packdb v0.0.0-20230516155931-1ab52e217822/go.mod h1:GI61aPmQMfgJMY3ITI06u7uDkUNnSyqH+HYdGePSUCE=
-blockwatch.cc/tzgo v1.17.0 h1:2PTRGFtw//7Szo7B8Xn9sgPzIXnsnbRWRX+9CqaT1sc=
-blockwatch.cc/tzgo v1.17.0/go.mod h1:tTgPzOH1pMhQod2sh2/jjOLabdCQegb8FZG23+fv1XE=
-blockwatch.cc/tzpro-go v0.17.0 h1:7S2oJLR6/UH/EID9azCIM8J/QXa1x5rM1VwTNa4jWTE=
-blockwatch.cc/tzpro-go v0.17.0/go.mod h1:RrsZZphrmDLhpHo8qMv1GWxB964qO4G0KBmZNcEBzkQ=
+blockwatch.cc/tzgo v1.17.2-0.20230816072533-df23743f304f h1:EfpIdvvvExFQRqlOxd83Vc7sn1LS98NbW3vUX18by5I=
+blockwatch.cc/tzgo v1.17.2-0.20230816072533-df23743f304f/go.mod h1:0qmkCabGTLn1rXR04aXqPTfeCWn5JOKcyOw98RsNbtM=
+blockwatch.cc/tzpro-go v0.17.3-0.20230707115210-8d35c406340f h1:or8ruJiEawwdvJIe+7EuX1OPBDuk4/yoNslKAvHgf3Q=
+blockwatch.cc/tzpro-go v0.17.3-0.20230707115210-8d35c406340f/go.mod h1:QT2fUCdcgwmIclKQEx6I1+l8Ik8FvbuhiYhGQmQDWKs=
 github.com/OneOfOne/xxhash v1.2.2 h1:KMrpdQIwFcEqXDklaen+P1axHaj9BSKzvpUUfnHldSE=
 github.com/OneOfOne/xxhash v1.2.2/go.mod h1:HSdplMjZKSmBqAxg5vPj2TmRDmfkzw+cTzAElWljhcU=
 github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d h1:licZJFw2RwpHMqeKTCYkitsPqHNxTmd4SNR5r94FGM8=
@@ -90,7 +90,7 @@ github.com/spaolacci/murmur3 v0.0.0-20180118202830-f09979ecbc72 h1:qLC7fQah7D6K1
 github.com/spaolacci/murmur3 v0.0.0-20180118202830-f09979ecbc72/go.mod h1:JwIasOWyU6f++ZhiEuf87xNszmSA2myDM2Kzu9HwQUA=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
-github.com/stretchr/testify v1.8.1 h1:w7B6lhMri9wdJUVmEZPGGhZzrYTPvgJArz7wNPgYKsk=
+github.com/stretchr/testify v1.8.4 h1:CcVxjf3Q8PM0mHUKJCdn+eZZtm5yQwehR5yeSVQQcUk=
 github.com/tidwall/gjson v1.14.4 h1:uo0p8EbA09J7RQaflQ1aBRffTR7xedD2bcIVSYxLnkM=
 github.com/tidwall/gjson v1.14.4/go.mod h1:/wbyibRr2FHMks5tjHJ5F8dMZh3AcwJEMf5vlfC0lxk=
 github.com/tidwall/match v1.1.1 h1:+Ho715JplO36QYgwN9PGYNhgZvoUSc9X2c80KVTi+GA=

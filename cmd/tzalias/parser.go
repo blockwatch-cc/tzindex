@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"blockwatch.cc/tzpro-go/tzpro"
+	"blockwatch.cc/tzpro-go/tzpro/index"
 )
 
 type kvpairs map[string]string
@@ -189,7 +189,7 @@ func setField(dst interface{}, name, value string) error {
 
 // we assume exactly two nesting levels and add all detected schemas
 // as schema descriptors to Extra
-func fillStruct(m map[string]string, alias *tzpro.Metadata) error {
+func fillStruct(m map[string]string, alias *index.Metadata) error {
 	for k, v := range m {
 		keyParts := strings.Split(k, ".")
 		ns := keyParts[0]
