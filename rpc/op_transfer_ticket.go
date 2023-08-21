@@ -64,3 +64,66 @@ func (t TransferTicket) Addresses(set *tezos.AddressSet) {
 	set.AddUnique(t.Destination)
 	set.AddUnique(t.Ticketer)
 }
+
+func (t TransferTicket) AddEmbeddedAddresses(addUnique func(tezos.Address)) {
+	if !t.Destination.IsContract() {
+		return
+	}
+	collect := func(p micheline.Prim) error {
+		switch {
+		case len(p.String) == 36 || len(p.String) == 37:
+			if a, err := tezos.ParseAddress(p.String); err == nil {
+				addUnique(a)
+			}
+			return micheline.PrimSkip
+		case tezos.IsAddressBytes(p.Bytes):
+			a := tezos.Address{}
+			if err := a.Decode(p.Bytes); err == nil {
+				addUnique(a)
+			}
+			return micheline.PrimSkip
+		default:
+			return nil
+		}
+	}
+
+	// from storage
+	_ = t.Metadata.Result.Storage.Walk(collect)
+
+	// from bigmap updates
+	for _, v := range t.Metadata.Result.BigmapEvents() {
+		if v.Action != micheline.DiffActionUpdate {
+			continue
+		}
+		_ = v.Key.Walk(collect)
+		_ = v.Value.Walk(collect)
+	}
+
+	// from ticket updates
+	for _, it := range t.Metadata.Result.TicketUpdates() {
+		for _, v := range it.Updates {
+			addUnique(v.Account)
+		}
+	}
+
+	// from internal results
+	for _, it := range t.Metadata.InternalResults {
+		if it.Script != nil {
+			_ = it.Script.Storage.Walk(collect)
+		}
+		_ = it.Result.Storage.Walk(collect)
+		for _, v := range it.Result.BigmapEvents() {
+			if v.Action != micheline.DiffActionUpdate {
+				continue
+			}
+			_ = v.Key.Walk(collect)
+			_ = v.Value.Walk(collect)
+		}
+		// from ticket updates
+		for _, v := range it.Result.TicketUpdates() {
+			for _, vv := range v.Updates {
+				addUnique(vv.Account)
+			}
+		}
+	}
+}

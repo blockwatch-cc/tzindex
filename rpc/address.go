@@ -95,6 +95,16 @@ func (b *Block) CollectAddresses(addUnique func(tezos.Address)) error {
 					addUnique(tx.Source)
 					addUnique(tx.Destination)
 					addUnique(tx.Ticketer)
+					for _, res := range tx.Metadata.InternalResults {
+						addUnique(res.Destination)
+						addUnique(res.Delegate)
+						for _, v := range res.Result.OriginatedContracts {
+							addUnique(v)
+						}
+					}
+					if tx.Result().IsSuccess() {
+						tx.AddEmbeddedAddresses(addUnique)
+					}
 
 				case *TxRollup:
 					addUnique(tx.Source)

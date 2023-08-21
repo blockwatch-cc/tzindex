@@ -283,7 +283,7 @@ func (b *Builder) AppendInternalTransactionOp(
 	}
 	dst, ok := b.AccountByAddress(iop.Destination)
 	if !ok {
-		return Errorf("missing source account %s", iop.Destination)
+		return Errorf("missing target account %s", iop.Destination)
 	}
 
 	var (
