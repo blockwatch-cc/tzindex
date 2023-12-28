@@ -14,6 +14,7 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/store"
 	"blockwatch.cc/tzindex/etl"
+	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/metadata"
 	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
@@ -24,19 +25,17 @@ func runServer() error {
 	// set user agent in library client
 	server.UserAgent = UserAgent()
 	server.ApiVersion = apiVersion
-	pack.QueryLogMinDuration = config.GetDuration("db.log_slow_queries")
 
 	// load metadata extensions
 	if err := metadata.LoadExtensions(); err != nil {
 		return err
 	}
 
-	engine := config.GetString("db.engine")
 	pathname := config.GetString("db.path")
+	pack.QueryLogMinDuration = config.GetDuration("db.log_slow_queries")
+	index.MaxStorageEntrySize = config.GetInt("db.max_storage_entry_size")
+	dbOpts := DBOpts(false)
 	log.Infof("Using %s database %s", engine, pathname)
-	if unsafe {
-		log.Warnf("Enabled NOSYNC mode. Database will not be safe on crashes!")
-	}
 
 	// make sure paths exist
 	if err := os.MkdirAll(pathname, 0700); err != nil {
@@ -50,12 +49,12 @@ func runServer() error {
 	}
 
 	// open shared state database
-	statedb, err := store.Open(engine, filepath.Join(pathname, etl.StateDBName), DBOpts(engine, false, unsafe))
+	statedb, err := store.Open(engine, filepath.Join(pathname, etl.StateDBName), dbOpts)
 	if err != nil {
 		if !store.IsError(err, store.ErrDbDoesNotExist) {
 			return fmt.Errorf("error opening %s database: %v", etl.StateDBName, err)
 		}
-		statedb, err = store.Create(engine, filepath.Join(pathname, etl.StateDBName), DBOpts(engine, false, unsafe))
+		statedb, err = store.Create(engine, filepath.Join(pathname, etl.StateDBName), dbOpts)
 		if err != nil {
 			return fmt.Errorf("error creating %s database: %v", etl.StateDBName, err)
 		}
@@ -79,7 +78,7 @@ func runServer() error {
 	// enable index storage tables
 	indexer := etl.NewIndexer(etl.IndexerConfig{
 		DBPath:    pathname,
-		DBOpts:    DBOpts(engine, false, unsafe),
+		DBOpts:    dbOpts,
 		StateDB:   statedb,
 		Indexes:   enabledIndexes(),
 		LightMode: lightIndex,

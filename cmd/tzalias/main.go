@@ -112,7 +112,7 @@ func main() {
 
 	if err := run(); err != nil {
 		if e, ok := tzpro.IsErrApi(err); ok {
-			log.Errorf("%s: %s", e.Errors[0].Message, e.Errors[0].Detail)
+			log.Errorf("%s: %s", e.Message, e.Detail)
 		} else {
 			log.Error(err)
 		}

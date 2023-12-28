@@ -170,8 +170,6 @@ Flags
       disable RPC TLS support (use http)
   -stop height
       stop indexing after height
-  -unsafe
-      disable fsync for fast ingest (DANGEROUS! data will be lost on crashes)
   -v  be verbose
   -validate
       validate account balances
@@ -189,6 +187,7 @@ Subsystem Options
 Database
   -db.path=./db             path for database storage
   -db.log_slow_queries=1s   warn when DB queries take longer than this
+  -db.max_storage_entry_size=131072  max size limit for storing contract storage updates
 
 Go runtime
   -go.cpu=0            max number of CPU cores to use (0 = all)

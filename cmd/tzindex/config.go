@@ -30,7 +30,6 @@ var (
 	// indexer options
 	noindex    bool
 	nomonitor  bool
-	unsafe     bool
 	norpc      bool
 	noapi      bool
 	cors       bool
@@ -62,7 +61,6 @@ func init() {
 	flags.BoolVar(&noapi, "noapi", false, "disable API server")
 	flags.BoolVar(&noindex, "noindex", false, "disable indexing")
 	flags.BoolVar(&nomonitor, "nomonitor", false, "disable block monitor")
-	flags.BoolVar(&unsafe, "unsafe", false, "disable fsync for fast ingest (DANGEROUS! data will be lost on crashes)")
 	flags.BoolVar(&validate, "validate", false, "validate account balances")
 	flags.Int64Var(&stop, "stop", 0, "stop indexing after `height`")
 	flags.BoolVar(&cors, "enable-cors", false, "enable API CORS support")
@@ -73,11 +71,14 @@ func init() {
 	config.SetDefault("go.sample_rate", 0) // block and mutex profiling sample rate
 
 	// database
-	config.SetDefault("db.engine", "bolt")
-	config.SetDefault("db.path", "./db")
-	config.SetDefault("db.nosync", false)
+	config.SetDefault("db.path", "./db")                // db base path
+	config.SetDefault("db.nosync", false)               // skip fsync, dangerous
+	config.SetDefault("db.no_grow_sync", false)         // don't use with ext3/4, good in Docker + XFS
+	config.SetDefault("db.no_free_sync", false)         // skip fsync+alloc on grow; don't use with ext3/4, good in Docker + XFS
+	config.SetDefault("db.page_size", os.Getpagesize()) // custom db page size (overwrites OS)
 	config.SetDefault("db.gc_ratio", 1.0)
 	config.SetDefault("db.log_slow_queries", time.Second)
+	config.SetDefault("db.max_storage_entry_size", 131072) // contract storage max bytes per record
 
 	// crawling
 	config.SetDefault("crawler.queue", 100)
