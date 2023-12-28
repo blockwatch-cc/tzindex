@@ -233,9 +233,6 @@ func (m *Indexer) Flush(ctx context.Context) error {
 				return err
 			}
 		}
-		if err := m.storeTip(idx.Key()); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -247,9 +244,6 @@ func (m *Indexer) FlushJournals(ctx context.Context) error {
 			if err := t.FlushJournal(ctx); err != nil {
 				return err
 			}
-		}
-		if err := m.storeTip(idx.Key()); err != nil {
-			return err
 		}
 	}
 	return nil
@@ -289,9 +283,6 @@ func (m *Indexer) Close() error {
 	for _, idx := range m.indexes {
 		log.Infof("Closing %s.", idx.Name())
 		if err := idx.Close(); err != nil {
-			return err
-		}
-		if err := m.storeTip(idx.Key()); err != nil {
 			return err
 		}
 	}
@@ -440,14 +431,12 @@ func (m *Indexer) maybeCreateIndex(_ context.Context, dbTx store.Tx, idx model.B
 	})
 }
 
-// Store idx tip
-func (m *Indexer) storeTip(key string) error {
-	tip, ok := m.tips[key]
-	if !ok {
-		return nil
+// Store idx tips
+func (m *Indexer) storeTips(dbTx store.Tx) error {
+	for key, tip := range m.tips {
+		if err := dbStoreIndexTip(dbTx, key, tip); err != nil {
+			return err
+		}
 	}
-	// log.Debugf("Storing %s idx tip.", key)
-	return m.statedb.Update(func(dbTx store.Tx) error {
-		return dbStoreIndexTip(dbTx, key, tip)
-	})
+	return nil
 }

@@ -148,9 +148,12 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *model.Blo
 			}
 
 			if err := c.db.Update(func(dbTx store.Tx) error {
+				if err := c.indexer.storeTips(dbTx); err != nil {
+					return err
+				}
 				return dbStoreChainTip(dbTx, newTip)
 			}); err != nil {
-				return fmt.Errorf("REORGANIZE: updating block database failed for %d: %w", block.Height, err)
+				return fmt.Errorf("REORGANIZE: updating statedb failed for %d: %w", block.Height, err)
 			}
 
 			// update chain tip
@@ -235,7 +238,16 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *model.Blo
 			newTip.AddDeployment(block.Params)
 		}
 
+		// flush after each attached block to make all insert/update ops durable
+		log.Infof("REORGANIZE: flushing database journals")
+		if err := c.indexer.FlushJournals(ctx); err != nil {
+			return fmt.Errorf("REORGANIZE: flushing table journals failed for %d: %w", block.Height, err)
+		}
+
 		err = c.db.Update(func(dbTx store.Tx) error {
+			if err := c.indexer.storeTips(dbTx); err != nil {
+				return err
+			}
 			return dbStoreChainTip(dbTx, newTip)
 		})
 		if err != nil {

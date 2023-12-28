@@ -888,6 +888,9 @@ func (c *Crawler) syncBlockchain() {
 
 		// store last chain state
 		err := c.db.Update(func(dbTx store.Tx) error {
+			if err := c.indexer.storeTips(dbTx); err != nil {
+				return err
+			}
 			return dbStoreChainTip(dbTx, tip)
 		})
 		if err != nil {
@@ -1052,6 +1055,9 @@ func (c *Crawler) syncBlockchain() {
 		// update state every 256 blocks or every block when synchronized
 		if state == STATE_SYNCHRONIZED || block.Height&0xff == 0 {
 			err := c.db.Update(func(dbTx store.Tx) error {
+				if err := c.indexer.storeTips(dbTx); err != nil {
+					return err
+				}
 				return dbStoreChainTip(dbTx, tip)
 			})
 			if err != nil {
