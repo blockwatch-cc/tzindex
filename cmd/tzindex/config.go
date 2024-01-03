@@ -106,23 +106,23 @@ func init() {
 	config.SetDefault("server.max_explore_count", 100)
 	config.SetDefault("server.default_explore_count", 20)
 	config.SetDefault("server.cors_enable", false)
-	config.SetDefault("server.cors_origin", []string{"*"})
-	config.SetDefault("server.cors_allow_headers", []string{
+	config.SetDefault("server.cors_origin", "*")
+	config.SetDefault("server.cors_allow_headers", strings.Join([]string{
 		"Authorization",
 		"Accept",
 		"Content-Type",
 		"X-Api-Key",
 		"X-Requested-With",
-	})
-	config.SetDefault("server.cors_expose_headers", []string{
+	}, ","))
+	config.SetDefault("server.cors_expose_headers", strings.Join([]string{
 		"Date",
 		"X-Runtime",
 		"X-Request-Id",
 		"X-Api-Version",
 		"X-Network-Id",
 		"X-Protocol-Hash",
-	})
-	config.SetDefault("server.cors_methods", []string{"GET", "PUT", "POST", "OPTIONS"})
+	}, ","))
+	config.SetDefault("server.cors_methods", "GET,PUT,POST,OPTIONS")
 	config.SetDefault("server.cors_maxage", 86400*time.Second)
 	config.SetDefault("server.cors_credentials", true)
 	config.SetDefault("server.cache_control", "public")

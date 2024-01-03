@@ -387,11 +387,7 @@ func (api *Context) writeResponseHeaders(contentType, trailers string) {
 
 	// set CORS header if enabled
 	if hc.CorsEnable {
-		if hc.CorsOrigin == "*" {
-			h.Set("Access-Control-Allow-Origin", api.Request.Header.Get("Origin"))
-		} else {
-			h.Set("Access-Control-Allow-Origin", hc.CorsOrigin)
-		}
+		h.Set("Access-Control-Allow-Origin", hc.CorsOrigin)
 		h.Set("Access-Control-Allow-Headers", hc.CorsAllowHeaders)
 		h.Set("Access-Control-Expose-Headers", hc.CorsExposeHeaders)
 		h.Set("Access-Control-Allow-Methods", hc.CorsMethods)
