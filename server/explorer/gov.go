@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package explorer
@@ -32,24 +32,18 @@ type Vote struct {
 	EndTime          time.Time              `json:"period_end_time"`
 	StartHeight      int64                  `json:"period_start_block"`
 	EndHeight        int64                  `json:"period_end_block"`
-	EligibleRolls    int64                  `json:"eligible_rolls"`
 	EligibleStake    float64                `json:"eligible_stake"`
 	EligibleVoters   int64                  `json:"eligible_voters"`
 	QuorumPct        int64                  `json:"quorum_pct"`
-	QuorumRolls      int64                  `json:"quorum_rolls"`
 	QuorumStake      float64                `json:"quorum_stake"`
-	TurnoutRolls     int64                  `json:"turnout_rolls"`
 	TurnoutStake     float64                `json:"turnout_stake"`
 	TurnoutVoters    int64                  `json:"turnout_voters"`
 	TurnoutPct       int64                  `json:"turnout_pct"`
 	TurnoutEma       int64                  `json:"turnout_ema"`
-	YayRolls         int64                  `json:"yay_rolls"`
 	YayStake         float64                `json:"yay_stake"`
 	YayVoters        int64                  `json:"yay_voters"`
-	NayRolls         int64                  `json:"nay_rolls"`
 	NayStake         float64                `json:"nay_stake"`
 	NayVoters        int64                  `json:"nay_voters"`
-	PassRolls        int64                  `json:"pass_rolls"`
 	PassStake        float64                `json:"pass_stake"`
 	PassVoters       int64                  `json:"pass_voters"`
 	IsOpen           bool                   `json:"is_open"`
@@ -69,24 +63,18 @@ func NewVote(ctx *server.Context, v *model.Vote) *Vote {
 		EndTime:          v.EndTime,
 		StartHeight:      v.StartHeight,
 		EndHeight:        v.EndHeight,
-		EligibleRolls:    v.EligibleRolls,
 		EligibleStake:    ctx.Params.ConvertValue(v.EligibleStake),
 		EligibleVoters:   v.EligibleVoters,
 		QuorumPct:        v.QuorumPct,
-		QuorumRolls:      v.QuorumRolls,
 		QuorumStake:      ctx.Params.ConvertValue(v.QuorumStake),
-		TurnoutRolls:     v.TurnoutRolls,
 		TurnoutStake:     ctx.Params.ConvertValue(v.TurnoutStake),
 		TurnoutVoters:    v.TurnoutVoters,
 		TurnoutPct:       v.TurnoutPct,
 		TurnoutEma:       v.TurnoutEma,
-		YayRolls:         v.YayRolls,
 		YayStake:         ctx.Params.ConvertValue(v.YayStake),
 		YayVoters:        v.YayVoters,
-		NayRolls:         v.NayRolls,
 		NayStake:         ctx.Params.ConvertValue(v.NayStake),
 		NayVoters:        v.NayVoters,
-		PassRolls:        v.PassRolls,
 		PassStake:        ctx.Params.ConvertValue(v.PassStake),
 		PassVoters:       v.PassVoters,
 		IsOpen:           v.IsOpen,
@@ -112,7 +100,6 @@ type Proposal struct {
 	OpHash        tezos.OpHash       `json:"op_hash"`
 	Height        int64              `json:"height"`
 	Time          time.Time          `json:"time"`
-	Rolls         int64              `json:"rolls"`
 	Stake         float64            `json:"stake"`
 	Voters        int64              `json:"voters"`
 }
@@ -122,7 +109,6 @@ func NewProposal(ctx *server.Context, p *model.Proposal) *Proposal {
 		Hash:          p.Hash,
 		Height:        p.Height,
 		Time:          p.Time,
-		Rolls:         p.Rolls,
 		Stake:         ctx.Params.ConvertValue(p.Stake),
 		Voters:        p.Voters,
 		BlockHash:     ctx.Indexer.LookupBlockHash(ctx, p.Height),
@@ -141,7 +127,6 @@ type Ballot struct {
 	Proposal         tezos.ProtocolHash     `json:"proposal"`
 	OpHash           tezos.OpHash           `json:"op"`
 	Ballot           tezos.BallotVote       `json:"ballot"`
-	Rolls            int64                  `json:"rolls"`
 	Stake            float64                `json:"stake"`
 	Sender           string                 `json:"sender"`
 }
@@ -169,7 +154,6 @@ func NewBallot(ctx *server.Context, b *model.Ballot, p tezos.ProtocolHash, o tez
 		Proposal:         p,
 		OpHash:           o,
 		Ballot:           b.Ballot,
-		Rolls:            b.Rolls,
 		Stake:            ctx.Params.ConvertValue(b.Stake),
 		Sender:           ctx.Indexer.LookupAddress(ctx, b.SourceId).String(),
 	}
@@ -196,7 +180,7 @@ type Election struct {
 	CooldownPeriod    *Vote                  `json:"cooldown"`
 	PromotionPeriod   *Vote                  `json:"promotion"`
 	AdoptionPeriod    *Vote                  `json:"adoption"`
-	expires           time.Time              `json:"-"`
+	expires           time.Time
 }
 
 var _ server.RESTful = (*Election)(nil)
@@ -227,12 +211,12 @@ func NewElection(ctx *server.Context, e *model.Election) *Election {
 		diff := p.NumVotingPeriods*p.BlocksPerVotingPeriod - (ctx.Tip.BestHeight - e.StartHeight)
 		election.EndTime = tm.Add(time.Duration(diff) * p.BlockTime())
 		election.EndHeight = election.StartHeight + p.NumVotingPeriods*p.BlocksPerVotingPeriod - 1
-		election.expires = tm.Add(p.BlockTime())
+		election.expires = ctx.Expires
 	} else {
 		election.MaxPeriods = election.NumPeriods
 		height := ctx.Tip.BestHeight
 		if election.EndHeight >= height {
-			election.expires = tm.Add(p.BlockTime())
+			election.expires = ctx.Expires
 		} else {
 			election.expires = ctx.Now.Add(ctx.Cfg.Http.CacheMaxExpires)
 		}
@@ -376,7 +360,7 @@ func ReadElection(ctx *server.Context) (interface{}, int) {
 			ee.ProposalPeriod.Proposals = make([]*Proposal, 0)
 			for _, vv := range proposals {
 				p := NewProposal(ctx, vv)
-				if winner == nil || winner.Rolls < p.Rolls {
+				if winner == nil || winner.Stake < p.Stake {
 					winner = p
 				}
 				ee.ProposalPeriod.Proposals = append(ee.ProposalPeriod.Proposals, p)
@@ -390,7 +374,6 @@ func ReadElection(ctx *server.Context) (interface{}, int) {
 					OpHash:        winner.OpHash,
 					Height:        winner.Height,
 					Time:          winner.Time,
-					Rolls:         0,
 					Stake:         0,
 					Voters:        0,
 				}
@@ -418,7 +401,6 @@ func ReadElection(ctx *server.Context) (interface{}, int) {
 type Voter struct {
 	RowId     model.AccountID      `json:"row_id"`
 	Address   tezos.Address        `json:"address"`
-	Rolls     int64                `json:"rolls"`
 	Stake     float64              `json:"stake"`
 	HasVoted  bool                 `json:"has_voted"`
 	Ballot    tezos.BallotVote     `json:"ballot,omitempty"`
@@ -441,7 +423,6 @@ func NewVoter(ctx *server.Context, v *model.Voter) *Voter {
 	voter := &Voter{
 		RowId:    v.RowId,
 		Address:  ctx.Indexer.LookupAddress(ctx, v.RowId),
-		Rolls:    v.Rolls,
 		Stake:    ctx.Params.ConvertValue(v.Stake),
 		Ballot:   v.Ballot,
 		HasVoted: v.HasVoted,
@@ -480,13 +461,13 @@ func ListVoters(ctx *server.Context) (interface{}, int) {
 	}
 
 	if election.IsOpen {
-		resp.expires = ctx.Tip.BestTime.Add(params.BlockTime())
+		resp.expires = ctx.Expires
 	} else {
 		resp.expires = ctx.Now.Add(ctx.Cfg.Http.CacheMaxExpires)
 	}
 
 	for _, v := range voters {
-		if v.Rolls == 0 {
+		if v.Stake == 0 {
 			continue
 		}
 		resp.list = append(resp.list, NewVoter(ctx, v))
@@ -538,7 +519,7 @@ func ListBallots(ctx *server.Context) (interface{}, int) {
 	}
 
 	if election.IsOpen {
-		resp.expires = ctx.Tip.BestTime.Add(p.BlockTime())
+		resp.expires = ctx.Expires
 	} else {
 		resp.expires = ctx.Now.Add(ctx.Cfg.Http.CacheMaxExpires)
 	}

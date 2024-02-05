@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -11,10 +11,11 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/store"
-	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/cache"
+	"blockwatch.cc/tzindex/etl/index"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/task"
 	"blockwatch.cc/tzindex/rpc"
 )
 
@@ -45,6 +46,9 @@ type Indexer struct {
 	indexes        []model.BlockIndexer
 	tips           map[string]*IndexTip
 	tables         map[string]*pack.Table
+	sched          *task.Scheduler
+	taskdb         *pack.DB
+	tasks          *pack.Table
 	lightMode      bool
 }
 
@@ -85,6 +89,10 @@ func (m *Indexer) IsLightMode() bool {
 	return m.lightMode
 }
 
+func (m *Indexer) Sched() *task.Scheduler {
+	return m.sched
+}
+
 func (m *Indexer) Table(key string) (*pack.Table, error) {
 	t, ok := m.tables[key]
 	if !ok {
@@ -109,7 +117,7 @@ func (m *Indexer) TableStats() []pack.TableStats {
 			stats = append(stats, t.Stats()...)
 		}
 	}
-	return stats
+	return append(stats, m.tasks.Stats()...)
 }
 
 func (m *Indexer) Init(ctx context.Context, tip *model.ChainTip, mode Mode) error {
@@ -213,6 +221,30 @@ func (m *Indexer) Init(ctx context.Context, tip *model.ChainTip, mode Mode) erro
 			m.tables[t.Name()] = t
 		}
 	}
+
+	// open tasks db/table
+	var tasks task.TaskRequest
+	key := tasks.TableKey()
+	fields, err := pack.Fields(tasks)
+	if err != nil {
+		return fmt.Errorf("reading fields for table %q from type %T: %v", key, tasks, err)
+	}
+	m.taskdb, err = pack.CreateDatabaseIfNotExists(m.dbpath, key, tip.Symbol, m.dbopts)
+	if err != nil {
+		return fmt.Errorf("creating %s database: %w", key, err)
+	}
+	m.tasks, err = m.taskdb.CreateTableIfNotExists(key, fields, tasks.TableOpts().Merge(model.ReadConfigOpts(key)))
+	if err != nil {
+		return fmt.Errorf("creating %s table: %w", key, err)
+	}
+
+	// start scheduler
+	m.sched = task.NewScheduler()
+	m.sched.WithTable(m.tasks).
+		WithCallback(m.OnTaskComplete).
+		WithLogger(log).
+		Start()
+
 	return nil
 }
 
@@ -222,6 +254,14 @@ func (m *Indexer) Finalize(ctx context.Context) error {
 			return err
 		}
 	}
+
+	// compact task table every 8192 blocks
+	if m.tips[index.BlockIndexKey].Height%8129 == 0 {
+		if err := m.tasks.Compact(ctx); err != nil {
+			log.Errorf("compacting tasks: %v", err)
+		}
+	}
+
 	return nil
 }
 
@@ -234,7 +274,7 @@ func (m *Indexer) Flush(ctx context.Context) error {
 			}
 		}
 	}
-	return nil
+	return m.tasks.Flush(ctx)
 }
 
 func (m *Indexer) FlushJournals(ctx context.Context) error {
@@ -246,7 +286,7 @@ func (m *Indexer) FlushJournals(ctx context.Context) error {
 			}
 		}
 	}
-	return nil
+	return m.tasks.FlushJournal(ctx)
 }
 
 func (m *Indexer) GC(ctx context.Context, ratio float64) error {
@@ -275,16 +315,49 @@ func (m *Indexer) GC(ctx context.Context, ratio float64) error {
 			return err
 		}
 	}
+	log.Info("Compacting tasks table.")
+	if err := m.tasks.Compact(ctx); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	log.Infof("Garbage collecting tasks db (%s).", m.taskdb.Path())
+	if err := m.taskdb.GC(ctx, ratio); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
 func (m *Indexer) Close() error {
+	// shutdown task scheduler
+	if m.sched != nil {
+		m.sched.Stop()
+		m.sched = nil
+	}
+	if m.tasks != nil {
+		m.tasks.Close()
+		m.tasks = nil
+	}
+	if m.taskdb != nil {
+		m.taskdb.Close()
+		m.taskdb = nil
+	}
+
+	// close indexes
 	m.tables = nil
 	for _, idx := range m.indexes {
 		log.Infof("Closing %s.", idx.Name())
 		if err := idx.Close(); err != nil {
 			return err
 		}
+		// if err := m.storeTip(idx.Key()); err != nil {
+		// 	return err
+		// }
 	}
 	return nil
 }
@@ -293,7 +366,7 @@ func (m *Indexer) ConnectProtocol(ctx context.Context, next, prev *rpc.Params) e
 	err := m.statedb.Update(func(dbTx store.Tx) error {
 		if prev != nil {
 			if prev.EndHeight < 0 {
-				prev.EndHeight = util.Max64(0, next.StartHeight-1)
+				prev.EndHeight = max(next.StartHeight-1, 0)
 			}
 			if err := dbStoreDeployment(dbTx, prev); err != nil {
 				return err
@@ -320,7 +393,7 @@ func (m *Indexer) ConnectBlock(ctx context.Context, block *model.Block, builder 
 		}
 
 		// skip when the block is already known
-		if tip.Hash != nil && tip.Hash.Equal(block.Hash) {
+		if tip.Hash != nil && *tip.Hash == block.Hash {
 			continue
 		}
 
@@ -361,7 +434,7 @@ func (m *Indexer) DisconnectBlock(ctx context.Context, block *model.Block, build
 			log.Errorf("missing tip for table %s", key)
 			continue
 		}
-		if block.Height > 0 && !tip.Hash.Equal(block.Hash) {
+		if block.Height > 0 && *tip.Hash != block.Hash {
 			continue
 		}
 
@@ -431,7 +504,6 @@ func (m *Indexer) maybeCreateIndex(_ context.Context, dbTx store.Tx, idx model.B
 	})
 }
 
-// Store idx tips
 func (m *Indexer) storeTips(dbTx store.Tx) error {
 	for key, tip := range m.tips {
 		if err := dbStoreIndexTip(dbTx, key, tip); err != nil {
@@ -439,4 +511,13 @@ func (m *Indexer) storeTips(dbTx store.Tx) error {
 		}
 	}
 	return nil
+}
+
+func (m *Indexer) OnTaskComplete(ctx context.Context, res *task.TaskResult) error {
+	// identify target indexer
+	idx, err := m.Index(res.Index)
+	if err != nil {
+		return err
+	}
+	return idx.OnTaskComplete(ctx, res)
 }

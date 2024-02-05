@@ -1,4 +1,4 @@
-// Copyright (c) 2021 Blockwatch Data Inc.
+// Copyright (c) 2024 Blockwatch Data Inc.
 // Authors: abdul@blockwatch.cc, alex@blockwatch.cc
 package main
 
@@ -56,10 +56,6 @@ func createTable(g *gocui.Gui) (*View, error) {
 			row = append(row, &RowCell{
 				Text: t.GetCached(),
 			})
-			// set cached size
-			row = append(row, &RowCell{
-				Text: FormatBytes(int(t.PackCacheSize)),
-			})
 			// set hits
 			row = append(row, &RowCell{
 				Text: t.GetCacheHitRate(p, prev.Time),
@@ -82,9 +78,9 @@ func createTable(g *gocui.Gui) (*View, error) {
 			})
 			// set R/W
 			row = append(row, &RowCell{
-				Text: FormatBytes(int(t.PacksBytesRead)) +
+				Text: FormatBytes(int(t.BytesRead)) +
 					" / " +
-					FormatBytes(int(t.PacksBytesWritten+t.JournalBytesWritten+t.TombstoneBytesWritten)),
+					FormatBytes(int(t.BytesWritten+t.JournalBytesWritten+t.TombstoneBytesWritten)),
 			})
 			tr := &Row{
 				RowCells: row,

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package cache
@@ -6,7 +6,7 @@ package cache
 import (
 	"sync/atomic"
 
-	"blockwatch.cc/packdb/cache/lru"
+	lru "github.com/hashicorp/golang-lru/v2"
 
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzindex/etl/model"
@@ -18,7 +18,7 @@ var (
 )
 
 type ContractCache struct {
-	cache *lru.TwoQueueCache // key := account_id
+	cache *lru.TwoQueueCache[model.AccountID, *model.Contract] // key := account_id
 	size  int64
 	stats Stats
 }
@@ -28,11 +28,7 @@ func NewContractCache(sz int) *ContractCache {
 		sz = ContractMaxCacheSize
 	}
 	c := &ContractCache{}
-	c.cache, _ = lru.New2QWithEvict(sz, func(_, v interface{}) {
-		con := v.(*model.Contract)
-		c.size -= int64(con.HeapSize())
-		atomic.AddInt64(&c.stats.Evictions, 1)
-	})
+	c.cache, _ = lru.New2Q[model.AccountID, *model.Contract](sz)
 	return c
 }
 
@@ -51,7 +47,7 @@ func (c *ContractCache) Get(id model.AccountID) (*model.Contract, bool) {
 	cc, ok := c.cache.Get(id)
 	if ok {
 		atomic.AddInt64(&c.stats.Hits, 1)
-		return cc.(*model.Contract), ok
+		return cc, ok
 	} else {
 		atomic.AddInt64(&c.stats.Misses, 1)
 		return nil, false
@@ -59,17 +55,11 @@ func (c *ContractCache) Get(id model.AccountID) (*model.Contract, bool) {
 }
 
 func (c *ContractCache) Add(cc *model.Contract) {
-	updated, _ := c.cache.Add(cc.RowId, cc)
-	if updated {
-		atomic.AddInt64(&c.stats.Updates, 1)
-	} else {
-		c.size += int64(cc.HeapSize())
-		atomic.AddInt64(&c.stats.Inserts, 1)
-	}
+	c.cache.Add(cc.AccountId, cc)
 }
 
 func (c *ContractCache) Drop(cc *model.Contract) {
-	c.cache.Remove(cc.RowId)
+	c.cache.Remove(cc.AccountId)
 }
 
 func (c *ContractCache) Purge() {
@@ -78,7 +68,7 @@ func (c *ContractCache) Purge() {
 }
 
 type ContractTypeCache struct {
-	cache *lru.TwoQueueCache // key := account_id
+	cache *lru.TwoQueueCache[uint64, any] // key := account_id
 	size  int64
 	stats Stats
 }
@@ -98,28 +88,19 @@ func NewContractTypeCache(sz int) *ContractTypeCache {
 		sz = ContractTypeMaxCacheSize
 	}
 	c := &ContractTypeCache{}
-	c.cache, _ = lru.New2QWithEvict(sz, func(_, v interface{}) {
-		c.size -= v.(*ContractTypeElem).Size()
-		atomic.AddInt64(&c.stats.Evictions, 1)
-	})
+	c.cache, _ = lru.New2Q[uint64, any](sz)
 	return c
 }
 
 func (c *ContractTypeCache) Add(cc *model.Contract) *ContractTypeElem {
 	elem := &ContractTypeElem{CodeHash: cc.CodeHash}
 	elem.ParamType, elem.StorageType, _ = cc.LoadType()
-	updated, _ := c.cache.Add(cc.AccountId, elem)
-	if updated {
-		atomic.AddInt64(&c.stats.Updates, 1)
-	} else {
-		c.size += elem.Size()
-		atomic.AddInt64(&c.stats.Inserts, 1)
-	}
+	c.cache.Add(cc.AccountId.U64(), elem)
 	return elem
 }
 
 func (c *ContractTypeCache) Drop(cc *model.Contract) {
-	c.cache.Remove(cc.AccountId)
+	c.cache.Remove(cc.AccountId.U64())
 }
 
 func (c *ContractTypeCache) Purge() {
@@ -128,7 +109,7 @@ func (c *ContractTypeCache) Purge() {
 }
 
 func (c *ContractTypeCache) Get(id model.AccountID) (*ContractTypeElem, bool) {
-	val, ok := c.cache.Get(id)
+	val, ok := c.cache.Get(id.U64())
 	if !ok {
 		atomic.AddInt64(&c.stats.Misses, 1)
 		return nil, false

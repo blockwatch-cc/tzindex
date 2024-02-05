@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -10,6 +10,7 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/task"
 	"blockwatch.cc/tzindex/rpc"
 )
 
@@ -60,7 +61,7 @@ func (idx *RightsIndex) Create(path, label string, opts interface{}) error {
 		return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
 	}
 
-	_, err = db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(readConfigOpts(key)))
+	_, err = db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(model.ReadConfigOpts(key)))
 	return err
 }
 
@@ -74,7 +75,7 @@ func (idx *RightsIndex) Init(path, label string, opts interface{}) error {
 	m := model.Right{}
 	key := m.TableKey()
 
-	idx.table, err = idx.db.Table(key, m.TableOpts().Merge(readConfigOpts(key)))
+	idx.table, err = idx.db.Table(key, m.TableOpts().Merge(model.ReadConfigOpts(key)))
 	if err != nil {
 		idx.Close()
 		return err
@@ -161,7 +162,9 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 	if block.ProposerId > 0 {
 		right, err := idx.loadRight(ctx, block.Cycle, block.ProposerId)
 		if err != nil {
-			log.Warnf("rights: missing baking right for block %d proposer %d: %v", block.Height, block.ProposerId, err)
+			// in very rare cases a baker has no endorsing and no round-0 baking
+			// rights but bakes a round > 0 block
+			log.Warnf("rights: missing #%d baking right for block %d proposer %d: %v", block.Round, block.Height, block.ProposerId, err)
 		} else {
 			pos := int(block.TZ.GetCyclePosition())
 			right.Baked.Set(pos)
@@ -227,8 +230,8 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 		return nil
 	}
 
-	// we use current block's params as they are the most recent ones,
-	// - during regular block processing this
+	// we use current block's params
+	// - during regular block processing they are the most recent ones,
 	// - during protocol migration this is the set of new params
 	start := block.TZ.Baking[0][0].Level
 	cycle := p.HeightToCycle(start)
@@ -253,8 +256,8 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 			return endorse[i].Delegate < endorse[j].Delegate
 		})
 
-		log.Debugf("rights: adding %d baking and %d endorsing rights for cycle %d starting at %d",
-			len(bake), len(endorse), cycle, start)
+		// log.Debugf("rights: adding %d baking and %d endorsing rights for cycle %d starting at %d",
+		// 	len(bake), len(endorse), cycle, start)
 
 		// build rights bitmaps for each baker
 		rightsByBaker := make(map[model.AccountID]*model.Right)
@@ -307,7 +310,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 			ecnt++
 		}
 
-		// add empty rights for all known bakers with rolls in snapshot
+		// add empty rights for all known bakers with stake in snapshot
 		if sn := block.TZ.Snapshot; sn != nil {
 			snap, err := builder.Table(SnapshotIndexKey)
 			if err != nil {
@@ -324,7 +327,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 					if err := r.Decode(s); err != nil {
 						return err
 					}
-					if s.Rolls == 0 {
+					if s.StakingBalance == 0 {
 						return nil
 					}
 					if _, ok := rightsByBaker[s.AccountId]; ok {
@@ -344,7 +347,7 @@ func (idx *RightsIndex) ConnectBlock(ctx context.Context, block *model.Block, bu
 		sort.Slice(ins, func(i, j int) bool { return ins[i].(*model.Right).AccountId < ins[j].(*model.Right).AccountId })
 
 		// insert full cycle worth of rights
-		log.Debugf("rights: inserting %d records with %d baking and %d endorsing rights", len(ins), bcnt, ecnt)
+		// log.Debugf("rights: inserting %d records with %d baking and %d endorsing rights", len(ins), bcnt, ecnt)
 		if err := idx.table.Insert(ctx, ins); err != nil {
 			return err
 		}
@@ -466,4 +469,9 @@ func (idx *RightsIndex) loadRight(ctx context.Context, cycle int64, id model.Acc
 		idx.cache[right.AccountId] = right
 	}
 	return right, nil
+}
+
+func (idx *RightsIndex) OnTaskComplete(_ context.Context, _ *task.TaskResult) error {
+	// unused
+	return nil
 }

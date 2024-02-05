@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -66,31 +66,52 @@ func (b *Builder) MigrateIthaca(ctx context.Context, oldparams, params *rpc.Para
 			return fmt.Errorf("cannot fetch extra snapshot for cycle %d: %v", b.block.TZ.Snapshot.Cycle-1, err)
 		}
 		log.Infof("Migrate v%03d: updating extra snapshot index c%d/%d", params.Version, extraSnap.Base, extraSnap.Index)
+
+		stage, err := b.idx.Table(model.SnapshotStagingTableKey)
+		if err != nil {
+			return fmt.Errorf("cannot open snapshot table: %v", err)
+		}
 		snap, err := b.idx.Table(model.SnapshotTableKey)
 		if err != nil {
 			return fmt.Errorf("cannot open snapshot table: %v", err)
 		}
-		upd := make([]pack.Item, 0)
-		err = pack.NewQuery("etl.migrate.update").
-			WithTable(snap).
-			WithoutCache().
-			AndEqual("cycle", extraSnap.Base).
-			AndEqual("index", extraSnap.Index).
-			Stream(ctx, func(r pack.Row) error {
-				s := &model.Snapshot{}
-				if err := r.Decode(s); err != nil {
-					return err
-				}
-				s.IsSelected = true
-				upd = append(upd, s)
-				return nil
-			})
-		if err != nil {
-			return fmt.Errorf("cannot scan snapshot table: %v", err)
-		}
-		// store update
-		if err := snap.Update(ctx, upd); err != nil {
-			return fmt.Errorf("cannot update snapshot table: %v", err)
+		chunkSize := int(1 << snap.Options().JournalSizeLog2)
+		snaps := make([]*model.Snapshot, 0, chunkSize)
+		move := make([]pack.Item, 0, chunkSize)
+		del := make([]uint64, 0, chunkSize)
+		var cursor uint64
+		for {
+			snaps = snaps[:0]
+			err = pack.NewQuery("etl.migrate.move").
+				WithTable(stage).
+				WithLimit(chunkSize).
+				WithoutCache().
+				AndEqual("cycle", extraSnap.Base).
+				AndEqual("index", extraSnap.Index).
+				AndGt("row_id", cursor).
+				Execute(ctx, &snaps)
+			if err != nil {
+				return fmt.Errorf("cannot scan snapshot table: %v", err)
+			}
+			if len(snaps) == 0 {
+				break
+			}
+			move = move[:len(snaps)]
+			del = del[:len(snaps)]
+			cursor = snaps[len(snaps)-1].RowId
+			for i := range snaps {
+				del[i] = snaps[i].RowId
+				snaps[i].RowId = 0
+				move[i] = snaps[i]
+			}
+			// store update
+			if err := snap.Insert(ctx, move); err != nil {
+				return fmt.Errorf("cannot update snapshot table: %v", err)
+			}
+			if err := stage.DeleteIds(ctx, del); err != nil {
+				return fmt.Errorf("cannot update snapshot stage table: %v", err)
+			}
+			snaps = snaps[:0]
 		}
 	}
 
@@ -116,6 +137,10 @@ func (b *Builder) RebuildIthacaSnapshotsRightsAndIncome(ctx context.Context, par
 	if err != nil {
 		return err
 	}
+	stage, err := b.idx.Table(model.SnapshotStagingTableKey)
+	if err != nil {
+		return err
+	}
 	accounts, err := b.idx.Table(model.AccountTableKey)
 	if err != nil {
 		return err
@@ -134,7 +159,7 @@ func (b *Builder) RebuildIthacaSnapshotsRightsAndIncome(ctx context.Context, par
 	if startCycle == 0 {
 		startCycle, endCycle = b.block.Cycle, b.block.Cycle+params.PreservedCycles
 	}
-	log.Infof("Migrate v%03d: updating snapshots, rights and baker income for cycles %d..%d", params.Version, startCycle, endCycle)
+	log.Infof("Migrate v%03d: updating snapshots, rights and baker income for cycles C_%d..C_%d", params.Version, startCycle, endCycle)
 
 	// 1 delete all future cycle rights and income, delete past snapshots
 	log.Infof("Migrate v%03d: removing deprecated future rights", params.Version)
@@ -149,15 +174,22 @@ func (b *Builder) RebuildIthacaSnapshotsRightsAndIncome(ctx context.Context, par
 		return fmt.Errorf("migrate: flushing income after clear: %w", err)
 	}
 
-	log.Infof("Migrate v%03d: removing deprecated past snapshots", params.Version)
-	for cycle := startCycle; cycle <= endCycle; cycle++ {
+	log.Infof("Migrate v%03d: removing deprecated past snapshots C_%d..C_%d", params.Version, startCycle-1, endCycle)
+	for cycle := startCycle - 1; cycle <= endCycle; cycle++ {
 		_, _ = pack.NewQuery("etl.migrate.delete").
 			WithTable(snaps).
+			AndEqual("cycle", cycle-params.PreservedCycles-1).
+			Delete(ctx)
+		_, _ = pack.NewQuery("etl.migrate.delete").
+			WithTable(stage).
 			AndEqual("cycle", cycle-params.PreservedCycles-1).
 			Delete(ctx)
 	}
 	if err := snaps.Flush(ctx); err != nil {
 		return fmt.Errorf("migrate: flushing snapshots after clear: %w", err)
+	}
+	if err := stage.Flush(ctx); err != nil {
+		return fmt.Errorf("migrate: flushing staged snapshots after clear: %w", err)
 	}
 
 	// 2
@@ -182,7 +214,6 @@ func (b *Builder) RebuildIthacaSnapshotsRightsAndIncome(ctx context.Context, par
 
 		// strip pre-cycle rights if current block is not start of cycle
 		// this only happens in Ithaca testnet due to a setup mistake
-		// if !params.IsCycleStart(b.block.Height) {
 		if !b.block.TZ.IsCycleStart() {
 			bundle.PrevEndorsing = nil
 		}
@@ -206,33 +237,32 @@ func (b *Builder) RebuildIthacaSnapshotsRightsAndIncome(ctx context.Context, par
 		// delegator accounts, they are the same for all 6 first Ithaca cycles
 		// see https://gitlab.com/tezos/tezos/-/issues/2764#note_902498093
 		// Skip on testnet because there are no snapshots earlier than cycle 0!
-		if cycle > params.PreservedCycles+1 {
-			rollOwners := make([]uint64, 0)
+		if cycle > params.PreservedCycles {
+			activeBakers := make([]uint64, 0)
 			ins := make([]pack.Item, 0)
 
 			// bakers first
 			for _, bkr := range b.Bakers() {
-				if bkr.Rolls(params, 0) == 0 {
+				if bkr.StakingBalance() < params.MinimalStake {
 					continue
 				}
 				ins = append(ins, &model.Snapshot{
-					Height:       b.parent.Height,                    // snapshot happened at parent block
-					Timestamp:    b.parent.Timestamp,                 // snapshot happened at parent block
-					Cycle:        cycle - params.PreservedCycles - 1, // base cycle
-					Index:        16,                                 // sic!, its the 17th snapshot
-					IsSelected:   true,
-					Rolls:        bkr.Rolls(params, 0),
-					ActiveStake:  bkr.ActiveStake(params, 0),
-					AccountId:    bkr.AccountId,
-					BakerId:      bkr.AccountId,
-					IsBaker:      true,
-					IsActive:     bkr.IsActive,
-					Balance:      bkr.TotalBalance() + bkr.FrozenRewards, // receipt in next block (!)
-					Delegated:    bkr.DelegatedBalance,
-					NDelegations: bkr.ActiveDelegations,
-					Since:        bkr.BakerSince,
+					Height:         b.parent.Height,                    // snapshot happened at parent block
+					Timestamp:      b.parent.Timestamp,                 // snapshot happened at parent block
+					Cycle:          cycle - params.PreservedCycles - 1, // base cycle
+					Index:          16,                                 // sic!, its the 17th snapshot
+					StakingBalance: bkr.StakingBalance(),
+					OwnStake:       bkr.FrozenStake(),
+					AccountId:      bkr.AccountId,
+					BakerId:        bkr.AccountId,
+					IsBaker:        true,
+					IsActive:       bkr.IsActive,
+					Balance:        bkr.TotalBalance() + bkr.FrozenRewards, // receipt in next block (!)
+					Delegated:      bkr.DelegatedBalance,
+					NDelegations:   bkr.ActiveDelegations,
+					Since:          bkr.BakerSince,
 				})
-				rollOwners = append(rollOwners, bkr.AccountId.U64())
+				activeBakers = append(activeBakers, bkr.AccountId.U64())
 			}
 
 			// sort and insert
@@ -243,7 +273,7 @@ func (b *Builder) RebuildIthacaSnapshotsRightsAndIncome(ctx context.Context, par
 				return fmt.Errorf("migrate: insert baker snapshot for cycle %d: %w", cycle, err)
 			}
 
-			// delegators second (non-zero balance, delegating to one of the roll owners)
+			// delegators second (non-zero balance, delegating to one of the eligible bakers)
 			type XAccount struct {
 				Id               model.AccountID `pack:"row_id"`
 				BakerId          model.AccountID `pack:"baker_id"`
@@ -255,7 +285,7 @@ func (b *Builder) RebuildIthacaSnapshotsRightsAndIncome(ctx context.Context, par
 				WithTable(accounts).
 				WithoutCache().
 				WithFields("row_id", "baker_id", "spendable_balance", "delegated_since").
-				AndIn("baker_id", rollOwners).
+				AndIn("baker_id", activeBakers).
 				Stream(ctx, func(r pack.Row) error {
 					if err := r.Decode(a); err != nil {
 						return err
@@ -265,15 +295,14 @@ func (b *Builder) RebuildIthacaSnapshotsRightsAndIncome(ctx context.Context, par
 						return nil
 					}
 					ins = append(ins, &model.Snapshot{
-						Height:     b.parent.Height,
-						Timestamp:  b.parent.Timestamp,
-						Cycle:      cycle - params.PreservedCycles - 1,
-						Index:      16,
-						IsSelected: true,
-						AccountId:  a.Id,
-						BakerId:    a.BakerId,
-						Balance:    a.SpendableBalance,
-						Since:      a.DelegatedSince,
+						Height:    b.parent.Height,
+						Timestamp: b.parent.Timestamp,
+						Cycle:     cycle - params.PreservedCycles - 1,
+						Index:     16,
+						AccountId: a.Id,
+						BakerId:   a.BakerId,
+						Balance:   a.SpendableBalance,
+						Since:     a.DelegatedSince,
 					})
 					return nil
 				})
@@ -290,6 +319,9 @@ func (b *Builder) RebuildIthacaSnapshotsRightsAndIncome(ctx context.Context, par
 			}
 
 			// patch snapshot info to point to the fake index
+			bundle.Snapshot.Index = 16
+		} else {
+			log.Infof("migrate: skip fake snapshot generation for C_%d", cycle)
 			bundle.Snapshot.Index = 16
 		}
 
@@ -311,6 +343,9 @@ func (b *Builder) RebuildIthacaSnapshotsRightsAndIncome(ctx context.Context, par
 
 	if err := snaps.Flush(ctx); err != nil {
 		return fmt.Errorf("migrate: flushing snapshots after upgrade: %w", err)
+	}
+	if err := stage.Compact(ctx); err != nil {
+		return fmt.Errorf("migrate: compacting stage snapshots after upgrade: %w", err)
 	}
 	if err := rights.Flush(ctx); err != nil {
 		return fmt.Errorf("migrate: flushing rights after upgrade: %w", err)

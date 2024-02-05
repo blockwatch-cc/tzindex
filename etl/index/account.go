@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -9,8 +9,8 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/vec"
-
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/task"
 )
 
 const AccountIndexKey = "account"
@@ -64,18 +64,9 @@ func (idx *AccountIndex) Create(path, label string, opts interface{}) error {
 		if err != nil {
 			return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
 		}
-		opts := m.TableOpts().Merge(readConfigOpts(key))
-		table, err := db.CreateTableIfNotExists(key, fields, opts)
-		if err != nil {
+		opts := m.TableOpts().Merge(model.ReadConfigOpts(key))
+		if _, err := db.CreateTableIfNotExists(key, fields, opts); err != nil {
 			return err
-		}
-
-		for _, f := range fields.Indexed() {
-			ikey := f.Alias
-			opts := m.IndexOpts(ikey).Merge(readConfigOpts(key, ikey+"_index"))
-			if _, err := table.CreateIndexIfNotExists(ikey, f, pack.IndexTypeHash, opts); err != nil {
-				return err
-			}
 		}
 	}
 	return nil
@@ -93,18 +84,7 @@ func (idx *AccountIndex) Init(path, label string, opts interface{}) error {
 		model.Baker{},
 	} {
 		key := m.TableKey()
-		fields, err := pack.Fields(m)
-		if err != nil {
-			return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
-		}
-		topts := m.TableOpts().Merge(readConfigOpts(key))
-		var ikey string
-		for _, v := range fields.Indexed() {
-			ikey = v.Alias
-			break
-		}
-		iopts := m.IndexOpts(ikey).Merge(readConfigOpts(key, ikey+"_index"))
-		table, err := idx.db.Table(key, topts, iopts)
+		table, err := idx.db.Table(key, m.TableOpts().Merge(model.ReadConfigOpts(key)))
 		if err != nil {
 			idx.Close()
 			return err
@@ -277,5 +257,10 @@ func (idx *AccountIndex) Flush(ctx context.Context) error {
 			log.Errorf("Flushing %s table: %v", n, err)
 		}
 	}
+	return nil
+}
+
+func (idx *AccountIndex) OnTaskComplete(_ context.Context, _ *task.TaskResult) error {
+	// unused
 	return nil
 }

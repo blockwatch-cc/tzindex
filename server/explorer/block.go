@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package explorer
@@ -66,8 +66,10 @@ type Block struct {
 	GasUsed              int64                     `json:"gas_used"`
 	StoragePaid          int64                     `json:"storage_paid"`
 	PctAccountsReused    float64                   `json:"pct_account_reuse"`
-	LbEscapeVote         tezos.LbVote              `json:"lb_esc_vote"`
-	LbEscapeEma          int64                     `json:"lb_esc_ema"`
+	LbVote               tezos.FeatureVote         `json:"lb_vote"`
+	LbEma                int64                     `json:"lb_ema"`
+	AiVote               tezos.FeatureVote         `json:"ai_vote"`
+	AiEma                int64                     `json:"ai_ema"`
 	Metadata             map[string]*ShortMetadata `json:"metadata,omitempty"`
 	Rights               []Right                   `json:"rights,omitempty"`
 
@@ -75,8 +77,8 @@ type Block struct {
 	Ops OpList `json:"ops,omitempty"`
 
 	// caching
-	expires time.Time `json:"-"`
-	lastmod time.Time `json:"-"`
+	expires time.Time
+	lastmod time.Time
 }
 
 type Right struct {
@@ -166,8 +168,10 @@ func NewBlock(ctx *server.Context, block *model.Block, args server.Options) *Blo
 		GasLimit:             block.GasLimit,
 		GasUsed:              block.GasUsed,
 		StoragePaid:          block.StoragePaid,
-		LbEscapeVote:         block.LbEscapeVote,
-		LbEscapeEma:          block.LbEscapeEma,
+		LbVote:               block.LbVote,
+		LbEma:                block.LbEma,
+		AiVote:               block.AiVote,
+		AiEma:                block.AiEma,
 		Protocol:             p.Protocol,
 		BakerConsensusKey:    ctx.Indexer.LookupAddress(ctx, block.BakerConsensusKeyId),
 		ProposerConsensusKey: ctx.Indexer.LookupAddress(ctx, block.ProposerConsensusKeyId),
@@ -230,12 +234,12 @@ func NewBlock(ctx *server.Context, block *model.Block, args server.Options) *Blo
 	switch {
 	case b.Height == nowHeight:
 		// cache most recent block only until next block and endorsements are due
-		b.expires = b.Timestamp.Add(p.BlockTime())
+		b.expires = ctx.Expires
 		b.lastmod = b.Timestamp
 	case b.Height+p.MaxOperationsTTL >= nowHeight:
 		// cache blocks in the reorg safety zone only until next block is expected
-		b.expires = ctx.Tip.BestTime.Add(p.BlockTime())
-		b.lastmod = b.Timestamp.Add(p.BlockTime())
+		b.expires = ctx.Expires
+		b.lastmod = b.Timestamp
 	default:
 		b.expires = b.Timestamp.Add(ctx.Cfg.Http.CacheMaxExpires)
 		b.lastmod = b.Timestamp

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package model
@@ -25,9 +25,9 @@ var (
 		New: func() interface{} { return new(Contract) },
 	}
 
-	ErrNoContract = errors.New("contract not indexed")
-
 	contractSize = int(reflect.TypeOf(Contract{}).Size())
+
+	ErrNoContract = errors.New("contract not indexed")
 )
 
 type ContractID uint64
@@ -38,23 +38,28 @@ func (id ContractID) U64() uint64 {
 
 // Contract holds code and info about smart contracts on the Tezos blockchain.
 type Contract struct {
-	RowId         ContractID           `pack:"I,pk"     json:"row_id"`
-	Address       tezos.Address        `pack:"H,snappy" json:"address"`
-	AccountId     AccountID            `pack:"A"        json:"account_id"`
-	CreatorId     AccountID            `pack:"C"        json:"creator_id"`
-	FirstSeen     int64                `pack:"f"        json:"first_seen"`
-	LastSeen      int64                `pack:"l"        json:"last_seen"`
-	StorageSize   int64                `pack:"z"        json:"storage_size"`
-	StoragePaid   int64                `pack:"y"        json:"storage_paid"`
-	StorageBurn   int64                `pack:"Y"        json:"storage_burn"`
-	Script        []byte               `pack:"s,snappy" json:"script"`
-	Storage       []byte               `pack:"g,snappy" json:"storage"`
-	InterfaceHash uint64               `pack:"i,snappy" json:"iface_hash"`
-	CodeHash      uint64               `pack:"c,snappy" json:"code_hash"`
-	StorageHash   uint64               `pack:"x,snappy" json:"storage_hash"`
-	CallStats     []byte               `pack:"S,snappy" json:"call_stats"`
-	Features      micheline.Features   `pack:"F,snappy" json:"features"`
-	Interfaces    micheline.Interfaces `pack:"n,snappy" json:"interfaces"`
+	RowId          ContractID           `pack:"I,pk"      json:"row_id"`
+	Address        tezos.Address        `pack:"H,bloom=3" json:"address"`
+	AccountId      AccountID            `pack:"A,u32"     json:"account_id"`
+	CreatorId      AccountID            `pack:"C,u32"     json:"creator_id"`
+	FirstSeen      int64                `pack:"f,i32"     json:"first_seen"`
+	LastSeen       int64                `pack:"l,i32"     json:"last_seen"`
+	StorageSize    int64                `pack:"z,i32"     json:"storage_size"`
+	StoragePaid    int64                `pack:"y,i32"     json:"storage_paid"`
+	StorageBurn    int64                `pack:"Y"         json:"storage_burn"`
+	Script         []byte               `pack:"s,snappy"  json:"script"`
+	Storage        []byte               `pack:"g,snappy"  json:"storage"`
+	InterfaceHash  uint64               `pack:"i,snappy"  json:"iface_hash"`
+	CodeHash       uint64               `pack:"c,snappy"  json:"code_hash"`
+	StorageHash    uint64               `pack:"x,snappy"  json:"storage_hash"`
+	CallStats      []byte               `pack:"S,snappy"  json:"call_stats"`
+	Features       micheline.Features   `pack:"F,snappy"  json:"features"`
+	Interfaces     micheline.Interfaces `pack:"n,snappy"  json:"interfaces"`
+	LedgerType     TokenType            `pack:"t"         json:"ledger_type"`
+	LedgerSchema   LedgerSchema         `pack:"h"         json:"ledger_schema"`
+	LedgerBigmap   int64                `pack:"b,i32"     json:"ledger_bigmap"`
+	LedgerMeta     MetaID               `pack:"M"         json:"metadata_id"`
+	MetadataBigmap int64                `pack:"m,i32"     json:"metadata_bigmap"`
 
 	IsDirty bool              `pack:"-" json:"-"` // indicates an update happened
 	IsNew   bool              `pack:"-" json:"-"` // new contract, used during migration
@@ -100,6 +105,7 @@ func NewContract(acc *Account, oop *rpc.Origination, op *Op, dict micheline.Cons
 		c.Interfaces = oop.Script.Interfaces()
 		ep, _ := oop.Script.Entrypoints(false)
 		c.CallStats = make([]byte, 4*len(ep))
+		c.LedgerSchema, c.LedgerType, c.LedgerBigmap, c.MetadataBigmap = DetectLedger(*oop.Script)
 	}
 	flags := oop.BabylonFlags(p.Version)
 	if flags.IsSpendable() {
@@ -108,6 +114,7 @@ func NewContract(acc *Account, oop *rpc.Origination, op *Op, dict micheline.Cons
 	if flags.IsDelegatable() {
 		c.Features |= micheline.FeatureDelegatable
 	}
+
 	c.IsNew = true
 	c.IsDirty = true
 	return c
@@ -138,6 +145,7 @@ func NewInternalContract(acc *Account, iop rpc.InternalResult, op *Op, dict mich
 		c.Interfaces = iop.Script.Interfaces()
 		ep, _ := iop.Script.Entrypoints(false)
 		c.CallStats = make([]byte, 4*len(ep))
+		c.LedgerSchema, c.LedgerType, c.LedgerBigmap, c.MetadataBigmap = DetectLedger(*iop.Script)
 	}
 	// pre-babylon did not have any internal originations
 	// c.Features |= micheline.FeatureSpendable | micheline.FeatureDelegatable
@@ -166,6 +174,7 @@ func NewImplicitContract(acc *Account, res rpc.ImplicitResult, op *Op, p *rpc.Pa
 		c.Interfaces = res.Script.Interfaces()
 		ep, _ := res.Script.Entrypoints(false)
 		c.CallStats = make([]byte, 4*len(ep))
+		c.LedgerSchema, c.LedgerType, c.LedgerBigmap, c.MetadataBigmap = DetectLedger(*res.Script)
 	}
 	c.IsNew = true
 	c.IsDirty = true
@@ -191,7 +200,7 @@ func NewManagerTzContract(a *Account, height int64) (*Contract, error) {
 	c.StorageSize = 232           // fixed 232 bytes
 	c.StoragePaid = 0             // noone paid for this
 	c.CallStats = make([]byte, 8) // 2 entrypoints, 'do' (0) and 'default' (1)
-	binary.BigEndian.PutUint32(c.CallStats[4:8], uint32(a.NTxSuccess))
+	binary.BigEndian.PutUint32(c.CallStats[4:8], uint32(a.NTxIn))
 	c.IsNew = true
 	c.IsDirty = true
 	return c, nil
@@ -254,12 +263,7 @@ func (m Contract) TableOpts() pack.Options {
 }
 
 func (m Contract) IndexOpts(key string) pack.Options {
-	return pack.Options{
-		PackSizeLog2:    15,
-		JournalSizeLog2: 15,
-		CacheSize:       8,
-		FillLevel:       90,
-	}
+	return pack.NoOptions
 }
 
 func (c Contract) String() string {
@@ -315,7 +319,7 @@ func (c Contract) IsRollup() bool {
 	}
 }
 
-func (c *Contract) ListRollupCallStats() map[string]int {
+func (c *Contract) ListTxRollupCallStats() map[string]int {
 	res := make(map[string]int, len(c.CallStats)>>2)
 	for i, v := range []string{
 		"deposit", // fake, /sigh/ :(
@@ -352,7 +356,7 @@ func (c *Contract) ListSmartRollupCallStats() map[string]int {
 func (c *Contract) ListCallStats() map[string]int {
 	switch c.Address.Type() {
 	case tezos.AddressTypeTxRollup:
-		return c.ListRollupCallStats()
+		return c.ListTxRollupCallStats()
 	case tezos.AddressTypeSmartRollup:
 		return c.ListSmartRollupCallStats()
 	}
@@ -405,15 +409,15 @@ func (c *Contract) NamedBigmaps(m []*BigmapAlloc) map[string]int64 {
 		kt, vt := v.GetKeyType().Typedef(""), v.GetValueType().Typedef("")
 		var name string
 		for _, typ := range types {
-			if !typ.Left().Equal(kt) {
+			if !typ.Left().Unfold().Equal(kt) {
 				continue
 			}
-			if !typ.Right().Equal(vt) {
+			if !typ.Right().Unfold().Equal(vt) {
 				continue
 			}
 			name = typ.Name
-			// some bigmap types may be reused (different bigmap use the same type)
-			// so be carful not overwriting existing matches
+			// some bigmap types may be reused (different bigmaps have the same type)
+			// so be careful not overwriting existing matches
 			if _, ok := named[name]; !ok {
 				break
 			}
@@ -494,7 +498,7 @@ func (c *Contract) LoadScript() (*micheline.Script, error) {
 		return c.script, nil
 	}
 
-	// should not happen
+	// pre-babylon KT1 delegtors and rollups have no script
 	if len(c.Script) == 0 {
 		return nil, nil
 	}
@@ -511,4 +515,16 @@ func (c *Contract) LoadScript() (*micheline.Script, error) {
 	}
 	c.script = s
 	return s, nil
+}
+
+func (c *Contract) ConvertParams(in micheline.Parameters) (out micheline.Parameters) {
+	ptyp, _, err := c.LoadType()
+	if err == nil {
+		ep, prim, _ := in.MapEntrypoint(ptyp)
+		out = micheline.Parameters{
+			Entrypoint: ep.Name,
+			Value:      prim,
+		}
+	}
+	return
 }

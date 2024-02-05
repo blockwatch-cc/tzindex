@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package tables
@@ -480,8 +480,8 @@ func StreamBigmapUpdateTable(ctx *server.Context, args *TableRequest) (interface
 		// lookup accounts from id
 		// ctx.Log.Tracef("Looking up %d ops", len(find))
 		type XOp struct {
-			Id   model.OpID   `knox:"I,pk"`
-			Hash tezos.OpHash `knox:"H"`
+			Id   model.OpID   `pack:"I,pk"`
+			Hash tezos.OpHash `pack:"H"`
 		}
 		op := &XOp{}
 		err = pack.NewQuery(ctx.RequestID+".bigmap_lookup").

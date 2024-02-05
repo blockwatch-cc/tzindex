@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package model
@@ -24,7 +24,7 @@ type Storage struct {
 	RowId     StorageID `pack:"I,pk"             json:"row_id"`
 	AccountId AccountID `pack:"A,bloom=3,snappy" json:"account_id"`
 	Hash      uint64    `pack:"H,bloom=3,snappy" json:"hash"`
-	Height    int64     `pack:"h"                json:"height"`
+	Height    int64     `pack:"h,i32"            json:"height"`
 	Storage   []byte    `pack:"S,snappy"         json:"storage"`
 }
 
@@ -37,10 +37,6 @@ func (s Storage) ID() uint64 {
 
 func (s *Storage) SetID(id uint64) {
 	s.RowId = StorageID(id)
-}
-
-func (s *Storage) Reset() {
-	*s = Storage{}
 }
 
 func (m Storage) TableKey() string {
@@ -58,4 +54,8 @@ func (m Storage) TableOpts() pack.Options {
 
 func (m Storage) IndexOpts(key string) pack.Options {
 	return pack.NoOptions
+}
+
+func (s *Storage) Reset() {
+	*s = Storage{}
 }

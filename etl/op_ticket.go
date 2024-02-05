@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -89,6 +89,7 @@ func (b *Builder) AppendTransferTicketOp(ctx context.Context, oh *rpc.Operation,
 				op.Data = tx.Entrypoint
 			}
 		}
+		op.CodeHash = dCon.CodeHash
 	}
 	// ticket deposit
 	if dCon != nil && op.IsRollup {
@@ -182,15 +183,15 @@ func (b *Builder) AppendTransferTicketOp(ctx context.Context, oh *rpc.Operation,
 		id.N++
 		switch id.Kind {
 		case model.OpTypeTransaction:
-			if err := b.AppendInternalTransactionOp(ctx, src, sbkr, oh, v, id, rollback); err != nil {
+			if err := b.AppendInternalTransactionOp(ctx, src, sbkr, oh, *v, id, rollback); err != nil {
 				return err
 			}
 		case model.OpTypeDelegation:
-			if err := b.AppendInternalDelegationOp(ctx, src, sbkr, oh, v, id, rollback); err != nil {
+			if err := b.AppendInternalDelegationOp(ctx, src, sbkr, oh, *v, id, rollback); err != nil {
 				return err
 			}
 		case model.OpTypeOrigination:
-			if err := b.AppendInternalOriginationOp(ctx, src, sbkr, oh, v, id, rollback); err != nil {
+			if err := b.AppendInternalOriginationOp(ctx, src, sbkr, oh, *v, id, rollback); err != nil {
 				return err
 			}
 		default:

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -14,8 +14,8 @@ func (b *Builder) NewActivationFlow(acc *model.Account, aop *rpc.Activation, id 
 		log.Warnf("Empty balance update for activation op at height %d", b.block.Height)
 	}
 	f := model.NewFlow(b.block, acc, nil, id)
-	f.Category = model.FlowCategoryBalance
-	f.Operation = model.FlowTypeActivation
+	f.Kind = model.FlowKindBalance
+	f.Type = model.FlowTypeActivation
 	for _, u := range bal {
 		if u.Kind == "contract" {
 			f.AmountIn = u.Amount()

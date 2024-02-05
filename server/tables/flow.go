@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package tables
@@ -76,8 +76,8 @@ func (f *Flow) MarshalJSONVerbose() ([]byte, error) {
 		Account        string  `json:"address"`
 		CounterParty   string  `json:"counterparty"`
 		CounterPartyId uint64  `json:"counterparty_id"`
-		Category       string  `json:"category"`
-		Operation      string  `json:"operation"`
+		Kind           string  `json:"kind"`
+		Type           string  `json:"type"`
 		AmountIn       float64 `json:"amount_in"`
 		AmountOut      float64 `json:"amount_out"`
 		IsFee          bool    `json:"is_fee"`
@@ -99,8 +99,8 @@ func (f *Flow) MarshalJSONVerbose() ([]byte, error) {
 		Account:        f.ctx.Indexer.LookupAddress(f.ctx, f.AccountId).String(),
 		CounterPartyId: f.CounterPartyId.U64(),
 		CounterParty:   f.ctx.Indexer.LookupAddress(f.ctx, f.CounterPartyId).String(),
-		Category:       f.Category.String(),
-		Operation:      f.Operation.String(),
+		Kind:           f.Kind.String(),
+		Type:           f.Type.String(),
 		AmountIn:       f.params.ConvertValue(f.AmountIn),
 		AmountOut:      f.params.ConvertValue(f.AmountOut),
 		IsFee:          f.IsFee,
@@ -142,10 +142,10 @@ func (f *Flow) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendUint(buf, f.CounterPartyId.U64(), 10)
 		case "counterparty":
 			buf = strconv.AppendQuote(buf, f.ctx.Indexer.LookupAddress(f.ctx, f.CounterPartyId).String())
-		case "category":
-			buf = strconv.AppendQuote(buf, f.Category.String())
-		case "operation":
-			buf = strconv.AppendQuote(buf, f.Operation.String())
+		case "kind":
+			buf = strconv.AppendQuote(buf, f.Kind.String())
+		case "type":
+			buf = strconv.AppendQuote(buf, f.Type.String())
 		case "amount_in":
 			buf = strconv.AppendFloat(buf, f.params.ConvertValue(f.AmountIn), 'f', dec, 64)
 		case "amount_out":
@@ -226,10 +226,10 @@ func (f *Flow) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatUint(f.CounterPartyId.U64(), 10)
 		case "counterparty":
 			res[i] = strconv.Quote(f.ctx.Indexer.LookupAddress(f.ctx, f.CounterPartyId).String())
-		case "category":
-			res[i] = strconv.Quote(f.Category.String())
-		case "operation":
-			res[i] = strconv.Quote(f.Operation.String())
+		case "kind":
+			res[i] = strconv.Quote(f.Kind.String())
+		case "type":
+			res[i] = strconv.Quote(f.Type.String())
 		case "amount_in":
 			res[i] = strconv.FormatFloat(f.params.ConvertValue(f.AmountIn), 'f', dec, 64)
 		case "amount_out":
@@ -442,11 +442,11 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 						styps = append(styps, strconv.FormatUint(uint64(i), 10))
 					}
 					v = strings.Join(styps, ",")
-				case "category":
+				case "kind":
 					// consider comma separated lists, convert type to int and back to string list
 					typs := make([]uint8, 0)
 					for _, t := range strings.Split(v, ",") {
-						typ := model.ParseFlowCategory(t)
+						typ := model.ParseFlowKind(t)
 						if !typ.IsValid() {
 							panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid category '%s'", val[0]), nil))
 						}
@@ -457,7 +457,7 @@ func StreamFlowTable(ctx *server.Context, args *TableRequest) (interface{}, int)
 						styps = append(styps, strconv.FormatUint(uint64(i), 10))
 					}
 					v = strings.Join(styps, ",")
-				case "operation":
+				case "type":
 					// consider comma separated lists, convert type to int and back to string list
 					typs := make([]uint8, 0)
 					for _, t := range strings.Split(v, ",") {

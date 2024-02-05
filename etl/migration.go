@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -20,48 +20,53 @@ func (b *Builder) MigrateProtocol(ctx context.Context, prevparams, nextparams *r
 		return nil
 	}
 
-	switch {
-	case nextparams.Protocol.Equal(tezos.ProtoV002):
+	switch nextparams.Protocol {
+	case tezos.ProtoV002:
 		// origination bugfix
 		return b.FixOriginationBug(ctx, nextparams)
 
-	case nextparams.Protocol.Equal(tezos.PtAthens):
+	case tezos.PtAthens:
 		// adds invoice
 		return b.MigrateAthens(ctx, prevparams, nextparams)
 
-	case nextparams.Protocol.Equal(tezos.PsBabyM1):
+	case tezos.PsBabyM1:
 		// adds invoice
 		// runs manager airdrop
 		// migrates delegator contracts
 		return b.MigrateBabylon(ctx, prevparams, nextparams)
 
-	case nextparams.Protocol.Equal(tezos.PsCARTHA):
+	case tezos.PsCARTHA:
 		// new rewards
 		return b.MigrateCarthage(ctx, prevparams, nextparams)
 
-	case nextparams.Protocol.Equal(tezos.PtGRANAD):
+	case tezos.PtGRANAD:
 		// Granada changes cycle length and rights
 		// - remove and reload future rights
 		// - remove and build future income data
 		return b.MigrateGranada(ctx, prevparams, nextparams)
 
-	case nextparams.Protocol.Equal(tezos.Psithaca):
+	case tezos.Psithaca:
 		// Ithaca changes all rights
 		// - remove and reload future rights
 		// - remove and rebuild future income data
 		return b.MigrateIthaca(ctx, prevparams, nextparams)
 
-	case nextparams.Protocol.Equal(tezos.PtLimaPt):
+	case tezos.PtLimaPt:
 		// Lima changes all rights
 		// - remove and reload future rights
 		// - remove and rebuild future income data
 		return b.MigrateLima(ctx, prevparams, nextparams)
 
-	case nextparams.Protocol.Equal(tezos.PtMumbai):
+	case tezos.PtMumbai:
 		// Mumbai changes cycle length and rights
 		// - remove and reload future rights
 		// - remove and rebuild future income data
 		return b.MigrateMumbai(ctx, prevparams, nextparams)
+
+	case tezos.Proxford:
+		// Oxford changes the entire staking system
+		// - update baker deposits to stake
+		return b.MigrateOxford(ctx, prevparams, nextparams)
 	}
 
 	return nil
@@ -172,7 +177,7 @@ func (b *Builder) PatchBigmapEvents(ctx context.Context, diff micheline.BigmapEv
 }
 
 func (b *Builder) RebuildFutureRightsAndIncome(ctx context.Context, params *rpc.Params) error {
-	// we need to update rights and income indexes
+	// we need to update rights, snapshot and income indexes
 	income, err := b.idx.Index(index.IncomeIndexKey)
 	if err != nil {
 		return err
@@ -182,19 +187,12 @@ func (b *Builder) RebuildFutureRightsAndIncome(ctx context.Context, params *rpc.
 		return err
 	}
 
-	// empty fetched rights, if any
-	b.block.TZ.Baking = nil
-	b.block.TZ.Endorsing = nil
-	b.block.TZ.PrevEndorsing = nil
-	// b.block.TZ.Snapshot = nil // don't clear snapshot data (!)
-	// b.block.TZ.SnapInfo = nil // don't clear snapshot data (!)
-
 	// builder cache contains rights for n+5 at this point, so we only need to
 	// fetch and rebuild cycles n .. n+4 (we ignore the last 2 extra blocks for
 	// endorsing)
-	startCycle, endCycle := params.StartCycle, params.StartCycle+params.PreservedCycles
+	startCycle, endCycle := params.StartCycle, params.StartCycle+params.PreservedCycles-1
 	if startCycle == 0 {
-		startCycle, endCycle = b.block.Cycle, b.block.Cycle+params.PreservedCycles
+		startCycle, endCycle = b.block.Cycle, b.block.Cycle+params.PreservedCycles-1
 	}
 	log.Infof("Migrate v%03d: updating rights and baker income for cycles %d..%d", params.Version, startCycle, endCycle)
 
@@ -250,7 +248,12 @@ func (b *Builder) RebuildFutureRightsAndIncome(ctx context.Context, params *rpc.
 			}
 		}
 
-		// 2.3 construct an empty block to insert rights into indexers
+		// 2.3 fetch issuance params (post Oxford)
+		if err := b.rpc.FetchIssuanceByCycle(ctx, b.block.Height, cycle, bundle); err != nil {
+			return fmt.Errorf("fetch: issuance for cycle %d: %v", cycle, err)
+		}
+
+		// 2.4 construct an empty block to insert rights into indexers
 		block := &model.Block{
 			Height: b.block.Height,
 			Params: params,

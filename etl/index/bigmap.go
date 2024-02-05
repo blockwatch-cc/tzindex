@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -8,12 +8,11 @@ import (
 	"fmt"
 	"io"
 
-	"blockwatch.cc/packdb/cache"
-	"blockwatch.cc/packdb/cache/lru"
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/task"
+	lru "github.com/hashicorp/golang-lru/v2"
 )
 
 const BigmapIndexKey = "bigmap"
@@ -21,13 +20,13 @@ const BigmapIndexKey = "bigmap"
 type BigmapIndex struct {
 	db         *pack.DB
 	tables     map[string]*pack.Table
-	allocCache cache.Cache // cache bigmap allocs (for fast type access)
+	allocCache *lru.Cache[int64, *model.BigmapAlloc] // cache bigmap allocs (for fast type access)
 }
 
 var _ model.BlockIndexer = (*BigmapIndex)(nil)
 
 func NewBigmapIndex() *BigmapIndex {
-	ac, _ := lru.New(1 << 15) // 32k
+	ac, _ := lru.New[int64, *model.BigmapAlloc](1 << 15) // 32k
 	return &BigmapIndex{
 		tables:     make(map[string]*pack.Table),
 		allocCache: ac,
@@ -71,7 +70,7 @@ func (idx *BigmapIndex) Create(path, label string, opts interface{}) error {
 		if err != nil {
 			return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
 		}
-		opts := m.TableOpts().Merge(readConfigOpts(key))
+		opts := m.TableOpts().Merge(model.ReadConfigOpts(key))
 		_, err = db.CreateTableIfNotExists(key, fields, opts)
 		if err != nil {
 			return err
@@ -93,7 +92,7 @@ func (idx *BigmapIndex) Init(path, label string, opts interface{}) error {
 		model.BigmapValue{},
 	} {
 		key := m.TableKey()
-		t, err := idx.db.Table(key, m.TableOpts().Merge(readConfigOpts(key)))
+		t, err := idx.db.Table(key, m.TableOpts().Merge(model.ReadConfigOpts(key)))
 		if err != nil {
 			idx.Close()
 			return err
@@ -138,11 +137,11 @@ func NewInMemoryBigmap(alloc *model.BigmapAlloc) *InMemoryBigmap {
 }
 
 func (idx *BigmapIndex) loadAlloc(ctx context.Context, id int64) (*model.BigmapAlloc, error) {
-	cachedAlloc, ok := idx.allocCache.Get(id)
+	alloc, ok := idx.allocCache.Get(id)
 	if ok {
-		return cachedAlloc.(*model.BigmapAlloc), nil
+		return alloc, nil
 	}
-	alloc := &model.BigmapAlloc{}
+	alloc = &model.BigmapAlloc{}
 	err := pack.NewQuery("etl.find_alloc").
 		WithTable(idx.tables[model.BigmapAllocTableKey]).
 		AndEqual("bigmap_id", id).
@@ -692,7 +691,7 @@ func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 			}
 			// beware of same-block updates when resetting alloc update
 			if prev.Height < height {
-				alloc.Updated = util.Max64(alloc.Updated, prev.Height)
+				alloc.Updated = max(alloc.Updated, prev.Height)
 			}
 
 		case micheline.DiffActionUpdate, micheline.DiffActionCopy:
@@ -759,7 +758,7 @@ func (idx *BigmapIndex) DeleteBlock(ctx context.Context, height int64) error {
 
 				// beware of same-block updates when resetting alloc update
 				if prev.Height < height {
-					alloc.Updated = util.Max64(alloc.Updated, prev.Height)
+					alloc.Updated = max(alloc.Updated, prev.Height)
 				}
 			}
 		}
@@ -808,5 +807,10 @@ func (idx *BigmapIndex) Flush(ctx context.Context) error {
 			log.Errorf("Flushing %s table: %v", n, err)
 		}
 	}
+	return nil
+}
+
+func (idx *BigmapIndex) OnTaskComplete(_ context.Context, _ *task.TaskResult) error {
+	// unused
 	return nil
 }

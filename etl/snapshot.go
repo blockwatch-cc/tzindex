@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -130,7 +130,7 @@ func (c *Crawler) snapshot_locked(ctx context.Context) error {
 	}
 
 	// dump index and report db's
-	dbs := []*pack.DB{}
+	dbs := make([]*pack.DB, 0)
 	for _, v := range c.indexer.indexes {
 		dbs = append(dbs, v.DB())
 	}

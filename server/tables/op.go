@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package tables
@@ -58,7 +58,6 @@ func init() {
 	opSourceNames["entrypoint"] = "a"    // stored in data field
 	opSourceNames["entrypoint_id"] = "-" // ignore, internal
 	opSourceNames["address"] = "-"       // any address
-	opSourceNames["code_hash"] = "R"     // need receiver id to find contract in cache
 	opSourceNames["id"] = "h"            // need height to calculate id
 	opAllAliases = append(opAllAliases,
 		"sender",
@@ -179,15 +178,14 @@ func (o *Op) MarshalJSONVerbose() ([]byte, error) {
 		Parameters:   hex.EncodeToString(o.Parameters),
 		Errors:       json.RawMessage(o.Errors),
 	}
-	if o.Type.ListId() >= 0 {
+	if o.Hash.IsValid() {
 		op.Hash = o.Hash.String()
 	}
 	if o.IsContract {
 		op.Entrypoint = o.Data
 		op.StorageHash = util.U64String(o.StorageHash).Hex()
 		op.Data = ""
-		_, _, codeHash, _ := o.ctx.Indexer.LookupContractType(o.ctx.Context, o.ReceiverId)
-		op.CodeHash = util.U64String(codeHash).Hex()
+		op.CodeHash = util.U64String(o.CodeHash).Hex()
 	}
 	if len(o.BigmapEvents) > 0 {
 		buf, _ := o.BigmapEvents.MarshalBinary()
@@ -211,7 +209,7 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 		case "type":
 			buf = strconv.AppendQuote(buf, o.Type.String())
 		case "hash":
-			if o.Type.ListId() >= 0 {
+			if o.Hash.IsValid() {
 				buf = strconv.AppendQuote(buf, o.Hash.String())
 			} else {
 				buf = append(buf, []byte(`""`)...)
@@ -353,11 +351,7 @@ func (o *Op) MarshalJSONBrief() ([]byte, error) {
 				buf = append(buf, null...)
 			}
 		case "code_hash":
-			var codeHash uint64
-			if o.IsContract {
-				_, _, codeHash, _ = o.ctx.Indexer.LookupContractType(o.ctx.Context, o.ReceiverId)
-			}
-			buf = strconv.AppendQuote(buf, util.U64String(codeHash).Hex())
+			buf = strconv.AppendQuote(buf, util.U64String(o.CodeHash).Hex())
 		default:
 			continue
 		}
@@ -379,7 +373,7 @@ func (o *Op) MarshalCSV() ([]string, error) {
 		case "type":
 			res[i] = strconv.Quote(o.Type.String())
 		case "hash":
-			if o.Type.ListId() >= 0 {
+			if o.Hash.IsValid() {
 				res[i] = strconv.Quote(o.Hash.String())
 			} else {
 				res[i] = `""`
@@ -479,11 +473,7 @@ func (o *Op) MarshalCSV() ([]string, error) {
 				res[i] = `""`
 			}
 		case "code_hash":
-			var codeHash uint64
-			if o.IsContract {
-				_, _, codeHash, _ = o.ctx.Indexer.LookupContractType(o.ctx.Context, o.ReceiverId)
-			}
-			res[i] = strconv.Quote(util.U64String(codeHash).Hex())
+			res[i] = strconv.Quote(util.U64String(o.CodeHash).Hex())
 
 		default:
 			continue
@@ -526,8 +516,6 @@ func StreamOpTable(ctx *server.Context, args *TableRequest) (interface{}, int) {
 				srcNames = append(srcNames, "height", "op_n")
 			case "big_map_diff":
 				needBigmapEvents = true
-			case "code_hash":
-				srcNames = append(srcNames, "receiver_id", "is_contract")
 			}
 		}
 	} else {

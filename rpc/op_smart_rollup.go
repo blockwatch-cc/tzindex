@@ -1,4 +1,4 @@
-// Copyright (c) 2023 Blockwatch Data Inc.
+// Copyright (c) 2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -165,8 +165,8 @@ type SmartRollupRefutation struct {
 // There is no indication in the outer parts of the refutation struct that
 // suggests how to decode this.
 type SmartRollupRefuteStep struct {
-	Ticks []SmartRollupTick
-	Proof *SmartRollupProof
+	Ticks []SmartRollupTick `json:"ticks,omitempty"`
+	Proof *SmartRollupProof `json:"proof,omitempty"`
 }
 
 type SmartRollupProof struct {

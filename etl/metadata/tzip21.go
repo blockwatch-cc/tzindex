@@ -1,23 +1,24 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package metadata
 
 import (
-  "blockwatch.cc/tzgo/tezos"
-  "time"
+	"time"
+
+	"blockwatch.cc/tzgo/tezos"
 )
 
 func init() {
-  LoadSchema(tz21Ns, []byte(tz21Schema), &Tz21{})
+	LoadSchema(tz21Ns, []byte(tz21Schema), &Tz21{})
 }
 
 // https://gitlab.com/tzip/tzip/-/blob/master/proposals/tzip-21/metadata-schema.json
 const (
-  tz21Ns     = "tz21"
-  tz21Schema = `{
+	tz21Ns     = "tz21"
+	tz21Schema = `{
   "$schema": "http://json-schema.org/draft/2019-09/schema#",
-  "$id": "https://api.tzstats.com/metadata/schemas/tz21.json",
+  "$id": "https://api.tzpro.io/metadata/schemas/tz21.json",
   "title": "Rich Metadata",
   "type": "object",
   "additionalProperties": true,
@@ -255,71 +256,71 @@ const (
 )
 
 type Tz21 struct {
-  Tz21Asset
+	Tz21Asset
 }
 
 type Tz21Asset struct {
-  Description        string          `json:"description"`
-  Minter             tezos.Address   `json:"minter"`
-  Creators           []string        `json:"creators"`
-  Contributors       []string        `json:"contributors"`
-  Publishers         []string        `json:"publishers"`
-  Date               time.Time       `json:"date"`
-  BlockLevel         int64           `json:"blockLevel"`
-  Type               string          `json:"type"`
-  Tags               []string        `json:"tags"`
-  Genres             []string        `json:"genres"`
-  Language           string          `json:"language"`
-  Identifier         string          `json:"identifier"`
-  Rights             string          `json:"rights"`
-  RightUri           string          `json:"rightUri"`
-  ArtifactUri        string          `json:"artifactUri"`
-  DisplayUri         string          `json:"displayUri"`
-  ThumbnailUri       string          `json:"thumbnailUri"`
-  ExternalUri        string          `json:"externalUri"`
-  IsTransferable     bool            `json:"isTransferable"`
-  IsBooleanAmount    bool            `json:"isBooleanAmount"`
-  ShouldPreferSymbol bool            `json:"shouldPreferSymbol"`
-  Formats            []Tz21Format    `json:"formats"`
-  Attributes         []Tz21Attribute `json:"attributes"`
-  Assets             []Tz21Asset     `json:"assets"`
+	Description        string          `json:"description"`
+	Minter             tezos.Address   `json:"minter"`
+	Creators           []string        `json:"creators"`
+	Contributors       []string        `json:"contributors"`
+	Publishers         []string        `json:"publishers"`
+	Date               time.Time       `json:"date"`
+	BlockLevel         int64           `json:"blockLevel"`
+	Type               string          `json:"type"`
+	Tags               []string        `json:"tags"`
+	Genres             []string        `json:"genres"`
+	Language           string          `json:"language"`
+	Identifier         string          `json:"identifier"`
+	Rights             string          `json:"rights"`
+	RightUri           string          `json:"rightUri"`
+	ArtifactUri        string          `json:"artifactUri"`
+	DisplayUri         string          `json:"displayUri"`
+	ThumbnailUri       string          `json:"thumbnailUri"`
+	ExternalUri        string          `json:"externalUri"`
+	IsTransferable     bool            `json:"isTransferable"`
+	IsBooleanAmount    bool            `json:"isBooleanAmount"`
+	ShouldPreferSymbol bool            `json:"shouldPreferSymbol"`
+	Formats            []Tz21Format    `json:"formats"`
+	Attributes         []Tz21Attribute `json:"attributes"`
+	Assets             []Tz21Asset     `json:"assets"`
 }
 
 type Tz21Format struct {
-  Uri        string        `json:"uri"`
-  Hash       string        `json:"hash"`
-  MimeType   string        `json:"mimeType"`
-  FileSize   int64         `json:"fileSize"`
-  FileName   string        `json:"fileName"`
-  Duration   string        `json:"duration"`
-  Dimensions Tz21Dimension `json:"dimensions"`
-  DataRate   Tz21DataRate  `json:"dataRate"`
+	Uri        string        `json:"uri"`
+	Hash       string        `json:"hash"`
+	MimeType   string        `json:"mimeType"`
+	FileSize   int64         `json:"fileSize"`
+	FileName   string        `json:"fileName"`
+	Duration   string        `json:"duration"`
+	Dimensions Tz21Dimension `json:"dimensions"`
+	DataRate   Tz21DataRate  `json:"dataRate"`
 }
 
 type Tz21Attribute struct {
-  Name  string `json:"name"`
-  Value string `json:"value"`
-  Type  string `json:"type,omitempty"`
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	Type  string `json:"type,omitempty"`
 }
 
 type Tz21Dimension struct {
-  Value string `json:"value"`
-  Unit  string `json:"unit"`
+	Value string `json:"value"`
+	Unit  string `json:"unit"`
 }
 
 type Tz21DataRate struct {
-  Value string `json:"value"`
-  Unit  string `json:"unit"`
+	Value string `json:"value"`
+	Unit  string `json:"unit"`
 }
 
 func (d Tz21) Namespace() string {
-  return tz21Ns
+	return tz21Ns
 }
 
 func (d Tz21) Validate() error {
-  s, ok := GetSchema(tz21Ns)
-  if ok {
-    return s.Validate(d)
-  }
-  return nil
+	s, ok := GetSchema(tz21Ns)
+	if ok {
+		return s.Validate(d)
+	}
+	return nil
 }

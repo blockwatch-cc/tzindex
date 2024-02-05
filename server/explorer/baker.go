@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package explorer
@@ -69,74 +69,85 @@ type BakerEvents struct {
 }
 
 type Baker struct {
-	Id                model.AccountID `json:"-"`
-	Address           tezos.Address   `json:"address"`
-	ConsensusKey      tezos.Key       `json:"consensus_key"`
-	ConsensusAddress  tezos.Address   `json:"consensus_address"`
-	BakerSince        time.Time       `json:"baker_since"`
-	BakerUntil        *time.Time      `json:"baker_until,omitempty"`
-	GracePeriod       int64           `json:"grace_period"`
-	BakerVersion      string          `json:"baker_version"`
-	TotalBalance      float64         `json:"total_balance"`
-	SpendableBalance  float64         `json:"spendable_balance"`
-	FrozenBalance     float64         `json:"frozen_balance"`
-	FrozenBond        float64         `json:"frozen_bond"`
-	DelegatedBalance  float64         `json:"delegated_balance"`
-	StakingBalance    float64         `json:"staking_balance"`
-	ActiveStake       float64         `json:"active_stake"`
-	StakingCapacity   float64         `json:"staking_capacity"`
-	DepositsLimit     *float64        `json:"deposits_limit"`
-	StakingShare      float64         `json:"staking_share"`
-	ActiveDelegations int64           `json:"active_delegations"`
-	TotalDelegations  int64           `json:"total_delegations"`
-	IsFull            bool            `json:"is_full"`
-	IsActive          bool            `json:"is_active"`
+	Id                 model.AccountID `json:"-"`
+	Address            tezos.Address   `json:"address"`
+	ConsensusKey       tezos.Key       `json:"consensus_key"`
+	ConsensusAddress   tezos.Address   `json:"consensus_address"`
+	BakerSince         time.Time       `json:"baker_since"`
+	BakerUntil         *time.Time      `json:"baker_until,omitempty"`
+	GracePeriod        int64           `json:"grace_period"`
+	BakerVersion       string          `json:"baker_version"`
+	TotalBalance       float64         `json:"total_balance"`
+	SpendableBalance   float64         `json:"spendable_balance"`
+	DelegatedBalance   float64         `json:"delegated_balance"`
+	OwnStake           float64         `json:"own_stake"`
+	TotalStake         float64         `json:"total_stake"`
+	DelegationCapacity float64         `json:"delegation_capacity"`
+	StakingCapacity    float64         `json:"staking_capacity"`
+	StakingEdge        int64           `json:"staking_edge"`
+	StakingLimit       int64           `json:"staking_limit"`
+	BakingPower        int64           `json:"baking_power"`
+	NetworkShare       float64         `json:"network_share"`
+	ActiveDelegations  int64           `json:"active_delegations"`
+	ActiveStakers      int64           `json:"active_stakers"`
+	IsOverDelegated    bool            `json:"is_over_delegated"`
+	IsOverStaked       bool            `json:"is_over_staked"`
+	IsActive           bool            `json:"is_active"`
 
 	Events   *BakerEvents     `json:"events,omitempty"`
 	Stats    *BakerStatistics `json:"stats,omitempty"`
 	Metadata *ShortMetadata   `json:"metadata,omitempty"`
 
 	// caching
-	expires time.Time `json:"-"`
-	lastmod time.Time `json:"-"`
+	expires time.Time
+	lastmod time.Time
 }
 
 func NewBaker(ctx *server.Context, b *model.Baker, args server.Options) *Baker {
 	tip := getTip(ctx)
-	capacity := b.StakingCapacity(ctx.Params, 0, 0)
-	stake := b.ActiveStake(ctx.Params, 0)
+	capDelegation := b.DelegationCapacity(ctx.Params, 0, 0)
+	capStake := b.StakingCapacity(ctx.Params)
+	bakingPower := b.BakingPower(ctx.Params, 0)
+	ownStake := b.StakeAmount(b.Account.StakeShares)
+	netPower := tip.Supply.ActiveStake
+	if netPower == 0 {
+		netPower++
+	}
 	baker := &Baker{
-		Id:                b.AccountId,
-		Address:           b.Address,
-		ConsensusKey:      b.ConsensusKey,
-		ConsensusAddress:  b.ConsensusKey.Address(),
-		BakerSince:        ctx.Indexer.LookupBlockTime(ctx.Context, b.BakerSince),
-		GracePeriod:       b.GracePeriod,
-		BakerVersion:      hex.EncodeToString(b.GetVersionBytes()),
-		TotalBalance:      ctx.Params.ConvertValue(b.TotalBalance()),
-		SpendableBalance:  ctx.Params.ConvertValue(b.Account.SpendableBalance),
-		FrozenBalance:     ctx.Params.ConvertValue(b.FrozenBalance()),
-		FrozenBond:        ctx.Params.ConvertValue(b.Account.FrozenBond),
-		DelegatedBalance:  ctx.Params.ConvertValue(b.DelegatedBalance),
-		StakingBalance:    ctx.Params.ConvertValue(b.StakingBalance()),
-		ActiveStake:       ctx.Params.ConvertValue(stake),
-		StakingCapacity:   ctx.Params.ConvertValue(capacity),
-		ActiveDelegations: b.ActiveDelegations,
-		TotalDelegations:  b.TotalDelegations,
-		IsActive:          b.IsActive,
-		IsFull:            b.StakingBalance() >= capacity,
-		StakingShare:      math.Ceil(float64(stake)/float64(tip.Supply.ActiveStake)*100_000) / 100_000,
-		expires:           tip.Timestamp.Add(ctx.Params.BlockTime()),
-		lastmod:           ctx.Indexer.LookupBlockTime(ctx.Context, b.Account.LastSeen),
+		Id:                 b.AccountId,
+		Address:            b.Address,
+		ConsensusKey:       b.ConsensusKey,
+		ConsensusAddress:   b.ConsensusKey.Address(),
+		BakerSince:         ctx.Indexer.LookupBlockTime(ctx.Context, b.BakerSince),
+		GracePeriod:        b.GracePeriod,
+		BakerVersion:       hex.EncodeToString(b.GetVersionBytes()),
+		TotalBalance:       ctx.Params.ConvertValue(b.TotalBalance()),
+		SpendableBalance:   ctx.Params.ConvertValue(b.Account.SpendableBalance),
+		DelegatedBalance:   ctx.Params.ConvertValue(b.DelegatedBalance),
+		OwnStake:           ctx.Params.ConvertValue(ownStake),
+		TotalStake:         ctx.Params.ConvertValue(b.TotalStake),
+		DelegationCapacity: ctx.Params.ConvertValue(capDelegation),
+		StakingCapacity:    ctx.Params.ConvertValue(capStake),
+		StakingEdge:        b.StakingEdge,
+		StakingLimit:       b.StakingLimit,
+		BakingPower:        bakingPower,
+		NetworkShare:       math.Ceil(float64(bakingPower)/float64(netPower)*100_000) / 100_000,
+		ActiveDelegations:  b.ActiveDelegations,
+		ActiveStakers:      b.ActiveStakers,
+		IsActive:           b.IsActive,
+		IsOverDelegated:    b.IsOverDelegated(ctx.Params),
+		IsOverStaked:       b.IsOverStaked(ctx.Params),
+		expires:            ctx.Expires,
+		lastmod:            ctx.Indexer.LookupBlockTime(ctx.Context, b.Account.LastSeen),
+	}
+	if !baker.ConsensusKey.IsValid() {
+		baker.ConsensusKey = b.Account.Pubkey
+		baker.ConsensusAddress = b.Address
 	}
 
 	if !b.IsActive {
 		baker.BakerUntil = ctx.Indexer.LookupBlockTimePtr(ctx.Context, b.BakerUntil)
-		baker.StakingShare = 0
-	}
-
-	if b.DepositsLimit >= 0 {
-		baker.DepositsLimit = Float64Ptr(ctx.Params.ConvertValue(b.DepositsLimit))
+		baker.NetworkShare = 0
 	}
 
 	if args.WithMeta() {
@@ -167,7 +178,7 @@ func NewBaker(ctx *server.Context, b *model.Baker, args server.Options) *Baker {
 
 		// get performance data
 		recentCycle := ctx.Params.HeightToCycle(b.Account.LastSeen) - 1
-		if p, err := ctx.Indexer.BakerPerformance(ctx, b.AccountId, util.Max64(0, recentCycle-64), recentCycle); err == nil {
+		if p, err := ctx.Indexer.BakerPerformance(ctx, b.AccountId, max(0, recentCycle-64), recentCycle); err == nil {
 			stats.AvgLuck64 = &p[0]
 			stats.AvgPerformance64 = &p[1]
 			stats.AvgContribution64 = &p[2]
@@ -304,9 +315,13 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 
 	// get chain data from cache
 	tip := getTip(ctx)
-	netStake := tip.Supply.ActiveStake
+	netPower := tip.Supply.ActiveStake
+	if netPower == 0 {
+		netPower++
+	}
 
-	// prepare response
+	// prepare response lists
+	ads := make([]Baker, 0)
 	bkr := make([]Baker, 0)
 
 	// filter bakers
@@ -347,12 +362,10 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 				continue
 			}
 			// filter by capacity
-			if suggest.Balance() > v.StakingCapacity(ctx.Params, netRolls, 0)-v.StakingBalance() {
-				// log.Infof("Skip %s capacity %d < %d",
-				// 	v,
-				// 	v.StakingCapacity(ctx.Params, netRolls)-v.StakingBalance(),
-				// 	suggest.Balance(),
-				// )
+			if suggest.Balance() > v.DelegationCapacity(ctx.Params, netRolls, 0)-v.StakingBalance() {
+				continue
+			}
+			if suggest.Balance() > v.StakingCapacity(ctx.Params)-v.StakingBalance() {
 				continue
 			}
 			// remove the current baker, if any
@@ -375,29 +388,33 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 		}
 
 		// build result
-		capacity := v.StakingCapacity(ctx.Params, netRolls, 0)
-		stake := v.ActiveStake(ctx.Params, netRolls)
+		capDelegation := v.DelegationCapacity(ctx.Params, 0, 0)
+		capStake := v.StakingCapacity(ctx.Params)
+		bakingPower := v.BakingPower(ctx.Params, 0)
+		// oxford only has stake based on shares
+		ownStake := v.StakeAmount(v.Account.StakeShares)
 		baker := Baker{
-			Id:                v.AccountId,
-			GracePeriod:       v.GracePeriod,
-			Address:           v.Address,
-			ConsensusKey:      v.ConsensusKey,
-			ConsensusAddress:  v.ConsensusKey.Address(),
-			BakerSince:        ctx.Indexer.LookupBlockTime(ctx.Context, v.BakerSince),
-			BakerVersion:      hex.EncodeToString(v.GetVersionBytes()),
-			TotalBalance:      ctx.Params.ConvertValue(v.TotalBalance()),
-			SpendableBalance:  ctx.Params.ConvertValue(v.Account.SpendableBalance),
-			FrozenBalance:     ctx.Params.ConvertValue(v.FrozenBalance()),
-			FrozenBond:        ctx.Params.ConvertValue(v.Account.FrozenBond),
-			DelegatedBalance:  ctx.Params.ConvertValue(v.DelegatedBalance),
-			ActiveStake:       ctx.Params.ConvertValue(stake),
-			StakingBalance:    ctx.Params.ConvertValue(v.StakingBalance()),
-			StakingCapacity:   ctx.Params.ConvertValue(capacity),
-			ActiveDelegations: v.ActiveDelegations,
-			TotalDelegations:  v.TotalDelegations,
-			IsFull:            v.StakingBalance() >= capacity,
-			IsActive:          v.IsActive,
-			StakingShare:      math.Ceil(float64(stake)/float64(netStake)*100_000) / 100_000,
+			Id:                 v.AccountId,
+			Address:            v.Address,
+			ConsensusKey:       v.ConsensusKey,
+			ConsensusAddress:   v.ConsensusKey.Address(),
+			BakerSince:         ctx.Indexer.LookupBlockTime(ctx.Context, v.BakerSince),
+			GracePeriod:        v.GracePeriod,
+			BakerVersion:       hex.EncodeToString(v.GetVersionBytes()),
+			TotalBalance:       ctx.Params.ConvertValue(v.TotalBalance()),
+			SpendableBalance:   ctx.Params.ConvertValue(v.Account.SpendableBalance),
+			DelegatedBalance:   ctx.Params.ConvertValue(v.DelegatedBalance),
+			OwnStake:           ctx.Params.ConvertValue(ownStake),
+			TotalStake:         ctx.Params.ConvertValue(v.TotalStake),
+			DelegationCapacity: ctx.Params.ConvertValue(capDelegation),
+			StakingCapacity:    ctx.Params.ConvertValue(capStake),
+			BakingPower:        bakingPower,
+			NetworkShare:       math.Ceil(float64(bakingPower)/float64(netPower)*100_000) / 100_000,
+			ActiveDelegations:  v.ActiveDelegations,
+			ActiveStakers:      v.ActiveStakers,
+			IsActive:           v.IsActive,
+			IsOverDelegated:    v.IsOverDelegated(ctx.Params),
+			IsOverStaked:       v.IsOverStaked(ctx.Params),
 			Stats: &BakerStatistics{
 				TotalRewardsEarned:  ctx.Params.ConvertValue(v.TotalRewardsEarned),
 				TotalFeesEarned:     ctx.Params.ConvertValue(v.TotalFeesEarned),
@@ -423,21 +440,30 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 			},
 		}
 
-		if !v.IsActive {
-			baker.BakerUntil = ctx.Indexer.LookupBlockTimePtr(ctx.Context, v.BakerUntil)
-			baker.StakingShare = 0
+		if !baker.ConsensusKey.IsValid() {
+			baker.ConsensusKey = v.Account.Pubkey
+			baker.ConsensusAddress = v.Address
 		}
 
-		// attach alias and append to list
+		if !v.IsActive {
+			baker.BakerUntil = ctx.Indexer.LookupBlockTimePtr(ctx.Context, v.BakerUntil)
+			baker.NetworkShare = 0
+		}
+
+		// attach alias and append to lists
 		if hasAlias {
 			baker.Metadata = alias.Short()
-			bkr = append(bkr, baker)
+			if alias.IsSponsored && args.WithSponsored {
+				ads = append(ads, baker)
+			} else {
+				bkr = append(bkr, baker)
+			}
 		} else {
 			bkr = append(bkr, baker)
 		}
 
 		// apply limit only when not in suggest mode (need all results for randomization)
-		if suggest == nil && args.Limit > 0 && len(bkr) == int(args.Limit) {
+		if suggest == nil && args.Limit > 0 && len(ads)+len(bkr) == int(args.Limit) {
 			break
 		}
 	}
@@ -448,25 +474,33 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 	resp := &BakerList{
 		list:     make([]Baker, 0),
 		modified: tip.Timestamp,
-		expires:  ctx.Now,
+		expires:  ctx.Expires,
 	}
 
 	// only cache non-randomized results
 	if suggest == nil {
-		resp.expires = tip.Timestamp.Add(ctx.Params.BlockTime())
+		resp.expires = ctx.Expires
 	}
 
 	// randomize suggestion: <=50% sponsored
 	if args.Limit > 0 && suggest != nil {
-		for args.Limit > 0 && len(bkr) > 0 {
-			// draw random from other
-			idx := rand.Intn(len(bkr))
-			resp.list = append(resp.list, bkr[idx])
-			bkr = append(bkr[:idx], bkr[idx+1:]...)
+		for args.Limit > 0 && len(ads)+len(bkr) > 0 {
+			if len(resp.list) < int(args.Limit) && len(ads) > 0 {
+				// draw random from sponsored
+				idx := rand.Intn(len(ads))
+				resp.list = append(resp.list, ads[idx])
+				ads = append(ads[:idx], ads[idx+1:]...)
+			} else {
+				// draw random from other
+				idx := rand.Intn(len(bkr))
+				resp.list = append(resp.list, bkr[idx])
+				bkr = append(bkr[:idx], bkr[idx+1:]...)
+			}
 			args.Limit--
 		}
 	} else {
-		resp.list = bkr
+		resp.list = ads
+		resp.list = append(resp.list, bkr...)
 		if args.Limit > 0 {
 			resp.list = resp.list[:util.Min(int(args.Limit), len(resp.list))]
 		}
@@ -481,7 +515,7 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 
 	// add expensive performance data
 	for i, v := range resp.list {
-		if p, err := ctx.Indexer.BakerPerformance(ctx, v.Id, util.Max64(0, tip.Cycle-64), tip.Cycle); err == nil {
+		if p, err := ctx.Indexer.BakerPerformance(ctx, v.Id, max(tip.Cycle-64, 0), tip.Cycle); err == nil {
 			resp.list[i].Stats.AvgLuck64 = &p[0]
 			resp.list[i].Stats.AvgPerformance64 = &p[1]
 			resp.list[i].Stats.AvgContribution64 = &p[2]
@@ -704,12 +738,12 @@ func GetBakerRights(ctx *server.Context) (interface{}, int) {
 
 type ExplorerIncome struct {
 	Cycle                  int64   `json:"cycle"`
-	Rolls                  int64   `json:"snapshot_rolls"`
 	Balance                float64 `json:"own_balance"`
 	Delegated              float64 `json:"delegated_balance"`
-	Staking                float64 `json:"staking_balance"`
-	ActiveStake            float64 `json:"active_stake"`
+	StakingBalance         float64 `json:"staking_balance"`
+	OwnStake               float64 `json:"own_stake"`
 	NDelegations           int64   `json:"n_delegations"`
+	NStakers               int64   `json:"n_stakers"`
 	NBakingRights          int64   `json:"n_baking_rights"`
 	NEndorsingRights       int64   `json:"n_endorsing_rights"`
 	Luck                   float64 `json:"luck"`                 // coins by fair share of rolls
@@ -725,7 +759,6 @@ type ExplorerIncome struct {
 	NSeedsRevealed         int64   `json:"n_seeds_revealed"`
 	ExpectedIncome         float64 `json:"expected_income"`
 	TotalIncome            float64 `json:"total_income"`
-	TotalDeposits          float64 `json:"total_deposits"`
 	BakingIncome           float64 `json:"baking_income"`
 	EndorsingIncome        float64 `json:"endorsing_income"`
 	AccusationIncome       float64 `json:"accusation_income"`
@@ -766,12 +799,12 @@ func GetBakerIncome(ctx *server.Context) (interface{}, int) {
 
 	resp := &ExplorerIncome{
 		Cycle:                  cycle,
-		Rolls:                  income.Rolls,
 		Balance:                ctx.Params.ConvertValue(income.Balance),
 		Delegated:              ctx.Params.ConvertValue(income.Delegated),
-		Staking:                ctx.Params.ConvertValue(income.Balance + income.Delegated),
-		ActiveStake:            ctx.Params.ConvertValue(income.ActiveStake),
+		StakingBalance:         ctx.Params.ConvertValue(income.StakingBalance),
+		OwnStake:               ctx.Params.ConvertValue(income.OwnStake),
 		NDelegations:           income.NDelegations,
+		NStakers:               income.NStakers,
 		NBakingRights:          income.NBakingRights,
 		NEndorsingRights:       income.NEndorsingRights,
 		Luck:                   ctx.Params.ConvertValue(income.Luck),
@@ -787,7 +820,6 @@ func GetBakerIncome(ctx *server.Context) (interface{}, int) {
 		NSeedsRevealed:         income.NSeedsRevealed,
 		ExpectedIncome:         ctx.Params.ConvertValue(income.ExpectedIncome),
 		TotalIncome:            ctx.Params.ConvertValue(income.TotalIncome),
-		TotalDeposits:          ctx.Params.ConvertValue(income.TotalDeposits),
 		BakingIncome:           ctx.Params.ConvertValue(income.BakingIncome),
 		EndorsingIncome:        ctx.Params.ConvertValue(income.EndorsingIncome),
 		AccusationIncome:       ctx.Params.ConvertValue(income.AccusationIncome),
@@ -818,15 +850,14 @@ type ExplorerSnapshot struct {
 	Cycle                  int64               `json:"snapshot_cycle"`
 	Timestamp              time.Time           `json:"snapshot_time"`
 	Index                  int                 `json:"snapshot_index"`
-	Rolls                  int64               `json:"snapshot_rolls"`
-	ActiveStake            int64               `json:"active_stake"`
 	StakingBalance         int64               `json:"staking_balance"`
 	OwnBalance             int64               `json:"own_balance"`
+	OwnStake               int64               `json:"own_stake"`
 	DelegatedBalance       int64               `json:"delegated_balance"`
 	NDelegations           int64               `json:"n_delegations"`
+	NStakers               int64               `json:"n_stakers"`
 	ExpectedIncome         int64               `json:"expected_income"`
 	TotalIncome            int64               `json:"total_income"`
-	TotalDeposits          int64               `json:"total_deposits"`
 	BakingIncome           int64               `json:"baking_income"`
 	EndorsingIncome        int64               `json:"endorsing_income"`
 	AccusationIncome       int64               `json:"accusation_income"`
@@ -842,6 +873,7 @@ type ExplorerSnapshot struct {
 	LostSeedFees           int64               `json:"lost_seed_fees"`
 	LostSeedRewards        int64               `json:"lost_seed_rewards"`
 	Delegators             []ExplorerDelegator `json:"delegators"`
+	Stakers                []ExplorerDelegator `json:"stakers"`
 }
 
 func GetBakerSnapshot(ctx *server.Context) (interface{}, int) {
@@ -860,7 +892,6 @@ func GetBakerSnapshot(ctx *server.Context) (interface{}, int) {
 		WithTable(snapshotTable).
 		AndEqual("account_id", acc.AccountId).
 		AndEqual("cycle", baseCycle).
-		AndEqual("is_selected", true).
 		AndEqual("is_baker", true).
 		Execute(ctx.Context, &self)
 	if err != nil {
@@ -895,18 +926,22 @@ func GetBakerSnapshot(ctx *server.Context) (interface{}, int) {
 		WithTable(snapshotTable).
 		AndEqual("baker_id", acc.AccountId).
 		AndEqual("cycle", baseCycle).
-		AndEqual("is_selected", true).
 		AndEqual("is_baker", false).
-		WithFields("account_id", "balance").
+		WithFields("account_id", "balance", "own_stake").
 		Execute(ctx.Context, &snaps)
 	if err != nil {
 		panic(server.EInternal(server.EC_DATABASE, "listing delegators", err))
 	}
 
 	// list funding state
+	var nDelegator, nStaker int
 	ids := make([]uint64, len(snaps))
 	for i, v := range snaps {
 		ids[i] = v.AccountId.U64()
+		nDelegator++
+		if v.OwnStake > 0 {
+			nStaker++
+		}
 	}
 	type XAcc struct {
 		RowId    model.AccountID `pack:"I"`
@@ -936,15 +971,14 @@ func GetBakerSnapshot(ctx *server.Context) (interface{}, int) {
 		Cycle:                  self.Cycle,
 		Timestamp:              self.Timestamp,
 		Index:                  self.Index,
-		Rolls:                  self.Rolls,
-		ActiveStake:            self.ActiveStake,
-		StakingBalance:         self.Balance + self.Delegated,
+		StakingBalance:         self.StakingBalance,
 		OwnBalance:             self.Balance,
+		OwnStake:               self.OwnStake,
 		DelegatedBalance:       self.Delegated,
 		NDelegations:           self.NDelegations,
+		NStakers:               self.NStakers,
 		ExpectedIncome:         income.ExpectedIncome,
 		TotalIncome:            income.TotalIncome,
-		TotalDeposits:          income.TotalDeposits,
 		BakingIncome:           income.BakingIncome,
 		EndorsingIncome:        income.EndorsingIncome,
 		AccusationIncome:       income.AccusationIncome,
@@ -959,15 +993,30 @@ func GetBakerSnapshot(ctx *server.Context) (interface{}, int) {
 		LostAccusationDeposits: income.LostAccusationDeposits,
 		LostSeedFees:           income.LostSeedFees,
 		LostSeedRewards:        income.LostSeedRewards,
-		Delegators:             make([]ExplorerDelegator, len(snaps)),
+		Delegators:             make([]ExplorerDelegator, 0, nDelegator),
+		Stakers:                make([]ExplorerDelegator, 0, nStaker),
 	}
-	for i, v := range snaps {
-		resp.Delegators[i].Address = ctx.Indexer.LookupAddress(ctx.Context, v.AccountId)
-		resp.Delegators[i].Balance = v.Balance
-		resp.Delegators[i].IsFunded = isFunded[v.AccountId]
+	for _, v := range snaps {
+		resp.Delegators = append(resp.Delegators,
+			ExplorerDelegator{
+				Address:  ctx.Indexer.LookupAddress(ctx.Context, v.AccountId),
+				Balance:  v.Balance,
+				IsFunded: isFunded[v.AccountId],
+			},
+		)
+		if v.OwnStake > 0 {
+			resp.Stakers = append(resp.Stakers,
+				ExplorerDelegator{
+					Address:  ctx.Indexer.LookupAddress(ctx.Context, v.AccountId),
+					Balance:  v.OwnStake,
+					IsFunded: true,
+				},
+			)
+		}
 	}
 
 	// sort delegators by balance
 	sort.Slice(resp.Delegators, func(i, j int) bool { return resp.Delegators[i].Balance > resp.Delegators[j].Balance })
+	sort.Slice(resp.Stakers, func(i, j int) bool { return resp.Stakers[i].Balance > resp.Stakers[j].Balance })
 	return resp, http.StatusOK
 }

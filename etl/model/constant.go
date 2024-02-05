@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package model
@@ -26,13 +26,13 @@ func (id ConstantID) U64() uint64 {
 
 // Constant holds code and info about registered global constants
 type Constant struct {
-	RowId       ConstantID         `pack:"I,pk,snappy"   json:"row_id"`
-	Address     tezos.ExprHash     `pack:"H,snappy"      json:"address"`
-	CreatorId   AccountID          `pack:"C,snappy"      json:"creator_id"`
-	Value       []byte             `pack:"v,snappy"      json:"value"`
-	Height      int64              `pack:"h,snappy"      json:"height"`
-	StorageSize int64              `pack:"z,snappy"      json:"storage_size"`
-	Features    micheline.Features `pack:"F,snappy"      json:"features"`
+	RowId       ConstantID         `pack:"I,pk"      json:"row_id"`
+	Address     tezos.ExprHash     `pack:"H,bloom=3" json:"address"`
+	CreatorId   AccountID          `pack:"C,u32"     json:"creator_id"`
+	Value       []byte             `pack:"v,snappy"  json:"value"`
+	Height      int64              `pack:"h,i32"     json:"height"`
+	StorageSize int64              `pack:"z,i32"     json:"storage_size"`
+	Features    micheline.Features `pack:"F,snappy"  json:"features"`
 }
 
 // Ensure Constant implements the pack.Item interface.
@@ -40,7 +40,7 @@ var _ pack.Item = (*Constant)(nil)
 
 // assuming the op was successful!
 func NewConstant(rop *rpc.ConstantRegistration, op *Op) *Constant {
-	res := rop.Metadata.Result
+	res := rop.Result()
 	g := &Constant{
 		Address:     res.GlobalAddress.Clone(),
 		CreatorId:   op.SenderId,
@@ -76,10 +76,5 @@ func (m Constant) TableOpts() pack.Options {
 }
 
 func (m Constant) IndexOpts(key string) pack.Options {
-	return pack.Options{
-		PackSizeLog2:    10,
-		JournalSizeLog2: 10,
-		CacheSize:       2,
-		FillLevel:       90,
-	}
+	return pack.NoOptions
 }

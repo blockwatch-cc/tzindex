@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -145,8 +145,35 @@ func (c *Crawler) Time() time.Time {
 	return c.Tip().BestTime
 }
 
+func (c *Crawler) NextBlockTime() time.Time {
+	var d time.Duration
+	if p := c.Params(); p != nil {
+		d = p.BlockTime()
+	}
+	return c.Time().Add(d * time.Duration(1+c.delay))
+}
+
 func (c *Crawler) updateTip(tip *model.ChainTip) {
 	c.tipStore.Store(tip)
+}
+
+func (c *Crawler) IsHealthy() bool {
+	s, _ := c.getState()
+	if s == STATE_SYNCHRONIZED {
+		return true
+	}
+	if s != STATE_SYNCHRONIZING {
+		return false
+	}
+	tip := c.Tip()
+	head := atomic.LoadInt64(&c.head)
+	dist := uint64(head - tip.BestHeight)
+	return dist <= uint64(c.delay)+2 // max delay+2 blocks away from head
+}
+
+func (c *Crawler) IsDegraded() bool {
+	s, _ := c.getState()
+	return s != STATE_SYNCHRONIZED || time.Since(c.Tip().BestTime) > time.Minute
 }
 
 func (c *Crawler) setState(state State, disableMonitor bool, args ...string) bool {
@@ -193,6 +220,10 @@ func (c *Crawler) disableMonitor() {
 	c.Lock()
 	c.useMonitor = false
 	c.Unlock()
+}
+
+func (c *Crawler) Params() *rpc.Params {
+	return c.indexer.reg.GetParamsLatest()
 }
 
 func (c *Crawler) ParamsByHeight(height int64) *rpc.Params {
@@ -243,6 +274,8 @@ type CrawlerStatus struct {
 	Indexed    int64     `json:"indexed"`
 	Progress   float64   `json:"progress"`
 	LastUpdate time.Time `json:"last_update"`
+
+	expires time.Time
 }
 
 func (c *Crawler) Status() CrawlerStatus {
@@ -255,22 +288,32 @@ func (c *Crawler) Status() CrawlerStatus {
 		Finalized:  -1,
 		Indexed:    tip.BestHeight,
 		LastUpdate: tip.BestTime,
+		expires:    c.NextBlockTime(),
 	}
 	if c.indexer.lightMode {
 		s.Mode = MODE_LIGHT
 	}
-	if tip.BestHeight > 0 && c.head > 0 {
-		s.Blocks = c.head
-		s.Finalized = c.head - 1
+	head := atomic.LoadInt64(&c.head)
+	if tip.BestHeight > 0 && head > 0 {
+		s.Blocks = head
+		s.Finalized = head - c.delay
 		s.Progress = float64(s.Indexed) / float64(s.Finalized)
 		if s.Progress == 1.0 && s.Indexed < s.Finalized {
 			s.Progress = 0.999999
 		}
 	}
-	if time.Since(s.LastUpdate) > time.Minute {
+	if s.Finalized == s.Indexed && time.Since(s.LastUpdate) > time.Minute {
 		s.Status = STATE_STALLED
 	}
 	return s
+}
+
+func (s CrawlerStatus) LastModified() time.Time {
+	return s.LastUpdate
+}
+
+func (s CrawlerStatus) Expires() time.Time {
+	return s.expires
 }
 
 // Init is invoked when the block manager is first initializing.
@@ -652,7 +695,7 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 			// on startup, check if we're already synchronized even
 			// without having processed a block
 			if !nextHash.IsValid() && state == STATE_CONNECTING {
-				if c.Height()+c.delay == c.head {
+				if c.Height()+c.delay == atomic.LoadInt64(&c.head) {
 					c.setState(STATE_SYNCHRONIZED, MONITOR_KEEP, "Already synchronized. Starting in monitor mode.")
 				}
 			}
@@ -660,7 +703,7 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 		}
 
 		// on missing bchead, wait and retry
-		if c.head == 0 {
+		if atomic.LoadInt64(&c.head) == 0 {
 			log.Warn("crawler: broken RPC connection. Trying again in 5s...")
 			// keep going
 			select {
@@ -680,14 +723,14 @@ func (c *Crawler) runIngest(next chan tezos.BlockHash) {
 		}
 
 		// update bchead when last block is higher
-		if lastblock > c.head {
+		if lastblock > atomic.LoadInt64(&c.head) {
 			if err := c.fetchBlockchainInfo(c.ctx); err != nil {
 				continue
 			}
 		}
 
 		// prefetch block
-		if lastblock < c.head || nextHash.IsValid() {
+		if lastblock < atomic.LoadInt64(&c.head) || nextHash.IsValid() {
 			if c.ctx.Err() != nil {
 				continue
 			}
@@ -920,7 +963,7 @@ func (c *Crawler) syncBlockchain() {
 				return
 			}
 			// log.Tracef("Processing block %d %s", tzblock.Height(), tzblock.Hash())
-			if c.head > tzblock.Height()+c.delay {
+			if atomic.LoadInt64(&c.head) > tzblock.Height()+c.delay {
 				c.setState(STATE_SYNCHRONIZING, MONITOR_KEEP)
 			}
 		}
@@ -1027,7 +1070,7 @@ func (c *Crawler) syncBlockchain() {
 		}
 
 		// current block may be ahead of bcinfo by one
-		if block.Height+c.delay >= c.head {
+		if block.Height+c.delay >= atomic.LoadInt64(&c.head) {
 			c.setState(STATE_SYNCHRONIZED, MONITOR_KEEP)
 		}
 		state, _ := c.getState()
@@ -1049,7 +1092,7 @@ func (c *Crawler) syncBlockchain() {
 			}
 		}
 
-		// log progress once every 10sec
+		// log progress once every 10sec or immediatly when in sync
 		c.plog.LogBlockHeight(block, len(c.finalized), state, time.Since(blockstart), state == STATE_SYNCHRONIZED)
 
 		// update state every 256 blocks or every block when synchronized

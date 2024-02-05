@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package series
@@ -150,14 +150,16 @@ func (c *ChainSeries) MarshalJSONVerbose() ([]byte, error) {
 		ActiveDelegators     int64     `json:"active_delegators"`
 		InactiveDelegators   int64     `json:"inactive_delegators"`
 		TotalBakers          int64     `json:"total_bakers"`
+		EligibleBakers       int64     `json:"eligible_bakers"`
 		ActiveBakers         int64     `json:"active_bakers"`
 		InactiveBakers       int64     `json:"inactive_bakers"`
 		ZeroBakers           int64     `json:"zero_bakers"`
 		SelfBakers           int64     `json:"self_bakers"`
 		SingleBakers         int64     `json:"single_bakers"`
 		MultiBakers          int64     `json:"multi_bakers"`
-		Rolls                int64     `json:"rolls"`
-		RollOwners           int64     `json:"roll_owners"`
+		TotalStakers         int64     `json:"total_stakers"`
+		ActiveStakers        int64     `json:"active_stakers"`
+		InactiveStakers      int64     `json:"inactive_stakers"`
 	}{
 		Height:               c.Height,
 		Cycle:                c.Cycle,
@@ -196,14 +198,16 @@ func (c *ChainSeries) MarshalJSONVerbose() ([]byte, error) {
 		ActiveDelegators:     c.ActiveDelegators,
 		InactiveDelegators:   c.InactiveDelegators,
 		TotalBakers:          c.TotalBakers,
+		EligibleBakers:       c.EligibleBakers,
 		ActiveBakers:         c.ActiveBakers,
 		InactiveBakers:       c.InactiveBakers,
 		ZeroBakers:           c.ZeroBakers,
 		SelfBakers:           c.SelfBakers,
 		SingleBakers:         c.SingleBakers,
 		MultiBakers:          c.MultiBakers,
-		Rolls:                c.Rolls,
-		RollOwners:           c.RollOwners,
+		TotalStakers:         c.TotalStakers,
+		ActiveStakers:        c.ActiveStakers,
+		InactiveStakers:      c.InactiveStakers,
 	}
 	return json.Marshal(ch)
 }
@@ -295,6 +299,8 @@ func (c *ChainSeries) MarshalJSONBrief() ([]byte, error) {
 				buf = strconv.AppendInt(buf, c.InactiveDelegators, 10)
 			case "total_bakers":
 				buf = strconv.AppendInt(buf, c.TotalBakers, 10)
+			case "eligible_bakers":
+				buf = strconv.AppendInt(buf, c.EligibleBakers, 10)
 			case "active_bakers":
 				buf = strconv.AppendInt(buf, c.ActiveBakers, 10)
 			case "inactive_bakers":
@@ -307,10 +313,12 @@ func (c *ChainSeries) MarshalJSONBrief() ([]byte, error) {
 				buf = strconv.AppendInt(buf, c.SingleBakers, 10)
 			case "multi_bakers":
 				buf = strconv.AppendInt(buf, c.MultiBakers, 10)
-			case "rolls":
-				buf = strconv.AppendInt(buf, c.Rolls, 10)
-			case "roll_owners":
-				buf = strconv.AppendInt(buf, c.RollOwners, 10)
+			case "total_stakers":
+				buf = strconv.AppendInt(buf, c.TotalStakers, 10)
+			case "active_stakers":
+				buf = strconv.AppendInt(buf, c.ActiveStakers, 10)
+			case "inactive_stakers":
+				buf = strconv.AppendInt(buf, c.InactiveStakers, 10)
 			default:
 				continue
 			}
@@ -409,6 +417,8 @@ func (c *ChainSeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(c.InactiveDelegators, 10)
 		case "total_bakers":
 			res[i] = strconv.FormatInt(c.TotalBakers, 10)
+		case "eligible_bakers":
+			res[i] = strconv.FormatInt(c.EligibleBakers, 10)
 		case "active_bakers":
 			res[i] = strconv.FormatInt(c.ActiveBakers, 10)
 		case "inactive_bakers":
@@ -421,10 +431,12 @@ func (c *ChainSeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(c.SingleBakers, 10)
 		case "multi_bakers":
 			res[i] = strconv.FormatInt(c.MultiBakers, 10)
-		case "rolls":
-			res[i] = strconv.FormatInt(c.Rolls, 10)
-		case "roll_owners":
-			res[i] = strconv.FormatInt(c.RollOwners, 10)
+		case "total_stakers":
+			res[i] = strconv.FormatInt(c.TotalStakers, 10)
+		case "active_stakers":
+			res[i] = strconv.FormatInt(c.ActiveStakers, 10)
+		case "inactive_stakers":
+			res[i] = strconv.FormatInt(c.InactiveStakers, 10)
 		default:
 			continue
 		}

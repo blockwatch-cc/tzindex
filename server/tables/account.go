@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package tables
@@ -102,11 +102,15 @@ func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 		TotalFeesUsed      float64 `json:"total_fees_used"`
 		UnclaimedBalance   float64 `json:"unclaimed_balance"`
 		SpendableBalance   float64 `json:"spendable_balance"`
-		FrozenBond         float64 `json:"frozen_bond"`
-		LostBond           float64 `json:"lost_bond"`
+		FrozenRollupBond   float64 `json:"frozen_rollup_bond"`
+		LostRollupBond     float64 `json:"lost_rollup_bond"`
+		StakedBalance      float64 `json:"staked_balance"`
+		UnstakedBalance    float64 `json:"unstaked_balance"`
+		LostStake          float64 `json:"lost_stake"`
 		IsFunded           bool    `json:"is_funded"`
 		IsActivated        bool    `json:"is_activated"`
 		IsDelegated        bool    `json:"is_delegated"`
+		IsStaked           bool    `json:"is_staked"`
 		IsRevealed         bool    `json:"is_revealed"`
 		IsBaker            bool    `json:"is_baker"`
 		IsContract         bool    `json:"is_contract"`
@@ -143,11 +147,15 @@ func (a *Account) MarshalJSONVerbose() ([]byte, error) {
 		TotalFeesUsed:      a.params.ConvertValue(a.TotalFeesUsed),
 		UnclaimedBalance:   a.params.ConvertValue(a.UnclaimedBalance),
 		SpendableBalance:   a.params.ConvertValue(a.SpendableBalance),
-		FrozenBond:         a.params.ConvertValue(a.FrozenBond),
-		LostBond:           a.params.ConvertValue(a.LostBond),
+		FrozenRollupBond:   a.params.ConvertValue(a.FrozenRollupBond),
+		LostRollupBond:     a.params.ConvertValue(a.LostRollupBond),
+		StakedBalance:      a.params.ConvertValue(a.StakedBalance),
+		UnstakedBalance:    a.params.ConvertValue(a.UnstakedBalance),
+		LostStake:          a.params.ConvertValue(a.LostStake),
 		IsFunded:           a.IsFunded,
 		IsActivated:        a.IsActivated,
 		IsDelegated:        a.IsDelegated,
+		IsStaked:           a.IsStaked,
 		IsRevealed:         a.IsRevealed,
 		IsBaker:            a.IsBaker,
 		IsContract:         a.IsContract,
@@ -226,10 +234,16 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendFloat(buf, a.params.ConvertValue(a.UnclaimedBalance), 'f', dec, 64)
 		case "spendable_balance":
 			buf = strconv.AppendFloat(buf, a.params.ConvertValue(a.SpendableBalance), 'f', dec, 64)
-		case "frozen_bond":
-			buf = strconv.AppendFloat(buf, a.params.ConvertValue(a.FrozenBond), 'f', dec, 64)
-		case "lost_bond":
-			buf = strconv.AppendFloat(buf, a.params.ConvertValue(a.LostBond), 'f', dec, 64)
+		case "frozen_rollup_bond":
+			buf = strconv.AppendFloat(buf, a.params.ConvertValue(a.FrozenRollupBond), 'f', dec, 64)
+		case "lost_rollup_bond":
+			buf = strconv.AppendFloat(buf, a.params.ConvertValue(a.LostRollupBond), 'f', dec, 64)
+		case "staked_balance":
+			buf = strconv.AppendFloat(buf, a.params.ConvertValue(a.StakedBalance), 'f', dec, 64)
+		case "unstaked_balance":
+			buf = strconv.AppendFloat(buf, a.params.ConvertValue(a.UnstakedBalance), 'f', dec, 64)
+		case "lost_stake":
+			buf = strconv.AppendFloat(buf, a.params.ConvertValue(a.LostStake), 'f', dec, 64)
 		case "is_funded":
 			if a.IsFunded {
 				buf = append(buf, '1')
@@ -244,6 +258,12 @@ func (a *Account) MarshalJSONBrief() ([]byte, error) {
 			}
 		case "is_delegated":
 			if a.IsDelegated {
+				buf = append(buf, '1')
+			} else {
+				buf = append(buf, '0')
+			}
+		case "is_staked":
+			if a.IsStaked {
 				buf = append(buf, '1')
 			} else {
 				buf = append(buf, '0')
@@ -346,16 +366,24 @@ func (a *Account) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(a.params.ConvertValue(a.UnclaimedBalance), 'f', dec, 64)
 		case "spendable_balance":
 			res[i] = strconv.FormatFloat(a.params.ConvertValue(a.SpendableBalance), 'f', dec, 64)
-		case "frozen_bond":
-			res[i] = strconv.FormatFloat(a.params.ConvertValue(a.FrozenBond), 'f', dec, 64)
-		case "lost_bond":
-			res[i] = strconv.FormatFloat(a.params.ConvertValue(a.LostBond), 'f', dec, 64)
+		case "frozen_rollup_bond":
+			res[i] = strconv.FormatFloat(a.params.ConvertValue(a.FrozenRollupBond), 'f', dec, 64)
+		case "lost_rollup_bond":
+			res[i] = strconv.FormatFloat(a.params.ConvertValue(a.LostRollupBond), 'f', dec, 64)
+		case "staked_balance":
+			res[i] = strconv.FormatFloat(a.params.ConvertValue(a.StakedBalance), 'f', dec, 64)
+		case "unstaked_balance":
+			res[i] = strconv.FormatFloat(a.params.ConvertValue(a.UnstakedBalance), 'f', dec, 64)
+		case "lost_stake":
+			res[i] = strconv.FormatFloat(a.params.ConvertValue(a.LostStake), 'f', dec, 64)
 		case "is_funded":
 			res[i] = strconv.FormatBool(a.IsFunded)
 		case "is_activated":
 			res[i] = strconv.FormatBool(a.IsActivated)
 		case "is_delegated":
 			res[i] = strconv.FormatBool(a.IsDelegated)
+		case "is_staked":
+			res[i] = strconv.FormatBool(a.IsStaked)
 		case "is_revealed":
 			res[i] = strconv.FormatBool(a.IsRevealed)
 		case "is_baker":
@@ -584,7 +612,8 @@ func StreamAccountTable(ctx *server.Context, args *TableRequest) (interface{}, i
 				case "total_received", "total_sent", "total_burned",
 					"total_fees_paid", "total_fees_used",
 					"unclaimed_balance", "spendable_balance",
-					"frozen_bond", "lost_bond":
+					"frozen_rollup_bond", "lost_rollup_bond",
+					"staked_balance", "unstaked_balance", "lost_stake":
 					fvals := make([]string, 0)
 					for _, vv := range strings.Split(v, ",") {
 						fval, err := strconv.ParseFloat(vv, 64)

@@ -1,13 +1,14 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package explorer
 
 import (
 	"encoding/json"
-	"github.com/gorilla/mux"
 	"net/http"
 	"time"
+
+	"github.com/gorilla/mux"
 
 	"blockwatch.cc/tzindex/server"
 )
@@ -63,7 +64,6 @@ func GetTrafficList(ctx *server.Context) (interface{}, int) {
 	args := &ListRequest{}
 	ctx.ParseRequestArgs(args)
 	tip := ctx.Tip
-	params := ctx.Params
 	args.Limit = ctx.Cfg.ClampExplore(args.Limit)
 
 	list, err := ctx.Indexer.TopTraffic(ctx.Context, int(args.Limit), int(args.Offset))
@@ -72,7 +72,7 @@ func GetTrafficList(ctx *server.Context) (interface{}, int) {
 	}
 	resp := &RankList{
 		list:     make([]RankListItem, len(list)),
-		expires:  tip.BestTime.Add(params.BlockTime()),
+		expires:  ctx.Expires,
 		modified: tip.BestTime,
 	}
 	for i, v := range list {
@@ -100,7 +100,7 @@ func GetVolumeList(ctx *server.Context) (interface{}, int) {
 	}
 	resp := &RankList{
 		list:     make([]RankListItem, len(list)),
-		expires:  tip.BestTime.Add(params.BlockTime()),
+		expires:  ctx.Expires,
 		modified: tip.BestTime,
 	}
 	for i, v := range list {
@@ -128,7 +128,7 @@ func GetRichList(ctx *server.Context) (interface{}, int) {
 	}
 	resp := &RankList{
 		list:     make([]RankListItem, len(list)),
-		expires:  tip.BestTime.Add(params.BlockTime()),
+		expires:  ctx.Expires,
 		modified: tip.BestTime,
 	}
 	for i, v := range list {

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -83,13 +83,13 @@ func (m *Indexer) ListVoters(ctx context.Context, r ListRequest) ([]*model.Voter
 	}
 
 	// Step 1
-	// collect voters from governance roll snapshot
-	rollsTable, err := m.Table(model.StakeTableKey)
+	// collect voters from governance stake snapshot
+	stakeTable, err := m.Table(model.StakeTableKey)
 	if err != nil {
 		return nil, err
 	}
 	q := pack.NewQuery("api.list_voters").
-		WithTable(rollsTable).
+		WithTable(stakeTable).
 		WithLimit(int(r.Limit)).
 		WithOffset(int(r.Offset)).
 		AndEqual("height", r.Since-1) // snapshots are made at end of previous vote
@@ -109,7 +109,6 @@ func (m *Indexer) ListVoters(ctx context.Context, r ListRequest) ([]*model.Voter
 		}
 		voters[snap.AccountId] = &model.Voter{
 			RowId: snap.AccountId,
-			Rolls: snap.Rolls,
 			Stake: snap.Stake,
 		}
 		return nil
@@ -254,7 +253,7 @@ func (m *Indexer) ListBallots(ctx context.Context, r ListRequest) ([]*model.Ball
 		WithLimit(int(r.Limit))
 	if r.Account != nil {
 		// clamp time range to account lifetime
-		r.Since = util.Max64(r.Since, r.Account.FirstSeen-1)
+		r.Since = max(r.Since, r.Account.FirstSeen-1)
 		r.Until = util.NonZeroMin64(r.Until, r.Account.LastSeen)
 		q = q.AndEqual("source_id", r.Account.RowId)
 	}

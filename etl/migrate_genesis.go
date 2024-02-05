@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"blockwatch.cc/packdb/pack"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
 )
@@ -27,6 +28,17 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 
 	accounts := make([]pack.Item, 0)
 	contracts := make([]pack.Item, 0)
+
+	// register zero address and burn address as first accounts in database
+	for i, v := range []tezos.Address{
+		tezos.ZeroAddress,
+		tezos.BurnAddress,
+	} {
+		acc := model.NewAccount(v)
+		acc.RowId = model.AccountID(i + 1)
+		acc.IsDirty = true
+		accounts = append(accounts, acc)
+	}
 
 	opCounter := 1
 	flowCounter := 1
@@ -83,8 +95,8 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 			P:    flowCounter,
 		}
 		f := model.NewFlow(b.block, acc, acc, id)
-		f.Category = model.FlowCategoryBalance
-		f.Operation = model.FlowTypeActivation
+		f.Kind = model.FlowKindBalance
+		f.Type = model.FlowTypeActivation
 		f.AmountIn = acc.SpendableBalance
 		b.block.Flows = append(b.block.Flows, f)
 		flowCounter++
@@ -151,8 +163,8 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 			P:    flowCounter,
 		}
 		f := model.NewFlow(b.block, acc, nil, id)
-		f.Category = model.FlowCategoryBalance
-		f.Operation = model.FlowTypeActivation
+		f.Kind = model.FlowKindBalance
+		f.Type = model.FlowTypeActivation
 		f.AmountIn = acc.Balance()
 		b.block.Flows = append(b.block.Flows, f)
 
@@ -193,7 +205,6 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		acc.IsDelegated = true
 		acc.BakerId = bkr.AccountId
 		acc.DelegatedSince = b.block.Height
-		bkr.TotalDelegations++
 		bkr.ActiveDelegations++
 		bkr.DelegatedBalance += acc.Balance()
 		log.Debugf("1 BOOT ADD delegation %s %d bal=%d -> %s %d delegations=%d",
@@ -207,8 +218,8 @@ func (b *Builder) BuildGenesisBlock(ctx context.Context) (*model.Block, error) {
 		}
 		// register delegation flows (will not be applied, just saved!)
 		f = model.NewFlow(b.block, bkr.Account, acc, id)
-		f.Category = model.FlowCategoryDelegation
-		f.Operation = model.FlowTypeDelegation
+		f.Kind = model.FlowKindDelegation
+		f.Type = model.FlowTypeDelegation
 		f.AmountIn = acc.Balance()
 		b.block.Flows = append(b.block.Flows, f)
 		flowCounter++

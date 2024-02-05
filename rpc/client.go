@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	libraryVersion = "v16"
+	libraryVersion = "v18"
 	userAgent      = "tzindex/v" + libraryVersion
 	mediaType      = "application/json"
 )
@@ -97,6 +97,11 @@ func (c *Client) WithParams(p *Params) *Client {
 
 func (c *Client) WithUserAgent(s string) *Client {
 	c.userAgent = s
+	return c
+}
+
+func (c *Client) WithApiKey(s string) *Client {
+	c.apiKey = s
 	return c
 }
 
@@ -235,7 +240,7 @@ func (c *Client) Do(req *http.Request, v interface{}) error {
 			log.Warnf("rpc: %T %v", err, err)
 			return err
 		}
-		if resp != nil {
+		if resp != nil && retries > 1 {
 			resp.Body.Close()
 			resp = nil
 		}
@@ -335,18 +340,18 @@ func handleError(resp *http.Response) error {
 		return &httpErr
 	}
 
-	var errs Errors
-	if err := json.Unmarshal(body, &errs); err != nil {
-		return &plainError{&httpErr, fmt.Sprintf("rpc: error decoding RPC error: %v", err)}
+	if body[0] == '[' {
+		// try decode node errors
+		errs := NodeErrors{}
+		if err := json.Unmarshal(body, &errs); err == nil {
+			return &rpcError{
+				httpError: &httpErr,
+				errors:    errs.Interface(),
+			}
+		} else {
+			log.Errorf("rpc: error decoding RPC error: %v", err)
+		}
 	}
-
-	if len(errs) == 0 {
-		log.Errorf("rpc: error decoding RPC error response: %w", err)
-		return &httpErr
-	}
-
-	return &rpcError{
-		httpError: &httpErr,
-		errors:    errs,
-	}
+	// proxy and gateway errors will be returned as httpError
+	return &httpErr
 }

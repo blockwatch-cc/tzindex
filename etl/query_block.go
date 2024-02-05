@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -310,4 +310,23 @@ func (m *Indexer) ListBlockRights(ctx context.Context, height int64, typ tezos.R
 		return nil, err
 	}
 	return resp, nil
+}
+
+func (m *Indexer) CycleByNum(ctx context.Context, num int64) (*model.Cycle, error) {
+	table, err := m.Table(model.CycleTableKey)
+	if err != nil {
+		return nil, err
+	}
+	c := &model.Cycle{}
+	err = pack.NewQuery("api.cycle_by_num").
+		WithTable(table).
+		AndEqual("cycle", num).
+		Execute(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	if c.RowId == 0 {
+		return nil, model.ErrNoCycle
+	}
+	return c, nil
 }

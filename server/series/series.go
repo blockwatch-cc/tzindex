@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package series
@@ -6,12 +6,13 @@ package series
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/gorilla/mux"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gorilla/mux"
 
 	"blockwatch.cc/packdb/encoding/csv"
 	"blockwatch.cc/packdb/pack"
@@ -39,7 +40,7 @@ const (
 	FillModeLinear  FillMode = "linear"
 	FillModeZero    FillMode = "zero"
 
-	collapseUnits string = "mhdwMy"
+	collapseUnits string = "mhdwMqy"
 )
 
 type Collapse struct {
@@ -61,10 +62,12 @@ func ParseCollapse(s string) (Collapse, error) {
 	} else {
 		c.Unit = rune(u)
 	}
-	if val, err := strconv.Atoi(s[:len(s)-1]); err != nil {
-		return c, fmt.Errorf("collapse: %v", err)
-	} else {
-		c.Value = val
+	if sval := s[:len(s)-1]; len(sval) > 0 {
+		if val, err := strconv.Atoi(sval); err != nil {
+			return c, fmt.Errorf("collapse: %v", err)
+		} else {
+			c.Value = val
+		}
 	}
 	if c.Value < 0 {
 		c.Value = -c.Value
@@ -88,7 +91,7 @@ func (c *Collapse) UnmarshalText(data []byte) error {
 	return nil
 }
 
-func (c Collapse) Duration() time.Duration {
+func (c Collapse) Base() time.Duration {
 	base := time.Minute
 	switch c.Unit {
 	case 'm':
@@ -101,37 +104,51 @@ func (c Collapse) Duration() time.Duration {
 		base = 24 * 7 * time.Hour
 	case 'M':
 		base = 30*24*time.Hour + 629*time.Minute + 28*time.Second // 30.437 days
+	case 'q':
+		base = 91*24*time.Hour + 6*time.Hour // 91.25 days
 	case 'y':
 		base = 365 * 24 * time.Hour
 	}
-	return time.Duration(c.Value) * base
+	return base
 }
 
+func (c Collapse) Duration() time.Duration {
+	return time.Duration(c.Value) * c.Base()
+}
+
+// Truncate truncates t to time unit ignoring its value, e.g.
+// - minutes: full minute
+// - hours: full hour
+// - days: midnight UTC
+// - weeks: midnight UTC on first day of week (Sunday)
+// - months: midnight UTC on first day of month
+// - quarters: midnight UTC on first day of quarter
+// - years: midnight UTC on first day of year
 func (c Collapse) Truncate(t time.Time) time.Time {
 	switch c.Unit {
 	default:
 		// anything below a day is fine for go's time library
-		return t.Truncate(c.Duration())
+		return t.Truncate(c.Base())
+	case 'd':
+		// truncate to day start,
+		yy, mm, dd := t.Date()
+		return time.Date(yy, mm, dd, 0, 0, 0, 0, time.UTC)
+
 	case 'w':
 		// truncate to midnight on first day of week (weekdays are zero-based)
-		if c.Value == 1 {
-			yy, mm, dd := t.AddDate(0, 0, -int(t.Weekday())).Date()
-			return time.Date(yy, mm, dd, 0, 0, 0, 0, time.UTC)
-		}
-
-		// round down to n weeks
-		_, w := t.ISOWeek()
-		w %= c.Value
-		yy, mm, dd := t.AddDate(0, 0, int(-t.Weekday())-w*7).Date()
+		yy, mm, dd := t.AddDate(0, 0, -int(t.Weekday())).Date()
 		return time.Date(yy, mm, dd, 0, 0, 0, 0, time.UTC)
 
 	case 'M':
 		// truncate to midnight on first day of month
 		yy, mm, _ := t.Date()
+		return time.Date(yy, mm, 1, 0, 0, 0, 0, time.UTC)
+
+	case 'q':
+		// truncate to midnight on first day of quarter
+		yy, mm, _ := t.Date()
 		val := yy*12 + int(mm) - 1
-		if c.Value > 1 {
-			val -= (val % c.Value)
-		}
+		val -= val % 3
 		yy = val / 12
 		mm = time.Month(val%12 + 1)
 		return time.Date(yy, mm, 1, 0, 0, 0, 0, time.UTC)
@@ -139,9 +156,6 @@ func (c Collapse) Truncate(t time.Time) time.Time {
 	case 'y':
 		// truncate to midnight on first day of year
 		yy := t.Year()
-		if c.Value > 1 {
-			yy -= (yy % c.Value)
-		}
 		return time.Date(yy, time.January, 1, 0, 0, 0, 0, time.UTC)
 	}
 }
@@ -157,6 +171,9 @@ func (c Collapse) Next(t time.Time, n int) time.Time {
 	case 'M':
 		// add n*m months
 		return c.Truncate(t).AddDate(0, n*c.Value, 0)
+	case 'q':
+		// add n*3m months
+		return c.Truncate(t).AddDate(0, 3*n*c.Value, 0)
 	case 'y':
 		// add n*m years
 		return c.Truncate(t).AddDate(n*c.Value, 0, 0)
@@ -348,7 +365,7 @@ func (r *SeriesRequest) Parse(ctx *server.Context) {
 
 	case r.From.IsZero() && !r.To.IsZero():
 		// adjust start time if not set
-		r.From = util.NewTime(r.Collapse.Next(r.To.Time(), -int(r.Limit)))
+		r.From = util.NewTime(r.Collapse.Next(r.To.Time(), -int(r.Limit-1)))
 		r.To = util.NewTime(r.Collapse.Next(r.To.Time(), 1))
 
 	case r.To.IsZero() && !r.From.IsZero():
@@ -363,8 +380,13 @@ func (r *SeriesRequest) Parse(ctx *server.Context) {
 	}
 
 	// make sure we never cross realtime
-	if r.To.Time().After(ctx.Now) {
+	if r.To.Time().After(r.Collapse.Next(ctx.Now, 1)) {
 		r.To = util.NewTime(r.Collapse.Next(ctx.Now, 1))
+	}
+
+	// round to to next boundary (if to is not already at boundary)
+	if !r.To.Time().Equal(r.Collapse.Truncate(r.To.Time())) {
+		r.To = util.NewTime(r.Collapse.Next(r.To.Time(), 1))
 	}
 
 	// limit
@@ -380,22 +402,22 @@ func StreamSeries(ctx *server.Context) (interface{}, int) {
 	args := &SeriesRequest{}
 	ctx.ParseRequestArgs(args)
 	switch args.Series {
-	case "block":
+	case model.BlockTableKey:
 		args.bucket = &BlockSeries{}
 		args.model = &model.Block{}
-	case "op":
+	case model.OpTableKey:
 		args.bucket = &OpSeries{}
 		args.model = &model.Op{}
-	case "flow":
+	case model.FlowTableKey:
 		args.bucket = &FlowSeries{}
 		args.model = &model.Flow{}
-	case "chain":
+	case model.ChainTableKey:
 		args.bucket = &ChainSeries{}
 		args.model = &model.Chain{}
-	case "supply":
+	case model.SupplyTableKey:
 		args.bucket = &SupplySeries{}
 		args.model = &model.Supply{}
-	case "balance":
+	case model.BalanceTableKey:
 		args.FillMode = FillModeLast
 		args.bucket = &BalanceSeries{}
 		args.model = &BalanceModel{

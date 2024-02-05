@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -16,6 +16,38 @@ import (
 // can implicitly burn a fee when new account is created
 // NOTE: this seems to not extend grace period
 func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.Operation, id model.OpRef, rollback bool) error {
+	o := id.Get(oh)
+
+	Errorf := func(format string, args ...interface{}) error {
+		return fmt.Errorf(
+			"%s op [%d:%d:%d]: "+format,
+			append([]interface{}{o.Kind(), id.L, id.P, id.C}, args...)...,
+		)
+	}
+
+	tx, ok := o.(*rpc.Transaction)
+	if !ok {
+		return Errorf("unexpected type %T ", o)
+	}
+
+	// stake ops
+	if tx.Source.IsEOA() && tx.Source == tx.Destination {
+		switch tx.Parameters.Entrypoint {
+		case "stake":
+			return b.AppendStakeOp(ctx, oh, id, rollback)
+		case "unstake":
+			return b.AppendUnstakeOp(ctx, oh, id, rollback)
+		case "finalize_unstake":
+			return b.AppendFinalizeUnstakeOp(ctx, oh, id, rollback)
+		case "set_delegate_parameters":
+			return b.AppendSetDelegateParametersOp(ctx, oh, id, rollback)
+		}
+	}
+
+	return b.AppendNormalTransactionOp(ctx, oh, id, rollback)
+}
+
+func (b *Builder) AppendNormalTransactionOp(ctx context.Context, oh *rpc.Operation, id model.OpRef, rollback bool) error {
 	o := id.Get(oh)
 
 	Errorf := func(format string, args ...interface{}) error {
@@ -95,15 +127,16 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.Operation, id
 		if dCon != nil && op.IsContract {
 			pTyp, _, err := dCon.LoadType()
 			if err != nil {
-				log.Error(Errorf("loading script: %v", err))
+				log.Error(Errorf("loading %s script: %v", dCon, err))
 			}
 			ep, _, err := top.Parameters.MapEntrypoint(pTyp)
 			if op.IsSuccess && err != nil {
-				log.Error(Errorf("searching entrypoint: %v", err))
+				log.Error(Errorf("searching %s entrypoint: %v", dCon, err))
 			} else {
 				op.Entrypoint = ep.Id
 				op.Data = ep.Name
 			}
+			op.CodeHash = dCon.CodeHash
 		}
 		// ticket deposit
 		if dCon != nil && op.IsRollup {
@@ -243,15 +276,15 @@ func (b *Builder) AppendTransactionOp(ctx context.Context, oh *rpc.Operation, id
 		id.N++
 		switch id.Kind {
 		case model.OpTypeTransaction:
-			if err := b.AppendInternalTransactionOp(ctx, src, sbkr, oh, v, id, rollback); err != nil {
+			if err := b.AppendInternalTransactionOp(ctx, src, sbkr, oh, *v, id, rollback); err != nil {
 				return err
 			}
 		case model.OpTypeDelegation:
-			if err := b.AppendInternalDelegationOp(ctx, src, sbkr, oh, v, id, rollback); err != nil {
+			if err := b.AppendInternalDelegationOp(ctx, src, sbkr, oh, *v, id, rollback); err != nil {
 				return err
 			}
 		case model.OpTypeOrigination:
-			if err := b.AppendInternalOriginationOp(ctx, src, sbkr, oh, v, id, rollback); err != nil {
+			if err := b.AppendInternalOriginationOp(ctx, src, sbkr, oh, *v, id, rollback); err != nil {
 				return err
 			}
 		default:
@@ -283,7 +316,7 @@ func (b *Builder) AppendInternalTransactionOp(
 	}
 	dst, ok := b.AccountByAddress(iop.Destination)
 	if !ok {
-		return Errorf("missing target account %s", iop.Destination)
+		return Errorf("missing dest account %s", iop.Destination)
 	}
 
 	var (
@@ -344,15 +377,16 @@ func (b *Builder) AppendInternalTransactionOp(
 		if dCon != nil && op.IsContract {
 			pTyp, _, err := dCon.LoadType()
 			if err != nil {
-				log.Error(Errorf("loading script for %s: %v", dst, err))
+				log.Error(Errorf("loading %s script: %v", dCon, err))
 			}
 			ep, _, err := iop.Parameters.MapEntrypoint(pTyp)
 			if op.IsSuccess && err != nil {
-				log.Error(Errorf("searching entrypoint in %s: %v", dst, err))
+				log.Error(Errorf("searching %s entrypoint: %v", dCon, err))
 			} else {
 				op.Entrypoint = ep.Id
 				op.Data = ep.Name
 			}
+			op.CodeHash = dCon.CodeHash
 		}
 		// ticket deposit
 		if dCon != nil && op.IsRollup {

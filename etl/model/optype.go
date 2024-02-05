@@ -1,11 +1,12 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package model
 
 import (
-	"blockwatch.cc/tzgo/tezos"
 	"fmt"
+
+	"blockwatch.cc/tzgo/tezos"
 )
 
 // implicit operation list ids
@@ -20,78 +21,88 @@ type OpType byte
 
 // enums are allocated in chronological order with most often used ops first
 const (
-	OpTypeBake                 OpType = iota // 0 implicit event
-	OpTypeEndorsement                        // 1
-	OpTypeTransaction                        // 2
-	OpTypeReveal                             // 3
-	OpTypeDelegation                         // 4
-	OpTypeOrigination                        // 5
-	OpTypeNonceRevelation                    // 6
-	OpTypeActivation                         // 7
-	OpTypeBallot                             // 8
-	OpTypeProposal                           // 9
-	OpTypeDoubleBaking                       // 10
-	OpTypeDoubleEndorsement                  // 11
-	OpTypeUnfreeze                           // 12 implicit event
-	OpTypeInvoice                            // 13 implicit event
-	OpTypeAirdrop                            // 14 implicit event
-	OpTypeSeedSlash                          // 15 implicit event
-	OpTypeMigration                          // 16 implicit event
-	OpTypeSubsidy                            // 17 v010 liquidity baking
-	OpTypeRegisterConstant                   // 18 v011
-	OpTypePreendorsement                     // 19 v012
-	OpTypeDoublePreendorsement               // 20 v012
-	OpTypeDepositsLimit                      // 21 v012
-	OpTypeDeposit                            // 22 v012 implicit event (baker deposit)
-	OpTypeBonus                              // 23 v012 implicit event (baker extra bonus)
-	OpTypeReward                             // 24 v012 implicit event (endorsement reward pay/burn)
-	OpTypeRollupOrigination                  // 25 v013
-	OpTypeRollupTransaction                  // 26 v013
-	OpTypeVdfRevelation                      // 27 v014
-	OpTypeIncreasePaidStorage                // 28 v014
-	OpTypeDrainDelegate                      // 29 v015
-	OpTypeUpdateConsensusKey                 // 30 v015
-	OpTypeTransferTicket                     // 31 v013
-	OpTypeBatch                = 254         // API output only
-	OpTypeInvalid              = 255
+	OpTypeBake                  OpType = iota // 0 implicit event (bake reward pay)
+	OpTypeEndorsement                         // 1
+	OpTypeTransaction                         // 2
+	OpTypeReveal                              // 3
+	OpTypeDelegation                          // 4
+	OpTypeOrigination                         // 5
+	OpTypeNonceRevelation                     // 6
+	OpTypeActivation                          // 7
+	OpTypeBallot                              // 8
+	OpTypeProposal                            // 9
+	OpTypeDoubleBaking                        // 10
+	OpTypeDoubleEndorsement                   // 11
+	OpTypeUnfreeze                            // 12 implicit event
+	OpTypeInvoice                             // 13 implicit event
+	OpTypeAirdrop                             // 14 implicit event
+	OpTypeSeedSlash                           // 15 implicit event
+	OpTypeMigration                           // 16 implicit event
+	OpTypeSubsidy                             // 17 v010 liquidity baking
+	OpTypeRegisterConstant                    // 18 v011
+	OpTypePreendorsement                      // 19 v012
+	OpTypeDoublePreendorsement                // 20 v012
+	OpTypeDepositsLimit                       // 21 v012
+	OpTypeDeposit                             // 22 v012 implicit event (baker deposit)
+	OpTypeBonus                               // 23 v012 implicit event (baker extra bonus)
+	OpTypeReward                              // 24 v012 implicit event (endorsement reward pay/burn)
+	OpTypeRollupOrigination                   // 25 v013
+	OpTypeRollupTransaction                   // 26 v013
+	OpTypeVdfRevelation                       // 27 v014
+	OpTypeIncreasePaidStorage                 // 28 v014
+	OpTypeDrainDelegate                       // 29 v015
+	OpTypeUpdateConsensusKey                  // 30 v015
+	OpTypeTransferTicket                      // 31 v013
+	OpTypeStake                               // 32 v018
+	OpTypeUnstake                             // 33 v018
+	OpTypeFinalizeUnstake                     // 34 v018
+	OpTypeSetDelegateParameters               // 35 v018
+	OpTypeStakeSlash                          // 36 v018 implicit event (staker slash)
+	OpTypeBatch                 = 254         // API output only
+	OpTypeInvalid               = 255
 )
 
 var (
 	opTypeStrings = map[OpType]string{
-		OpTypeBake:                 "bake",
-		OpTypeEndorsement:          "endorsement",
-		OpTypeTransaction:          "transaction",
-		OpTypeReveal:               "reveal",
-		OpTypeDelegation:           "delegation",
-		OpTypeOrigination:          "origination",
-		OpTypeNonceRevelation:      "nonce_revelation",
-		OpTypeActivation:           "activation",
-		OpTypeBallot:               "ballot",
-		OpTypeProposal:             "proposal",
-		OpTypeDoubleBaking:         "double_baking",
-		OpTypeDoubleEndorsement:    "double_endorsement",
-		OpTypeUnfreeze:             "unfreeze",
-		OpTypeInvoice:              "invoice",
-		OpTypeAirdrop:              "airdrop",
-		OpTypeSeedSlash:            "seed_slash",
-		OpTypeMigration:            "migration",
-		OpTypeSubsidy:              "subsidy",
-		OpTypeRegisterConstant:     "register_constant",
-		OpTypePreendorsement:       "preendorsement",
-		OpTypeDoublePreendorsement: "double_preendorsement",
-		OpTypeDepositsLimit:        "deposits_limit",
-		OpTypeDeposit:              "deposit",
-		OpTypeReward:               "reward",
-		OpTypeBonus:                "bonus",
-		OpTypeBatch:                "batch",
-		OpTypeRollupOrigination:    "rollup_origination",
-		OpTypeRollupTransaction:    "rollup_transaction",
-		OpTypeVdfRevelation:        "vdf_revelation",
-		OpTypeIncreasePaidStorage:  "increase_paid_storage",
-		OpTypeDrainDelegate:        "drain_delegate",
-		OpTypeUpdateConsensusKey:   "update_consensus_key",
-		OpTypeTransferTicket:       "transfer_ticket",
-		OpTypeInvalid:              "",
+		OpTypeBake:                  "bake",
+		OpTypeEndorsement:           "endorsement",
+		OpTypeTransaction:           "transaction",
+		OpTypeReveal:                "reveal",
+		OpTypeDelegation:            "delegation",
+		OpTypeOrigination:           "origination",
+		OpTypeNonceRevelation:       "nonce_revelation",
+		OpTypeActivation:            "activation",
+		OpTypeBallot:                "ballot",
+		OpTypeProposal:              "proposal",
+		OpTypeDoubleBaking:          "double_baking",
+		OpTypeDoubleEndorsement:     "double_endorsement",
+		OpTypeUnfreeze:              "unfreeze",
+		OpTypeInvoice:               "invoice",
+		OpTypeAirdrop:               "airdrop",
+		OpTypeSeedSlash:             "seed_slash",
+		OpTypeMigration:             "migration",
+		OpTypeSubsidy:               "subsidy",
+		OpTypeRegisterConstant:      "register_constant",
+		OpTypePreendorsement:        "preendorsement",
+		OpTypeDoublePreendorsement:  "double_preendorsement",
+		OpTypeDepositsLimit:         "deposits_limit",
+		OpTypeDeposit:               "deposit",
+		OpTypeReward:                "reward",
+		OpTypeBonus:                 "bonus",
+		OpTypeBatch:                 "batch",
+		OpTypeRollupOrigination:     "rollup_origination",
+		OpTypeRollupTransaction:     "rollup_transaction",
+		OpTypeVdfRevelation:         "vdf_revelation",
+		OpTypeIncreasePaidStorage:   "increase_paid_storage",
+		OpTypeDrainDelegate:         "drain_delegate",
+		OpTypeUpdateConsensusKey:    "update_consensus_key",
+		OpTypeTransferTicket:        "transfer_ticket",
+		OpTypeStake:                 "stake",
+		OpTypeUnstake:               "unstake",
+		OpTypeFinalizeUnstake:       "finalize_unstake",
+		OpTypeSetDelegateParameters: "set_delegate_parameters",
+		OpTypeStakeSlash:            "stake_slash",
+		OpTypeInvalid:               "",
 	}
 	opTypeReverseStrings = make(map[string]OpType)
 )
@@ -143,7 +154,8 @@ func (t OpType) IsEvent() bool {
 		OpTypeSubsidy,
 		OpTypeDeposit,
 		OpTypeBonus,
-		OpTypeReward:
+		OpTypeReward,
+		OpTypeStakeSlash:
 		return true
 	default:
 		return false
@@ -229,7 +241,8 @@ func (t OpType) ListId() int {
 		OpTypeSeedSlash,
 		OpTypeDeposit,
 		OpTypeBonus,
-		OpTypeReward:
+		OpTypeReward,
+		OpTypeStakeSlash:
 		return -1
 	case OpTypeEndorsement, OpTypePreendorsement:
 		return 0
@@ -253,7 +266,11 @@ func (t OpType) ListId() int {
 		OpTypeRollupTransaction,
 		OpTypeIncreasePaidStorage,
 		OpTypeUpdateConsensusKey,
-		OpTypeTransferTicket:
+		OpTypeTransferTicket,
+		OpTypeStake,
+		OpTypeUnstake,
+		OpTypeFinalizeUnstake,
+		OpTypeSetDelegateParameters:
 		return 3
 	default:
 		return -1

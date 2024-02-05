@@ -1,16 +1,18 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package tables
 
 import (
 	"fmt"
-	"github.com/gorilla/mux"
 	"strings"
 	"time"
 
+	"github.com/gorilla/mux"
+
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/util"
+	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -100,45 +102,50 @@ func StreamTable(ctx *server.Context) (interface{}, int) {
 	args := &TableRequest{}
 	ctx.ParseRequestArgs(args)
 	switch args.Table {
-	case "block":
+	case model.BlockTableKey:
 		return StreamBlockTable(ctx, args)
-	case "chain":
+	case model.ChainTableKey:
 		return StreamChainTable(ctx, args)
-	case "supply":
+	case model.SupplyTableKey:
 		return StreamSupplyTable(ctx, args)
-	case "op":
+	case model.OpTableKey:
 		return StreamOpTable(ctx, args)
-	case "flow":
+	case model.FlowTableKey:
 		return StreamFlowTable(ctx, args)
-	case "contract":
+	case model.ContractTableKey:
 		return StreamContractTable(ctx, args)
-	case "account":
+	case model.AccountTableKey:
 		return StreamAccountTable(ctx, args)
-	case "rights":
+	case model.RightsTableKey:
 		return StreamRightsTable(ctx, args)
-	case "snapshot":
+	case model.SnapshotTableKey:
 		return StreamSnapshotTable(ctx, args)
-	case "election":
+	case model.ElectionTableKey, "election":
+		args.Table = model.ElectionTableKey
 		return StreamElectionTable(ctx, args)
-	case "proposal":
+	case model.ProposalTableKey, "proposal":
+		args.Table = model.ProposalTableKey
 		return StreamProposalTable(ctx, args)
-	case "vote":
+	case model.VoteTableKey, "vote":
+		args.Table = model.VoteTableKey
 		return StreamVoteTable(ctx, args)
-	case "ballot":
+	case model.BallotTableKey, "ballot":
+		args.Table = model.BallotTableKey
 		return StreamBallotTable(ctx, args)
-	case "income":
+	case model.IncomeTableKey:
 		return StreamIncomeTable(ctx, args)
-	case "bigmaps":
+	case model.BigmapAllocTableKey, "bigmaps":
+		args.Table = model.BigmapAllocTableKey
 		return StreamBigmapAllocTable(ctx, args)
-	case "bigmap_values":
+	case model.BigmapValueTableKey:
 		return StreamBigmapValueTable(ctx, args)
-	case "bigmap_updates":
+	case model.BigmapUpdateTableKey:
 		return StreamBigmapUpdateTable(ctx, args)
-	case "constant":
+	case model.ConstantTableKey:
 		return StreamConstantTable(ctx, args)
-	case "balance":
+	case model.BalanceTableKey:
 		return StreamBalanceTable(ctx, args)
-	case "event":
+	case model.EventTableKey:
 		return StreamEventTable(ctx, args)
 	default:
 		panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, fmt.Sprintf("no such table '%s'", args.Table), nil))

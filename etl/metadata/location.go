@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package metadata
@@ -20,7 +20,7 @@ func init() {
 		b.WriteString(v)
 		b.WriteRune('"')
 	}
-	str := strings.Replace(locationSchema, `{{COUNTRY_CODES}}`, b.String(), -1)
+	str := strings.ReplaceAll(locationSchema, `{{COUNTRY_CODES}}`, b.String())
 	b.Reset()
 	for i, v := range iata.IATA_LARGE_AIRPORT_CODES {
 		if i > 0 {
@@ -30,7 +30,7 @@ func init() {
 		b.WriteString(v.String())
 		b.WriteRune('"')
 	}
-	str = strings.Replace(str, `{{CITY_CODES}}`, b.String(), -1)
+	str = strings.ReplaceAll(str, `{{CITY_CODES}}`, b.String())
 	LoadSchema(locationNs, []byte(str), &Location{})
 }
 
@@ -38,7 +38,7 @@ const (
 	locationNs     = "location"
 	locationSchema = `{
 	"$schema": "http://json-schema.org/draft/2019-09/schema#",
-	"$id": "https://api.tzstats.com/metadata/schemas/location.json",
+	"$id": "https://api.tzpro.io/metadata/schemas/location.json",
 	"title": "Location Info",
     "description": "A geographical location and coordinates.",
 	"type": "object",

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package series
@@ -324,7 +324,7 @@ func (s *FlowSeries) BuildQuery(ctx *server.Context, args *SeriesRequest) pack.Q
 					// consider comma separated lists, convert type to int and back to string list
 					typs := make([]uint8, 0)
 					for _, t := range strings.Split(v, ",") {
-						typ := model.ParseFlowCategory(t)
+						typ := model.ParseFlowKind(t)
 						if !typ.IsValid() {
 							panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid category '%s'", val[0]), nil))
 						}

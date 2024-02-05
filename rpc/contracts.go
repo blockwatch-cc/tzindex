@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -30,8 +30,8 @@ func (c *Client) GetContract(ctx context.Context, addr tezos.Address, id BlockID
 }
 
 // GetContractScript returns the originated contract script.
-func (c *Client) GetContractScript(ctx context.Context, addr tezos.Address) (*micheline.Script, error) {
-	u := fmt.Sprintf("chains/main/blocks/head/context/contracts/%s/script", addr)
+func (c *Client) GetContractScript(ctx context.Context, addr tezos.Address, id BlockID) (*micheline.Script, error) {
+	u := fmt.Sprintf("chains/main/blocks/%s/context/contracts/%s/script", id, addr)
 	s := micheline.NewScript()
 	err := c.Get(ctx, u, s)
 	if err != nil {

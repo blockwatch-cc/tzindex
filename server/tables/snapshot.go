@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package tables
@@ -65,45 +65,45 @@ func (s *Snapshot) MarshalJSON() ([]byte, error) {
 
 func (s *Snapshot) MarshalJSONVerbose() ([]byte, error) {
 	snap := struct {
-		RowId        uint64  `json:"row_id"`
-		Height       int64   `json:"height"`
-		Cycle        int64   `json:"cycle"`
-		IsSelected   bool    `json:"is_selected"`
-		Timestamp    int64   `json:"time"` // convert to UNIX milliseconds
-		Index        int     `json:"index"`
-		Rolls        int64   `json:"rolls"`
-		ActiveStake  float64 `json:"active_stake"`
-		Account      string  `json:"address"`
-		AccountId    uint64  `json:"account_id"`
-		Baker        string  `json:"baker"`
-		BakerId      uint64  `json:"baker_id"`
-		IsBaker      bool    `json:"is_baker"`
-		IsActive     bool    `json:"is_active"`
-		Balance      float64 `json:"balance"`
-		Delegated    float64 `json:"delegated"`
-		NDelegations int64   `json:"n_delegations"`
-		Since        int64   `json:"since"`
-		SinceTime    int64   `json:"since_time"`
+		RowId          uint64  `json:"row_id"`
+		Height         int64   `json:"height"`
+		Cycle          int64   `json:"cycle"`
+		Timestamp      int64   `json:"time"` // convert to UNIX milliseconds
+		Index          int     `json:"index"`
+		OwnStake       float64 `json:"own_stake"`
+		StakingBalance float64 `json:"staking_balance"`
+		Account        string  `json:"address"`
+		AccountId      uint64  `json:"account_id"`
+		Baker          string  `json:"baker"`
+		BakerId        uint64  `json:"baker_id"`
+		IsBaker        bool    `json:"is_baker"`
+		IsActive       bool    `json:"is_active"`
+		Balance        float64 `json:"balance"`
+		Delegated      float64 `json:"delegated"`
+		NDelegations   int64   `json:"n_delegations"`
+		NStakers       int64   `json:"n_stakers"`
+		Since          int64   `json:"since"`
+		SinceTime      int64   `json:"since_time"`
 	}{
-		RowId:        s.RowId,
-		Height:       s.Height,
-		Cycle:        s.Cycle,
-		IsSelected:   s.IsSelected,
-		Timestamp:    util.UnixMilliNonZero(s.Timestamp),
-		Index:        s.Snapshot.Index,
-		Rolls:        s.Snapshot.Rolls,
-		ActiveStake:  s.params.ConvertValue(s.ActiveStake),
-		AccountId:    s.AccountId.U64(),
-		Account:      s.ctx.Indexer.LookupAddress(s.ctx, s.AccountId).String(),
-		BakerId:      s.BakerId.U64(),
-		Baker:        s.ctx.Indexer.LookupAddress(s.ctx, s.BakerId).String(),
-		IsBaker:      s.IsBaker,
-		IsActive:     s.IsActive,
-		Balance:      s.params.ConvertValue(s.Balance),
-		Delegated:    s.params.ConvertValue(s.Delegated),
-		NDelegations: s.NDelegations,
-		Since:        s.Since,
-		SinceTime:    s.ctx.Indexer.LookupBlockTimeMs(s.ctx.Context, s.Since),
+		RowId:          s.RowId,
+		Height:         s.Height,
+		Cycle:          s.Cycle,
+		Timestamp:      util.UnixMilliNonZero(s.Timestamp),
+		Index:          s.Snapshot.Index,
+		StakingBalance: s.params.ConvertValue(s.StakingBalance),
+		OwnStake:       s.params.ConvertValue(s.OwnStake),
+		AccountId:      s.AccountId.U64(),
+		Account:        s.ctx.Indexer.LookupAddress(s.ctx, s.AccountId).String(),
+		BakerId:        s.BakerId.U64(),
+		Baker:          s.ctx.Indexer.LookupAddress(s.ctx, s.BakerId).String(),
+		IsBaker:        s.IsBaker,
+		IsActive:       s.IsActive,
+		Balance:        s.params.ConvertValue(s.Balance),
+		Delegated:      s.params.ConvertValue(s.Delegated),
+		NDelegations:   s.NDelegations,
+		NStakers:       s.NStakers,
+		Since:          s.Since,
+		SinceTime:      s.ctx.Indexer.LookupBlockTimeMs(s.ctx.Context, s.Since),
 	}
 	return json.Marshal(snap)
 }
@@ -120,20 +120,14 @@ func (s *Snapshot) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, s.Height, 10)
 		case "cycle":
 			buf = strconv.AppendInt(buf, s.Cycle, 10)
-		case "is_selected":
-			if s.IsSelected {
-				buf = append(buf, '1')
-			} else {
-				buf = append(buf, '0')
-			}
 		case "time":
 			buf = strconv.AppendInt(buf, util.UnixMilliNonZero(s.Timestamp), 10)
 		case "index":
 			buf = strconv.AppendInt(buf, int64(s.Snapshot.Index), 10)
-		case "rolls":
-			buf = strconv.AppendInt(buf, s.Snapshot.Rolls, 10)
-		case "active_stake":
-			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.ActiveStake), 'f', dec, 64)
+		case "staking_balance":
+			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.StakingBalance), 'f', dec, 64)
+		case "own_stake":
+			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.OwnStake), 'f', dec, 64)
 		case "account_id":
 			buf = strconv.AppendUint(buf, s.AccountId.U64(), 10)
 		case "address":
@@ -168,6 +162,8 @@ func (s *Snapshot) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Delegated), 'f', dec, 64)
 		case "n_delegations":
 			buf = strconv.AppendInt(buf, s.NDelegations, 10)
+		case "n_stakers":
+			buf = strconv.AppendInt(buf, s.NStakers, 10)
 		case "since":
 			buf = strconv.AppendInt(buf, s.Since, 10)
 		case "since_time":
@@ -194,16 +190,14 @@ func (s *Snapshot) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(s.Height, 10)
 		case "cycle":
 			res[i] = strconv.FormatInt(s.Cycle, 10)
-		case "is_selected":
-			res[i] = strconv.FormatBool(s.IsSelected)
 		case "time":
 			res[i] = strconv.Quote(s.Timestamp.Format(time.RFC3339))
 		case "index":
 			res[i] = strconv.FormatInt(int64(s.Snapshot.Index), 10)
-		case "rolls":
-			res[i] = strconv.FormatInt(s.Snapshot.Rolls, 10)
-		case "active_stake":
-			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.ActiveStake), 'f', dec, 64)
+		case "staking_balance":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.StakingBalance), 'f', dec, 64)
+		case "own_stake":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.OwnStake), 'f', dec, 64)
 		case "account_id":
 			res[i] = strconv.FormatUint(s.AccountId.U64(), 10)
 		case "address":
@@ -222,6 +216,8 @@ func (s *Snapshot) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Delegated), 'f', dec, 64)
 		case "n_delegations":
 			res[i] = strconv.FormatInt(s.NDelegations, 10)
+		case "n_stakers":
+			res[i] = strconv.FormatInt(s.NStakers, 10)
 		case "since":
 			res[i] = strconv.FormatInt(s.Since, 10)
 		case "since_time":
@@ -425,7 +421,7 @@ func StreamSnapshotTable(ctx *server.Context, args *TableRequest) (interface{}, 
 			for _, v := range val {
 				// convert amounts from float to int64
 				switch prefix {
-				case "balance", "delegated", "active_stake":
+				case "balance", "delegated", "active_stake", "own_stake":
 					fvals := make([]string, 0)
 					for _, vv := range strings.Split(v, ",") {
 						fval, err := strconv.ParseFloat(vv, 64)

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package cache
@@ -7,8 +7,8 @@ import (
 	"context"
 	"sync/atomic"
 
-	"blockwatch.cc/packdb/cache/lru"
 	"blockwatch.cc/packdb/pack"
+	lru "github.com/hashicorp/golang-lru/v2"
 
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
@@ -21,7 +21,7 @@ var (
 )
 
 type BigmapCache struct {
-	cache *lru.TwoQueueCache // key := bigmap_id
+	cache *lru.TwoQueueCache[int64, any] // key := bigmap_id
 	size  int64
 	stats Stats
 }
@@ -31,22 +31,12 @@ func NewBigmapCache(sz int) *BigmapCache {
 		sz = BigmapMaxCacheSize
 	}
 	c := &BigmapCache{}
-	c.cache, _ = lru.New2QWithEvict(sz, func(_, v interface{}) {
-		buf := v.([]byte)
-		c.size -= int64(len(buf))
-		atomic.AddInt64(&c.stats.Evictions, 1)
-	})
+	c.cache, _ = lru.New2Q[int64, any](sz)
 	return c
 }
 
 func (c *BigmapCache) Add(b *model.BigmapAlloc) {
-	updated, _ := c.cache.Add(b.BigmapId, b.Data)
-	if updated {
-		atomic.AddInt64(&c.stats.Updates, 1)
-	} else {
-		c.size += int64(len(b.Data))
-		atomic.AddInt64(&c.stats.Inserts, 1)
-	}
+	c.cache.Add(b.BigmapId, b.Data)
 }
 
 func (c *BigmapCache) Drop(b *model.BigmapAlloc) {
@@ -150,7 +140,7 @@ func (h BigmapHistory) Range(from, to int) []*model.BigmapValue {
 }
 
 type BigmapHistoryCache struct {
-	cache *lru.TwoQueueCache // key := int64(bigmap_id<<32 & height)
+	cache *lru.TwoQueueCache[int64, any] // key := int64(bigmap_id<<32 & height)
 	size  int64
 	stats Stats
 }
@@ -160,10 +150,7 @@ func NewBigmapHistoryCache(sz int) *BigmapHistoryCache {
 		sz = BigmapHistoryMaxCacheSize
 	}
 	c := &BigmapHistoryCache{}
-	c.cache, _ = lru.New2QWithEvict(sz, func(_, v interface{}) {
-		atomic.AddInt64(&c.size, -v.(*BigmapHistory).Size())
-		atomic.AddInt64(&c.stats.Evictions, 1)
-	})
+	c.cache, _ = lru.New2Q[int64, any](sz)
 	return c
 }
 
@@ -196,10 +183,10 @@ func (c *BigmapHistoryCache) Get(id, height int64) (*BigmapHistory, bool) {
 func (c *BigmapHistoryCache) GetBest(id, height int64) (*BigmapHistory, bool) {
 	var bestHeight int64
 	for _, v := range c.cache.Keys() {
-		if v.(int64)>>32 != id {
+		if v>>32 != id {
 			continue
 		}
-		keyHeight := v.(int64) & 0xffffffff
+		keyHeight := v & 0xffffffff
 		if keyHeight > height {
 			continue
 		}

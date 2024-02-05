@@ -1,9 +1,10 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -19,6 +20,7 @@ import (
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzpro-go/tzpro"
 	"blockwatch.cc/tzpro-go/tzpro/index"
+	"blockwatch.cc/tzindex/etl/metadata"
 	"github.com/echa/config"
 	"github.com/echa/log"
 )
@@ -29,6 +31,7 @@ var (
 	sorted   bool
 	nobackup bool
 	nocolor  bool
+	local    bool
 	apiurl   string
 )
 
@@ -40,17 +43,19 @@ func init() {
 	flags.BoolVar(&sorted, "sorted", false, "sort JSON file by alias name")
 	flags.BoolVar(&nobackup, "no-backup", false, "don't backup data before destructive commands")
 	flags.BoolVar(&nocolor, "no-color", false, "disable color output")
+	flags.BoolVar(&local, "local", false, "use embedded JSON schema")
 	flags.StringVar(&apiurl, "index", "http://localhost:8000", "Index API URL")
 }
 
 func main() {
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		if err == flag.ErrHelp {
-			fmt.Println("Usage: tzalias <cmd> [address[/asset_id]] [fields] [<file>]")
+			fmt.Println("Usage: tzalias <cmd> [address[_token_id]] [fields] [<file>]")
 			flags.PrintDefaults()
 			fmt.Println("\nCommands")
 			fmt.Printf("  export          download and save metadata to `file`\n")
 			fmt.Printf("  import          import all metadata from `file`\n")
+			fmt.Printf("  validate        check a metadata file\n")
 			fmt.Printf("  inspect         show metadata\n")
 			fmt.Printf("  add             add new metadata\n")
 			fmt.Printf("  update          update existing metadata\n")
@@ -175,6 +180,53 @@ func makeFilename() string {
 	return defaultFilePrefix + "-" + time.Now().UTC().Format("2006-01-02T15-04-05") + ".json"
 }
 
+func readFile(fname string) (map[string]index.Metadata, error) {
+	buf, err := os.ReadFile(fname)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %v", fname, err)
+	}
+
+	content := make(map[string]index.Metadata)
+	// if err := json.Unmarshal(buf, &content); err != nil {
+	// 	return nil,fmt.Errorf("%s: %v", fname, err)
+	// }
+
+	dec := json.NewDecoder(bytes.NewBuffer(buf))
+
+	// read open bracket
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil, fmt.Errorf("%s invalid contents, expected JSON object `{}`", fname)
+	}
+	line := 1
+	for dec.More() {
+		var (
+			key string
+			val index.Metadata
+		)
+
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, fmt.Errorf("%s:L%d key: %v", fname, line, err)
+		}
+		key = tok.(string)
+		_, err = tezos.ParseAddress(key)
+		if err != nil {
+			return nil, fmt.Errorf("%s:L%d: %q: %v", fname, line, key, err)
+		}
+		if err := dec.Decode(&val); err != nil {
+			return nil, fmt.Errorf("%s:L%d %q: %v", fname, line, key, err)
+		}
+		content[key] = val
+		line++
+	}
+
+	return content, nil
+}
+
 func exportAliases(ctx context.Context, c *tzpro.Client) error {
 	fname := makeFilename()
 	aliases, err := c.Metadata.List(ctx)
@@ -208,20 +260,20 @@ func exportAliases(ctx context.Context, c *tzpro.Client) error {
 	return nil
 }
 
-func parseAddressAndAssetId(n string) (addr tezos.Address, id *int64, err error) {
-	fields := strings.Split(n, "/")
-	addr, err = tezos.ParseAddress(fields[0])
+func parseAddressAndTokend(n string) (addr tezos.Address, id *tezos.Z, err error) {
+	a, i, ok := strings.Cut(n, "_")
+	addr, err = tezos.ParseAddress(a)
 	if err != nil {
 		err = fmt.Errorf("%s: %v", n, err)
 		return
 	}
-	if len(fields) > 1 {
-		i, e := strconv.ParseInt(fields[1], 10, 64)
+	if ok {
+		z, e := tezos.ParseZ(i)
 		if e != nil {
 			err = fmt.Errorf("%s: %v", n, e)
 			return
 		}
-		id = &i
+		id = &z
 	}
 	return
 }
@@ -230,15 +282,9 @@ func importAliases(ctx context.Context, c *tzpro.Client) error {
 	if flags.NArg() < 2 {
 		return fmt.Errorf("missing filename")
 	}
-	fname := flags.Arg(1)
-	buf, err := os.ReadFile(fname)
+	content, err := readFile(flags.Arg(1))
 	if err != nil {
-		return fmt.Errorf("%s: %v", fname, err)
-	}
-
-	content := make(map[string]index.Metadata)
-	if err := json.Unmarshal(buf, &content); err != nil {
-		return fmt.Errorf("%s: %v", fname, err)
+		return err
 	}
 
 	aliases, err := c.Metadata.List(ctx)
@@ -255,7 +301,7 @@ func importAliases(ctx context.Context, c *tzpro.Client) error {
 	count := 0
 	ins := make([]index.Metadata, 0)
 	for n, v := range content {
-		v.Address, v.AssetId, err = parseAddressAndAssetId(n)
+		v.Address, v.TokenId, err = parseAddressAndTokend(n)
 		if err != nil {
 			return err
 		}
@@ -290,7 +336,7 @@ func purgeAliases(ctx context.Context, c *tzpro.Client) error {
 }
 
 func inspectAlias(ctx context.Context, c *tzpro.Client) error {
-	addr, id, err := parseAddressAndAssetId(flags.Arg(1))
+	addr, id, err := parseAddressAndTokend(flags.Arg(1))
 	if err != nil {
 		return err
 	}
@@ -298,10 +344,10 @@ func inspectAlias(ctx context.Context, c *tzpro.Client) error {
 	if id == nil {
 		alias, err = c.Metadata.GetWallet(ctx, addr)
 	} else {
-		alias, err = c.Metadata.GetAsset(ctx, tezos.NewToken(addr, tezos.NewZ(*id)))
+		alias, err = c.Metadata.GetAsset(ctx, tezos.NewToken(addr, *id))
 	}
 	if err != nil {
-		return fmt.Errorf("%s/%d: %v", addr, id, err)
+		return fmt.Errorf("%s_%s: %v", addr, id, err)
 	}
 	print(&alias)
 	return nil
@@ -316,7 +362,7 @@ func addAlias(ctx context.Context, c *tzpro.Client) error {
 		return err
 	}
 
-	addr, id, err := parseAddressAndAssetId(flags.Arg(1))
+	addr, id, err := parseAddressAndTokend(flags.Arg(1))
 	if err != nil {
 		return err
 	}
@@ -326,12 +372,12 @@ func addAlias(ctx context.Context, c *tzpro.Client) error {
 	if id == nil {
 		alias, _ = c.Metadata.GetWallet(ctx, addr)
 	} else {
-		alias, _ = c.Metadata.GetAsset(ctx, tezos.NewToken(addr, tezos.NewZ(*id)))
+		alias, _ = c.Metadata.GetAsset(ctx, tezos.NewToken(addr, *id))
 	}
 
 	// always set identifier
 	alias.Address = addr
-	alias.AssetId = id
+	alias.TokenId = id
 	if err := fillStruct(kvp, &alias); err != nil {
 		return err
 	}
@@ -340,7 +386,7 @@ func addAlias(ctx context.Context, c *tzpro.Client) error {
 	if err != nil {
 		return err
 	}
-	log.Infof("Added alias %s/%d", alias.Address, alias.AssetId)
+	log.Infof("Added alias %s_%s", alias.Address, alias.TokenId)
 	print(&alias)
 	return nil
 }
@@ -349,7 +395,7 @@ func updateAlias(ctx context.Context, c *tzpro.Client) error {
 	if flags.NArg() < 2 {
 		return fmt.Errorf("missing arguments")
 	}
-	addr, id, err := parseAddressAndAssetId(flags.Arg(1))
+	addr, id, err := parseAddressAndTokend(flags.Arg(1))
 	if err != nil {
 		return err
 	}
@@ -357,10 +403,10 @@ func updateAlias(ctx context.Context, c *tzpro.Client) error {
 	if id == nil {
 		alias, err = c.Metadata.GetWallet(ctx, addr)
 	} else {
-		alias, err = c.Metadata.GetAsset(ctx, tezos.NewToken(addr, tezos.NewZ(*id)))
+		alias, err = c.Metadata.GetAsset(ctx, tezos.NewToken(addr, *id))
 	}
 	if err != nil {
-		return fmt.Errorf("%s/%d: %v", addr, id, err)
+		return fmt.Errorf("%s_%s: %v", addr, id, err)
 	}
 	kvp, err := parseArgs(flags.Args()[2:])
 	if err != nil {
@@ -379,7 +425,7 @@ func updateAlias(ctx context.Context, c *tzpro.Client) error {
 	if err != nil {
 		return err
 	}
-	log.Infof("Updated alias %s/%d", alias.Address, alias.AssetId)
+	log.Infof("Updated alias %s_%s", alias.Address, alias.TokenId)
 	print(&alias)
 	return nil
 }
@@ -394,14 +440,14 @@ func removeAlias(ctx context.Context, c *tzpro.Client) error {
 			return err
 		}
 	}
-	addr, id, err := parseAddressAndAssetId(flags.Arg(1))
+	addr, id, err := parseAddressAndTokend(flags.Arg(1))
 	if err != nil {
 		return err
 	}
 	if id == nil {
 		err = c.Metadata.RemoveWallet(ctx, addr)
 	} else {
-		err = c.Metadata.RemoveAsset(ctx, tezos.NewToken(addr, tezos.NewZ(*id)))
+		err = c.Metadata.RemoveAsset(ctx, tezos.NewToken(addr, *id))
 	}
 	if err != nil {
 		return err
@@ -449,20 +495,23 @@ func validateAliases(ctx context.Context, c *tzpro.Client) error {
 	if flags.NArg() < 2 {
 		return fmt.Errorf("missing filename")
 	}
-	fname := flags.Arg(1)
-	buf, err := os.ReadFile(fname)
-	if err != nil {
-		return fmt.Errorf("%s: %w", fname, err)
-	}
-
-	content := make(map[string]index.Metadata)
-	if err := json.Unmarshal(buf, &content); err != nil {
-		return fmt.Errorf("%s: %w", fname, err)
-	}
-
-	ss, err := c.Metadata.GetSchemas(ctx)
+	content, err := readFile(flags.Arg(1))
 	if err != nil {
 		return err
+	}
+
+	var ss map[string]json.RawMessage
+	if local {
+		ss = make(map[string]json.RawMessage)
+		for _, v := range metadata.ListSchemas() {
+			s, _ := metadata.GetSchema(v)
+			ss[v], _ = json.Marshal(s)
+		}
+	} else {
+		ss, err = c.Metadata.GetSchemas(ctx)
+		if err != nil {
+			return err
+		}
 	}
 
 	schemas := make(map[string]*jsonschema.Schema)

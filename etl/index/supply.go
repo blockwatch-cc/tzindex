@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -9,6 +9,7 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/task"
 )
 
 const SupplyIndexKey = "supply"
@@ -54,7 +55,7 @@ func (idx *SupplyIndex) Create(path, label string, opts interface{}) error {
 		return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
 	}
 
-	_, err = db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(readConfigOpts(key)))
+	_, err = db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(model.ReadConfigOpts(key)))
 	return err
 }
 
@@ -68,7 +69,7 @@ func (idx *SupplyIndex) Init(path, label string, opts interface{}) error {
 	m := model.Supply{}
 	key := m.TableKey()
 
-	idx.table, err = idx.db.Table(key, m.TableOpts().Merge(readConfigOpts(key)))
+	idx.table, err = idx.db.Table(key, m.TableOpts().Merge(model.ReadConfigOpts(key)))
 	if err != nil {
 		idx.Close()
 		return err
@@ -128,5 +129,10 @@ func (idx *SupplyIndex) Flush(ctx context.Context) error {
 			log.Errorf("Flushing %s table: %v", v.Name(), err)
 		}
 	}
+	return nil
+}
+
+func (idx *SupplyIndex) OnTaskComplete(_ context.Context, _ *task.TaskResult) error {
+	// unused
 	return nil
 }

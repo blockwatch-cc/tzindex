@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -31,8 +31,8 @@ func (b *Builder) NewRollupOriginationFlows(
 	if burned > 0 {
 		// debit from source as burn
 		f := model.NewFlow(b.block, src, nil, id)
-		f.Category = model.FlowCategoryBalance
-		f.Operation = model.FlowTypeRollupOrigination
+		f.Kind = model.FlowKindBalance
+		f.Type = model.FlowTypeRollupOrigination
 		f.AmountOut = burned
 		f.IsBurned = true
 		flows = append(flows, f)
@@ -43,8 +43,8 @@ func (b *Builder) NewRollupOriginationFlows(
 	// debit from source delegation if not baker
 	if srcbkr != nil && !src.IsBaker && feespaid+burned > 0 {
 		f := model.NewFlow(b.block, srcbkr.Account, src, id)
-		f.Category = model.FlowCategoryDelegation
-		f.Operation = model.FlowTypeRollupOrigination
+		f.Kind = model.FlowKindDelegation
+		f.Type = model.FlowTypeRollupOrigination
 		f.AmountOut = feespaid + burned // fees and value burned
 		flows = append(flows, f)
 	}
@@ -65,8 +65,8 @@ var (
 )
 
 func (b *Builder) NewRollupTransactionFlows(
-	src, dst, loser, recv *model.Account,
-	sbkr, lbkr *model.Baker,
+	src, dst, loser, winner, recv *model.Account,
+	sbkr, lbkr, wbkr *model.Baker,
 	fees, bal rpc.BalanceUpdates,
 	block *model.Block,
 	id model.OpRef) []*model.Flow {
@@ -81,11 +81,11 @@ func (b *Builder) NewRollupTransactionFlows(
 		case "contract":
 			if u.Change < 0 {
 				// ignore deposit here (handled by freezer updates below)
-				if len(bal) > i+1 && bal[i+1].Category == "storage fees" {
+				if len(bal) > i+1 && bal[i+1].Kind == "storage fees" {
 					// origination burn
 					f := model.NewFlow(b.block, src, dst, id)
-					f.Category = model.FlowCategoryBalance
-					f.Operation = model.FlowTypeRollupOrigination
+					f.Kind = model.FlowKindBalance
+					f.Type = model.FlowTypeRollupOrigination
 					f.AmountOut = -u.Change
 					f.IsBurned = true
 					srcBurn += -u.Change
@@ -95,50 +95,59 @@ func (b *Builder) NewRollupTransactionFlows(
 				_, isReward := rollupRewardTypes[bal[i-1].Category]
 				if i > 0 && isReward {
 					// accuser rewards
-					f := model.NewFlow(b.block, src, dst, id)
-					f.Category = model.FlowCategoryBalance
-					f.Operation = model.FlowTypeRollupReward
+					f := model.NewFlow(b.block, winner, dst, id)
+					f.Kind = model.FlowKindBalance
+					f.Type = model.FlowTypeRollupReward
 					f.AmountIn = u.Change
 					flows = append(flows, f)
+
+					// credit to winner delegation unless winner is a baker
+					if wbkr != nil && !winner.IsBaker {
+						f := model.NewFlow(b.block, wbkr.Account, winner, id)
+						f.Kind = model.FlowKindDelegation
+						f.Type = model.FlowTypeRollupPenalty
+						f.AmountIn = u.Change
+						flows = append(flows, f)
+					}
 				}
 			}
 		case "freezer":
 			if u.Change > 0 {
 				// deposit from balance to bond
 				f := model.NewFlow(b.block, src, dst, id)
-				f.Category = model.FlowCategoryBalance
-				f.Operation = model.FlowTypeRollupTransaction
+				f.Kind = model.FlowKindBalance
+				f.Type = model.FlowTypeRollupTransaction
 				f.AmountOut = u.Change
 				flows = append(flows, f)
 				f = model.NewFlow(b.block, src, dst, id)
-				f.Category = model.FlowCategoryBond
-				f.Operation = model.FlowTypeRollupTransaction
+				f.Kind = model.FlowKindBond
+				f.Type = model.FlowTypeRollupTransaction
 				f.AmountIn = u.Change
 				f.IsFrozen = true
 				flows = append(flows, f)
 			} else {
 				// slash or unlock
 				_, isSlash := rollupPunishTypes[bal[i+1].Category]
-				if len(bal) > i+1 && isSlash {
+				if isSlash {
 					// slash loser
 					f := model.NewFlow(b.block, loser, dst, id)
-					f.Category = model.FlowCategoryBond
-					f.Operation = model.FlowTypeRollupPenalty
+					f.Kind = model.FlowKindBond
+					f.Type = model.FlowTypeRollupPenalty
 					f.AmountOut = -u.Change
 					f.IsBurned = true
 					loserBurn += -u.Change
 					flows = append(flows, f)
 				} else {
 					// unlock (move bond back to balance)
-					f := model.NewFlow(b.block, src, recv, id)
-					f.Category = model.FlowCategoryBond
-					f.Operation = model.FlowTypeRollupTransaction
+					f := model.NewFlow(b.block, recv, dst, id)
+					f.Kind = model.FlowKindBond
+					f.Type = model.FlowTypeRollupTransaction
 					f.AmountOut = -u.Change
 					f.IsUnfrozen = true
 					flows = append(flows, f)
-					f = model.NewFlow(b.block, src, recv, id)
-					f.Category = model.FlowCategoryBalance
-					f.Operation = model.FlowTypeRollupTransaction
+					f = model.NewFlow(b.block, recv, dst, id)
+					f.Kind = model.FlowKindBalance
+					f.Type = model.FlowTypeRollupTransaction
 					f.AmountIn = -u.Change
 					flows = append(flows, f)
 				}
@@ -149,8 +158,8 @@ func (b *Builder) NewRollupTransactionFlows(
 	// debit from source delegation unless source is a baker
 	if feespaid+srcBurn > 0 && sbkr != nil && !src.IsBaker {
 		f := model.NewFlow(b.block, sbkr.Account, src, id)
-		f.Category = model.FlowCategoryDelegation
-		f.Operation = model.FlowTypeRollupTransaction
+		f.Kind = model.FlowKindDelegation
+		f.Type = model.FlowTypeRollupTransaction
 		f.AmountOut = feespaid + srcBurn // fees and amount burned
 		flows = append(flows, f)
 	}
@@ -158,8 +167,8 @@ func (b *Builder) NewRollupTransactionFlows(
 	// debit from loser delegation unless loser is a baker
 	if loserBurn > 0 && lbkr != nil && !loser.IsBaker {
 		f := model.NewFlow(b.block, lbkr.Account, loser, id)
-		f.Category = model.FlowCategoryDelegation
-		f.Operation = model.FlowTypeRollupPenalty
+		f.Kind = model.FlowKindDelegation
+		f.Type = model.FlowTypeRollupPenalty
 		f.AmountOut = loserBurn // amount burned
 		flows = append(flows, f)
 	}

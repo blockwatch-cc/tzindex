@@ -1,4 +1,4 @@
-// Copyright (c) 2021 Blockwatch Data Inc.
+// Copyright (c) 2024 Blockwatch Data Inc.
 // Authors: abdul@blockwatch.cc, alex@blockwatch.cc
 package main
 
@@ -20,7 +20,7 @@ var headers []*TableHeader = []*TableHeader{
 	{
 		Label: "TABLE",
 		Align: AlignLeft,
-		Width: 30,
+		Width: 24,
 	},
 	{
 		Label: "TUPLES",
@@ -43,19 +43,14 @@ var headers []*TableHeader = []*TableHeader{
 		Width: 10,
 	},
 	{
-		Label: "CACHED",
-		Align: AlignSlash,
-		Width: 15,
-	},
-	{
 		Label: "CACHESIZE",
-		Align: AlignRight,
-		Width: 12,
+		Align: AlignSlash,
+		Width: 22,
 	},
 	{
 		Label: "HITS",
-		Align: AlignRight,
-		Width: 10,
+		Align: AlignSlash,
+		Width: 17,
 	},
 	{
 		Label: "JOURNAL",
@@ -70,6 +65,7 @@ var headers []*TableHeader = []*TableHeader{
 	{
 		Label: "THROUGHPUT",
 		Align: AlignSlash,
+		Width: 25,
 	},
 	{
 		Label: "I/O",

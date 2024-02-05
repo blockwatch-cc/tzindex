@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package model
@@ -6,7 +6,6 @@ package model
 import (
 	"time"
 
-	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/rpc"
 )
@@ -36,7 +35,7 @@ type Deployment struct {
 func (t *ChainTip) AddDeployment(p *rpc.Params) {
 	// set end height for previous deployment
 	if l := len(t.Deployments); l > 0 {
-		t.Deployments[l-1].EndHeight = util.Max64(0, p.StartHeight-1)
+		t.Deployments[l-1].EndHeight = max(0, p.StartHeight-1)
 	}
 	t.Deployments = append(t.Deployments, Deployment{
 		Protocol:    p.Protocol,

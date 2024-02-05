@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package tables
@@ -49,7 +49,6 @@ func init() {
 
 	blockAllAliases = append(blockAllAliases,
 		"pct_account_reuse",
-		"creator",
 		"baker",
 		"proposer",
 		"protocol",
@@ -61,7 +60,7 @@ func init() {
 // configurable marshalling helper
 type Block struct {
 	model.Block
-	Predecessor tezos.BlockHash `knox:"predecessor" json:"predecessor"`
+	Predecessor tezos.BlockHash `pack:"predecessor" json:"predecessor"`
 
 	verbose bool            // cond. marshal
 	columns util.StringList // cond. cols & order when brief
@@ -102,10 +101,10 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		NSlotsEndorsed         int                    `json:"n_endorsed_slots"`
 		NOpsApplied            int                    `json:"n_ops_applied"`
 		NOpsFailed             int                    `json:"n_ops_failed"`
-		NEvents                int                    `json:"n_events"`
 		NContractCalls         int                    `json:"n_calls"`
 		NRollupCalls           int                    `json:"n_rollup_calls"`
 		NTx                    int                    `json:"n_tx"`
+		NEvents                int                    `json:"n_events"`
 		NTickets               int                    `json:"n_tickets"`
 		Volume                 float64                `json:"volume"`
 		Fee                    float64                `json:"fee"`
@@ -123,8 +122,10 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		GasUsed                int64                  `json:"gas_used"`
 		StoragePaid            int64                  `json:"storage_paid"`
 		PctAccountsReused      float64                `json:"pct_account_reuse"`
-		LbEscapeVote           tezos.LbVote           `json:"lb_esc_vote"`
-		LbEscapeEma            int64                  `json:"lb_esc_ema"`
+		LbVote                 tezos.FeatureVote      `json:"lb_vote"`
+		LbEma                  int64                  `json:"lb_ema"`
+		AiVote                 tezos.FeatureVote      `json:"ai_vote"`
+		AiEma                  int64                  `json:"ai_ema"`
 		Protocol               tezos.ProtocolHash     `json:"protocol"`
 		ProposerConsensusKeyId uint64                 `json:"proposer_consensus_key_id"`
 		BakerConsensusKeyId    uint64                 `json:"baker_consensus_key_id"`
@@ -134,6 +135,7 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		RowId:                  b.RowId,
 		ParentId:               b.ParentId,
 		Hash:                   b.Hash.String(),
+		Predecessor:            b.Predecessor.String(),
 		Timestamp:              util.UnixMilliNonZero(b.Timestamp),
 		Height:                 b.Height,
 		Cycle:                  b.Cycle,
@@ -150,10 +152,10 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		NSlotsEndorsed:         b.NSlotsEndorsed,
 		NOpsApplied:            model.Int16Correct(b.NOpsApplied),
 		NOpsFailed:             model.Int16Correct(b.NOpsFailed),
-		NEvents:                model.Int16Correct(b.NEvents),
 		NContractCalls:         model.Int16Correct(b.NContractCalls),
 		NRollupCalls:           model.Int16Correct(b.NRollupCalls),
 		NTx:                    model.Int16Correct(b.NTx),
+		NEvents:                model.Int16Correct(b.NEvents),
 		NTickets:               model.Int16Correct(b.NTickets),
 		Volume:                 b.params.ConvertValue(b.Volume),
 		Fee:                    b.params.ConvertValue(b.Fee),
@@ -170,16 +172,15 @@ func (b *Block) MarshalJSONVerbose() ([]byte, error) {
 		GasLimit:               b.GasLimit,
 		GasUsed:                b.GasUsed,
 		StoragePaid:            b.StoragePaid,
-		LbEscapeVote:           b.LbEscapeVote,
-		LbEscapeEma:            b.LbEscapeEma,
+		LbVote:                 b.LbVote,
+		LbEma:                  b.LbEma,
+		AiVote:                 b.AiVote,
+		AiEma:                  b.AiEma,
 		Protocol:               b.params.Protocol,
 		ProposerConsensusKeyId: b.ProposerConsensusKeyId.U64(),
 		BakerConsensusKeyId:    b.BakerConsensusKeyId.U64(),
 		ProposerConsensusKey:   b.ctx.Indexer.LookupAddress(b.ctx, b.ProposerConsensusKeyId).String(),
 		BakerConsensusKey:      b.ctx.Indexer.LookupAddress(b.ctx, b.BakerConsensusKeyId).String(),
-	}
-	if b.Predecessor.IsValid() {
-		block.Predecessor = b.Predecessor.String()
 	}
 	if b.SeenAccounts > 0 {
 		block.PctAccountsReused = float64(b.SeenAccounts-b.NewAccounts) / float64(b.SeenAccounts) * 100
@@ -248,10 +249,10 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NContractCalls)), 10)
 		case "n_rollup_calls":
 			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NRollupCalls)), 10)
-		case "n_events":
-			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NEvents)), 10)
 		case "n_tx":
 			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NTx)), 10)
+		case "n_events":
+			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NEvents)), 10)
 		case "n_tickets":
 			buf = strconv.AppendInt(buf, int64(model.Int16Correct(b.NTickets)), 10)
 		case "volume":
@@ -290,10 +291,14 @@ func (b *Block) MarshalJSONBrief() ([]byte, error) {
 				reuse = float64(model.Int16Correct(b.SeenAccounts)-model.Int16Correct(b.NewAccounts)) / float64(model.Int16Correct(b.SeenAccounts)) * 100
 			}
 			buf = strconv.AppendFloat(buf, reuse, 'f', 6, 64)
-		case "lb_esc_vote":
-			buf = strconv.AppendQuote(buf, b.LbEscapeVote.String())
-		case "lb_esc_ema":
-			buf = strconv.AppendInt(buf, b.LbEscapeEma, 10)
+		case "lb_vote":
+			buf = strconv.AppendQuote(buf, b.LbVote.String())
+		case "lb_ema":
+			buf = strconv.AppendInt(buf, b.LbEma, 10)
+		case "ai_vote":
+			buf = strconv.AppendQuote(buf, b.AiVote.String())
+		case "ai_ema":
+			buf = strconv.AppendInt(buf, b.AiEma, 10)
 		case "protocol":
 			buf = strconv.AppendQuote(buf, b.params.Protocol.String())
 		case "proposer_consensus_key_id":
@@ -369,10 +374,10 @@ func (b *Block) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NContractCalls)), 10)
 		case "n_rollup_calls":
 			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NRollupCalls)), 10)
-		case "n_events":
-			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NEvents)), 10)
 		case "n_tx":
 			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NTx)), 10)
+		case "n_events":
+			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NEvents)), 10)
 		case "n_tickets":
 			res[i] = strconv.FormatInt(int64(model.Int16Correct(b.NTickets)), 10)
 		case "volume":
@@ -411,10 +416,14 @@ func (b *Block) MarshalCSV() ([]string, error) {
 				reuse = float64(model.Int16Correct(b.SeenAccounts)-model.Int16Correct(b.NewAccounts)) / float64(model.Int16Correct(b.SeenAccounts)) * 100
 			}
 			res[i] = strconv.FormatFloat(reuse, 'f', -1, 64)
-		case "lb_esc_vote":
-			res[i] = strconv.Quote(b.LbEscapeVote.String())
-		case "lb_esc_ema":
-			res[i] = strconv.FormatInt(b.LbEscapeEma, 10)
+		case "lb_vote":
+			res[i] = strconv.Quote(b.LbVote.String())
+		case "lb_ema":
+			res[i] = strconv.FormatInt(b.LbEma, 10)
+		case "ai_vote":
+			res[i] = strconv.Quote(b.AiVote.String())
+		case "ai_ema":
+			res[i] = strconv.FormatInt(b.AiEma, 10)
 		case "protocol":
 			res[i] = strconv.Quote(b.params.Protocol.String())
 		case "proposer_consensus_key_id":

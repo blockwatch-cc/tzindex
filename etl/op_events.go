@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -6,6 +6,7 @@ package etl
 import (
 	"context"
 
+	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzindex/etl/model"
 )
 
@@ -65,6 +66,21 @@ func (b *Builder) AppendContractMigrationOp(ctx context.Context, acc *model.Acco
 	op.StorageHash = c.StorageHash
 	op.IsStorageUpdate = true
 	op.Contract = c
+	b.block.Ops = append(b.block.Ops, op)
+	return nil
+}
+
+func (b *Builder) AppendBigmapMigrationOp(ctx context.Context, acc *model.Account, c *model.Contract, p int, events micheline.BigmapEvents) error {
+	id := model.OpRef{
+		Kind: model.OpTypeMigration,
+		N:    b.block.NextN(),
+		L:    model.OPL_PROTOCOL_UPGRADE,
+		P:    p,
+	}
+	op := model.NewEventOp(b.block, acc.RowId, id)
+	op.IsContract = true
+	op.Contract = c
+	op.BigmapEvents = events
 	b.block.Ops = append(b.block.Ops, op)
 	return nil
 }

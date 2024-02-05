@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -10,6 +10,7 @@ import (
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 )
 
 // generate synthetic ops from flows for
@@ -25,6 +26,26 @@ func (b *Builder) AppendImplicitEvents(ctx context.Context) error {
 	if len(flows) == 0 {
 		return nil
 	}
+
+	// validate flows: no sequence gaps, no invalid types, no zero or negative balances
+	for _, f := range flows {
+		if f.AmountIn < 0 {
+			return fmt.Errorf("negative amount in block flow %#v", f)
+		}
+		if f.AmountOut < 0 {
+			return fmt.Errorf("negative amount in block flow %#v", f)
+		}
+		if f.AmountIn+f.AmountOut == 0 {
+			return fmt.Errorf("zero amount in block flow %#v", f)
+		}
+		if !f.Kind.IsValid() {
+			return fmt.Errorf("invalid kind in block flow %#v", f)
+		}
+		if !f.Type.IsValid() {
+			return fmt.Errorf("invalid type in block flow %#v", f)
+		}
+	}
+
 	b.block.Flows = append(b.block.Flows, flows...)
 
 	// prepare ops
@@ -41,7 +62,7 @@ func (b *Builder) AppendImplicitEvents(ctx context.Context) error {
 			L: model.OPL_BLOCK_EVENTS, // list id
 			P: f.OpN,                  // pos in list
 		}
-		switch f.Operation {
+		switch f.Type {
 		case model.FlowTypeInvoice:
 			// only append additional invoice op post-Florence
 			if b.block.Params.Version >= 9 {
@@ -49,8 +70,8 @@ func (b *Builder) AppendImplicitEvents(ctx context.Context) error {
 					id.Kind = model.OpTypeInvoice
 					ops[f.OpN] = model.NewEventOp(b.block, f.AccountId, id)
 					ops[f.OpN].SenderId = f.AccountId
-					ops[f.OpN].Reward = f.AmountIn
 				}
+				ops[f.OpN].Reward += f.AmountIn
 			}
 		case model.FlowTypeBaking:
 			if ops[f.OpN] == nil {
@@ -59,20 +80,28 @@ func (b *Builder) AppendImplicitEvents(ctx context.Context) error {
 				ops[f.OpN].SenderId = f.AccountId
 			}
 			// assuming only one flow per category per baker
-			switch f.Category {
-			case model.FlowCategoryDeposits:
-				ops[f.OpN].Deposit = f.AmountIn
-			case model.FlowCategoryRewards:
-				ops[f.OpN].Reward = f.AmountIn
-			case model.FlowCategoryBalance:
+			switch f.Kind {
+			case model.FlowKindDeposits:
+				ops[f.OpN].Deposit += f.AmountIn
+				// ops[f.OpN].Volume += f.AmountIn
+			case model.FlowKindRewards:
+				ops[f.OpN].Reward += f.AmountIn
+				// ops[f.OpN].Volume += f.AmountIn
+			case model.FlowKindBalance:
 				// post-Ithaca only: fee is explicit (we hava a flow), so we can
 				// add fee here; on pre-Ithaca protocols we sum op fees when updating
 				// a block and then later add the block fee in the op indexer
 				if f.IsFee {
 					ops[f.OpN].Fee += f.AmountIn
+					// ops[f.OpN].Volume += f.AmountIn
 				} else {
 					ops[f.OpN].Reward += f.AmountIn
+					// ops[f.OpN].Volume += f.AmountIn
 				}
+			case model.FlowKindStake:
+				// oxford: some staker pool reward from bake is auto-staked again
+				ops[f.OpN].Reward += f.AmountIn
+				ops[f.OpN].Deposit += f.AmountIn
 			}
 		case model.FlowTypeInternal:
 			// only create ops for unfreeze-related internal events here
@@ -83,13 +112,16 @@ func (b *Builder) AppendImplicitEvents(ctx context.Context) error {
 					ops[f.OpN].SenderId = f.AccountId
 				}
 				// sum multiple flows per category per baker
-				switch f.Category {
-				case model.FlowCategoryDeposits:
+				switch f.Kind {
+				case model.FlowKindDeposits:
 					ops[f.OpN].Deposit += f.AmountOut
-				case model.FlowCategoryRewards:
+					// ops[f.OpN].Volume += f.AmountOut
+				case model.FlowKindRewards:
 					ops[f.OpN].Reward += f.AmountOut
-				case model.FlowCategoryFees:
+					// ops[f.OpN].Volume += f.AmountOut
+				case model.FlowKindFees:
 					ops[f.OpN].Fee += f.AmountOut
+					// ops[f.OpN].Volume += f.AmountOut
 				}
 			}
 		case model.FlowTypeNonceRevelation:
@@ -100,14 +132,14 @@ func (b *Builder) AppendImplicitEvents(ctx context.Context) error {
 					ops[f.OpN] = model.NewEventOp(b.block, f.AccountId, id)
 				}
 				// sum multiple consecutive seed slashes into one op
-				switch f.Category {
-				case model.FlowCategoryRewards:
+				switch f.Kind {
+				case model.FlowKindRewards:
 					ops[f.OpN].Reward += f.AmountOut
 					ops[f.OpN].Burned += f.AmountOut
-				case model.FlowCategoryFees:
+				case model.FlowKindFees:
 					ops[f.OpN].Fee += f.AmountOut
 					ops[f.OpN].Burned += f.AmountOut
-				case model.FlowCategoryBalance:
+				case model.FlowKindBalance:
 					ops[f.OpN].Reward += f.AmountIn
 					ops[f.OpN].Burned += f.AmountOut
 				}
@@ -118,10 +150,15 @@ func (b *Builder) AppendImplicitEvents(ctx context.Context) error {
 				id.Kind = model.OpTypeBonus
 				ops[f.OpN] = model.NewEventOp(b.block, f.AccountId, id)
 				ops[f.OpN].SenderId = f.AccountId
-				ops[f.OpN].Reward = f.AmountIn
-			} else {
-				// add bonus to existing block proposer
+			}
+			if f.Kind == model.FlowKindStake {
+				// oxford: some reward from bake bonus is auto-staked again
 				ops[f.OpN].Reward += f.AmountIn
+				ops[f.OpN].Deposit += f.AmountIn
+			} else {
+				// non-frozen bonus to existing block proposer
+				ops[f.OpN].Reward += f.AmountIn
+				// ops[f.OpN].Volume += f.AmountIn
 			}
 		case model.FlowTypeReward:
 			// Ithaca+
@@ -131,29 +168,99 @@ func (b *Builder) AppendImplicitEvents(ctx context.Context) error {
 					id.Kind = model.OpTypeReward
 					ops[f.OpN] = model.NewEventOp(b.block, f.AccountId, id)
 					ops[f.OpN].SenderId = f.AccountId
-					ops[f.OpN].Reward = f.AmountIn
-					ops[f.OpN].Burned = f.AmountIn
 				}
+				ops[f.OpN].Reward += f.AmountIn
+				ops[f.OpN].Burned += f.AmountIn
 			} else {
 				// endorsement reward
 				if ops[f.OpN] == nil {
 					id.Kind = model.OpTypeReward
 					ops[f.OpN] = model.NewEventOp(b.block, f.AccountId, id)
 					ops[f.OpN].SenderId = f.AccountId
-					ops[f.OpN].Reward = f.AmountIn
+				}
+				if f.Kind == model.FlowKindStake {
+					// oxford: some reward from endorsing is auto-staked again
+					ops[f.OpN].Reward += f.AmountIn
+					ops[f.OpN].Deposit += f.AmountIn
+				} else {
+					// pre/post-oxford non-frozen reward goes to spendable balances
+					ops[f.OpN].Reward += f.AmountIn
+					// ops[f.OpN].Volume += f.AmountIn
 				}
 			}
 		case model.FlowTypeDeposit:
-			// Ithaca+
+			// Ithaca+ until Oxford, then replaced by stake
 			// explicit deposit payment (positive)
 			// refund is translated into an unfreeze event
-			if f.Category == model.FlowCategoryDeposits {
+			if f.Kind == model.FlowKindDeposits {
 				if ops[f.OpN] == nil {
 					id.Kind = model.OpTypeDeposit
 					ops[f.OpN] = model.NewEventOp(b.block, f.AccountId, id)
 					ops[f.OpN].SenderId = f.AccountId
-					ops[f.OpN].Deposit = f.AmountIn
 				}
+				ops[f.OpN].Deposit += f.AmountIn
+				// ops[f.OpN].Volume += f.AmountIn
+			}
+		case model.FlowTypeStake:
+			// Oxford+ deposit is staked
+			// only handle stake kind (skip balance flows)
+			if f.Kind == model.FlowKindStake {
+				if ops[f.OpN] == nil {
+					id.Kind = model.OpTypeStake
+					ops[f.OpN] = model.NewEventOp(b.block, f.AccountId, id)
+					ops[f.OpN].SenderId = f.AccountId
+				}
+				ops[f.OpN].Deposit += f.AmountIn
+				// ops[f.OpN].Volume += f.AmountIn
+			}
+		case model.FlowTypeUnstake:
+			// Oxford+ frozen deposit is unstaked
+			// only handle stake kind (no other flow should exist, but make sure)
+			if f.Kind == model.FlowKindStake {
+				if ops[f.OpN] == nil {
+					id.Kind = model.OpTypeUnstake
+					ops[f.OpN] = model.NewEventOp(b.block, f.AccountId, id)
+					ops[f.OpN].SenderId = f.AccountId
+				}
+				ops[f.OpN].Deposit += f.AmountOut
+			}
+		case model.FlowTypeFinalizeUnstake:
+			// Oxford+ frozen unstaked deposit is returned to spendable balance
+			// only handle stake kind (no other flow should exist, but make sure)
+			if f.Kind == model.FlowKindStake {
+				if ops[f.OpN] == nil {
+					id.Kind = model.OpTypeFinalizeUnstake
+					ops[f.OpN] = model.NewEventOp(b.block, f.AccountId, id)
+					ops[f.OpN].SenderId = f.AccountId
+				}
+				ops[f.OpN].Volume += f.AmountOut
+			}
+		case model.FlowTypePenalty:
+			// Oxford+ staking slash happens EOC
+			// TODO: differentiate staked & unstaked amount?
+			switch f.Kind {
+			case model.FlowKindStake:
+				// penalty burn
+				if ops[f.OpN] == nil {
+					id.Kind = model.OpTypeStakeSlash
+					ops[f.OpN] = model.NewEventOp(b.block, f.AccountId, id)
+					ops[f.OpN].SenderId = f.CounterPartyId // accuser
+					ops[f.OpN].ReceiverId = f.AccountId    // offender
+				}
+				if f.IsBurned {
+					ops[f.OpN].Burned += f.AmountOut
+				}
+				ops[f.OpN].Deposit += f.AmountOut
+			case model.FlowKindBalance:
+				// reward
+				if ops[f.OpN] == nil {
+					id.Kind = model.OpTypeStakeSlash
+					ops[f.OpN] = model.NewEventOp(b.block, f.AccountId, id)
+					ops[f.OpN].SenderId = f.AccountId        // accuser
+					ops[f.OpN].ReceiverId = f.CounterPartyId // offender
+				}
+				ops[f.OpN].Reward += f.AmountIn
+				// ops[f.OpN].Volume += f.AmountIn
 			}
 		}
 	}
@@ -196,7 +303,7 @@ func (b *Builder) AppendImplicitBlockOps(ctx context.Context) error {
 			// load script from RPC
 			if op.Script == nil {
 				var err error
-				op.Script, err = b.rpc.GetContractScript(ctx, dst.Address)
+				op.Script, err = b.rpc.GetContractScript(ctx, dst.Address, rpc.BlockLevel(b.block.Height))
 				if err != nil {
 					return Errorf("loading contract script %s: %v", dst.Address, err)
 				}
@@ -207,6 +314,7 @@ func (b *Builder) AppendImplicitBlockOps(ctx context.Context) error {
 			dst.IsContract = true
 			o.GasUsed = op.Gas()
 			o.StoragePaid = op.PaidStorageSizeDiff
+			o.CodeHash = op.Script.CodeHash()
 			if op.Storage.IsValid() {
 				o.Storage, _ = op.Storage.MarshalBinary()
 				o.StorageHash = op.Storage.Hash64()
@@ -246,7 +354,7 @@ func (b *Builder) AppendImplicitBlockOps(ctx context.Context) error {
 			b.block.Ops = append(b.block.Ops, o)
 
 			// register new implicit contract
-			o.Contract = model.NewImplicitContract(dst, op, o, b.block.Params)
+			o.Contract = model.NewImplicitContract(dst, *op, o, b.block.Params)
 			b.conMap[dst.RowId] = o.Contract
 
 		case tezos.OpTypeTransaction:
@@ -273,6 +381,7 @@ func (b *Builder) AppendImplicitBlockOps(ctx context.Context) error {
 				o.Entrypoint = 1
 				o.Storage, _ = op.Storage.MarshalBinary()
 				o.StorageHash = op.Storage.Hash64()
+				o.CodeHash = dCon.CodeHash
 				o.IsStorageUpdate = dCon.Update(o, b.block.Params)
 				o.Contract = dCon
 				b.block.Ops = append(b.block.Ops, o)

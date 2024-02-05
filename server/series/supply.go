@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package series
@@ -124,6 +124,7 @@ func (s *SupplySeries) MarshalJSONVerbose() ([]byte, error) {
 		Liquid              float64   `json:"liquid"`
 		Delegated           float64   `json:"delegated"`
 		Staking             float64   `json:"staking"`
+		Unstaking           float64   `json:"unstaking"`
 		Shielded            float64   `json:"shielded"`
 		ActiveStake         float64   `json:"active_stake"`
 		ActiveDelegated     float64   `json:"active_delegated"`
@@ -144,13 +145,16 @@ func (s *SupplySeries) MarshalJSONVerbose() ([]byte, error) {
 		BurnedStorage       float64   `json:"burned_storage"`
 		BurnedExplicit      float64   `json:"burned_explicit"`
 		BurnedSeedMiss      float64   `json:"burned_seed_miss"`
-		BurnedAbsence       float64   `json:"burned_absence"`
+		BurnedOffline       float64   `json:"burned_offline"`
 		BurnedRollup        float64   `json:"burned_rollup"`
 		Frozen              float64   `json:"frozen"`
 		FrozenDeposits      float64   `json:"frozen_deposits"`
 		FrozenRewards       float64   `json:"frozen_rewards"`
 		FrozenFees          float64   `json:"frozen_fees"`
 		FrozenBonds         float64   `json:"frozen_bonds"`
+		FrozenStake         float64   `json:"frozen_stake"`
+		FrozenBakerStake    float64   `json:"frozen_baker_stake"`
+		FrozenStakerStake   float64   `json:"frozen_staker_stake"`
 	}{
 		Height:              s.Height,
 		Cycle:               s.Cycle,
@@ -163,6 +167,7 @@ func (s *SupplySeries) MarshalJSONVerbose() ([]byte, error) {
 		Liquid:              s.params.ConvertValue(s.Liquid),
 		Delegated:           s.params.ConvertValue(s.Delegated),
 		Staking:             s.params.ConvertValue(s.Staking),
+		Unstaking:           s.params.ConvertValue(s.Unstaking),
 		Shielded:            s.params.ConvertValue(s.Shielded),
 		ActiveStake:         s.params.ConvertValue(s.ActiveStake),
 		ActiveDelegated:     s.params.ConvertValue(s.ActiveDelegated),
@@ -183,13 +188,16 @@ func (s *SupplySeries) MarshalJSONVerbose() ([]byte, error) {
 		BurnedStorage:       s.params.ConvertValue(s.BurnedStorage),
 		BurnedExplicit:      s.params.ConvertValue(s.BurnedExplicit),
 		BurnedSeedMiss:      s.params.ConvertValue(s.BurnedSeedMiss),
-		BurnedAbsence:       s.params.ConvertValue(s.BurnedAbsence),
+		BurnedOffline:       s.params.ConvertValue(s.BurnedOffline),
 		BurnedRollup:        s.params.ConvertValue(s.BurnedRollup),
 		Frozen:              s.params.ConvertValue(s.Frozen),
 		FrozenDeposits:      s.params.ConvertValue(s.FrozenDeposits),
 		FrozenRewards:       s.params.ConvertValue(s.FrozenRewards),
 		FrozenFees:          s.params.ConvertValue(s.FrozenFees),
 		FrozenBonds:         s.params.ConvertValue(s.FrozenBonds),
+		FrozenStake:         s.params.ConvertValue(s.FrozenStake),
+		FrozenBakerStake:    s.params.ConvertValue(s.FrozenBakerStake),
+		FrozenStakerStake:   s.params.ConvertValue(s.FrozenStakerStake),
 	}
 	return json.Marshal(supply)
 }
@@ -230,6 +238,8 @@ func (s *SupplySeries) MarshalJSONBrief() ([]byte, error) {
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Delegated), 'f', dec, 64)
 			case "staking":
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Staking), 'f', dec, 64)
+			case "unstaking":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Unstaking), 'f', dec, 64)
 			case "shielded":
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.Shielded), 'f', dec, 64)
 			case "active_stake":
@@ -270,8 +280,8 @@ func (s *SupplySeries) MarshalJSONBrief() ([]byte, error) {
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedExplicit), 'f', dec, 64)
 			case "burned_seed_miss":
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedSeedMiss), 'f', dec, 64)
-			case "burned_absence":
-				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedAbsence), 'f', dec, 64)
+			case "burned_offline":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedOffline), 'f', dec, 64)
 			case "burned_rollup":
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.BurnedRollup), 'f', dec, 64)
 			case "frozen":
@@ -284,6 +294,12 @@ func (s *SupplySeries) MarshalJSONBrief() ([]byte, error) {
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.FrozenFees), 'f', dec, 64)
 			case "frozen_bonds":
 				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.FrozenBonds), 'f', dec, 64)
+			case "frozen_stake":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.FrozenStake), 'f', dec, 64)
+			case "frozen_baker_stake":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.FrozenBakerStake), 'f', dec, 64)
+			case "frozen_staker_stake":
+				buf = strconv.AppendFloat(buf, s.params.ConvertValue(s.FrozenStakerStake), 'f', dec, 64)
 			default:
 				continue
 			}
@@ -331,6 +347,8 @@ func (s *SupplySeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Delegated), 'f', dec, 64)
 		case "staking":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Staking), 'f', dec, 64)
+		case "unstaking":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Unstaking), 'f', dec, 64)
 		case "shielded":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.Shielded), 'f', dec, 64)
 		case "active_stake":
@@ -371,8 +389,8 @@ func (s *SupplySeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.BurnedExplicit), 'f', dec, 64)
 		case "burned_seed_miss":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.BurnedSeedMiss), 'f', dec, 64)
-		case "burned_absence":
-			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.BurnedAbsence), 'f', dec, 64)
+		case "burned_offline":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.BurnedOffline), 'f', dec, 64)
 		case "burned_rollup":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.BurnedRollup), 'f', dec, 64)
 		case "frozen":
@@ -385,6 +403,12 @@ func (s *SupplySeries) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.FrozenFees), 'f', dec, 64)
 		case "frozen_bonds":
 			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.FrozenBonds), 'f', dec, 64)
+		case "frozen_stake":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.FrozenStake), 'f', dec, 64)
+		case "frozen_baker_stake":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.FrozenBakerStake), 'f', dec, 64)
+		case "frozen_staker_stake":
+			res[i] = strconv.FormatFloat(s.params.ConvertValue(s.FrozenStakerStake), 'f', dec, 64)
 		default:
 			continue
 		}

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -22,8 +22,8 @@ func (b *Builder) NewFeeFlows(src *model.Account, fees rpc.BalanceUpdates, id mo
 		case "contract":
 			// pre/post-Ithaca fees paid by src
 			f := model.NewFlow(b.block, src, b.block.Proposer.Account, id)
-			f.Category = model.FlowCategoryBalance
-			f.Operation = typ
+			f.Kind = model.FlowKindBalance
+			f.Type = typ
 			f.AmountOut = -u.Change // note the negation!
 			f.IsFee = true
 			sum += -u.Change
@@ -32,8 +32,8 @@ func (b *Builder) NewFeeFlows(src *model.Account, fees rpc.BalanceUpdates, id mo
 			// pre-Ithaca: fees paid to baker
 			if u.Category == "fees" {
 				f := model.NewFlow(b.block, b.block.Proposer.Account, src, id)
-				f.Category = model.FlowCategoryFees
-				f.Operation = typ
+				f.Kind = model.FlowKindFees
+				f.Type = typ
 				f.AmountIn = u.Change
 				f.IsFrozen = true
 				flows = append(flows, f)

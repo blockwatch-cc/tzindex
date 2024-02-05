@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -22,8 +22,8 @@ func (b *Builder) NewConstantRegistrationFlows(
 		if u.Kind == "contract" {
 			// debit burn from source
 			f := model.NewFlow(b.block, src, nil, id)
-			f.Category = model.FlowCategoryBalance
-			f.Operation = model.FlowTypeRegisterConstant
+			f.Kind = model.FlowKindBalance
+			f.Type = model.FlowTypeRegisterConstant
 			f.AmountOut = -u.Change
 			burned += -u.Change
 			f.IsBurned = true
@@ -34,8 +34,8 @@ func (b *Builder) NewConstantRegistrationFlows(
 	// debit burn from source delegation if not baker
 	if srcbkr != nil && !src.IsBaker && feespaid+burned > 0 {
 		f := model.NewFlow(b.block, srcbkr.Account, src, id)
-		f.Category = model.FlowCategoryDelegation
-		f.Operation = model.FlowTypeRegisterConstant
+		f.Kind = model.FlowKindDelegation
+		f.Type = model.FlowTypeRegisterConstant
 		f.AmountOut = feespaid + burned
 		flows = append(flows, f)
 	}
@@ -58,8 +58,8 @@ func (b *Builder) NewIncreasePaidStorageFlows(
 		if u.Kind == "contract" {
 			// debit burn from source
 			f := model.NewFlow(b.block, src, nil, id)
-			f.Category = model.FlowCategoryBalance
-			f.Operation = model.FlowTypePayStorage
+			f.Kind = model.FlowKindBalance
+			f.Type = model.FlowTypePayStorage
 			f.AmountOut = -u.Change
 			burned += -u.Change
 			f.IsBurned = true
@@ -70,8 +70,8 @@ func (b *Builder) NewIncreasePaidStorageFlows(
 	// debit burn from source delegation if not baker
 	if srcbkr != nil && !src.IsBaker && feespaid+burned > 0 {
 		f := model.NewFlow(b.block, srcbkr.Account, src, id)
-		f.Category = model.FlowCategoryDelegation
-		f.Operation = model.FlowTypePayStorage
+		f.Kind = model.FlowKindDelegation
+		f.Type = model.FlowTypePayStorage
 		f.AmountOut = feespaid + burned
 		flows = append(flows, f)
 	}

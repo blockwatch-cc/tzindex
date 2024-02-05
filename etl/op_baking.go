@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
@@ -44,7 +43,7 @@ func (b *Builder) AppendEndorsementOp(ctx context.Context, oh *rpc.Operation, id
 	// store endorsed slots as data
 	// pre-Ithaca: use slots
 	// post-Ithaca: use EndorsementPower and PreendorsementPower
-	power := meta.EndorsementPower + meta.PreendorsementPower + len(meta.Slots)
+	power := meta.Power()
 	op.Data = strconv.Itoa(power)
 
 	// build flows; post-Ithaca this is empty
@@ -52,12 +51,12 @@ func (b *Builder) AppendEndorsementOp(ctx context.Context, oh *rpc.Operation, id
 
 	// fill op amounts from flows
 	for _, f := range flows {
-		switch f.Category {
-		case model.FlowCategoryRewards:
+		switch f.Kind {
+		case model.FlowKindRewards:
 			op.Reward += f.AmountIn
-		case model.FlowCategoryDeposits:
+		case model.FlowKindDeposits:
 			op.Deposit += f.AmountIn
-		case model.FlowCategoryBalance:
+		case model.FlowKindBalance:
 			// don't count internal flows against volume
 		}
 	}
@@ -223,34 +222,60 @@ func (b *Builder) AppendDoubleBakingOp(ctx context.Context, oh *rpc.Operation, i
 		return Errorf("unexpected type %T ", o)
 	}
 
-	// determine who's who
-	// - before Ithaca: last & first (dynamic count of updates when one subaccount is empty)
-	// - after Ithaca: second, third (always 4 entries)
+	// determine who's the offender from balance updates
+	var offender *model.Baker
 	upd := dop.Fees()
-	accuserIndex, offenderIndex := 1, 2
-	if b.block.Params.Version < 12 {
-		accuserIndex, offenderIndex = len(upd)-1, 0
-	}
-	addr := upd[accuserIndex].Address()
-	accuser, ok := b.BakerByAddress(addr)
-	if !ok {
-		return Errorf("missing accuser account %s", addr)
-	}
-	addr = upd[offenderIndex].Address()
-	offender, ok := b.BakerByAddress(addr)
-	if !ok {
-		return Errorf("missing offender account %s", addr)
+	switch {
+	case b.block.Params.Version < 12:
+		// - before Ithaca: last & first (dynamic count of updates when one subaccount is empty)
+		addr := upd[0].Address()
+		if acc, ok := b.BakerByAddress(addr); !ok {
+			return Errorf("missing offender account %s", addr)
+		} else {
+			offender = acc
+		}
+	case b.block.Params.Version < 18:
+		// - after Ithaca: second, third (always 4 entries)
+		if len(upd) == 4 {
+			addr := upd[2].Address()
+			if acc, ok := b.BakerByAddress(addr); !ok {
+				return Errorf("missing offender account %s", addr)
+			} else {
+				offender = acc
+			}
+		}
+	default:
+		// no balance updates in oxford+, we can only look at rights
+		var head rpc.BlockHeader
+		_ = json.Unmarshal(dop.BH1, &head)
+		addr, err := b.rpc.GetBakingRightOwner(ctx,
+			rpc.BlockLevel(head.Level-1),
+			head.PayloadRound,
+			b.block.Params,
+		)
+		if err != nil {
+			return err
+		}
+		if addr.IsValid() {
+			if acc, ok := b.BakerByAddress(addr); !ok {
+				return Errorf("missing offender account %s", addr)
+			} else {
+				offender = acc
+			}
+		}
 	}
 
 	// build flows first to determine burn
-	flows := b.NewDenunciationFlows(accuser, offender, upd, id)
+	flows := b.NewPenaltyFlows(b.block.Proposer, offender, upd, id)
 
 	// build op
 	op := model.NewOp(b.block, id)
 	op.IsSuccess = true
 	op.Status = tezos.OpStatusApplied
-	op.SenderId = accuser.AccountId
-	op.ReceiverId = offender.AccountId
+	op.SenderId = b.block.ProposerId
+	if offender != nil {
+		op.ReceiverId = offender.AccountId
+	}
 
 	// we store both block headers as json array
 	buf, err := json.Marshal(dop.Strip())
@@ -267,13 +292,15 @@ func (b *Builder) AppendDoubleBakingOp(ctx context.Context, oh *rpc.Operation, i
 			op.Burned += f.AmountOut
 
 			// track offender losses by category
-			switch f.Category {
-			case model.FlowCategoryRewards:
+			switch f.Kind {
+			case model.FlowKindRewards:
 				op.Reward -= f.AmountOut
-			case model.FlowCategoryDeposits:
+			case model.FlowKindDeposits:
 				op.Deposit -= f.AmountOut
-			case model.FlowCategoryFees:
+			case model.FlowKindFees:
 				op.Fee -= f.AmountOut
+			case model.FlowKindStake:
+				op.Deposit -= f.AmountOut
 			}
 		} else {
 			// track accuser reward as volume
@@ -285,33 +312,83 @@ func (b *Builder) AppendDoubleBakingOp(ctx context.Context, oh *rpc.Operation, i
 
 	// update accounts
 	if !rollback {
-		accuser.NBakerOps++
-		accuser.NAccusations++
-		accuser.IsDirty = true
-		acc := accuser.Account
+		b.block.Proposer.NBakerOps++
+		b.block.Proposer.NAccusations++
+		b.block.Proposer.IsDirty = true
+		acc := b.block.Proposer.Account
 		acc.LastSeen = b.block.Height
 		acc.IsDirty = true
 
-		offender.NBakerOps++
-		offender.N2Baking++
-		offender.IsDirty = true
-		acc = offender.Account
-		acc.LastSeen = b.block.Height
-		acc.IsDirty = true
+		if offender != nil {
+			offender.NBakerOps++
+			offender.N2Baking++
+			offender.IsDirty = true
+			acc := offender.Account
+			acc.LastSeen = b.block.Height
+			acc.IsDirty = true
+
+			// apply losses to unstake requests
+			// - bakers can have unstake requests too
+			// - accounts referenced in unstake may not be pre-loaded
+			// - emit a slash event
+			// if reqs, err := b.idx.ListFrozenUnstakeRequests(ctx, offender.AccountId, op.Cycle, b.block.Params); err == nil {
+			// 	for _, req := range reqs {
+			// 		acc, err := b.LoadAccountByAccountId(ctx, req.SenderId)
+			// 		if err != nil {
+			// 			return Errorf("missing account %d with unstake request %d", req.SenderId, req.RowId)
+			// 		}
+			// 		// 10% loss
+			// 		acc.UnstakedBalance -= req.Volume / 10
+			// 		acc.LostStake += req.Volume / 10
+			// 		acc.IsDirty = true
+
+			// 		// emit slash event for non-bakers
+			// 		if !acc.IsBaker {
+			// 			slash := model.NewEventOp(b.block, req.SenderId, id)
+			// 			slash.Type = model.OpTypeStakeSlash
+			// 			slash.SenderId = req.SenderId
+			// 			slash.BakerId = offender.AccountId
+			// 			slash.Burned = req.Volume / 10
+			// 			b.block.Ops = append(b.block.Ops, slash)
+			// 		}
+			// 	}
+			// }
+		}
+
 	} else {
-		accuser.NBakerOps--
-		accuser.NAccusations--
-		accuser.IsDirty = true
-		acc := accuser.Account
-		acc.LastSeen = util.Max64N(acc.LastSeen, acc.LastIn, acc.LastOut)
+		b.block.Proposer.NBakerOps--
+		b.block.Proposer.NAccusations--
+		b.block.Proposer.IsDirty = true
+		acc := b.block.Proposer.Account
+		acc.LastSeen = max(acc.LastSeen, acc.LastIn, acc.LastOut)
 		acc.IsDirty = true
 
-		offender.NBakerOps--
-		offender.N2Baking--
-		offender.IsDirty = true
-		acc = offender.Account
-		acc.LastSeen = util.Max64N(acc.LastSeen, acc.LastIn, acc.LastOut)
-		acc.IsDirty = true
+		if offender != nil {
+			offender.NBakerOps--
+			offender.N2Baking--
+			offender.IsDirty = true
+			acc := offender.Account
+			acc.LastSeen = max(acc.LastSeen, acc.LastIn, acc.LastOut)
+			acc.IsDirty = true
+
+			// reverse-apply losses to unstake requests
+			// - bakers can have unstake requests too
+			// - accounts referenced in unstake may not be pre-loaded
+			// - emit a slash event
+			// if reqs, err := b.idx.ListFrozenUnstakeRequests(ctx, offender.AccountId, op.Cycle, b.block.Params); err == nil {
+			// 	for _, req := range reqs {
+			// 		acc, err := b.LoadAccountByAccountId(ctx, req.SenderId)
+			// 		if err != nil {
+			// 			return Errorf("missing account %d with unstake request %d", req.SenderId, req.RowId)
+			// 		}
+			// 		// 10% loss
+			// 		acc.UnstakedBalance -= req.Volume / 10
+			// 		acc.LostStake += req.Volume / 10
+			// 		acc.IsDirty = true
+			// 	}
+			// }
+		}
+
 	}
 
 	return nil
@@ -332,34 +409,59 @@ func (b *Builder) AppendDoubleEndorsingOp(ctx context.Context, oh *rpc.Operation
 		return Errorf("unexpected type %T ", o)
 	}
 
-	// determine who's who
-	// - before Ithaca: last & first (dynamic count of updates when one subaccount is empty)
-	// - after Ithaca: second, third (always 4 entries)
+	var offender *model.Baker
 	upd := dop.Fees()
-	accuserIndex, offenderIndex := 1, 2
-	if b.block.Params.Version < 12 {
-		accuserIndex, offenderIndex = len(upd)-1, 0
-	}
-	addr := upd[accuserIndex].Address()
-	accuser, ok := b.BakerByAddress(addr)
-	if !ok {
-		return Errorf("missing accuser account %s", addr)
-	}
-	addr = upd[offenderIndex].Address()
-	offender, ok := b.BakerByAddress(addr)
-	if !ok {
-		return Errorf("missing offender account %s", addr)
+	switch {
+	case b.block.Params.Version < 12:
+		// - before Ithaca: last & first (dynamic count of updates when one subaccount is empty)
+		addr := upd[0].Address()
+		if acc, ok := b.BakerByAddress(addr); !ok {
+			return Errorf("missing offender account %s", addr)
+		} else {
+			offender = acc
+		}
+	case b.block.Params.Version < 18:
+		// - after Ithaca: second, third (always 4 entries)
+		if len(upd) == 4 {
+			addr := upd[2].Address()
+			if acc, ok := b.BakerByAddress(addr); !ok {
+				return Errorf("missing offender account %s", addr)
+			} else {
+				offender = acc
+			}
+		}
+	default:
+		// no balance updates in oxford+, we can only look at rights
+		var end rpc.InlinedEndorsement
+		_ = json.Unmarshal(dop.OP1, &end)
+		addr, err := b.rpc.GetEndorsingSlotOwner(ctx,
+			rpc.BlockLevel(end.Operations.Level),
+			end.Operations.Slot,
+			b.block.Params,
+		)
+		if err != nil {
+			return err
+		}
+		if addr.IsValid() {
+			if acc, ok := b.BakerByAddress(addr); !ok {
+				return Errorf("missing offender account %s", addr)
+			} else {
+				offender = acc
+			}
+		}
 	}
 
 	// build flows first to determine burn
-	flows := b.NewDenunciationFlows(accuser, offender, upd, id)
+	flows := b.NewPenaltyFlows(b.block.Proposer, offender, upd, id)
 
 	// build op
 	op := model.NewOp(b.block, id)
 	op.IsSuccess = true
 	op.Status = tezos.OpStatusApplied
-	op.SenderId = accuser.AccountId
-	op.ReceiverId = offender.AccountId
+	op.SenderId = b.block.Proposer.AccountId
+	if offender != nil {
+		op.ReceiverId = offender.AccountId
+	}
 
 	// we store double-endorsed evidences as JSON
 	buf, err := json.Marshal(dop.Strip())
@@ -376,13 +478,15 @@ func (b *Builder) AppendDoubleEndorsingOp(ctx context.Context, oh *rpc.Operation
 			op.Burned += f.AmountOut
 
 			// track offender losses by category
-			switch f.Category {
-			case model.FlowCategoryRewards:
+			switch f.Kind {
+			case model.FlowKindRewards:
 				op.Reward -= f.AmountOut
-			case model.FlowCategoryDeposits:
+			case model.FlowKindDeposits:
 				op.Deposit -= f.AmountOut
-			case model.FlowCategoryFees:
+			case model.FlowKindFees:
 				op.Fee -= f.AmountOut
+			case model.FlowKindStake:
+				op.Deposit -= f.AmountOut
 			}
 		} else {
 			// track accuser reward as volume
@@ -394,33 +498,88 @@ func (b *Builder) AppendDoubleEndorsingOp(ctx context.Context, oh *rpc.Operation
 
 	// update accounts
 	if !rollback {
-		accuser.NBakerOps++
-		accuser.NAccusations++
-		accuser.IsDirty = true
-		acc := accuser.Account
+		b.block.Proposer.NBakerOps++
+		b.block.Proposer.NAccusations++
+		b.block.Proposer.IsDirty = true
+		acc := b.block.Proposer.Account
 		acc.LastSeen = b.block.Height
 		acc.IsDirty = true
 
-		offender.NBakerOps++
-		offender.N2Endorsement++
-		offender.IsDirty = true
-		acc = offender.Account
-		acc.LastSeen = b.block.Height
-		acc.IsDirty = true
+		if offender != nil {
+			offender.NBakerOps++
+			offender.N2Endorsement++
+			offender.IsDirty = true
+			acc := offender.Account
+			acc.LastSeen = b.block.Height
+			acc.IsDirty = true
+
+			// apply losses to unstake requests
+			// - bakers can have unstake requests too
+			// - accounts referenced in unstake may not be pre-loaded
+			// - emit a slash event
+			// p := b.block.Params
+			// if reqs, err := b.idx.ListFrozenUnstakeRequests(ctx, offender.AccountId, op.Cycle, p); err == nil {
+			// 	log.Warnf("%d slashing %d unstake requests from C%d to C%d", op.Height, len(reqs), op.Cycle-p.PreservedCycles-p.MaxSlashingPeriod+1, op.Cycle)
+			// 	for _, req := range reqs {
+			// 		log.Warnf("Slashing unstake request op=%d src=%d amount=%d slash=%d",
+			// 			req.RowId, req.SenderId, req.Volume, req.Volume/2,
+			// 		)
+			// 		acc, err := b.LoadAccountByAccountId(ctx, req.SenderId)
+			// 		if err != nil {
+			// 			return Errorf("missing account %d with unstake request %d", req.SenderId, req.RowId)
+			// 		}
+			// 		// 50% loss
+			// 		acc.UnstakedBalance -= req.Volume / 2
+			// 		acc.LostStake += req.Volume / 2
+			// 		acc.IsDirty = true
+
+			// 		// emit slash event for non-bakers
+			// 		if !acc.IsBaker {
+			// 			slash := model.NewEventOp(b.block, req.SenderId, id)
+			// 			slash.Type = model.OpTypeStakeSlash
+			// 			slash.SenderId = req.SenderId
+			// 			slash.BakerId = offender.AccountId
+			// 			slash.Burned = req.Volume / 2
+			// 			b.block.Ops = append(b.block.Ops, slash)
+			// 		}
+			// 	}
+			// }
+
+		}
+
 	} else {
-		accuser.NBakerOps--
-		accuser.NAccusations--
-		accuser.IsDirty = true
-		acc := accuser.Account
-		acc.LastSeen = util.Max64N(acc.LastSeen, acc.LastIn, acc.LastOut)
+		b.block.Proposer.NBakerOps--
+		b.block.Proposer.NAccusations--
+		b.block.Proposer.IsDirty = true
+		acc := b.block.Proposer.Account
+		acc.LastSeen = max(acc.LastSeen, acc.LastIn, acc.LastOut)
 		acc.IsDirty = true
 
-		offender.NBakerOps--
-		offender.N2Endorsement--
-		offender.IsDirty = true
-		acc = offender.Account
-		acc.LastSeen = util.Max64N(acc.LastSeen, acc.LastIn, acc.LastOut)
-		acc.IsDirty = true
+		if offender != nil {
+			offender.NBakerOps--
+			offender.N2Endorsement--
+			offender.IsDirty = true
+			acc := offender.Account
+			acc.LastSeen = max(acc.LastSeen, acc.LastIn, acc.LastOut)
+			acc.IsDirty = true
+
+			// reverse-apply losses to unstake requests
+			// - bakers can have unstake requests too
+			// - accounts referenced in unstake may not be pre-loaded
+			// - emit a slash event
+			// if reqs, err := b.idx.ListFrozenUnstakeRequests(ctx, offender.AccountId, op.Cycle, b.block.Params); err == nil {
+			// 	for _, req := range reqs {
+			// 		acc, err := b.LoadAccountByAccountId(ctx, req.SenderId)
+			// 		if err != nil {
+			// 			return Errorf("missing account %d with unstake request %d", req.SenderId, req.RowId)
+			// 		}
+			// 		// 50% loss
+			// 		acc.UnstakedBalance += req.Volume / 2
+			// 		acc.LostStake -= req.Volume / 2
+			// 		acc.IsDirty = true
+			// 	}
+			// }
+		}
 	}
 	return nil
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package model
@@ -24,9 +24,9 @@ var (
 
 type Right struct {
 	RowId     uint64     `pack:"I,pk"      json:"row_id"`           // unique id
-	Cycle     int64      `pack:"c"         json:"cycle"`            // cycle
-	Height    int64      `pack:"h"         json:"height"`           // height
-	AccountId AccountID  `pack:"A"         json:"account_id"`       // rights holder
+	Cycle     int64      `pack:"c,i16"     json:"cycle"`            // cycle
+	Height    int64      `pack:"h,i32"     json:"height"`           // height
+	AccountId AccountID  `pack:"A,u32"     json:"account_id"`       // rights holder
 	Bake      vec.BitSet `pack:"B,snappy"  json:"baking_rights"`    // bits for every block
 	Endorse   vec.BitSet `pack:"E,snappy"  json:"endorsing_rights"` // bits for every block
 	Baked     vec.BitSet `pack:"b,snappy"  json:"blocks_baked"`     // bits for every block
@@ -80,8 +80,8 @@ func AllocRight() *Right {
 
 func NewRight(acc AccountID, height, cycle int64, nBlocks, nSeeds int) *Right {
 	r := AllocRight()
-	r.Cycle = cycle
 	r.Height = height
+	r.Cycle = cycle
 	r.AccountId = acc
 	r.Bake.Resize(nBlocks)
 	r.Endorse.Resize(nBlocks)

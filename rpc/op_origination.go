@@ -1,4 +1,4 @@
-// Copyright (c) 2023 Blockwatch Data Inc.
+// Copyright (c) 2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -75,8 +75,16 @@ func (o Origination) AddEmbeddedAddresses(add func(tezos.Address)) {
 		if v.Action != micheline.DiffActionUpdate {
 			continue
 		}
-		_ = v.Key.Walk(collect)
-		_ = v.Value.Walk(collect)
+		vp := v.Key
+		if vp.IsPacked() {
+			vp, _ = vp.Unpack()
+		}
+		_ = vp.Walk(collect)
+		vv := v.Value
+		if vv.IsPacked() {
+			vv, _ = vv.Unpack()
+		}
+		_ = vv.Walk(collect)
 	}
 }
 

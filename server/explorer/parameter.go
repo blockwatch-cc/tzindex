@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package explorer
@@ -38,8 +38,8 @@ func NewContractParameters(ctx *server.Context, data []byte, typ micheline.Type,
 		log.Errorf("%s param unmarshal: %v", op, err)
 		return resp
 	}
-	// log.Infof("call entrypoint=%s params=%s", p.Entrypoint)
-	// log.Infof("call params=%s", p.Value.Dump())
+	// log.Infof("call entrypoint=%s", p.Entrypoint)
+	// log.Infof("call value=%s", p.Value.Dump())
 	// log.Infof("call type %s", typ.Dump())
 
 	ep, prim, err := p.MapEntrypoint(typ)
@@ -60,6 +60,8 @@ func NewContractParameters(ctx *server.Context, data []byte, typ micheline.Type,
 	// use resolved entrypoint type and real name
 	resp.Entrypoint = ep.Name
 	typ = ep.Type()
+	// log.Infof("EP type %s", typ.Dump())
+	// log.Infof("EP value %s", prim.Dump())
 
 	// strip entrypoint name annot to prevent duplicate nesting
 	typ.Prim.Anno = nil

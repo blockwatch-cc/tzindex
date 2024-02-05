@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package metadata
@@ -6,8 +6,9 @@ package metadata
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/echa/config"
 	"sort"
+
+	"github.com/echa/config"
 )
 
 var registry *Registry
@@ -85,7 +86,6 @@ func LoadExtensions() error {
 			return fmt.Errorf("metadata: loading extension %s: %w", ns, err)
 		}
 		RegisterSchema(ext)
-		log.Infof("Registered %s metadata extension.", ns)
 		return nil
 	})
 }

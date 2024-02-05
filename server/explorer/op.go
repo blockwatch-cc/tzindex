@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package explorer
@@ -195,7 +195,7 @@ type Op struct {
 	Events        []*Event                  `json:"events,omitempty"`
 	TicketUpdates []*TicketUpdate           `json:"ticket_updates,omitempty"`
 
-	expires time.Time `json:"-"`
+	expires time.Time
 }
 
 func WrapAsBatchOp(op *Op) *Op {
@@ -225,15 +225,19 @@ func WrapAsBatchOp(op *Op) *Op {
 
 func (o *Op) AddAccounts(ctx *server.Context, op *model.Op, args server.Options) {
 	switch op.Type {
-	case model.OpTypeBake, model.OpTypeBonus:
+	case model.OpTypeBake, model.OpTypeBonus, model.OpTypeDeposit,
+		model.OpTypeUnfreeze, model.OpTypeReward:
 		if op.SenderId > 0 {
 			a := ctx.Indexer.LookupAddress(ctx, op.SenderId)
 			o.Sender = &a
 		}
+		if op.ReceiverId > 0 {
+			a := ctx.Indexer.LookupAddress(ctx, op.ReceiverId)
+			o.Receiver = &a
+		}
 
-	case model.OpTypeUnfreeze, model.OpTypeInvoice, model.OpTypeAirdrop,
-		model.OpTypeSeedSlash, model.OpTypeMigration, model.OpTypeSubsidy,
-		model.OpTypeDeposit, model.OpTypeReward:
+	case model.OpTypeInvoice, model.OpTypeAirdrop,
+		model.OpTypeSeedSlash, model.OpTypeMigration, model.OpTypeSubsidy:
 		if op.ReceiverId > 0 {
 			a := ctx.Indexer.LookupAddress(ctx, op.ReceiverId)
 			o.Receiver = &a
@@ -247,7 +251,8 @@ func (o *Op) AddAccounts(ctx *server.Context, op *model.Op, args server.Options)
 		o.Timestamp = ctx.Indexer.LookupBlockTime(ctx, op.Height)
 		o.Cycle = ctx.Params.HeightToCycle(op.Height)
 
-	case model.OpTypeDoubleBaking, model.OpTypeDoubleEndorsement, model.OpTypeDoublePreendorsement:
+	case model.OpTypeDoubleBaking, model.OpTypeDoubleEndorsement,
+		model.OpTypeDoublePreendorsement, model.OpTypeStakeSlash:
 		if op.SenderId > 0 {
 			a := ctx.Indexer.LookupAddress(ctx, op.SenderId)
 			o.Accuser = &a
@@ -295,16 +300,20 @@ func (o *Op) AddAccounts(ctx *server.Context, op *model.Op, args server.Options)
 			}
 			switch typ {
 			case tezos.OpTypeTxRollupRejection:
+				// assuming only player can send reject op
 				a := ctx.Indexer.LookupAddress(ctx, op.CreatorId)
 				o.Loser = &a
 				o.Winner = o.Sender
 
 			case tezos.OpTypeSmartRollupTimeout:
+				// note: 3rd party can send timeout op
 				a := ctx.Indexer.LookupAddress(ctx, op.CreatorId)
 				o.Loser = &a
-				o.Winner = o.Sender
+				w := ctx.Indexer.LookupAddress(ctx, op.BakerId)
+				o.Winner = &w
 
 			case tezos.OpTypeSmartRollupRefute:
+				// assuming only player can send refute op
 				if op.CreatorId > 0 {
 					a := ctx.Indexer.LookupAddress(ctx, op.CreatorId)
 					o.Loser = &a
@@ -654,7 +663,7 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 		Reward:        p.ConvertValue(op.Reward),
 		Deposit:       p.ConvertValue(op.Deposit),
 		Burned:        p.ConvertValue(op.Burned),
-		Confirmations: util.Max64(0, ctx.Tip.BestHeight-op.Height),
+		Confirmations: max(ctx.Tip.BestHeight-op.Height, 0),
 	}
 
 	// some events have no hash
@@ -700,7 +709,7 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 
 	// add events
 	for _, ev := range op.Events {
-		o.Events = append(o.Events, NewEvent(ctx, ev, args))
+		o.Events = append(o.Events, NewEvent(ctx, ev))
 	}
 
 	// add ticket updates
@@ -709,7 +718,7 @@ func NewOp(ctx *server.Context, op *model.Op, block *model.Block, cc *model.Cont
 	}
 
 	// cache until next block is expected
-	o.expires = ctx.Tip.BestTime.Add(p.BlockTime())
+	o.expires = ctx.Expires
 
 	return o
 }
@@ -820,40 +829,59 @@ func (r *OpsRequest) Parse(ctx *server.Context) {
 		r.SinceHash = b.Hash.Clone()
 	}
 	// filter by type condition
-	for key, val := range ctx.Request.URL.Query() {
-		keys := strings.Split(key, ".")
-		if keys[0] != "type" {
-			continue
-		}
-		// parse mode
-		r.TypeMode = pack.FilterModeEqual
-		if len(keys) > 1 {
-			r.TypeMode = pack.ParseFilterMode(keys[1])
-			if !r.TypeMode.IsValid() {
-				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid type filter mode '%s'", keys[1]), nil))
-			}
-		}
-		// check op types and convert to []int64 for use in condition
-		for _, t := range strings.Split(val[0], ",") {
+	if mode, val, ok := server.Query(ctx, "type"); ok {
+		r.TypeMode = mode
+		for _, t := range strings.Split(val, ",") {
 			typ := model.ParseOpType(t)
 			if !typ.IsValid() {
-				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid operation type '%s'", t), nil))
+				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid operation type %q", t), nil))
 			}
 			r.TypeList = append(r.TypeList, typ)
 		}
-		// allow constructs of form `type=a,b`
-		if len(r.TypeList) > 1 {
-			if r.TypeMode == pack.FilterModeEqual {
-				r.TypeMode = pack.FilterModeIn
+	}
+	// filter by time condition
+	if mode, val, ok := server.Query(ctx, "time"); ok {
+		switch mode {
+		case pack.FilterModeGt, pack.FilterModeGte:
+			tm, err := util.ParseTime(val)
+			if err != nil {
+				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid time value %q", val), err))
 			}
-		} else {
-			// check for single value mode `type.in=a`
-			switch r.TypeMode {
-			case pack.FilterModeIn:
-				r.TypeMode = pack.FilterModeEqual
-			case pack.FilterModeNotIn:
-				r.TypeMode = pack.FilterModeNotEqual
+			height := max(ctx.Indexer.LookupBlockHeightFromTime(ctx, tm.Time()), r.SinceHeight)
+			if mode == pack.FilterModeGte {
+				height--
 			}
+			r.SinceHeight = height
+
+		case pack.FilterModeLt, pack.FilterModeLte:
+			tm, err := util.ParseTime(val)
+			if err != nil {
+				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid time value %q", val), err))
+			}
+			height := min(ctx.Indexer.LookupBlockHeightFromTime(ctx, tm.Time()), r.BlockHeight)
+			if mode == pack.FilterModeLt {
+				height--
+			}
+			r.BlockHeight = height
+
+		case pack.FilterModeRange:
+			from, to, ok := strings.Cut(val, ",")
+			if !ok {
+				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid time range value %q", val), nil))
+			}
+			fromTime, err := util.ParseTime(from)
+			if err != nil {
+				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid from time value %q", val), err))
+			}
+			toTime, err := util.ParseTime(to)
+			if err != nil {
+				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid to time value %q", val), err))
+			}
+			r.SinceHeight = max(ctx.Indexer.LookupBlockHeightFromTime(ctx, fromTime.Time())-1, r.SinceHeight)
+			r.BlockHeight = min(ctx.Indexer.LookupBlockHeightFromTime(ctx, toTime.Time()), r.BlockHeight)
+
+		default:
+			panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid time mode %q", mode), nil))
 		}
 	}
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -82,7 +82,7 @@ func (f *ReorgDelayFilter) Push(ctx context.Context, b *rpc.Bundle, quit <-chan 
 	}
 
 	// detect reorg: the new block's parent does not math the tail's hash
-	if tail != nil && !b.ParentHash().Equal(tail.Hash()) {
+	if tail != nil && b.ParentHash() != tail.Hash() {
 		return ErrReorgDetected
 	}
 

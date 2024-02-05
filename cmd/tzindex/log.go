@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package main
@@ -12,7 +12,6 @@ import (
 	"blockwatch.cc/tzindex/etl"
 	"blockwatch.cc/tzindex/etl/cache"
 	"blockwatch.cc/tzindex/etl/index"
-	"blockwatch.cc/tzindex/etl/metadata"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
@@ -26,10 +25,11 @@ import (
 
 var (
 	log     = logpkg.NewLogger("MAIN") // main program
-	blocLog = logpkg.NewLogger("ETL ") // blockchain
+	etlLog  = logpkg.NewLogger("ETL ") // blockchain
 	dataLog = logpkg.NewLogger("DATA") // database
 	jrpcLog = logpkg.NewLogger("RPC ") // json rpc client
 	srvrLog = logpkg.NewLogger("API ") // api server
+	repoLog = logpkg.NewLogger("REPO") // reports
 	michLog = logpkg.NewLogger("MICH") // micheline
 )
 
@@ -39,11 +39,10 @@ func init() {
 	config.SetDefault("log.flags", "date,time,micro,utc")
 
 	// assign default loggers
-	etl.UseLogger(blocLog)
-	cache.UseLogger(blocLog)
-	model.UseLogger(blocLog)
-	index.UseLogger(blocLog)
-	metadata.UseLogger(blocLog)
+	etl.UseLogger(etlLog)
+	cache.UseLogger(etlLog)
+	model.UseLogger(etlLog)
+	index.UseLogger(etlLog)
 	store.UseLogger(dataLog)
 	pack.UseLogger(dataLog)
 	rpc.UseLogger(jrpcLog)
@@ -51,16 +50,18 @@ func init() {
 	explorer.UseLogger(srvrLog)
 	tables.UseLogger(srvrLog)
 	series.UseLogger(srvrLog)
+	system.UseLogger(srvrLog)
 	micheline.UseLogger(michLog)
 }
 
 // subsystemLoggers maps each subsystem identifier to its associated logger.
 var subsystemLoggers = map[string]logpkg.Logger{
 	"MAIN": log,
-	"ETL ": blocLog,
+	"ETL ": etlLog,
 	"DATA": dataLog,
 	"RPC ": jrpcLog,
 	"API ": srvrLog,
+	"REPO": repoLog,
 	"MICH": michLog,
 }
 
@@ -79,23 +80,24 @@ func initLogging() {
 	log = logpkg.NewLogger("MAIN") // command level
 
 	// create loggers with configured backend
-	blocLog = logpkg.NewLogger("ETL ") // blockchain
-	blocLog.SetLevel(logpkg.ParseLevel(config.GetString("log.etl")))
+	etlLog = logpkg.NewLogger("ETL ") // blockchain
+	etlLog.SetLevel(logpkg.ParseLevel(config.GetString("log.etl")))
 	dataLog = logpkg.NewLogger("DATA") // database
 	dataLog.SetLevel(logpkg.ParseLevel(config.GetString("log.db")))
 	jrpcLog = logpkg.NewLogger("RPC ") // json rpc client
 	jrpcLog.SetLevel(logpkg.ParseLevel(config.GetString("log.rpc")))
 	srvrLog = logpkg.NewLogger("API ") // api server
-	srvrLog.SetLevel(logpkg.ParseLevel(config.GetString("log.api")))
+	srvrLog.SetLevel(logpkg.ParseLevel(config.GetString("log.server")))
+	repoLog = logpkg.NewLogger("REPO") // reports
+	repoLog.SetLevel(logpkg.ParseLevel(config.GetString("log.report")))
 	michLog = logpkg.NewLogger("MICH") // micheline
 	michLog.SetLevel(logpkg.ParseLevel(config.GetString("log.micheline")))
 
 	// assign default loggers
-	etl.UseLogger(blocLog)
-	cache.UseLogger(blocLog)
-	model.UseLogger(blocLog)
-	index.UseLogger(blocLog)
-	metadata.UseLogger(blocLog)
+	etl.UseLogger(etlLog)
+	cache.UseLogger(etlLog)
+	model.UseLogger(etlLog)
+	index.UseLogger(etlLog)
 	store.UseLogger(dataLog)
 	pack.UseLogger(dataLog)
 	rpc.UseLogger(jrpcLog)
@@ -103,15 +105,17 @@ func initLogging() {
 	explorer.UseLogger(srvrLog)
 	tables.UseLogger(srvrLog)
 	server.UseLogger(srvrLog)
+	system.UseLogger(srvrLog)
 	micheline.UseLogger(michLog)
 
 	// store loggers in map
 	subsystemLoggers = map[string]logpkg.Logger{
 		"MAIN": log,
-		"ETL ": blocLog,
+		"ETL ": etlLog,
 		"DATA": dataLog,
 		"RPC ": jrpcLog,
-		"API ": srvrLog,
+		"SRVR": srvrLog,
+		"REPO": repoLog,
 		"MICH": michLog,
 	}
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -10,6 +10,7 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/task"
 )
 
 const EventIndexKey = "event"
@@ -55,7 +56,7 @@ func (idx *EventIndex) Create(path, label string, opts interface{}) error {
 		return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
 	}
 
-	_, err = db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(readConfigOpts(key)))
+	_, err = db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(model.ReadConfigOpts(key)))
 	return err
 }
 
@@ -69,7 +70,7 @@ func (idx *EventIndex) Init(path, label string, opts interface{}) error {
 	m := model.Event{}
 	key := m.TableKey()
 
-	idx.table, err = idx.db.Table(key, m.TableOpts().Merge(readConfigOpts(key)))
+	idx.table, err = idx.db.Table(key, m.TableOpts().Merge(model.ReadConfigOpts(key)))
 	if err != nil {
 		idx.Close()
 		return err
@@ -114,7 +115,7 @@ func (idx *EventIndex) ConnectBlock(ctx context.Context, block *model.Block, bui
 			if !ok {
 				return fmt.Errorf("event: missing source contract %s", v.Source)
 			}
-			ins = append(ins, model.NewEventWithData(v, src.RowId, op))
+			ins = append(ins, model.NewEventWithData(*v, src.RowId, op))
 		}
 	}
 
@@ -151,5 +152,10 @@ func (idx *EventIndex) Flush(ctx context.Context) error {
 			log.Errorf("Flushing %s table: %v", v.Name(), err)
 		}
 	}
+	return nil
+}
+
+func (idx *EventIndex) OnTaskComplete(_ context.Context, _ *task.TaskResult) error {
+	// unused
 	return nil
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package cache
@@ -6,8 +6,8 @@ package cache
 import (
 	"sync/atomic"
 
-	"blockwatch.cc/packdb/cache/lru"
 	"blockwatch.cc/tzindex/etl/model"
+	lru "github.com/hashicorp/golang-lru/v2"
 )
 
 const (
@@ -15,7 +15,7 @@ const (
 )
 
 type TicketTypeCache struct {
-	cache *lru.TwoQueueCache // key := TicketTypeID
+	cache *lru.TwoQueueCache[model.TicketID, *model.TicketType] // key := TicketTypeID
 	size  int
 	stats Stats
 }
@@ -25,21 +25,12 @@ func NewTicketTypeCache(sz int) *TicketTypeCache {
 		sz = TicketTypeMaxCacheSize
 	}
 	c := &TicketTypeCache{}
-	c.cache, _ = lru.New2QWithEvict(sz, func(_, v interface{}) {
-		c.size -= v.(*model.TicketType).Size()
-		atomic.AddInt64(&c.stats.Evictions, 1)
-	})
+	c.cache, _ = lru.New2Q[model.TicketID, *model.TicketType](sz)
 	return c
 }
 
 func (c *TicketTypeCache) Add(t *model.TicketType) {
-	updated, _ := c.cache.Add(t.Id, t)
-	if updated {
-		atomic.AddInt64(&c.stats.Updates, 1)
-	} else {
-		c.size += t.Size()
-		atomic.AddInt64(&c.stats.Inserts, 1)
-	}
+	c.cache.Add(t.Id, t)
 }
 
 func (c *TicketTypeCache) Drop(t *model.TicketType) {
@@ -58,7 +49,7 @@ func (c *TicketTypeCache) Get(id model.TicketID) (*model.TicketType, bool) {
 		return nil, false
 	}
 	atomic.AddInt64(&c.stats.Hits, 1)
-	return val.(*model.TicketType), true
+	return val, true
 }
 
 func (c TicketTypeCache) Stats() Stats {

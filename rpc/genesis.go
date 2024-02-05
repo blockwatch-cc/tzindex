@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -130,31 +130,24 @@ type bootstrap struct {
 }
 
 type contract struct {
-	Delegate string `bson:"delegate"`
-	Value    string `bson:"amount"`
-	Script   bson.M `bson:"script"`
+	Delegate string        `bson:"delegate"`
+	Value    string        `bson:"amount"`
+	Script   bson.M        `bson:"script"`
+	Hash     tezos.Address `bson:"hash"`
 }
 
 func (b *bootstrap) DecodeContracts() ([]*X1, error) {
-	// ignore non-mainnet contract lists (we don't know their addresses)
-	if len(b.Contracts) != len(vestingContractAddrs) {
-		return nil, nil
-	}
 	c := make([]*X1, len(b.Contracts))
 	for i, v := range b.Contracts {
 		c[i] = &X1{
-			Addr: vestingContractAddrs[i],
+			Addr: v.Hash,
 		}
-		addr, err := tezos.ParseAddress(v.Delegate)
-		if err != nil {
-			return nil, err
+		// mainnet vesting contracts have no explicit adress defined
+		if !c[i].Addr.IsValid() && i < len(vestingContractAddrs) {
+			c[i].Addr = vestingContractAddrs[i]
 		}
-		c[i].Delegate = addr
-		value, err := strconv.ParseInt(v.Value, 10, 64)
-		if err != nil {
-			return nil, err
-		}
-		c[i].Value = value
+		c[i].Delegate, _ = tezos.ParseAddress(v.Delegate)
+		c[i].Value, _ = strconv.ParseInt(v.Value, 10, 64)
 
 		// script unmarshalling BSON -> JSON -> Micheline
 		buf, err := json.Marshal(v.Script)
@@ -165,70 +158,48 @@ func (b *bootstrap) DecodeContracts() ([]*X1, error) {
 			return nil, err
 		}
 
-		// skip when this does not look like a vesting contract
-		isVesting := true
-		switch {
-		case !c[i].Script.Storage.IsValid():
-			isVesting = false
-		case len(c[i].Script.Storage.Args) == 0:
-			isVesting = false
-		case !c[i].Script.Storage.Args[0].IsValid():
-			isVesting = false
-		case len(c[i].Script.Storage.Args[0].Args) == 0:
-			isVesting = false
-		case !c[i].Script.Storage.Args[0].Args[1].IsValid():
-			isVesting = false
-		case len(c[i].Script.Storage.Args[0].Args[1].Args) == 0:
-			isVesting = false
-		case !c[i].Script.Storage.Args[0].Args[1].Args[0].IsValid():
-			isVesting = false
-		case len(c[i].Script.Storage.Args[0].Args[1].Args[0].Args) == 0:
-			isVesting = false
-		}
+		// patch storage for vesting contracts
+		if c[i].Script.CodeHash() == 0x530642dfea23cbe3 {
+			// patch initial storage (convert strings to bytes) to circumvent tezos
+			// origination bug
+			// - replace edpk strings with byte sequences
+			// - replace delegate addesses with binary pkh 00 TT AAAA...
 
-		if !isVesting {
-			continue
-		}
-
-		// patch initial storage (convert strings to bytes) to circumvent tezos
-		// origination bug
-		// - replace edpk strings with byte sequences
-		// - replace delegate addesses with binary pkh 00 TT AAAA...
-
-		// keygroups >> signatories
-		for _, v := range c[i].Script.Storage.Args[0].Args[1].Args[0].Args {
-			for _, vv := range v.Args[0].Args {
-				edpk, err := tezos.ParseKey(vv.String)
-				if err != nil {
-					return nil, fmt.Errorf("decoding signatory key %s: %w", vv.String, err)
+			// keygroups >> signatories
+			for _, v := range c[i].Script.Storage.Args[0].Args[1].Args[0].Args {
+				for _, vv := range v.Args[0].Args {
+					edpk, err := tezos.ParseKey(vv.String)
+					if err != nil {
+						return nil, fmt.Errorf("decoding signatory key %s: %w", vv.String, err)
+					}
+					vv.Type = micheline.PrimBytes
+					vv.Bytes = append([]byte{0}, edpk.Hash()...)
+					vv.String = ""
 				}
-				vv.Type = micheline.PrimBytes
-				vv.Bytes = append([]byte{0}, edpk.Hash()...)
-				vv.String = ""
 			}
-		}
 
-		// only the first 8 contracts have authorizers set
-		if i < 8 {
-			// pour_dest
-			pair := c[i].Script.Storage.Args[1].Args[1].Args[0].Args
-			dest, err := tezos.ParseAddress(pair[0].String)
-			if err != nil {
-				return nil, fmt.Errorf("decoding pour_dest %s: %w", pair[0].String, err)
-			}
-			pair[0].Type = micheline.PrimBytes
-			pair[0].Bytes = dest.Encode()
-			pair[0].String = ""
+			// only the first 8 contracts have authorizers set
+			if i < 8 {
+				// pour_dest
+				pair := c[i].Script.Storage.Args[1].Args[1].Args[0].Args
+				dest, err := tezos.ParseAddress(pair[0].String)
+				if err != nil {
+					return nil, fmt.Errorf("decoding pour_dest %s: %w", pair[0].String, err)
+				}
+				pair[0].Type = micheline.PrimBytes
+				pair[0].Bytes = dest.Encode()
+				pair[0].String = ""
 
-			// pour_authorizer
-			edpk, err := tezos.ParseKey(pair[1].String)
-			if err != nil {
-				return nil, fmt.Errorf("decoding pour_authorizer key %s: %w", pair[1].String, err)
+				// pour_authorizer
+				edpk, err := tezos.ParseKey(pair[1].String)
+				if err != nil {
+					return nil, fmt.Errorf("decoding pour_authorizer key %s: %w", pair[1].String, err)
+				}
+				// replace with byte sequence
+				pair[1].Type = micheline.PrimBytes
+				pair[1].Bytes = append([]byte{0}, edpk.Hash()...)
+				pair[1].String = ""
 			}
-			// replace with byte sequence
-			pair[1].Type = micheline.PrimBytes
-			pair[1].Bytes = append([]byte{0}, edpk.Hash()...)
-			pair[1].String = ""
 		}
 	}
 	return c, nil

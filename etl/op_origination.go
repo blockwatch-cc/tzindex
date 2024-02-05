@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -161,7 +161,6 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.Operation, id
 				dst.BakerId = newbkr.AccountId
 				dst.DelegatedSince = b.block.Height
 
-				newbkr.TotalDelegations++
 				newbkr.ActiveDelegations++
 				newbkr.IsDirty = true
 				newbkr.Account.LastSeen = b.block.Height
@@ -174,6 +173,7 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.Operation, id
 			b.conMap[dst.RowId] = con
 			op.Storage = con.Storage
 			op.StorageHash = con.StorageHash
+			op.CodeHash = con.CodeHash
 			op.IsStorageUpdate = true
 			op.Contract = con
 		} else {
@@ -193,7 +193,6 @@ func (b *Builder) AppendOriginationOp(ctx context.Context, oh *rpc.Operation, id
 			if newbkr != nil {
 				dst.IsDelegated = false
 				dst.BakerId = 0
-				newbkr.TotalDelegations--
 				newbkr.ActiveDelegations--
 				newbkr.IsDirty = true
 			}
@@ -331,7 +330,6 @@ func (b *Builder) AppendInternalOriginationOp(
 				dst.BakerId = newbkr.AccountId
 				dst.DelegatedSince = b.block.Height
 
-				newbkr.TotalDelegations++
 				newbkr.ActiveDelegations++
 				newbkr.IsDirty = true
 				newbkr.Account.LastSeen = b.block.Height
@@ -344,6 +342,7 @@ func (b *Builder) AppendInternalOriginationOp(
 			b.conMap[dst.RowId] = con
 			op.Storage = con.Storage
 			op.StorageHash = con.StorageHash
+			op.CodeHash = con.CodeHash
 			op.IsStorageUpdate = true
 			op.Contract = con
 		} else {
@@ -362,7 +361,6 @@ func (b *Builder) AppendInternalOriginationOp(
 			if newbkr != nil {
 				dst.IsDelegated = false
 				dst.BakerId = 0
-				newbkr.TotalDelegations--
 				newbkr.ActiveDelegations--
 				newbkr.IsDirty = true
 			}

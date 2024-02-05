@@ -1,4 +1,4 @@
-// Copyright (c) 2023 Blockwatch Data Inc.
+// Copyright (c) 2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -18,6 +18,7 @@ type Bundle struct {
 	PrevEndorsing []EndorsingRight   // last block from previous cycle
 	Snapshot      *SnapshotIndex
 	SnapInfo      *SnapshotInfo
+	Issuance      []Issuance // future cycles where rights exist
 }
 
 func (b Bundle) IsValid() bool {
@@ -159,6 +160,9 @@ func (c *Client) GetLightBundle(ctx context.Context, id BlockID, p *Params) (b *
 	if b.Block, err = c.GetBlock(ctx, id); err != nil {
 		return
 	}
+	if err = b.Block.UpdateAllOriginatedScripts(ctx, c); err != nil {
+		return
+	}
 	if b.Height() > 0 && !b.Protocol().IsValid() {
 		return nil, fmt.Errorf("fetch: empty metadata in RPC response (maybe you are not using an archive node)")
 	}
@@ -192,12 +196,19 @@ func (c *Client) GetFullBundle(ctx context.Context, id BlockID, p *Params) (b *B
 				return
 			}
 			b.PrevEndorsing = nil
+
+			// fetch issuance params
+			if err = c.FetchIssuanceByCycle(ctx, height, cycle, b); err != nil {
+				err = fmt.Errorf("fetch: issuance for cycle %d: %v", cycle, err)
+				return
+			}
 		}
 	default:
 		// Fetch snapshot index and rights at the start of a cycle
 		if !b.IsCycleStart() {
 			return
 		}
+
 		// snapshot index and rights for future cycle N; the snapshot index
 		// refers to a snapshot block taken in cycle N-7 (6 post-Ithaca) and
 		// randomness collected from seed_nonce_revelations during cycle N-6
@@ -205,6 +216,11 @@ func (c *Client) GetFullBundle(ctx context.Context, id BlockID, p *Params) (b *B
 		cycle := b.Cycle() + b.Params.PreservedCycles
 		if err = c.FetchRightsByCycle(ctx, height, cycle, b); err != nil {
 			err = fmt.Errorf("fetch: rights for cycle %d: %v", cycle, err)
+			return
+		}
+		// fetch issuance params
+		if err = c.FetchIssuanceByCycle(ctx, height, cycle, b); err != nil {
+			err = fmt.Errorf("fetch: issuance for cycle %d: %v", cycle, err)
 			return
 		}
 	}
@@ -234,6 +250,13 @@ func (c *Client) fetchParamsForBlock(ctx context.Context, block *Block, p *Param
 		WithChainId(block.ChainId).
 		WithProtocol(block.Metadata.Protocol).
 		WithDeployment(block.Header.Proto)
+
+	// v18 has adaptive issuance
+	if next.Version >= 18 {
+		if issue, _ := c.GetIssuance(ctx, BlockLevel(height)); len(issue) > 0 {
+			next.WithIssuance(issue[0])
+		}
+	}
 
 	// adjust deployment number for genesis & bootstrap blocks
 	if height <= 1 {

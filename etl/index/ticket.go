@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -7,11 +7,12 @@ import (
 	"context"
 	"fmt"
 
-	"blockwatch.cc/packdb/cache"
-	"blockwatch.cc/packdb/cache/lru"
 	"blockwatch.cc/packdb/pack"
+	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/task"
 	"blockwatch.cc/tzindex/rpc"
+	lru "github.com/hashicorp/golang-lru/v2"
 )
 
 const TicketIndexKey = "ticket"
@@ -19,13 +20,13 @@ const TicketIndexKey = "ticket"
 type TicketIndex struct {
 	db     *pack.DB
 	tables map[string]*pack.Table
-	cache  cache.Cache
+	cache  *lru.Cache[tezos.ExprHash, *model.TicketType]
 }
 
 var _ model.BlockIndexer = (*TicketIndex)(nil)
 
 func NewTicketIndex() *TicketIndex {
-	c, _ := lru.New(1 << 15) // 32k
+	c, _ := lru.New[tezos.ExprHash, *model.TicketType](1 << 15) // 32k
 	return &TicketIndex{
 		tables: make(map[string]*pack.Table),
 		cache:  c,
@@ -68,7 +69,7 @@ func (idx *TicketIndex) Create(path, label string, opts interface{}) error {
 		if err != nil {
 			return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
 		}
-		opts := m.TableOpts().Merge(readConfigOpts(key))
+		opts := m.TableOpts().Merge(model.ReadConfigOpts(key))
 		_, err = db.CreateTableIfNotExists(key, fields, opts)
 		if err != nil {
 			return err
@@ -89,7 +90,7 @@ func (idx *TicketIndex) Init(path, label string, opts interface{}) error {
 		model.TicketUpdate{},
 	} {
 		key := m.TableKey()
-		t, err := idx.db.Table(key, m.TableOpts().Merge(readConfigOpts(key)))
+		t, err := idx.db.Table(key, m.TableOpts().Merge(model.ReadConfigOpts(key)))
 		if err != nil {
 			idx.Close()
 			return err
@@ -161,11 +162,11 @@ func (idx *TicketIndex) ConnectBlock(ctx context.Context, block *model.Block, b 
 
 func (idx *TicketIndex) findOrCreateTicketType(ctx context.Context, t rpc.Ticket) (*model.TicketType, error) {
 	key := t.Hash()
-	ityp, ok := idx.cache.Get(key.String())
+	tt, ok := idx.cache.Get(key)
 	if ok {
-		return ityp.(*model.TicketType), nil
+		return tt, nil
 	}
-	tt := model.NewTicketType()
+	tt = model.NewTicketType()
 	err := pack.NewQuery("etl.find_ticket_type").
 		WithTable(idx.tables[model.TicketTypeTableKey]).
 		AndEqual("hash", key).
@@ -182,7 +183,7 @@ func (idx *TicketIndex) findOrCreateTicketType(ctx context.Context, t rpc.Ticket
 			return nil, err
 		}
 	}
-	idx.cache.Add(key.String(), tt)
+	idx.cache.Add(key, tt)
 	return tt, nil
 }
 
@@ -212,5 +213,10 @@ func (idx *TicketIndex) Flush(ctx context.Context) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func (idx *TicketIndex) OnTaskComplete(_ context.Context, _ *task.TaskResult) error {
+	// unused
 	return nil
 }

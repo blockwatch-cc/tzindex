@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package metadata
@@ -11,7 +11,7 @@ const (
 	aliasNs     = "alias"
 	aliasSchema = `{
   "$schema": "http://json-schema.org/draft/2019-09/schema#",
-  "$id": "https://api.tzstats.com/metadata/schemas/alias.json",
+  "$id": "https://api.tzpro.io/metadata/schemas/alias.json",
   "title": "Alias",
   "type": "object",
   "required": [ "name", "kind" ],
@@ -52,6 +52,11 @@ const (
         "user",
         "contract",
         "collection",
+        "rollup",
+        "router",
+        "vault",
+        "p2p",
+        "proxy",
         "other"
       ],
       "description": "A structured type used for filtering."

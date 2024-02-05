@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package tables
@@ -75,7 +75,6 @@ func (p *Proposal) MarshalJSONVerbose() ([]byte, error) {
 		Op           string  `json:"op"`
 		ElectionId   uint64  `json:"election_id"`
 		VotingPeriod int64   `json:"voting_period"`
-		Rolls        int64   `json:"rolls"`
 		Stake        float64 `json:"stake"`
 		Voters       int64   `json:"voters"`
 	}{
@@ -89,7 +88,6 @@ func (p *Proposal) MarshalJSONVerbose() ([]byte, error) {
 		Op:           p.ops[p.OpId].String(),
 		ElectionId:   p.ElectionId.U64(),
 		VotingPeriod: p.VotingPeriod,
-		Rolls:        p.Rolls,
 		Stake:        p.ctx.Params.ConvertValue(p.Stake),
 		Voters:       p.Voters,
 	}
@@ -122,8 +120,6 @@ func (p *Proposal) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendUint(buf, p.ElectionId.U64(), 10)
 		case "voting_period":
 			buf = strconv.AppendInt(buf, p.VotingPeriod, 10)
-		case "rolls":
-			buf = strconv.AppendInt(buf, p.Rolls, 10)
 		case "stake":
 			buf = strconv.AppendFloat(buf, p.ctx.Params.ConvertValue(p.Stake), 'f', dec, 64)
 		case "voters":
@@ -164,8 +160,6 @@ func (p *Proposal) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatUint(p.ElectionId.U64(), 10)
 		case "voting_period":
 			res[i] = strconv.FormatInt(p.VotingPeriod, 10)
-		case "rolls":
-			res[i] = strconv.FormatInt(p.Rolls, 10)
 		case "stake":
 			res[i] = strconv.FormatFloat(p.ctx.Params.ConvertValue(p.Stake), 'f', dec, 64)
 		case "voters":
@@ -437,8 +431,8 @@ func StreamProposalTable(ctx *server.Context, args *TableRequest) (interface{}, 
 		if len(find) > 0 {
 			// lookup ops from id
 			type XOp struct {
-				Id   model.OpID   `knox:"I,pk"`
-				Hash tezos.OpHash `knox:"H"`
+				Id   model.OpID   `pack:"I,pk"`
+				Hash tezos.OpHash `pack:"H"`
 			}
 			op := &XOp{}
 			err = pack.NewQuery(ctx.RequestID+".proposal_op_lookup").

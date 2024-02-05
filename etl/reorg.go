@@ -1,4 +1,4 @@
-// Copyright (c) 2018 - 2020 Blockwatch Data Inc.
+// Copyright (c) 2018 - 2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -9,7 +9,6 @@ import (
 	"fmt"
 
 	"blockwatch.cc/packdb/store"
-	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzindex/etl/model"
 )
 
@@ -18,7 +17,7 @@ func (c *Crawler) Rollback(ctx context.Context, height int64, ignoreErrors bool)
 
 	// negative height is treated as offset
 	if height < 0 {
-		height = util.Max64(tip.BestHeight+height, 0)
+		height = max(tip.BestHeight+height, 0)
 	}
 
 	// check height against current tip
@@ -251,7 +250,7 @@ func (c *Crawler) reorganize(ctx context.Context, formerBest, newBest *model.Blo
 			return dbStoreChainTip(dbTx, newTip)
 		})
 		if err != nil {
-			return fmt.Errorf("REORGANIZE: updating block database failed for %d: %w", block.Height, err)
+			return fmt.Errorf("REORGANIZE: updating statedb failed for %d: %w", block.Height, err)
 		}
 
 		// update chainstate with new version

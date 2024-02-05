@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package tables
@@ -79,7 +79,6 @@ func (b *Ballot) MarshalJSONVerbose() ([]byte, error) {
 		Source           string  `json:"source"`
 		OpId             uint64  `json:"op_id"`
 		Op               string  `json:"op"`
-		Rolls            int64   `json:"rolls"`
 		Stake            float64 `json:"stake"`
 		Ballot           string  `json:"ballot"`
 	}{
@@ -95,7 +94,6 @@ func (b *Ballot) MarshalJSONVerbose() ([]byte, error) {
 		Source:           b.ctx.Indexer.LookupAddress(b.ctx, b.SourceId).String(),
 		OpId:             b.OpId.U64(),
 		Op:               b.ops[b.OpId].String(),
-		Rolls:            b.Rolls,
 		Stake:            b.ctx.Params.ConvertValue(b.Stake),
 		Ballot:           b.Ballot.Ballot.String(),
 	}
@@ -132,8 +130,6 @@ func (b *Ballot) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendUint(buf, b.OpId.U64(), 10)
 		case "op":
 			buf = strconv.AppendQuote(buf, b.ops[b.OpId].String())
-		case "rolls":
-			buf = strconv.AppendInt(buf, b.Rolls, 10)
 		case "stake":
 			buf = strconv.AppendFloat(buf, b.ctx.Params.ConvertValue(b.Stake), 'f', dec, 64)
 		case "ballot":
@@ -178,8 +174,6 @@ func (b *Ballot) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatUint(b.OpId.U64(), 10)
 		case "op":
 			res[i] = strconv.Quote(b.ops[b.OpId].String())
-		case "rolls":
-			res[i] = strconv.FormatInt(b.Rolls, 10)
 		case "stake":
 			res[i] = strconv.FormatFloat(b.ctx.Params.ConvertValue(b.Stake), 'f', dec, 64)
 		case "ballot":
@@ -488,8 +482,8 @@ func StreamBallotTable(ctx *server.Context, args *TableRequest) (interface{}, in
 			// lookup ops from id
 			// ctx.Log.Tracef("Looking up %d ops", len(find))
 			type XOp struct {
-				Id   model.OpID   `knox:"I,pk"`
-				Hash tezos.OpHash `knox:"H"`
+				Id   model.OpID   `pack:"I,pk"`
+				Hash tezos.OpHash `pack:"H"`
 			}
 			op := &XOp{}
 			err = pack.NewQuery(ctx.RequestID+".ballot_op_lookup").

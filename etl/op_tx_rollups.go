@@ -1,4 +1,4 @@
-// Copyright (c) 2023 Blockwatch Data Inc.
+// Copyright (c) 2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -229,8 +229,8 @@ func (b *Builder) AppendTxRollupTransactionOp(ctx context.Context, oh *rpc.Opera
 
 	if op.IsSuccess {
 		flows := b.NewRollupTransactionFlows(
-			src, dst, offender, src, // involved accounts (src is receiver of bond unlock)
-			sbkr, obkr, // related bakers (optional)
+			src, dst, offender, src, src, // involved accounts (src is receiver of bond unlock and accuser)
+			sbkr, obkr, sbkr, // related bakers (optional)
 			tx.Fees(),      // fees
 			res.Balances(), // move
 			b.block,
@@ -247,10 +247,10 @@ func (b *Builder) AppendTxRollupTransactionOp(ctx context.Context, oh *rpc.Opera
 				// bond unfreeze
 				op.Volume = f.AmountOut
 			default:
-				if f.Operation == model.FlowTypeRollupReward {
+				if f.Type == model.FlowTypeRollupReward {
 					// winner reward
 					op.Reward += f.AmountIn
-				} else if f.Category == model.FlowCategoryBond {
+				} else if f.Kind == model.FlowKindBond {
 					// bond freeze
 					op.Deposit = f.AmountIn
 				}
@@ -259,8 +259,8 @@ func (b *Builder) AppendTxRollupTransactionOp(ctx context.Context, oh *rpc.Opera
 	} else {
 		// fees only
 		_ = b.NewRollupTransactionFlows(
-			src, nil, nil, nil, // just source
-			sbkr, nil, // just source baker
+			src, nil, nil, nil, nil, // just source
+			sbkr, nil, nil, // just source baker
 			tx.Fees(),
 			nil, // no result balance updates
 			b.block,

@@ -1,11 +1,13 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"sort"
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/packdb/vec"
@@ -13,6 +15,7 @@ import (
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/cache"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/task"
 	"blockwatch.cc/tzindex/rpc"
 )
 
@@ -63,6 +66,10 @@ func (b *Builder) Params(height int64) *rpc.Params {
 
 func (b *Builder) IsLightMode() bool {
 	return b.idx.lightMode
+}
+
+func (b *Builder) Sched() *task.Scheduler {
+	return b.idx.Sched()
 }
 
 func (b *Builder) ClearCache() {
@@ -168,6 +175,20 @@ func (b *Builder) AccountById(id model.AccountID) (*model.Account, bool) {
 	return acc, ok
 }
 
+func (b *Builder) LoadAccountByAccountId(ctx context.Context, id model.AccountID) (*model.Account, error) {
+	acc, ok := b.AccountById(id)
+	if ok {
+		return acc, nil
+	}
+	acc, err := b.idx.LookupAccountById(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	b.accMap[id] = acc
+	b.accHashMap[b.accCache.AddressHashKey(acc.Address)] = acc
+	return acc, nil
+}
+
 func (b *Builder) BakerByAddress(addr tezos.Address) (*model.Baker, bool) {
 	key := b.accCache.AddressHashKey(addr)
 	bkr, ok := b.bakerHashMap[key]
@@ -192,6 +213,7 @@ func (b *Builder) LoadContractByAccountId(ctx context.Context, id model.AccountI
 		return con, nil
 	}
 	if con, ok := b.conCache.Get(id); ok {
+		b.conMap[id] = con
 		return con, nil
 	}
 	con, err := b.idx.LookupContractId(ctx, id)
@@ -201,6 +223,23 @@ func (b *Builder) LoadContractByAccountId(ctx context.Context, id model.AccountI
 	b.conMap[id] = con
 	b.conCache.Add(con)
 	return con, nil
+}
+
+func (b *Builder) LoadAccountByAddress(ctx context.Context, addr tezos.Address) (*model.Account, error) {
+	acc, ok := b.AccountByAddress(addr)
+	if ok {
+		return acc, nil
+	}
+	_, acc, ok = b.accCache.GetAddress(addr)
+	if ok {
+		return acc, nil
+	}
+	acc, err := b.idx.LookupAccount(ctx, addr)
+	if err != nil {
+		return nil, err
+	}
+	b.accCache.Add(acc)
+	return acc, nil
 }
 
 func (b *Builder) Accounts() map[model.AccountID]*model.Account {
@@ -232,31 +271,30 @@ func (b *Builder) Init(ctx context.Context, tip *model.ChainTip, c *rpc.Client) 
 	var err error
 	b.parent, err = b.idx.BlockByHeight(ctx, tip.BestHeight)
 	if err != nil {
-		return err
+		return fmt.Errorf("parent: %v", err)
 	}
 	if err := b.parent.FetchRPC(ctx, c); err != nil {
-		return err
+		return fmt.Errorf("fetch: %v", err)
 	}
 	b.parent.Chain, err = b.idx.ChainByHeight(ctx, tip.BestHeight)
 	if err != nil {
-		return err
+		return fmt.Errorf("chain: %v", err)
 	}
 	b.parent.Supply, err = b.idx.SupplyByHeight(ctx, tip.BestHeight)
 	if err != nil {
-		return err
+		return fmt.Errorf("supply: %v", err)
 	}
 
 	// edge-case: when the crawler stops at the last block of a protocol
 	// deployment the protocol version in the header has already switched
 	// to the next protocol
 	version := b.parent.Version
-	p := b.idx.ParamsByHeight(tip.BestHeight)
-	if tip.BestHeight == p.EndHeight && version > 0 {
+	if b.parent.TZ.Block.IsProtocolUpgrade() && version > 0 {
 		version--
 	}
 	b.parent.Params, err = b.idx.ParamsByDeployment(version)
 	if err != nil {
-		return err
+		return fmt.Errorf("params: %v", err)
 	}
 
 	// to make our crawler happy, we also expose the last block
@@ -264,13 +302,13 @@ func (b *Builder) Init(ctx context.Context, tip *model.ChainTip, c *rpc.Client) 
 	b.block = b.parent
 	b.block.Parent, err = b.idx.BlockByID(ctx, b.block.ParentId)
 	if err != nil {
-		return err
+		return fmt.Errorf("grandparent: %v", err)
 	}
 
 	// load all registered bakers, bakers are always kept in builder
 	// but not in account cache
 	if bkrs, err := b.idx.ListBakers(ctx, false); err != nil {
-		return err
+		return fmt.Errorf("bakers: %v", err)
 	} else {
 		for _, bkr := range bkrs {
 			b.bakerMap[bkr.AccountId] = bkr
@@ -628,12 +666,19 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 	}
 
 	// collect new addrs and bulk insert to generate ids
-	// Note: due to random map walk in Go, address id allocation is non-deterministic,
-	//       since address deletion on reorgs is also non-deterministic, we don't give
-	//       any guarantee about row_ids. In fact, they may even differ between
-	//       multiple instances of the indexer who saw different reorgs.
-	//       Keep this in mind for downstream use of ids and databases!
-	newacc := make([]pack.Item, 0)
+	//
+	// Note:
+	//  to make address id allocation deterministic, we sort new addresses
+	//  before insert; however, determinism may be broken on reorgs when
+	//  accounts are deleted or other instances / later indexing runs do not
+	//  see the same reorg block order;
+	//
+	//  Keep this in mind for downstream use of ids and databases!
+	//
+	//  A practical countermeasure would be to always only index in
+	//  the reorg-safe zone, 1 or 2 blocks behind head
+	//
+	newacc := make([]*model.Account, 0)
 	for _, v := range b.accHashMap {
 		if v.IsNew {
 			if v.RowId > 0 {
@@ -647,13 +692,19 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 
 	// bulk insert to generate ids
 	if len(newacc) > 0 {
-		err := table.Insert(ctx, newacc)
+		sort.Slice(newacc, func(i, j int) bool {
+			return bytes.Compare(newacc[i].Address[:], newacc[j].Address[:]) < 0
+		})
+		ins := make([]pack.Item, len(newacc))
+		for i, v := range newacc {
+			ins[i] = v
+		}
+		err := table.Insert(ctx, ins)
 		if err != nil {
 			return err
 		}
 		// and add new addresses under their new ids into the id map
-		for _, v := range newacc {
-			acc := v.(*model.Account)
+		for _, acc := range newacc {
 			b.accMap[acc.RowId] = acc
 			// log.Infof("Create A_%d for addr %s", acc.RowId, acc)
 		}
@@ -747,14 +798,14 @@ func (b *Builder) Decorate(ctx context.Context, rollback bool) error {
 	}
 
 	// identify absent rights holders
-	if err := b.LoadAbsentRightsHolders(ctx); err != nil {
+	if err := b.LoadOfflineRightsHolders(ctx); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (b *Builder) LoadAbsentRightsHolders(ctx context.Context) error {
+func (b *Builder) LoadOfflineRightsHolders(ctx context.Context) error {
 	if b.IsLightMode() || b.block.Height == 0 {
 		return nil
 	}
@@ -816,9 +867,9 @@ func (b *Builder) LoadAbsentRightsHolders(ctx context.Context) error {
 	}
 	// produce absentee list in block
 	if l := len(b.absentEndorsers); l > 0 {
-		b.block.AbsentEndorsers = make([]model.AccountID, 0, l)
+		b.block.OfflineEndorsers = make([]model.AccountID, 0, l)
 		for n := range b.absentEndorsers {
-			b.block.AbsentEndorsers = append(b.block.AbsentEndorsers, n)
+			b.block.OfflineEndorsers = append(b.block.OfflineEndorsers, n)
 		}
 	}
 
@@ -827,7 +878,7 @@ func (b *Builder) LoadAbsentRightsHolders(ctx context.Context) error {
 		ofs := b.block.TZ.GetCyclePosition()
 		for n, bits := range b.bakeRights {
 			if bits.IsSet(int(ofs)) {
-				b.block.AbsentBaker = n
+				b.block.OfflineBaker = n
 				break
 			}
 		}
@@ -899,6 +950,13 @@ func (b *Builder) OnUpgrade(ctx context.Context, rollback bool) error {
 	} else if b.block.TZ.IsCycleStart() {
 		// update params at start of cycle (to capture early ramp up data)
 		b.idx.reg.Register(b.block.Params)
+
+		// check for activation votes
+		if b.block.TZ.Block.IsAiActivationUpgrade() {
+			if err := b.MigrateAdaptiveIssuance(ctx, b.block.Params); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -984,14 +1042,14 @@ func (b *Builder) UpdateStats(ctx context.Context) error {
 	}
 
 	// absentees
-	if b.block.AbsentBaker > 0 {
-		bkr, ok := b.BakerById(b.block.AbsentBaker)
+	if b.block.OfflineBaker > 0 {
+		bkr, ok := b.BakerById(b.block.OfflineBaker)
 		if ok {
 			bkr.BlocksNotBaked++
 			bkr.IsDirty = true
 		}
 	}
-	for _, v := range b.block.AbsentEndorsers {
+	for _, v := range b.block.OfflineEndorsers {
 		bkr, ok := b.BakerById(v)
 		if ok {
 			bkr.BlocksNotEndorsed++
@@ -1011,10 +1069,9 @@ func (b *Builder) UpdateStats(ctx context.Context) error {
 		bkr.Account.PrevBalance = bkr.Account.Balance()
 	}
 
-	// apply pure in-flows
+	// apply all stake flows (must be applied in order)
 	for _, f := range b.block.Flows {
-		// skip any out flow
-		if f.AmountOut > 0 {
+		if f.Kind != model.FlowKindStake {
 			continue
 		}
 		// try baker update first (will recursively update related account balance)
@@ -1029,7 +1086,32 @@ func (b *Builder) UpdateStats(ctx context.Context) error {
 		acc, ok := b.AccountById(f.AccountId)
 		if !ok {
 			return fmt.Errorf("flow update [%s:%s]: missing account id %d",
-				f.Category, f.Operation, f.AccountId)
+				f.Kind, f.Type, f.AccountId)
+		}
+		if err := acc.UpdateBalance(f); err != nil {
+			return err
+		}
+	}
+
+	// apply pure in-flows
+	for _, f := range b.block.Flows {
+		// skip out flows and stake flows
+		if f.AmountOut > 0 || f.Kind == model.FlowKindStake {
+			continue
+		}
+		// try baker update first (will recursively update related account balance)
+		bkr, ok := b.BakerById(f.AccountId)
+		if ok {
+			if err := bkr.UpdateBalance(f); err != nil {
+				return err
+			}
+			continue
+		}
+		// otherwise try simple account update
+		acc, ok := b.AccountById(f.AccountId)
+		if !ok {
+			return fmt.Errorf("flow update [%s:%s]: missing account id %d",
+				f.Kind, f.Type, f.AccountId)
 		}
 		if err := acc.UpdateBalance(f); err != nil {
 			return err
@@ -1038,8 +1120,8 @@ func (b *Builder) UpdateStats(ctx context.Context) error {
 
 	// apply out-flows and in/out-flows
 	for _, f := range b.block.Flows {
-		// skip any pure in flow
-		if f.AmountOut == 0 {
+		// skip pure in flows and stake flows
+		if f.AmountOut == 0 || f.Kind == model.FlowKindStake {
 			continue
 		}
 		// try baker update first (will recursively update related account balance)
@@ -1054,7 +1136,7 @@ func (b *Builder) UpdateStats(ctx context.Context) error {
 		acc, ok := b.AccountById(f.AccountId)
 		if !ok {
 			return fmt.Errorf("flow update [%s:%s]: missing account id %d",
-				f.Category, f.Operation, f.AccountId)
+				f.Kind, f.Type, f.AccountId)
 		}
 		if err := acc.UpdateBalance(f); err != nil {
 			return err
@@ -1076,14 +1158,14 @@ func (b *Builder) RollbackStats(ctx context.Context) error {
 	}
 
 	// absentees
-	if b.block.AbsentBaker > 0 {
-		bkr, ok := b.BakerById(b.block.AbsentBaker)
+	if b.block.OfflineBaker > 0 {
+		bkr, ok := b.BakerById(b.block.OfflineBaker)
 		if ok {
 			bkr.BlocksNotBaked--
 			bkr.IsDirty = true
 		}
 	}
-	for _, v := range b.block.AbsentEndorsers {
+	for _, v := range b.block.OfflineEndorsers {
 		bkr, ok := b.BakerById(v)
 		if ok {
 			bkr.BlocksNotEndorsed--
@@ -1121,7 +1203,7 @@ func (b *Builder) RollbackStats(ctx context.Context) error {
 		acc, ok := b.AccountById(f.AccountId)
 		if !ok {
 			return fmt.Errorf("flow rollback [%s:%s]: missing account id %d",
-				f.Category, f.Operation, f.AccountId)
+				f.Kind, f.Type, f.AccountId)
 		}
 		if err := acc.RollbackBalance(f); err != nil {
 			return err
@@ -1146,7 +1228,32 @@ func (b *Builder) RollbackStats(ctx context.Context) error {
 		acc, ok := b.AccountById(f.AccountId)
 		if !ok {
 			return fmt.Errorf("flow rollback [%s:%s]: missing account id %d",
-				f.Category, f.Operation, f.AccountId)
+				f.Kind, f.Type, f.AccountId)
+		}
+		if err := acc.RollbackBalance(f); err != nil {
+			return err
+		}
+	}
+
+	// reverse apply all stake flows (must be applied in reverse order)
+	for i := len(b.block.Flows) - 1; i >= 0; i-- {
+		f := b.block.Flows[i]
+		if f.Kind != model.FlowKindStake {
+			continue
+		}
+		// try baker update first (will recursively update related account balance)
+		bkr, ok := b.BakerById(f.AccountId)
+		if ok {
+			if err := bkr.RollbackBalance(f); err != nil {
+				return err
+			}
+			continue
+		}
+		// otherwise try simple account update
+		acc, ok := b.AccountById(f.AccountId)
+		if !ok {
+			return fmt.Errorf("flow update [%s:%s]: missing account id %d",
+				f.Kind, f.Type, f.AccountId)
 		}
 		if err := acc.RollbackBalance(f); err != nil {
 			return err

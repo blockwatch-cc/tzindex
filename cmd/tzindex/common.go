@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package main
@@ -14,6 +14,10 @@ import (
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
 	"github.com/echa/config"
+
+	// metadata decoders
+	_ "blockwatch.cc/tzindex/etl/metadata/decoder/domain"
+	_ "blockwatch.cc/tzindex/etl/metadata/decoder/profile"
 )
 
 func newHTTPClient() (*http.Client, error) {
@@ -54,6 +58,8 @@ func newHTTPClient() (*http.Client, error) {
 			ExpectContinueTimeout: config.GetDuration("rpc.continue_timeout"),
 			MaxIdleConns:          config.GetInt("rpc.idle_conns"),
 			MaxIdleConnsPerHost:   config.GetInt("rpc.idle_conns"),
+			DisableCompression:    false,
+			ForceAttemptHTTP2:     true,
 		},
 	}
 	return &client, nil
@@ -80,6 +86,7 @@ func newRPCClient() (*rpc.Client, error) {
 		return nil, fmt.Errorf("rpc client: %w", err)
 	}
 	rpcclient.
+		WithApiKey(config.GetString("rpc.api_key")).
 		WithUserAgent(UserAgent()).
 		WithRetry(
 			config.GetInt("rpc.retries"),
@@ -89,44 +96,36 @@ func newRPCClient() (*rpc.Client, error) {
 	return rpcclient, nil
 }
 
-func enabledIndexes() []model.BlockIndexer {
-	if lightIndex {
-		return []model.BlockIndexer{
-			index.NewAccountIndex(),
-			index.NewBalanceIndex(),
-			index.NewContractIndex(),
-			index.NewStorageIndex(),
-			index.NewConstantIndex(),
-			index.NewBlockIndex(),
-			index.NewOpIndex(),
-			index.NewEventIndex(),
-			index.NewFlowIndex(),
-			index.NewChainIndex(),
-			index.NewSupplyIndex(),
-			index.NewBigmapIndex(),
-			index.NewMetadataIndex(),
-			index.NewTicketIndex(),
-		}
-	} else {
-		return []model.BlockIndexer{
-			index.NewAccountIndex(),
-			index.NewBalanceIndex(),
-			index.NewContractIndex(),
-			index.NewStorageIndex(),
-			index.NewConstantIndex(),
-			index.NewBlockIndex(),
-			index.NewOpIndex(),
-			index.NewEventIndex(),
-			index.NewFlowIndex(),
-			index.NewChainIndex(),
-			index.NewSupplyIndex(),
+func enabledIndexes() (list []model.BlockIndexer) {
+	list = append(list,
+		index.NewAccountIndex(),
+		index.NewBalanceIndex(),
+		index.NewContractIndex(),
+		index.NewStorageIndex(),
+		index.NewConstantIndex(),
+		index.NewBlockIndex(),
+		index.NewCycleIndex(),
+		index.NewOpIndex(),
+		index.NewEventIndex(),
+		index.NewFlowIndex(),
+		index.NewChainIndex(),
+		index.NewSupplyIndex(),
+		index.NewBigmapIndex(),
+		index.NewTicketIndex(),
+	)
+	if !lightIndex {
+		list = append(list,
 			index.NewRightsIndex(),
 			index.NewSnapshotIndex(),
 			index.NewIncomeIndex(),
 			index.NewGovIndex(),
-			index.NewBigmapIndex(),
-			index.NewMetadataIndex(),
-			index.NewTicketIndex(),
-		}
+		)
 	}
+	if experimental {
+		list = append(list,
+			index.NewMetadataIndex(),
+			index.NewTokenIndex(),
+		)
+	}
+	return
 }

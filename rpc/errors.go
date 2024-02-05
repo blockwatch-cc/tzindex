@@ -1,10 +1,9 @@
-// Copyright (c) 2020-2023 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -37,24 +36,37 @@ type Error interface {
 	ErrorKind() string
 }
 
-// GenericError is a basic error type
-type GenericError struct {
+// NodeError is a basic error type
+type NodeError struct {
 	ID   string `json:"id"`
 	Kind string `json:"kind"`
 }
 
-func (e *GenericError) Error() string {
+func (e *NodeError) Error() string {
 	return fmt.Sprintf("tezos: kind = %q, id = %q", e.Kind, e.ID)
 }
 
 // ErrorID returns Tezos error id
-func (e *GenericError) ErrorID() string {
+func (e *NodeError) ErrorID() string {
 	return e.ID
 }
 
 // ErrorKind returns Tezos error kind
-func (e *GenericError) ErrorKind() string {
+func (e *NodeError) ErrorKind() string {
 	return e.Kind
+}
+
+type NodeErrors []NodeError
+
+func (n NodeErrors) Interface() []Error {
+	if n == nil {
+		return nil
+	}
+	e := make([]Error, len(n))
+	for i := range n {
+		e[i] = &n[i]
+	}
+	return e
 }
 
 // HTTPStatus interface represents an unprocessed HTTP reply
@@ -80,23 +92,6 @@ type RPCError interface {
 
 // Errors is a slice of Error with custom JSON unmarshaller
 type Errors []Error
-
-// UnmarshalJSON implements json.Unmarshaler
-func (e *Errors) UnmarshalJSON(data []byte) error {
-	var errs []*GenericError
-
-	if err := json.Unmarshal(data, &errs); err != nil {
-		return err
-	}
-
-	*e = make(Errors, len(errs))
-	for i, g := range errs {
-		// TODO: handle different kinds
-		(*e)[i] = g
-	}
-
-	return nil
-}
 
 func (e Errors) Error() string {
 	if len(e) == 0 {
@@ -169,17 +164,8 @@ func (e *rpcError) Errors() []Error {
 	return e.errors
 }
 
-type plainError struct {
-	*httpError
-	msg string
-}
-
-func (e *plainError) Error() string {
-	return e.msg
-}
-
 var (
-	_ Error    = &GenericError{}
+	_ Error    = &NodeError{}
 	_ Error    = Errors{}
 	_ RPCError = &rpcError{}
 )

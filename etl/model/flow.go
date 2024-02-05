@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package model
@@ -46,29 +46,26 @@ var (
 // flows for each freezer category, one out-flow and a second in-flow to the balance category.
 
 type Flow struct {
-	RowId          uint64       `pack:"I,pk,snappy"    json:"row_id"`
-	Height         int64        `pack:"h,snappy"       json:"height"`
-	Cycle          int64        `pack:"c,snappy"       json:"cycle"`
-	Timestamp      time.Time    `pack:"T,snappy"       json:"time"`
-	OpN            int          `pack:"1,snappy"       json:"op_n"`
-	OpC            int          `pack:"2,snappy"       json:"op_c"`
-	OpI            int          `pack:"3,snappy"       json:"op_i"`
-	AccountId      AccountID    `pack:"A,snappy,bloom" json:"account_id"`
-	CounterPartyId AccountID    `pack:"R,snappy"       json:"counterparty_id"` // account that initiated the flow
-	Category       FlowCategory `pack:"C,snappy,bloom" json:"category"`        // sub-account that received the update
-	Operation      FlowType     `pack:"O,snappy,bloom" json:"operation"`       // op type that caused this update
-	AmountIn       int64        `pack:"i,snappy"       json:"amount_in"`       // sum flowing in to the account
-	AmountOut      int64        `pack:"o,snappy"       json:"amount_out"`      // sum flowing out of the account
-	IsFee          bool         `pack:"e,snappy"       json:"is_fee"`          // flag: out-flow paid a fee
-	IsBurned       bool         `pack:"b,snappy"       json:"is_burned"`       // flag: out-flow was burned
-	IsFrozen       bool         `pack:"f,snappy"       json:"is_frozen"`       // flag: in-flow is frozen
-	IsUnfrozen     bool         `pack:"u,snappy"       json:"is_unfrozen"`     // flag: out-flow was unfrozen (rewards -> balance)
-	IsShielded     bool         `pack:"y,snappy"       json:"is_shielded"`     // flag: in-flow was shielded (Sapling)
-	IsUnshielded   bool         `pack:"Y,snappy"       json:"is_unshielded"`   // flag: out-flow was unshielded (Sapling)
-	TokenAge       int64        `pack:"a,snappy"       json:"token_age"`       // time since last transfer in seconds
-
-	TokenGenMin int64 `pack:"-"  json:"-"`
-	TokenGenMax int64 `pack:"-"  json:"-"`
+	RowId          uint64    `pack:"I,pk"               json:"row_id"`
+	Height         int64     `pack:"h,i32,snappy"       json:"height"`
+	Cycle          int64     `pack:"c,i16,snappy"       json:"cycle"`
+	Timestamp      time.Time `pack:"T,snappy"           json:"time"`
+	OpN            int       `pack:"1,i16,snappy"       json:"op_n"`
+	OpC            int       `pack:"2,i16,snappy"       json:"op_c"`
+	OpI            int       `pack:"3,i16,snappy"       json:"op_i"`
+	AccountId      AccountID `pack:"A,u32,snappy,bloom" json:"account_id"`
+	CounterPartyId AccountID `pack:"R,u32,snappy"       json:"counterparty_id"` // account that initiated the flow
+	Kind           FlowKind  `pack:"C,u8,snappy,bloom"  json:"kind"`            // sub-account that received the update
+	Type           FlowType  `pack:"O,u8,snappy,bloom"  json:"type"`            // op type that caused this update
+	AmountIn       int64     `pack:"i,snappy"           json:"amount_in"`       // sum flowing in to the account
+	AmountOut      int64     `pack:"o,snappy"           json:"amount_out"`      // sum flowing out of the account
+	IsFee          bool      `pack:"e,snappy"           json:"is_fee"`          // flag: out-flow paid a fee
+	IsBurned       bool      `pack:"b,snappy"           json:"is_burned"`       // flag: out-flow was burned
+	IsFrozen       bool      `pack:"f,snappy"           json:"is_frozen"`       // flag: in-flow is frozen
+	IsUnfrozen     bool      `pack:"u,snappy"           json:"is_unfrozen"`     // flag: out-flow was unfrozen (rewards -> balance)
+	IsShielded     bool      `pack:"y,snappy"           json:"is_shielded"`     // flag: in-flow was shielded (Sapling)
+	IsUnshielded   bool      `pack:"Y,snappy"           json:"is_unshielded"`   // flag: out-flow was unshielded (Sapling)
+	TokenAge       int64     `pack:"a,i32,snappy"       json:"token_age"`       // time since last transfer in seconds
 }
 
 // Ensure Flow implements the pack.Item interface.

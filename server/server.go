@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -139,6 +140,13 @@ func wrapper(f ApiCall) func(http.ResponseWriter, *http.Request) {
 
 		// use configured request timeout as default
 		timeout := srv.cfg.Http.WriteTimeout
+
+		// try reading upstream request timeout hint
+		if th := r.Header.Get(srv.cfg.Http.TimeoutHeader); th != "" {
+			if d, err := strconv.ParseInt(th, 10, 64); err == nil {
+				timeout = time.Duration(d) * time.Millisecond
+			}
+		}
 
 		// skip timeout on internal routes /debug and /system
 		if strings.HasPrefix(r.URL.Path, "/") {

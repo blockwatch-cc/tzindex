@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package model
@@ -11,7 +11,6 @@ import (
 	"sync"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
 )
 
@@ -54,47 +53,54 @@ type AccountRank struct {
 // For history look at Op and Flow (balance updates) for baker info look at Baker,
 // for smart contract info at Contract.
 type Account struct {
-	RowId            AccountID         `pack:"I,pk" json:"row_id"`
-	Address          tezos.Address     `pack:"H"    json:"address"`
-	Type             tezos.AddressType `pack:"t"    json:"address_type"`
-	Pubkey           tezos.Key         `pack:"k"    json:"pubkey"`
-	Counter          int64             `pack:"j"    json:"counter"`
-	BakerId          AccountID         `pack:"D"    json:"baker_id"`
-	CreatorId        AccountID         `pack:"C"    json:"creator_id"`
-	FirstIn          int64             `pack:"i"    json:"first_in"`
-	FirstOut         int64             `pack:"o"    json:"first_out"`
-	LastIn           int64             `pack:"J"    json:"last_in"`
-	LastOut          int64             `pack:"O"    json:"last_out"`
-	FirstSeen        int64             `pack:"0"    json:"first_seen"`
-	LastSeen         int64             `pack:"l"    json:"last_seen"`
-	DelegatedSince   int64             `pack:"+"    json:"delegated_since"`
-	TotalReceived    int64             `pack:"R"    json:"total_received"`
-	TotalSent        int64             `pack:"S"    json:"total_sent"`
-	TotalBurned      int64             `pack:"B"    json:"total_burned"`
-	TotalFeesPaid    int64             `pack:"F"    json:"total_fees_paid"`
-	TotalFeesUsed    int64             `pack:"u"    json:"total_fees_used"`
-	UnclaimedBalance int64             `pack:"U"    json:"unclaimed_balance"`
-	SpendableBalance int64             `pack:"s"    json:"spendable_balance"`
-	FrozenBond       int64             `pack:"L"    json:"frozen_bond"`
-	LostBond         int64             `pack:"X"    json:"lost_bond"`
-	IsFunded         bool              `pack:"f"    json:"is_funded"`
-	IsActivated      bool              `pack:"A"    json:"is_activated"`
-	IsDelegated      bool              `pack:"="    json:"is_delegated"`
-	IsRevealed       bool              `pack:"r"    json:"is_revealed"`
-	IsBaker          bool              `pack:"d"    json:"is_baker"`
-	IsContract       bool              `pack:"c"    json:"is_contract"`
-	NTxSuccess       int               `pack:"1"    json:"n_tx_successs"`
-	NTxFailed        int               `pack:"2"    json:"n_tx_failed"`
-	NTxIn            int               `pack:"3"    json:"n_tx_in"`
-	NTxOut           int               `pack:"4"    json:"n_tx_out"`
+	RowId            AccountID         `pack:"I,pk"      json:"row_id"`
+	Address          tezos.Address     `pack:"H,bloom=3" json:"address"`
+	Type             tezos.AddressType `pack:"t,u8"      json:"address_type"`
+	Pubkey           tezos.Key         `pack:"k"         json:"pubkey"`
+	Counter          int64             `pack:"j,i32"     json:"counter"`
+	BakerId          AccountID         `pack:"D"         json:"baker_id"`
+	CreatorId        AccountID         `pack:"C"         json:"creator_id"`
+	FirstIn          int64             `pack:"i,i32"     json:"first_in"`
+	FirstOut         int64             `pack:"o,i32"     json:"first_out"`
+	LastIn           int64             `pack:"J,i32"     json:"last_in"`
+	LastOut          int64             `pack:"O,i32"     json:"last_out"`
+	FirstSeen        int64             `pack:"0,i32"     json:"first_seen"`
+	LastSeen         int64             `pack:"l,i32"     json:"last_seen"`
+	DelegatedSince   int64             `pack:"+,i32"     json:"delegated_since"`
+	TotalReceived    int64             `pack:"R"         json:"total_received"`
+	TotalSent        int64             `pack:"S"         json:"total_sent"`
+	TotalBurned      int64             `pack:"B"         json:"total_burned"`
+	TotalFeesPaid    int64             `pack:"F"         json:"total_fees_paid"`
+	TotalFeesUsed    int64             `pack:"u"         json:"total_fees_used"`
+	UnclaimedBalance int64             `pack:"U"         json:"unclaimed_balance"`
+	SpendableBalance int64             `pack:"s"         json:"spendable_balance"`
+	FrozenRollupBond int64             `pack:"L"         json:"frozen_rollup_bond"` // rollup
+	LostRollupBond   int64             `pack:"X"         json:"lost_rollup_bond"`   // rollup
+	StakedBalance    int64             `pack:"Y"         json:"staked_balance"`     // stake
+	UnstakedBalance  int64             `pack:"Z"         json:"unstaked_balance"`   // stake
+	LostStake        int64             `pack:"V"         json:"lost_stake"`         // stake
+	StakeShares      int64             `pack:"W"         json:"stake_shares"`       // stake
+	IsFunded         bool              `pack:"f,snappy"  json:"is_funded"`
+	IsActivated      bool              `pack:"A,snappy"  json:"is_activated"`
+	IsDelegated      bool              `pack:"=,snappy"  json:"is_delegated"`
+	IsStaked         bool              `pack:"?,snappy"  json:"is_staked"`
+	IsRevealed       bool              `pack:"r,snappy"  json:"is_revealed"`
+	IsBaker          bool              `pack:"d,snappy"  json:"is_baker"`
+	IsContract       bool              `pack:"c,snappy"  json:"is_contract"`
+	NTxSuccess       int               `pack:"1,i32"     json:"n_tx_success"`
+	NTxFailed        int               `pack:"2,i32"     json:"n_tx_failed"`
+	NTxIn            int               `pack:"3,i32"     json:"n_tx_in"`
+	NTxOut           int               `pack:"4,i32"     json:"n_tx_out"`
 
 	// used during block processing, not stored in DB
-	IsNew       bool  `pack:"-" json:"-"` // first seen this block
-	WasFunded   bool  `pack:"-" json:"-"` // true if account was funded before processing this block
-	WasDust     bool  `pack:"-" json:"-"` // true if account had 0 < balance < 1tez at start of block
-	IsDirty     bool  `pack:"-" json:"-"` // indicates an update happened
-	MustDelete  bool  `pack:"-" json:"-"` // indicates the account should be deleted (during rollback)
-	PrevBalance int64 `pack:"-" json:"-"` // previous balance before update
+	IsNew       bool   `pack:"-" json:"-"` // first seen this block
+	WasFunded   bool   `pack:"-" json:"-"` // true if account was funded before processing this block
+	WasDust     bool   `pack:"-" json:"-"` // true if account had 0 < balance < 1tez at start of block
+	IsDirty     bool   `pack:"-" json:"-"` // indicates an update happened
+	MustDelete  bool   `pack:"-" json:"-"` // indicates the account should be deleted (during rollback)
+	PrevBalance int64  `pack:"-" json:"-"` // previous balance before update
+	Baker       *Baker `pack:"-" json:"-"` // used for stake updates
+	AuxBaker    *Baker `pack:"-" json:"-"` // used for unstake during delegation
 }
 
 // Ensure Account implements the pack.Item interface.
@@ -103,7 +109,7 @@ var _ pack.Item = (*Account)(nil)
 func NewAccount(addr tezos.Address) *Account {
 	acc := AllocAccount()
 	acc.Type = addr.Type()
-	acc.Address = addr.Clone()
+	acc.Address = addr
 	acc.IsNew = true
 	acc.IsDirty = true
 	return acc
@@ -144,12 +150,7 @@ func (m Account) TableOpts() pack.Options {
 }
 
 func (m Account) IndexOpts(key string) pack.Options {
-	return pack.Options{
-		PackSizeLog2:    14,
-		JournalSizeLog2: 17,
-		CacheSize:       64,
-		FillLevel:       90,
-	}
+	return pack.NoOptions
 }
 
 func (a Account) String() string {
@@ -162,7 +163,7 @@ func (a Account) IsDust() bool {
 }
 
 func (a Account) Balance() int64 {
-	return a.SpendableBalance + a.FrozenBond
+	return a.SpendableBalance + a.FrozenRollupBond + a.UnstakedBalance
 }
 
 func (a *Account) Reset() {
@@ -181,13 +182,13 @@ func (a *Account) UpdateBalanceN(flows []*Flow) error {
 func (a *Account) UpdateBalance(f *Flow) error {
 	a.IsDirty = true
 
-	switch f.Category {
-	case FlowCategoryBalance:
+	switch f.Kind {
+	case FlowKindBalance:
 		if a.SpendableBalance < f.AmountOut-f.AmountIn {
 			return fmt.Errorf("acc.update id %d %s balance %d is smaller than "+
 				"outgoing amount %d", a.RowId, a, a.SpendableBalance, f.AmountOut-f.AmountIn)
 		}
-		switch f.Operation {
+		switch f.Type {
 		case FlowTypeAirdrop, FlowTypeInvoice, FlowTypeSubsidy:
 			a.TotalReceived += f.AmountIn
 
@@ -220,20 +221,134 @@ func (a *Account) UpdateBalance(f *Flow) error {
 		// for all types adjust spendable balance
 		a.SpendableBalance += f.AmountIn - f.AmountOut
 
-	case FlowCategoryBond:
-		if a.FrozenBond < f.AmountOut-f.AmountIn {
+	case FlowKindBond:
+		if a.FrozenRollupBond < f.AmountOut-f.AmountIn {
 			return fmt.Errorf("acc.update id %d %s frozen bond %d is smaller than "+
-				"outgoing amount %d", a.RowId, a, a.FrozenBond, f.AmountOut-f.AmountIn)
+				"outgoing amount %d", a.RowId, a, a.FrozenRollupBond, f.AmountOut-f.AmountIn)
 		}
-		a.FrozenBond += f.AmountIn - f.AmountOut
+		a.FrozenRollupBond += f.AmountIn - f.AmountOut
 		if f.IsBurned {
 			a.TotalBurned += f.AmountOut
-			a.LostBond += f.AmountOut
+			a.LostRollupBond += f.AmountOut
+		}
+
+	case FlowKindStake:
+		switch f.Type {
+		case FlowTypeStake:
+			// log.Infof("Stake: %s %d", a, f.AmountIn)
+			// log.Infof(">> before total_stake=%d total_shares=%d my_stake=%d my_shares=%d",
+			// 	a.Baker.TotalStake, a.Baker.TotalShares, a.StakedBalance, a.StakeShares)
+
+			// Note: minted shares may be zero due to rounding
+			sh := a.Baker.MintStake(f.AmountIn)
+			if sh < 0 {
+				// log.Warnf("ACC %#v", a)
+				// log.Warnf("BKR %#v", a.Baker)
+				return fmt.Errorf("acc.update id %d %s neg stake %d shares for amount %d",
+					a.RowId, a, sh, f.AmountIn)
+			}
+			if a.StakeShares == 0 {
+				a.Baker.ActiveStakers++
+			}
+			a.StakedBalance += f.AmountIn
+			a.StakeShares += sh
+			a.IsStaked = a.StakeShares > 0
+			// log.Infof(">> after total_stake=%d total_shares=%d my_stake=%d my_shares=%d",
+			// 	a.Baker.TotalStake, a.Baker.TotalShares, a.StakedBalance, a.StakeShares)
+			// log.Infof(">> minted %d shares for %d stake, bkr: %s stake=%d shares=%d",
+			// 	sh, f.AmountIn, a.Baker, a.Baker.TotalStake, a.Baker.TotalShares)
+
+		case FlowTypeUnstake:
+			// log.Infof("Unstake: %s %d", a, f.AmountOut)
+			// handle only out flow
+			if f.AmountOut > 0 {
+				// Oxford: select the correct baker
+				// - an implicit unstake happens during re-delegation, but the new baker
+				// is already assigned to the account by the operation decoder; for this
+				// case to work we must check which baker is referenced by the stake flow
+				bkr := a.Baker
+				if bkr == nil || bkr.AccountId != f.CounterPartyId {
+					bkr = a.AuxBaker
+				}
+				if bkr == nil || bkr.AccountId != f.CounterPartyId {
+					return fmt.Errorf("acc.update A_%d %s invalid baker %d referenced by %s flow",
+						a.RowId, a, f.CounterPartyId, f.Type)
+				}
+
+				// log.Infof(">> before total_stake=%d total_shares=%d my_stake=%d my_shares=%d",
+				// 	bkr.TotalStake, bkr.TotalShares, a.StakedBalance, a.StakeShares)
+
+				// calculate how much of the current baker pool is owned by us?
+				ownAmount := bkr.StakeAmount(a.StakeShares)
+
+				if ownAmount < a.StakedBalance {
+					// log.Warnf("ACC %#v", a)
+					return fmt.Errorf("acc.update A_%d %s owned stake %d (%d shares) is smaller than "+
+						"frozen principal %d", a.RowId, a, ownAmount, a.StakeShares, a.StakedBalance)
+				}
+
+				pendingReward := ownAmount - a.StakedBalance
+				// log.Infof(">> own=%d reward=%d principal=%d", ownAmount, pendingReward, ownAmount-pendingReward)
+
+				// reduce stake principal or just unstake rewards?
+				a.StakedBalance -= f.AmountOut - pendingReward
+				a.UnstakedBalance += f.AmountOut
+
+				// Note: burned shares may be zero due to rounding
+				sh := bkr.BurnStake(f.AmountOut)
+				if sh < 0 {
+					// log.Warnf("ACC %#v", a)
+					// log.Warnf("BKR %#v", bkr)
+					return fmt.Errorf("acc.update A_%d %s neg stake %d shares for amount %d",
+						a.RowId, a, sh, f.AmountOut)
+				}
+				if sh > a.StakeShares {
+					// log.Warnf("ACC %#v", a)
+					// log.Warnf("BKR %#v", bkr)
+					return fmt.Errorf("acc.update A_%d %s burned shares %d > own shares %d",
+						a.RowId, a, sh, a.StakeShares)
+				}
+				a.StakeShares -= sh
+				a.IsStaked = a.StakeShares > 0
+				if a.StakeShares == 0 {
+					bkr.ActiveStakers--
+				}
+				// log.Infof(">> after total_stake=%d total_shares=%d my_stake=%d my_shares=%d",
+				// 	bkr.TotalStake, bkr.TotalShares, a.StakedBalance, a.StakeShares)
+
+				// log.Infof(">> burned %d shares, bkr: %s stake=%d shares=%d",
+				// 	sh, bkr, bkr.TotalStake, bkr.TotalShares)
+			}
+
+		case FlowTypeFinalizeUnstake:
+			// log.Infof("Finalize: %s %d", a, f.AmountOut)
+			if a.UnstakedBalance < f.AmountOut {
+				return fmt.Errorf("acc.update A_%d %s unfrozen stake %d is smaller than "+
+					"outgoing amount %d", a.RowId, a, a.UnstakedBalance, f.AmountOut)
+			}
+			a.UnstakedBalance -= f.AmountOut
+
+			// log.Infof(">> unstaked_balance=%d, bkr: %s stake=%d shares=%d",
+			// 	a.UnstakedBalance, a.Baker, a.Baker.TotalStake, a.Baker.TotalShares)
+
+		case FlowTypePenalty:
+			// slash at end of cycle
+			// log.Infof("Penalty: %s %d", a, f.AmountOut)
+			ownAmount := a.Baker.StakeAmount(a.StakeShares)
+			pendingReward := ownAmount - a.StakedBalance
+			a.StakedBalance -= f.AmountOut - pendingReward
+			a.LostStake += f.AmountOut
+
+			// log.Infof(">> staked_balance=%d, bkr: %s stake=%d shares=%d",
+			// 	a.StakedBalance, a.Baker, a.Baker.TotalStake, a.Baker.TotalShares)
+
+			// WIP
+			// howto handle slashing losses for stakers?
 		}
 	}
 
 	// update in/out events for balance updates
-	if f.Category == FlowCategoryBalance {
+	if f.Kind == FlowKindBalance {
 		if f.AmountIn > 0 {
 			a.LastIn = f.Height
 			if a.FirstIn == 0 {
@@ -250,9 +365,9 @@ func (a *Account) UpdateBalance(f *Flow) error {
 
 	// any flow contributes to `last seen`
 	a.IsFunded = a.Balance() > 0
-	a.LastSeen = util.Max64N(a.LastSeen, f.Height)
+	a.LastSeen = max(a.LastSeen, f.Height)
 
-	// reset token generation
+	// reset revealed flag
 	if !a.IsFunded && !a.IsBaker {
 		a.IsRevealed = false
 	}
@@ -274,15 +389,15 @@ func (a *Account) RollbackBalance(f *Flow) error {
 	a.IsNew = a.FirstSeen == f.Height
 	wasEmpty := a.Balance() == 0
 
-	switch f.Category {
+	switch f.Kind {
 
-	case FlowCategoryBalance:
+	case FlowKindBalance:
 		if a.SpendableBalance < f.AmountIn-f.AmountOut {
 			return fmt.Errorf("acc.update id %d %s balance %d is smaller than "+
 				"reversed incoming amount %d", a.RowId, a, a.SpendableBalance, f.AmountIn-f.AmountOut)
 		}
 
-		switch f.Operation {
+		switch f.Type {
 		case FlowTypeInvoice, FlowTypeAirdrop, FlowTypeSubsidy:
 			a.TotalReceived -= f.AmountIn
 
@@ -312,15 +427,70 @@ func (a *Account) RollbackBalance(f *Flow) error {
 		a.SpendableBalance -= f.AmountIn - f.AmountOut
 
 		// cannot update token age
-	case FlowCategoryBond:
-		if a.FrozenBond < f.AmountIn-f.AmountOut {
+	case FlowKindBond:
+		if a.FrozenRollupBond < f.AmountIn-f.AmountOut {
 			return fmt.Errorf("acc.update id %d %s frozen bond %d is smaller than "+
-				"reversed incoming  amount %d", a.RowId, a, a.FrozenBond, f.AmountIn-f.AmountOut)
+				"reversed incoming  amount %d", a.RowId, a, a.FrozenRollupBond, f.AmountIn-f.AmountOut)
 		}
-		a.FrozenBond -= f.AmountIn - f.AmountOut
+		a.FrozenRollupBond -= f.AmountIn - f.AmountOut
 		if f.IsBurned {
 			a.TotalBurned -= f.AmountOut
-			a.LostBond -= f.AmountOut
+			a.LostRollupBond -= f.AmountOut
+		}
+
+	case FlowKindStake:
+		switch f.Type {
+		case FlowTypeStake:
+			a.StakeShares -= a.Baker.BurnStake(f.AmountIn)
+			if a.StakeShares < 0 {
+				a.StakeShares = 0
+			}
+			if a.StakeShares == 0 {
+				a.Baker.ActiveStakers--
+			}
+			a.StakedBalance -= f.AmountIn
+			a.IsStaked = a.StakeShares > 0
+
+		case FlowTypeUnstake:
+			// handle only out flow
+			if f.AmountOut > 0 {
+				// Oxford: select the correct baker
+				// - an implicit unstake happens during re-delegation, but the new baker
+				// is already assigned to the account by the operation decoder; for this
+				// case to work we must check which baker is referenced by the stake flow
+				bkr := a.Baker
+				if bkr == nil || bkr.AccountId != f.CounterPartyId {
+					bkr = a.AuxBaker
+				}
+				if bkr == nil || bkr.AccountId != f.CounterPartyId {
+					return fmt.Errorf("acc.update A_%d %s invalid baker %d referenced by %s flow",
+						a.RowId, a, f.CounterPartyId, f.Type)
+				}
+
+				// Note: correct rollback impossible because previous StakedBalance
+				// (stake principal) cannot be computed backwards
+				if a.StakeShares == 0 {
+					bkr.ActiveStakers++
+				}
+
+				// reverse share burn by minting
+				a.StakeShares += bkr.MintStake(f.AmountOut)
+				a.IsStaked = a.StakeShares > 0
+				a.UnstakedBalance -= f.AmountOut
+
+				// FIXME: reverse calculate rewards/principal split
+				// add full withdrawn amount to frozen stake (this underestimates
+				// rewards and overestimates stake, but remains factually correct)
+				a.StakedBalance += f.AmountOut
+			}
+		case FlowTypeFinalizeUnstake:
+			a.UnstakedBalance += f.AmountOut
+
+		case FlowTypePenalty:
+			// revert slash at end of cycle
+			// FIXME: reverse calculate rewards/principal split
+			a.StakedBalance += f.AmountOut
+			a.LostStake -= f.AmountOut
 		}
 	}
 
@@ -332,7 +502,8 @@ func (a *Account) RollbackBalance(f *Flow) error {
 	// skip activity updates (too complex to track previous in/out heights)
 	// and rely on subsequent block updates, we still set LastSeen to the current block
 	a.IsFunded = a.Balance() > 0
-	a.LastSeen = util.Min64(f.Height, util.Max64N(a.LastIn, a.LastOut))
+	a.LastSeen = min(f.Height, max(a.LastIn, a.LastOut))
+
 	return nil
 }
 
@@ -361,11 +532,16 @@ func (a Account) MarshalBinary() ([]byte, error) {
 	_ = binary.Write(buf, le, a.TotalFeesUsed)
 	_ = binary.Write(buf, le, a.UnclaimedBalance)
 	_ = binary.Write(buf, le, a.SpendableBalance)
-	_ = binary.Write(buf, le, a.FrozenBond)
-	_ = binary.Write(buf, le, a.LostBond)
+	_ = binary.Write(buf, le, a.FrozenRollupBond)
+	_ = binary.Write(buf, le, a.LostRollupBond)
+	_ = binary.Write(buf, le, a.StakedBalance)
+	_ = binary.Write(buf, le, a.UnstakedBalance)
+	_ = binary.Write(buf, le, a.LostStake)
+	_ = binary.Write(buf, le, a.StakeShares)
 	_ = binary.Write(buf, le, a.IsFunded)
 	_ = binary.Write(buf, le, a.IsActivated)
 	_ = binary.Write(buf, le, a.IsDelegated)
+	_ = binary.Write(buf, le, a.IsStaked)
 	_ = binary.Write(buf, le, a.IsRevealed)
 	_ = binary.Write(buf, le, a.IsBaker)
 	_ = binary.Write(buf, le, a.IsContract)
@@ -402,11 +578,16 @@ func (a *Account) UnmarshalBinary(data []byte) error {
 	_ = binary.Read(buf, le, &a.TotalFeesUsed)
 	_ = binary.Read(buf, le, &a.UnclaimedBalance)
 	_ = binary.Read(buf, le, &a.SpendableBalance)
-	_ = binary.Read(buf, le, &a.FrozenBond)
-	_ = binary.Read(buf, le, &a.LostBond)
+	_ = binary.Read(buf, le, &a.FrozenRollupBond)
+	_ = binary.Read(buf, le, &a.LostRollupBond)
+	_ = binary.Read(buf, le, &a.StakedBalance)
+	_ = binary.Read(buf, le, &a.UnstakedBalance)
+	_ = binary.Read(buf, le, &a.LostStake)
+	_ = binary.Read(buf, le, &a.StakeShares)
 	_ = binary.Read(buf, le, &a.IsFunded)
 	_ = binary.Read(buf, le, &a.IsActivated)
 	_ = binary.Read(buf, le, &a.IsDelegated)
+	_ = binary.Read(buf, le, &a.IsStaked)
 	_ = binary.Read(buf, le, &a.IsRevealed)
 	_ = binary.Read(buf, le, &a.IsBaker)
 	_ = binary.Read(buf, le, &a.IsContract)

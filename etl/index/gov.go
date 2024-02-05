@@ -1,4 +1,4 @@
-// Copyright (c) 2023 Blockwatch Data Inc.
+// Copyright (c) 2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 // Note on voting_period_kind field in block headers:
@@ -20,6 +20,7 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/task"
 	"blockwatch.cc/tzindex/rpc"
 )
 
@@ -77,7 +78,7 @@ func (idx *GovIndex) Create(path, label string, opts interface{}) error {
 		if err != nil {
 			return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
 		}
-		opts := m.TableOpts().Merge(readConfigOpts(key))
+		opts := m.TableOpts().Merge(model.ReadConfigOpts(key))
 		_, err = db.CreateTableIfNotExists(key, fields, opts)
 		if err != nil {
 			return err
@@ -101,7 +102,7 @@ func (idx *GovIndex) Init(path, label string, opts interface{}) error {
 		model.Stake{},
 	} {
 		key := m.TableKey()
-		topts := m.TableOpts().Merge(readConfigOpts(key))
+		topts := m.TableOpts().Merge(model.ReadConfigOpts(key))
 		table, err := idx.db.Table(key, topts)
 		if err != nil {
 			idx.Close()
@@ -380,13 +381,16 @@ func (idx *GovIndex) openVote(ctx context.Context, block *model.Block, _ model.B
 		IsOpen:           true,
 	}
 
-	// add rolls and calculate quorum
-	// - use current (cycle resp. vote start block) for roll snapshot
+	stake, err := idx.sumStake(ctx, block.Height)
+	if err != nil {
+		return err
+	}
+
+	// add stake and calculate quorum
+	// - use current (cycle resp. vote start block) for stake snapshot
 	// - at genesis there is no parent block, we use defaults here
-	cd, supply := block.Chain, block.Supply
-	vote.EligibleRolls = cd.Rolls
-	vote.EligibleStake = supply.ActiveStake
-	vote.EligibleVoters = cd.RollOwners
+	vote.EligibleStake = stake
+	vote.EligibleVoters = block.Chain.EligibleBakers
 	switch vote.VotingPeriodKind {
 	case tezos.VotingPeriodProposal:
 		// fixed min proposal quorum as defined by protocol
@@ -404,7 +408,6 @@ func (idx *GovIndex) openVote(ctx context.Context, block *model.Block, _ model.B
 		vote.QuorumPct = quorumPct
 		vote.TurnoutEma = turnoutEma
 	}
-	vote.QuorumRolls = vote.EligibleRolls * vote.QuorumPct / 10000
 	vote.QuorumStake = vote.EligibleStake * vote.QuorumPct / 10000
 
 	// insert vote
@@ -436,7 +439,7 @@ func (idx *GovIndex) closeVote(ctx context.Context, block *model.Block, builder 
 	case tezos.VotingPeriodProposal:
 		// select the winning proposal if any and update election
 		var isDraw bool
-		if vote.TurnoutRolls > 0 {
+		if vote.TurnoutStake > 0 {
 			proposals, err := idx.proposalsByElection(ctx, vote.ElectionId)
 			if err != nil {
 				return false, err
@@ -445,15 +448,15 @@ func (idx *GovIndex) closeVote(ctx context.Context, block *model.Block, builder 
 			// select the winner
 			var (
 				winner model.ProposalID
-				count  int64
+				stake  int64
 			)
 			for _, v := range proposals {
-				if v.Rolls < count {
+				if v.Stake < stake {
 					continue
 				}
-				if v.Rolls > count {
+				if v.Stake > stake {
 					isDraw = false
-					count = v.Rolls
+					stake = v.Stake
 					winner = v.RowId
 				} else {
 					isDraw = true
@@ -495,8 +498,8 @@ func (idx *GovIndex) closeVote(ctx context.Context, block *model.Block, builder 
 		return false, err
 	}
 
-	// create a roll snapshot after vote end as preparation for next vote
-	if err := idx.makeRollSnapshot(ctx, block, builder); err != nil {
+	// create stake snapshot after vote end as preparation for next vote
+	if err := idx.makeStakeSnapshot(ctx, block, builder); err != nil {
 		return false, err
 	}
 	return !vote.IsFailed, nil
@@ -614,16 +617,15 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *model.Block, b
 		if !aok {
 			return fmt.Errorf("missing account %s in proposal op [%d:%d]", pop.Source, 1, op.OpP)
 		}
-		// load account rolls at snapshot block (i.e. the last vote close block)
-		rolls, stake, err := idx.snapshotByHeight(ctx, bkr.AccountId, vote.StartHeight)
+		// load account stake at snapshot block (i.e. the last vote close block)
+		stake, err := idx.snapshotByHeight(ctx, bkr.AccountId, vote.StartHeight)
 		if err != nil {
-			return fmt.Errorf("missing roll snapshot for %s in vote period %d (%s) start %d",
+			return fmt.Errorf("missing stake snapshot for %s in vote period %d (%s) start %d",
 				bkr, vote.VotingPeriod, vote.VotingPeriodKind, vote.StartHeight-1)
 		}
 		// fix for missing pre-genesis snapshot
-		if block.Cycle == 0 && rolls == 0 {
-			rolls = bkr.Rolls(block.Params, 0)
-			stake = bkr.ActiveStake(block.Params, 0)
+		if block.Cycle == 0 && stake == 0 {
+			stake = bkr.StakingBalance()
 		}
 
 		// create ballots for all proposals
@@ -643,7 +645,7 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *model.Block, b
 			if err != nil {
 				return err
 			} else if cnt > 0 {
-				// log.Debugf("Skipping voter %s for proposal %s with %d rolls (already voted %d times)", acc, v, rolls, cnt)
+				// log.Debugf("Skipping voter %s for proposal %s with %d stake (already voted %d times)", acc, v, stake, cnt)
 				continue
 			}
 
@@ -656,17 +658,15 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *model.Block, b
 				Time:             block.Timestamp,
 				SourceId:         bkr.AccountId,
 				OpId:             op.RowId,
-				Rolls:            rolls,
 				Stake:            stake,
 				Ballot:           tezos.BallotVoteYay,
 			}
 			insBallots = append(insBallots, b)
 
 			// update proposal too
-			// log.Debugf("New voter %s for proposal %s with %d rolls (add to %d voters, %d rolls)",
-			// 	acc, v, rolls, prop.Voters, prop.Rolls)
+			// log.Debugf("New voter %s for proposal %s with %d stake (add to %d voters, %d stake)",
+			// 	acc, v, stake, prop.Voters, prop.Stake)
 			prop.Voters++
-			prop.Rolls += rolls
 			prop.Stake += stake
 		}
 
@@ -679,30 +679,23 @@ func (idx *GovIndex) processProposals(ctx context.Context, block *model.Block, b
 		if err != nil {
 			return err
 		} else if cnt == 0 {
-			// log.Debugf("Update turnout for period %d voter %s with %d rolls (add to %d voters, %d rolls)",
-			// 	vote.VotingPeriod, acc, rolls, vote.TurnoutVoters, vote.TurnoutRolls)
-			vote.TurnoutRolls += rolls
+			// log.Debugf("Update turnout for period %d voter %s with %d stake (add to %d voters, %d stake)",
+			// 	vote.VotingPeriod, acc, stake, vote.TurnoutVoters, vote.TurnoutStake)
 			vote.TurnoutStake += stake
 			vote.TurnoutVoters++
-			// } else {
-			// log.Debugf("Skipping turnout calc for period %d voter %s  with %d rolls (already voted %d times)", vote.VotingPeriod, acc, rolls, cnt)
 		}
 	}
 
-	// update eligible rolls when zero (happens when vote opens on genesis)
-	if vote.EligibleRolls == 0 {
-		vote.EligibleRolls = block.Chain.Rolls
-		vote.EligibleStake = block.Supply.ActiveStake
-		vote.EligibleVoters = block.Chain.RollOwners
+	// update eligible stake when zero (happens when vote opens on genesis)
+	if vote.EligibleStake == 0 {
+		// not 100% correct but ok
+		vote.EligibleStake = block.Supply.ActiveStake - block.Supply.ActiveStake%block.Params.MinimalStake
+		vote.EligibleVoters = block.Chain.EligibleBakers
 		vote.QuorumPct, _, _ = idx.quorumByHeight(ctx, block.Height, block.Params)
 	}
 
 	// finalize vote for this round and safe; stake is used in Jakarta+
-	if block.Params.Version < 13 {
-		vote.TurnoutPct = vote.TurnoutRolls * 10000 / vote.EligibleRolls
-	} else {
-		vote.TurnoutPct = vote.TurnoutStake * 10000 / vote.EligibleStake
-	}
+	vote.TurnoutPct = vote.TurnoutStake * 10000 / vote.EligibleStake
 	if err := idx.tables[model.VoteTableKey].Update(ctx, vote); err != nil {
 		return err
 	}
@@ -743,33 +736,28 @@ func (idx *GovIndex) processBallots(ctx context.Context, block *model.Block, bui
 		if !aok {
 			return fmt.Errorf("missing account %s in proposal op [%d:%d]", bop.Source, 1, op.OpP)
 		}
-		// load account rolls at snapshot block
-		rolls, stake, err := idx.snapshotByHeight(ctx, bkr.AccountId, vote.StartHeight)
+		// load account stake at snapshot block
+		stake, err := idx.snapshotByHeight(ctx, bkr.AccountId, vote.StartHeight)
 		if err != nil {
-			return fmt.Errorf("missing roll snapshot for %s in vote period %d (%s) start %d",
+			return fmt.Errorf("missing stake snapshot for %s in vote period %d (%s) start %d",
 				bkr, vote.VotingPeriod, vote.VotingPeriodKind, vote.StartHeight-1)
 		}
 		// fix for missing pre-genesis snapshot
-		if block.Cycle == 0 && rolls == 0 {
-			rolls = bkr.Rolls(block.Params, 0)
-			stake = bkr.ActiveStake(block.Params, 0)
+		if block.Cycle == 0 && stake == 0 {
+			stake = bkr.StakingBalance()
 		}
 
 		// update vote
-		vote.TurnoutRolls += rolls
 		vote.TurnoutStake += stake
 		vote.TurnoutVoters++
 		switch bop.Ballot {
 		case tezos.BallotVoteYay:
-			vote.YayRolls += rolls
 			vote.YayStake += stake
 			vote.YayVoters++
 		case tezos.BallotVoteNay:
-			vote.NayRolls += rolls
 			vote.NayStake += stake
 			vote.NayVoters++
 		case tezos.BallotVotePass:
-			vote.PassRolls += rolls
 			vote.PassStake += stake
 			vote.PassVoters++
 		}
@@ -783,27 +771,21 @@ func (idx *GovIndex) processBallots(ctx context.Context, block *model.Block, bui
 			Time:             block.Timestamp,
 			SourceId:         bkr.AccountId,
 			OpId:             op.RowId,
-			Rolls:            rolls,
 			Stake:            stake,
 			Ballot:           bop.Ballot,
 		}
 		insBallots = append(insBallots, b)
 	}
 
-	// update eligible rolls when zero (happens when vote opens on genesis)
-	if vote.EligibleRolls == 0 {
-		vote.EligibleRolls = block.Chain.Rolls
+	// update eligible stake when zero (happens when vote opens on genesis)
+	if vote.EligibleStake == 0 {
 		vote.EligibleStake = block.Supply.ActiveStake
-		vote.EligibleVoters = block.Chain.RollOwners
+		vote.EligibleVoters = block.Chain.EligibleBakers
 		vote.QuorumPct, _, _ = idx.quorumByHeight(ctx, block.Height, block.Params)
 	}
 
 	// finalize vote for this round and safe; stake is used in Jakarta+
-	if block.Params.Version < 13 {
-		vote.TurnoutPct = vote.TurnoutRolls * 10000 / vote.EligibleRolls
-	} else {
-		vote.TurnoutPct = vote.TurnoutStake * 10000 / vote.EligibleStake
-	}
+	vote.TurnoutPct = vote.TurnoutStake * 10000 / vote.EligibleStake
 	if err := idx.tables[model.VoteTableKey].Update(ctx, vote); err != nil {
 		return err
 	}
@@ -873,47 +855,40 @@ func (idx *GovIndex) proposalsByElection(ctx context.Context, id model.ElectionI
 // }
 
 // MUST call at vote end block
-func (idx *GovIndex) makeRollSnapshot(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
+func (idx *GovIndex) makeStakeSnapshot(ctx context.Context, block *model.Block, builder model.BlockBuilder) error {
 	// use params from vote snapshot block (this is the previous vote end block)
 	// using params that were active at that block is essential (esp. when
-	// a protocol upgrade changes rolls size like Athens did)
+	// a protocol upgrade changes minimum stake size like Athens did)
 	p := builder.Params(block.Height)
-	log.Debugf("gov: make roll snapshot at height %d", block.Height)
+	log.Debugf("gov: make stake snapshot at height %d", block.Height)
 
 	// skip deactivated bakers (we don't mark bakers deactivated until
 	// next block / first in cycle) so we have to use the block receipt
 	deactivated := tezos.NewAddressSet(block.TZ.Block.Metadata.Deactivated...)
 
-	// snapshot all active bakers with at least 1 roll (deactivation happens at
+	// snapshot all active bakers with at least minium stake (deactivation happens at
 	// start of the next cycle, so here bakers are still active!)
-	ins := make([]pack.Item, 0, int(block.Chain.RollOwners)) // hint
+	ins := make([]pack.Item, 0, int(block.Chain.EligibleBakers)) // hint
 	for _, v := range builder.Bakers() {
 		// check for deactivation
 		if !v.IsActive || deactivated.Contains(v.Address) {
 			continue
 		}
 
-		var rolls, stake int64
-		if p.Version < 12 {
-			// check account owns at least one roll
-			rolls = v.Rolls(p, 0)
-			if rolls == 0 {
-				continue
-			}
-			stake = v.StakingBalance()
-		} else {
-			// use stake truncated to full coins
-			stake = v.StakingBalance()
-			if stake < p.MinimalStake {
-				continue
-			}
-			rolls = stake / p.MinimalStake
+		// use stake truncated to full coins
+		stake := v.StakingBalance()
+		if stake < p.MinimalStake {
+			continue
+		}
+
+		// round to full rolls for protocols before Jakarta
+		if block.Params.Version < 13 {
+			stake -= stake % p.MinimalStake
 		}
 
 		snap := &model.Stake{
 			Height:    block.Height,
 			AccountId: v.AccountId,
-			Rolls:     rolls,
 			Stake:     stake,
 		}
 		ins = append(ins, snap)
@@ -921,9 +896,9 @@ func (idx *GovIndex) makeRollSnapshot(ctx context.Context, block *model.Block, b
 	return idx.tables[model.StakeTableKey].Insert(ctx, ins)
 }
 
-func (idx *GovIndex) snapshotByHeight(ctx context.Context, aid model.AccountID, height int64) (int64, int64, error) {
+func (idx *GovIndex) snapshotByHeight(ctx context.Context, aid model.AccountID, height int64) (int64, error) {
 	var snap model.Stake
-	err := pack.NewQuery("etl.gov_find_rolls").
+	err := pack.NewQuery("etl.gov_find_stake").
 		WithTable(idx.tables[model.StakeTableKey]).
 		WithoutCache().
 		WithDesc().
@@ -932,12 +907,42 @@ func (idx *GovIndex) snapshotByHeight(ctx context.Context, aid model.AccountID, 
 		AndLte("height", height).
 		Execute(ctx, &snap)
 	if err != nil {
-		return 0, 0, err
+		return 0, err
 	}
 	if snap.Stake == 0 {
-		log.Warnf("govindex: roll snapshot for account %d at height %d is zero", aid, height)
+		log.Warnf("govindex: stake snapshot for account %d at height %d is zero", aid, height)
 	}
-	return snap.Rolls, snap.Stake, nil
+	return snap.Stake, nil
+}
+
+func (idx *GovIndex) sumStake(ctx context.Context, height int64) (int64, error) {
+	var foundHeight, sum int64
+	var snap model.Stake
+	err := pack.NewQuery("etl.gov_sum_stake").
+		WithTable(idx.tables[model.StakeTableKey]).
+		WithoutCache().
+		WithDesc().
+		// need -1 offset, last Florence snap needs -2 as offset
+		AndLte("height", height).
+		Stream(ctx, func(r pack.Row) error {
+			if err := r.Decode(&snap); err != nil {
+				return err
+			}
+			if foundHeight == 0 {
+				foundHeight = snap.Height
+			} else if foundHeight != snap.Height {
+				return io.EOF
+			}
+			sum += snap.Stake
+			return nil
+		})
+	if err != nil && err != io.EOF {
+		return 0, err
+	}
+	if sum == 0 {
+		log.Warnf("govindex: stake snapshot at height %d is zero", foundHeight)
+	}
+	return sum, nil
 }
 
 // quorums adjust at the end of each exploration & promotion voting period
@@ -1014,5 +1019,10 @@ func (idx *GovIndex) Flush(ctx context.Context) error {
 			log.Errorf("Flushing %s table: %v", v.Name(), err)
 		}
 	}
+	return nil
+}
+
+func (idx *GovIndex) OnTaskComplete(_ context.Context, _ *task.TaskResult) error {
+	// unused
 	return nil
 }

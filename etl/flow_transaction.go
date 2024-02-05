@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -38,16 +38,16 @@ func (b *Builder) NewTransactionFlows(
 	if moved > 0 && dst != nil {
 		// debit from source
 		f := model.NewFlow(b.block, src, dst, id)
-		f.Category = model.FlowCategoryBalance
-		f.Operation = model.FlowTypeTransaction
+		f.Kind = model.FlowKindBalance
+		f.Type = model.FlowTypeTransaction
 		f.AmountOut = moved
 		f.TokenAge = block.Age(src.LastIn)
 		f.IsUnshielded = srccon != nil && srccon.Features.Contains(micheline.FeatureSapling)
 		flows = append(flows, f)
 		// credit to dest
 		f = model.NewFlow(b.block, dst, src, id)
-		f.Category = model.FlowCategoryBalance
-		f.Operation = model.FlowTypeTransaction
+		f.Kind = model.FlowKindBalance
+		f.Type = model.FlowTypeTransaction
 		f.AmountIn = moved
 		f.TokenAge = block.Age(src.LastIn)
 		f.IsShielded = dstcon != nil && dstcon.Features.Contains(micheline.FeatureSapling)
@@ -57,8 +57,8 @@ func (b *Builder) NewTransactionFlows(
 	if burnedAndMoved-moved > 0 {
 		// debit burn from source
 		f := model.NewFlow(b.block, src, nil, id)
-		f.Category = model.FlowCategoryBalance
-		f.Operation = model.FlowTypeTransaction
+		f.Kind = model.FlowKindBalance
+		f.Type = model.FlowTypeTransaction
 		f.AmountOut = burnedAndMoved - moved
 		f.IsBurned = true
 		flows = append(flows, f)
@@ -67,8 +67,8 @@ func (b *Builder) NewTransactionFlows(
 	// debit from source delegation unless source is a baker
 	if sbkr != nil && !src.IsBaker && feespaid+burnedAndMoved > 0 {
 		f := model.NewFlow(b.block, sbkr.Account, src, id)
-		f.Category = model.FlowCategoryDelegation
-		f.Operation = model.FlowTypeTransaction
+		f.Kind = model.FlowKindDelegation
+		f.Type = model.FlowTypeTransaction
 		f.AmountOut = feespaid + burnedAndMoved // fees and amount moved
 		flows = append(flows, f)
 	}
@@ -76,8 +76,8 @@ func (b *Builder) NewTransactionFlows(
 	// credit to destination baker unless dest is a baker
 	if dbkr != nil && !dst.IsBaker && moved > 0 {
 		f := model.NewFlow(b.block, dbkr.Account, src, id)
-		f.Category = model.FlowCategoryDelegation
-		f.Operation = model.FlowTypeTransaction
+		f.Kind = model.FlowKindDelegation
+		f.Type = model.FlowTypeTransaction
 		f.AmountIn = moved
 		flows = append(flows, f)
 	}
@@ -116,16 +116,16 @@ func (b *Builder) NewInternalTransactionFlows(
 	if moved > 0 && dst != nil {
 		// deducted from source
 		f := model.NewFlow(b.block, src, dst, id)
-		f.Category = model.FlowCategoryBalance
-		f.Operation = model.FlowTypeTransaction
+		f.Kind = model.FlowKindBalance
+		f.Type = model.FlowTypeTransaction
 		f.AmountOut = moved
 		f.TokenAge = block.Age(src.LastIn)
 		f.IsUnshielded = srccon != nil && srccon.Features.Contains(micheline.FeatureSapling)
 		flows = append(flows, f)
 		// credit to dest
 		f = model.NewFlow(b.block, dst, src, id)
-		f.Category = model.FlowCategoryBalance
-		f.Operation = model.FlowTypeTransaction
+		f.Kind = model.FlowKindBalance
+		f.Type = model.FlowTypeTransaction
 		f.AmountIn = moved
 		f.TokenAge = block.Age(src.LastIn)
 		f.IsShielded = dstcon != nil && dstcon.Features.Contains(micheline.FeatureSapling)
@@ -135,16 +135,16 @@ func (b *Builder) NewInternalTransactionFlows(
 	if burnedAndMoved-moved > 0 {
 		// Note: use outer source to burn
 		f := model.NewFlow(b.block, origsrc, nil, id)
-		f.Category = model.FlowCategoryBalance
-		f.Operation = model.FlowTypeTransaction
+		f.Kind = model.FlowKindBalance
+		f.Type = model.FlowTypeTransaction
 		f.AmountOut = burnedAndMoved - moved
 		f.IsBurned = true
 		flows = append(flows, f)
 		// adjust delegated balance if not a baker
 		if origbkr != nil && !origsrc.IsBaker {
 			f = model.NewFlow(b.block, origbkr.Account, origsrc, id)
-			f.Category = model.FlowCategoryDelegation
-			f.Operation = model.FlowTypeTransaction
+			f.Kind = model.FlowKindDelegation
+			f.Type = model.FlowTypeTransaction
 			f.AmountOut = burnedAndMoved - moved
 			flows = append(flows, f)
 		}
@@ -155,8 +155,8 @@ func (b *Builder) NewInternalTransactionFlows(
 	// debut moved amount from source delegation if not baker
 	if srcbkr != nil && !src.IsBaker && moved > 0 {
 		f := model.NewFlow(b.block, srcbkr.Account, src, id)
-		f.Category = model.FlowCategoryDelegation
-		f.Operation = model.FlowTypeTransaction
+		f.Kind = model.FlowKindDelegation
+		f.Type = model.FlowTypeTransaction
 		f.AmountOut = moved
 		flows = append(flows, f)
 	}
@@ -164,8 +164,8 @@ func (b *Builder) NewInternalTransactionFlows(
 	// credit to dest delegate unless its a baker
 	if dstbkr != nil && !dst.IsBaker && moved > 0 {
 		f := model.NewFlow(b.block, dstbkr.Account, src, id)
-		f.Category = model.FlowCategoryDelegation
-		f.Operation = model.FlowTypeTransaction
+		f.Kind = model.FlowKindDelegation
+		f.Type = model.FlowTypeTransaction
 		f.AmountIn = moved
 		flows = append(flows, f)
 	}

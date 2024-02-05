@@ -1,4 +1,4 @@
-// Copyright (c) 2023 Blockwatch Data Inc.
+// Copyright (c) 2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -52,16 +52,27 @@ func (t Transaction) AddEmbeddedAddresses(addUnique func(tezos.Address)) {
 		}
 	}
 
+	// from params
+	_ = t.Parameters.Value.Walk(collect)
+
 	// from storage
 	_ = t.Metadata.Result.Storage.Walk(collect)
 
 	// from bigmap updates
 	for _, v := range t.Metadata.Result.BigmapEvents() {
-		if v.Action != micheline.DiffActionUpdate {
+		if v.Action != micheline.DiffActionUpdate && v.Action != micheline.DiffActionRemove {
 			continue
 		}
-		_ = v.Key.Walk(collect)
-		_ = v.Value.Walk(collect)
+		vp := v.Key
+		if vp.IsPacked() {
+			vp, _ = vp.Unpack()
+		}
+		_ = vp.Walk(collect)
+		vv := v.Value
+		if vv.IsPacked() {
+			vv, _ = vv.Unpack()
+		}
+		_ = vv.Walk(collect)
 	}
 
 	// from ticket updates
@@ -73,17 +84,34 @@ func (t Transaction) AddEmbeddedAddresses(addUnique func(tezos.Address)) {
 
 	// from internal results
 	for _, it := range t.Metadata.InternalResults {
+		// from params
+		_ = it.Parameters.Value.Walk(collect)
+
+		// from origination storage
 		if it.Script != nil {
 			_ = it.Script.Storage.Walk(collect)
 		}
+
+		// from result storage
 		_ = it.Result.Storage.Walk(collect)
+
+		// from bigmap updates
 		for _, v := range it.Result.BigmapEvents() {
-			if v.Action != micheline.DiffActionUpdate {
+			if v.Action != micheline.DiffActionUpdate && v.Action != micheline.DiffActionRemove {
 				continue
 			}
-			_ = v.Key.Walk(collect)
-			_ = v.Value.Walk(collect)
+			vp := v.Key
+			if vp.IsPacked() {
+				vp, _ = vp.Unpack()
+			}
+			_ = vp.Walk(collect)
+			vv := v.Value
+			if vv.IsPacked() {
+				vv, _ = vv.Unpack()
+			}
+			_ = vv.Walk(collect)
 		}
+
 		// from ticket updates
 		for _, v := range it.Result.TicketUpdates() {
 			for _, vv := range v.Updates {

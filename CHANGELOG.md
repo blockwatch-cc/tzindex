@@ -1,5 +1,150 @@
 # Changelog
 
+### v18.0.0
+
+Oxford Staking
+- new stake operations
+- new balance update handling
+- new slashing behavior
+- new staking stats for accounts, bakers, chain, supply, income, snapshot
+- new issuance behavior (new constants and new RPC)
+
+CLI breaking change
+- new default `-db.max_storage_entry_size=131072` (was 0 before)
+
+Table name changes (/tables API)
+- old names are deprecated but still work, will be removed in a later release
+- `bigmaps` -> `bigmap_types`
+- `election` -> `gov_election`
+- `proposal` -> `gov_proposal`
+- `vote` -> `gov_vote`
+- `ballot` -> `gov_ballot`
+- `stake` -> `gov_stake`
+
+Account model changes
+- new `staked_balance`
+- new `frozen_rewards`
+- new `unstaked_balance`
+- new `lost_stake`
+- new `is_staked`
+- renamed `frozen_bond` -> `frozen_rollup_bond`
+- renamed `lost_bond` -> `lost_rollup_bond`
+
+Baker model changes
+- new `total_stake` (own and foreign slashable stake)
+- new `baking_power` (stake plus delegations, capped)
+- new `active_stakers` (number of foreign stakers)
+- new `staking_edge` (baker fee for staking)
+- new `staking_limit` (individual staking cap, lower than max protocol cap)
+- new `delegation_capacity` (total delegation capacity until cap)
+- new `staking_capacity` (total stake capacity until cap)
+- new `is_over_delegated` (overflow is not counted into baking power)
+- new `is_over_staked` (overflow counts towards delegations)
+- renamed `active_stake` -> `own_stake`
+- renamed `staking_share` -> `network_share`
+- renamed `frozen_bond` -> `frozen_rollup_bond`
+- renamed `lost_bond` -> `lost_rollup_bond`
+- removed `staking_balance` (replaced by `total_stake`)
+- removed `deposits_limit`
+- removed `total_delegations`
+- removed `is_full` (replaced by `is_over_delegated` and `is_over_staked`)
+
+Block model changes
+- new `ai_vote`
+- new `ai_ema`
+- renamed `lb_esc_vote` -> `lb_vote`
+- renamed `lb_esc_ema` -> `lb_ema`
+
+Chain model changes
+- new `total_stakers`
+- new `active_stakers`
+- new `inactive_stakers`
+- removed `rolls`
+- renamed `rolls_owners` -> `eligible_bakers`
+
+Supply model changes
+- new `unstaking`      // anything in unfreeze but not withdrawn
+- new `frozen_stake`        // all
+- new `frozen_baker_stake`  // baker only
+- new `frozen_staker_stake` // staker only
+- changed `staking` to only include slashable stake
+- changed `active_staking` to only include slashable stake
+- changed `inactive_staking` to only include slashable stake
+- renamed `burned_absence` -> `burned_offline`
+
+Income model
+- new `own_stake`
+- new `n_stakers`
+- removed `active_stake`
+- removed `snapshot_rolls`
+- removed `total_deposits`
+
+Snapshot model
+- new `own_stake`
+- new `n_stakers`
+- removed `active_stake`
+- removed `snapshot_rolls`
+- removed `total_deposits`
+
+Op model
+- new types: `stake`, `unstake`, `finalize_unstake`, `set_delegate_parameters`, `stake_slash`
+- don't store Ithaca+ endorsements and pre-endorsements, saves 30GB (50%) storage
+
+Flow model
+- new kind: `stake`
+- new types: `stake`, `unstake`, `finalize_unstake`, `set_delegate_parameters`
+
+Gov Vote model
+- removed `eligible_rolls`
+- removed `quorum_rolls`
+- removed `turnout_rolls`
+- removed `yay_rolls`
+- removed `nay_rolls`
+- removed `pass_rolls`
+
+Gov Proposal model
+- removed `rolls`
+
+Gov Ballot model
+- removed `rolls`
+
+Chain config model changes
+- removed `delay_increment_per_round`
+
+Cycle
+- new `active_stakers`
+- new `block_reward`
+- new `block_bonus_per_slot`
+- new `max_block_reward`
+- new `endorsement_reward_per_slot`
+- new `nonce_revelation_reward`
+- new `vdf_revelation_reward`
+- new `lb_subsidy`
+- renamed `roll_owners` -> `eligible_bakers`
+- renamed `working_bakers` -> `unique_bakers`
+- removed `rolls`
+- removed `working_endorsers`
+
+Metadata
+- restructured token metadata handling
+- renamed `asset_id` to `token_id`
+- moved `asset.symbol` and `asset.decimals` into `asset.tokens[]` array
+
+Other changes
+
+- re-fetch origination storage for correct store and bigmap init
+
+* 200676e1 | Fix migration snapshot handling
+* 0e620ce | Purge metadata cache on update
+* 43b31dd | Disable storing endorsements
+* 64d2c5a | Fix smart rollup flows
+* 07d345a | Ignore api_key query arg on tables and series
+* 84afaf8 | Track addresses in transfer tickets ops
+* b72fad4 | Fix indexing broken rollup ops
+* 57d536f | Drop mumbainet references
+* 5da48c2 | Upgrade TzPro SDK
+* 8469ff4 | proxy: reload params on watcher exit
+
 ### v17.0.1 (v016-2023-02-26)
 
 * Track addresses in transfer tickets ops

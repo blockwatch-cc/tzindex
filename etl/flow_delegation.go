@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -9,7 +9,7 @@ import (
 )
 
 // used for internal an non-internal delegations
-func (b *Builder) NewDelegationFlows(src *model.Account, newbkr, oldbkr *model.Baker, fees rpc.BalanceUpdates, id model.OpRef) []*model.Flow {
+func (b *Builder) NewDelegationFlows(src *model.Account, newbkr, oldbkr *model.Baker, fees, upd rpc.BalanceUpdates, id model.OpRef) []*model.Flow {
 	// apply fees first
 	flows, feespaid := b.NewFeeFlows(src, fees, id)
 	var pending int64
@@ -20,8 +20,8 @@ func (b *Builder) NewDelegationFlows(src *model.Account, newbkr, oldbkr *model.B
 		// create flow only if fees are paid
 		if feespaid > 0 && !src.IsBaker {
 			f := model.NewFlow(b.block, oldbkr.Account, src, id)
-			f.Category = model.FlowCategoryDelegation
-			f.Operation = model.FlowTypeDelegation
+			f.Kind = model.FlowKindDelegation
+			f.Type = model.FlowTypeDelegation
 			f.AmountOut = feespaid // deduct this operation's fees only
 			flows = append(flows, f)
 		}
@@ -32,7 +32,7 @@ func (b *Builder) NewDelegationFlows(src *model.Account, newbkr, oldbkr *model.B
 		// (re-)delegated balance must be adjusted by all pending updates
 		// because they have already created delegation out-flows
 		for _, f := range b.block.Flows {
-			if f.AccountId == src.RowId && f.Category == model.FlowCategoryBalance {
+			if f.AccountId == src.RowId && f.Kind == model.FlowKindBalance {
 				pending += f.AmountOut - f.AmountIn
 			}
 		}
@@ -41,8 +41,8 @@ func (b *Builder) NewDelegationFlows(src *model.Account, newbkr, oldbkr *model.B
 		// also cover the case where src registers as baker
 		if oldbkr != nil {
 			f := model.NewFlow(b.block, oldbkr.Account, src, id)
-			f.Category = model.FlowCategoryDelegation
-			f.Operation = model.FlowTypeDelegation
+			f.Kind = model.FlowKindDelegation
+			f.Type = model.FlowTypeDelegation
 			f.AmountOut = balance - pending // deduct difference including fees
 			flows = append(flows, f)
 		}
@@ -52,10 +52,43 @@ func (b *Builder) NewDelegationFlows(src *model.Account, newbkr, oldbkr *model.B
 		// (i.e. baker registration)
 		if newbkr != nil && !src.IsBaker && balance-pending-feespaid > 0 {
 			f := model.NewFlow(b.block, newbkr.Account, src, id)
-			f.Category = model.FlowCategoryDelegation
-			f.Operation = model.FlowTypeDelegation
+			f.Kind = model.FlowKindDelegation
+			f.Type = model.FlowTypeDelegation
 			f.AmountIn = balance - feespaid - pending // add difference without fees
 			flows = append(flows, f)
+		}
+
+		// if src is staked, create unstake flows
+		// unstake flows, assuming unstaked amount does not count into delegation
+		for _, v := range upd {
+			if v.Category == "deposits" {
+				// baker staking pool out
+				f := model.NewFlow(b.block, src, oldbkr.Account, id)
+				f.Kind = model.FlowKindStake
+				f.Type = model.FlowTypeUnstake
+				f.AmountOut = -v.Amount()
+				flows = append(flows, f)
+
+				// unstaked amount remains in delegation with the old baker
+				f = model.NewFlow(b.block, src, oldbkr.Account, id)
+				f.Kind = model.FlowKindDelegation
+				f.Type = model.FlowTypeUnstake
+				f.AmountIn = -v.Amount()
+				flows = append(flows, f)
+
+				// TODO: on finalize, this delegation moves to the new baker
+				// note: there can only be one stake/unstake-baker, user must wait
+				// for finalize until he can stake again
+
+				// unused
+				// case "unstaked_deposits":
+				// 	// wallet unstake pool in
+				// 	f := model.NewFlow(b.block, src, oldbkr.Account, id) // flow to self
+				// 	f.Kind = model.FlowKindStake
+				// 	f.Type = model.FlowTypeUnstake
+				// 	f.AmountIn = v.Amount()
+				// 	flows = append(flows, f)
+			}
 		}
 	}
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -20,15 +20,6 @@ type Operation struct {
 	Metadata string           `json:"metadata,omitempty"` // contains `too large` when stripped, this is BAD!!
 }
 
-// // Url returns the Tezos RPC url path to this operation group.
-// func (o Operation) Url() string {
-// 	return fmt.Sprintf("/chains/main/blocks/%d/operations/%d/%d",
-// 		o.Block,
-// 		o.Contents[0].Kind().ListId(),
-// 		o.Index,
-// 	)
-// }
-
 // Addresses lists all Tezos addresses that appear in this operation group. This does
 // not include addresses used in contract call parameters, storage updates and tickets.
 func (o Operation) Addresses() *tezos.AddressSet {
@@ -37,6 +28,13 @@ func (o Operation) Addresses() *tezos.AddressSet {
 		v.Addresses(set)
 	}
 	return set
+}
+
+func (o Operation) IsSuccess() bool {
+	if len(o.Contents) == 0 {
+		return false
+	}
+	return o.Contents[0].Result().IsSuccess()
 }
 
 // TypedOperation must be implemented by all operations
@@ -51,7 +49,7 @@ type TypedOperation interface {
 // OperationError represents data describing an error conditon that lead to a
 // failed operation execution.
 type OperationError struct {
-	GenericError
+	NodeError
 	// whitelist commonly useful error contents, avoid storing large scripts, etc
 	Contract       string          `json:"contract,omitempty"`
 	ContractHandle string          `json:"contract_handle,omitempty"`
@@ -71,17 +69,22 @@ type OperationMetadata struct {
 	Result         OperationResult `json:"operation_result"`
 
 	// transaction only
-	InternalResults []InternalResult `json:"internal_operation_results,omitempty"`
+	InternalResults []*InternalResult `json:"internal_operation_results,omitempty"`
 
 	// endorsement only
 	Delegate            tezos.Address `json:"delegate"`
-	Slots               []int         `json:"slots,omitempty"`
+	Slots               []int         `json:"slots,omitempty"`                // < v12
 	EndorsementPower    int           `json:"endorsement_power,omitempty"`    // v12+
 	PreendorsementPower int           `json:"preendorsement_power,omitempty"` // v12+
+	ConsensusPower      int           `json:"consensus_power,omitempty"`      // v18+
 }
 
 func (m OperationMetadata) Power() int {
-	return m.EndorsementPower + len(m.Slots)
+	// only one of these fields is used per operation depending on protocol
+	return m.ConsensusPower + // v18+
+		m.EndorsementPower + // v12+
+		m.PreendorsementPower + // v12+
+		len(m.Slots) // v0+
 }
 
 // Address returns the delegate address for endorsements.
@@ -158,7 +161,11 @@ func (r OperationResult) IsSuccess() bool {
 
 func (r OperationResult) Gas() int64 {
 	if r.ConsumedMilliGas > 0 {
-		return r.ConsumedMilliGas / 1000
+		var corr int64
+		if r.ConsumedMilliGas%1000 > 0 {
+			corr++
+		}
+		return r.ConsumedMilliGas/1000 + corr
 	}
 	return r.ConsumedGas
 }
@@ -173,7 +180,7 @@ func (r OperationResult) MilliGas() int64 {
 // Generic is the most generic operation type.
 type Generic struct {
 	OpKind   tezos.OpType       `json:"kind"`
-	Metadata *OperationMetadata `json:"metadata"`
+	Metadata *OperationMetadata `json:"metadata,omitempty"`
 }
 
 // Kind returns the operation's type. Implements TypedOperation interface.

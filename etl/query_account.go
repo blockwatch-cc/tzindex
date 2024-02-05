@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -44,7 +44,7 @@ func (m *Indexer) LookupAccountId(ctx context.Context, addr tezos.Address) (mode
 		return 0, err
 	}
 	type Alias struct {
-		RowId model.AccountID `knox:"row_id"`
+		RowId model.AccountID `pack:"row_id"`
 	}
 	id := &Alias{}
 	err = pack.NewQuery("api.accountid_by_hash").

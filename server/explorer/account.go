@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package explorer
@@ -54,11 +54,16 @@ type Account struct {
 	TotalFeesUsed      float64              `json:"total_fees_used"`
 	UnclaimedBalance   float64              `json:"unclaimed_balance,omitempty"`
 	SpendableBalance   float64              `json:"spendable_balance"`
-	FrozenBond         float64              `json:"frozen_bond,omitempty"`
-	LostBond           float64              `json:"lost_bond,omitempty"`
+	FrozenRollupBond   float64              `json:"frozen_rollup_bond,omitempty"`
+	LostRollupBond     float64              `json:"lost_rollup_bond,omitempty"`
+	StakedBalance      float64              `json:"staked_balance"`
+	UnstakedBalance    float64              `json:"unstaked_balance"`
+	FrozenRewards      float64              `json:"frozen_rewards"` // calculated
+	LostStake          float64              `json:"lost_stake"`
 	IsFunded           bool                 `json:"is_funded"`
 	IsActivated        bool                 `json:"is_activated,omitempty"`
 	IsDelegated        bool                 `json:"is_delegated"`
+	IsStaked           bool                 `json:"is_staked"`
 	IsRevealed         bool                 `json:"is_revealed"`
 	IsBaker            bool                 `json:"is_baker,omitempty"`
 	IsContract         bool                 `json:"is_contract,omitempty"`
@@ -72,12 +77,11 @@ type Account struct {
 	Ops OpList `json:"ops,omitempty"`
 
 	// caching
-	expires time.Time `json:"-"`
-	lastmod time.Time `json:"-"`
+	expires time.Time
+	lastmod time.Time
 }
 
 func NewAccount(ctx *server.Context, a *model.Account, args server.Options) *Account {
-	tip := ctx.Tip
 	p := ctx.Params
 	acc := &Account{
 		RowId:            a.RowId,
@@ -98,11 +102,15 @@ func NewAccount(ctx *server.Context, a *model.Account, args server.Options) *Acc
 		TotalFeesPaid:    p.ConvertValue(a.TotalFeesPaid),
 		TotalFeesUsed:    p.ConvertValue(a.TotalFeesUsed),
 		SpendableBalance: p.ConvertValue(a.SpendableBalance),
-		FrozenBond:       p.ConvertValue(a.FrozenBond),
-		LostBond:         p.ConvertValue(a.LostBond),
+		FrozenRollupBond: p.ConvertValue(a.FrozenRollupBond),
+		LostRollupBond:   p.ConvertValue(a.LostRollupBond),
+		StakedBalance:    p.ConvertValue(a.StakedBalance),
+		UnstakedBalance:  p.ConvertValue(a.UnstakedBalance),
+		LostStake:        p.ConvertValue(a.LostStake),
 		IsFunded:         a.IsFunded,
 		IsActivated:      a.IsActivated,
 		IsDelegated:      a.IsDelegated,
+		IsStaked:         a.IsStaked,
 		IsRevealed:       a.IsRevealed,
 		IsBaker:          a.IsBaker,
 		IsContract:       a.IsContract,
@@ -110,7 +118,7 @@ func NewAccount(ctx *server.Context, a *model.Account, args server.Options) *Acc
 		NTxFailed:        a.NTxFailed,
 		NTxOut:           a.NTxOut,
 		NTxIn:            a.NTxIn,
-		expires:          tip.BestTime.Add(p.BlockTime()),
+		expires:          ctx.Expires,
 	}
 
 	if a.Type == tezos.AddressTypeBlinded {
@@ -156,6 +164,14 @@ func NewAccount(ctx *server.Context, a *model.Account, args server.Options) *Acc
 		}
 	}
 
+	// resolve baking rewards
+	if a.IsStaked {
+		if bkr, err := ctx.Indexer.LookupBakerId(ctx, a.BakerId); err == nil {
+			ownStake := bkr.StakeAmount(a.StakeShares)
+			acc.FrozenRewards = p.ConvertValue(ownStake - a.StakedBalance)
+		}
+	}
+
 	acc.lastmod = acc.LastSeenTime
 	return acc
 }
@@ -186,6 +202,8 @@ func (b Account) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/{ident}/contracts", server.C(ReadDeployedContracts)).Methods("GET")
 	r.HandleFunc("/{ident}/operations", server.C(ListAccountOperations)).Methods("GET")
 	r.HandleFunc("/{ident}/metadata", server.C(ReadMetadata)).Methods("GET")
+	r.HandleFunc("/{ident}/token_balances", server.C(ListAccountTokenBalances)).Methods("GET")
+	r.HandleFunc("/{ident}/token_events", server.C(ListAccountTokenEvents)).Methods("GET")
 
 	// LEGACY: keep here for dapp and wallet compatibility
 	r.HandleFunc("/{ident}/op", server.C(ReadAccountOps)).Methods("GET")
@@ -240,6 +258,23 @@ func ReadAccount(ctx *server.Context) (interface{}, int) {
 	args := &AccountRequest{}
 	ctx.ParseRequestArgs(args)
 	return NewAccount(ctx, loadAccount(ctx), args), http.StatusOK
+}
+
+type Payout struct {
+	LifetimeRewards  float64 `json:"lifetime_rewards"`
+	EstimatedRewards float64 `json:"estimated_rewards"`
+
+	// caching
+	expires time.Time `json:"-"`
+	lastmod time.Time `json:"-"`
+}
+
+func (p Payout) LastModified() time.Time {
+	return p.lastmod
+}
+
+func (p Payout) Expires() time.Time {
+	return p.expires
 }
 
 func ReadDeployedContracts(ctx *server.Context) (interface{}, int) {

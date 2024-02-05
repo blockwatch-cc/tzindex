@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package model
@@ -10,6 +10,7 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
+	"blockwatch.cc/tzindex/etl/task"
 	"blockwatch.cc/tzindex/rpc"
 )
 
@@ -20,8 +21,7 @@ type Model interface {
 	IndexOpts(string) pack.Options
 }
 
-// BlockCrawler provides an interface to access information about the current
-// state of blockchain crawling.
+// BlockCrawler is an interface to access the block crawler state and execute DB queries.
 type BlockCrawler interface {
 	// returns the requested database table if exists or error otherwise
 	Table(string) (*pack.Table, error)
@@ -51,11 +51,13 @@ type BlockCrawler interface {
 	BlockHeightFromTime(ctx context.Context, tm time.Time) int64
 }
 
-// BlockBuilder provides an interface to access information about the currently
-// processed block.
+// BlockBuilder is an interface to access block builder caches and info.
 type BlockBuilder interface {
-	// resolves account from address, returns nil and false when not found
+	// resolves account from builder cache, returns nil and false when not found
 	AccountByAddress(tezos.Address) (*Account, bool)
+
+	// resolves account from database, returns nil and error when not found
+	LoadAccountByAddress(context.Context, tezos.Address) (*Account, error)
 
 	// resolves account from id, returns nil and false when not found
 	AccountById(AccountID) (*Account, bool)
@@ -72,7 +74,7 @@ type BlockBuilder interface {
 	// returns a map of all accounts referenced in the current block
 	Accounts() map[AccountID]*Account
 
-	// returns a map of all bakers referenced in the current block
+	// returns a map of all delegates referenced in the current block
 	Bakers() map[AccountID]*Baker
 
 	// returns a map of all contracts referenced in the current block
@@ -87,12 +89,14 @@ type BlockBuilder interface {
 	// returns the requested database table if exists or error otherwise
 	Table(string) (*pack.Table, error)
 
+	// returns global task scheduler
+	Sched() *task.Scheduler
+
 	// returns true if indexer is run in light mode
 	IsLightMode() bool
 }
 
-// BlockIndexer provides a generic interface for an indexer that is managed by an
-// etl.Indexer.
+// BlockIndexer is the interface all indexers must implement.
 type BlockIndexer interface {
 	// Name returns the human-readable name of the index.
 	Name() string
@@ -128,6 +132,9 @@ type BlockIndexer interface {
 	// FinalizeSync is invoked when an the initial sync has finished. It may
 	// be used to clean and defrag tables or (re)build indexes.
 	FinalizeSync(ctx context.Context) error
+
+	// OnTaskComplete is called when a scheduled task completes.
+	OnTaskComplete(context.Context, *task.TaskResult) error
 
 	// Flush flushes all indexer databases.
 	Flush(ctx context.Context) error

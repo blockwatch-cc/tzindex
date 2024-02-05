@@ -1,4 +1,4 @@
-// Copyright (c) 2023 Blockwatch Data Inc.
+// Copyright (c) 2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -36,14 +36,13 @@ type Params struct {
 	DelayIncrementPerRound time.Duration `json:"delay_increment_per_round,omitempty"`
 
 	// rewards
-	SeedNonceRevelationTip   int64     `json:"seed_nonce_revelation_tip,omitempty"`
-	BlockReward              int64     `json:"block_reward,omitempty"`
-	EndorsementReward        int64     `json:"endorsement_reward,omitempty"`
-	BlockRewardV6            *[2]int64 `json:"block_rewards_v6,omitempty"`
-	EndorsementRewardV6      *[2]int64 `json:"endorsement_rewards_v6,omitempty"`
-	BakingRewardFixedPortion int64     `json:"baking_reward_fixed_portion,omitempty"`
-	BakingRewardBonusPerSlot int64     `json:"baking_reward_bonus_per_slot,omitempty"`
-	EndorsingRewardPerSlot   int64     `json:"endorsing_reward_per_slot,omitempty"`
+	BlockReward              int64 `json:"block_reward,omitempty"`
+	EndorsementReward        int64 `json:"endorsement_reward,omitempty"`
+	BakingRewardFixedPortion int64 `json:"baking_reward_fixed_portion,omitempty"`
+	BakingRewardBonusPerSlot int64 `json:"baking_reward_bonus_per_slot,omitempty"`
+	EndorsingRewardPerSlot   int64 `json:"endorsing_reward_per_slot,omitempty"`
+	LiquidityBakingSubsidy   int64 `json:"liquidity_baking_subsidy,omitempty"`
+	SeedNonceRevelationTip   int64 `json:"seed_nonce_revelation_tip,omitempty"`
 
 	// costs
 	CostPerByte                int64 `json:"cost_per_byte,omitempty"`
@@ -51,12 +50,16 @@ type Params struct {
 	OriginationBurn            int64 `json:"origination_burn,omitempty"`
 	BlockSecurityDeposit       int64 `json:"block_security_deposit,omitempty"`
 	EndorsementSecurityDeposit int64 `json:"endorsement_security_deposit,omitempty"`
-	FrozenDepositsPercentage   int   `json:"frozen_deposits_percentage,omitempty"`
 
 	// limits
-	EndorsersPerBlock      int   `json:"endorsers_per_block,omitempty"`
-	MaxOperationsTTL       int64 `json:"max_operations_ttl,omitempty"`
-	ConsensusCommitteeSize int   `json:"consensus_committee_size,omitempty"`
+	EndorsersPerBlock              int   `json:"endorsers_per_block,omitempty"`
+	MaxOperationsTTL               int64 `json:"max_operations_ttl,omitempty"`
+	ConsensusCommitteeSize         int   `json:"consensus_committee_size,omitempty"`
+	ConsensusThreshold             int   `json:"consensus_threshold,omitempty"`
+	FrozenDepositsPercentage       int   `json:"frozen_deposits_percentage,omitempty"`          // <v18
+	LimitOfDelegationOverBaking    int64 `json:"limit_of_delegation_over_baking,omitempty"`     // v18+
+	GlobalLimitOfStakingOverBaking int64 `json:"global_limit_of_staking_over_baking,omitempty"` // v18+
+	MaxSlashingPeriod              int64 `json:"max_slashing_period,omitempty"`
 
 	// voting
 	BlocksPerVotingPeriod int64 `json:"blocks_per_voting_period,omitempty"`
@@ -76,10 +79,10 @@ func NewParams() *Params {
 		Network:          "unknown",
 		Symbol:           "XTZ",
 		Decimals:         6,
-		NumVotingPeriods: 5,    // initial:4, v008+:5
-		MaxOperationsTTL: 240,  // initial:60, v011+:120, v016+:240
-		BlocksPerCycle:   4096, // use a meaningful default
-		MinimalStake:     10000000000,
+		NumVotingPeriods: 5,          // initial:4, v008+:5
+		MaxOperationsTTL: 240,        // initial:60, v011+:120, v016+:240
+		BlocksPerCycle:   8192,       // meaningful default v16+
+		MinimalStake:     6000000000, // v12+
 		StartHeight:      -1,
 		EndHeight:        -1,
 		StartCycle:       -1,
@@ -94,12 +97,10 @@ func (p *Params) WithChainId(id tezos.ChainIdHash) *Params {
 			p.Network = "Mainnet"
 		case Ghostnet:
 			p.Network = "Ghostnet"
-		case Limanet:
-			p.Network = "Limanet"
-		case Mumbainet:
-			p.Network = "Mumbainet"
 		case Nairobinet:
 			p.Network = "Nairobinet"
+		case Oxfordnet:
+			p.Network = "Oxfordnet"
 		}
 	}
 	return p
@@ -138,6 +139,17 @@ func (p *Params) WithNetwork(n string) *Params {
 	return p
 }
 
+func (p *Params) WithIssuance(i Issuance) *Params {
+	p.BlockReward = i.BakingReward + i.BakingBonus*int64(p.ConsensusCommitteeSize-p.ConsensusThreshold)
+	p.EndorsementReward = i.AttestingReward
+	p.BakingRewardFixedPortion = i.BakingReward
+	p.BakingRewardBonusPerSlot = i.BakingBonus
+	p.EndorsingRewardPerSlot = i.AttestingReward
+	p.LiquidityBakingSubsidy = i.LBSubsidy
+	p.SeedNonceRevelationTip = i.SeedNonceTip
+	return p
+}
+
 // convertAmount converts a floating point number, which may or may not be representable
 // as an integer, to an integer type by rounding to the nearest integer.
 // This is performed consistent with the General Decimal Arithmetic spec
@@ -169,6 +181,7 @@ func (p Params) SnapshotBaseCycle(c int64) int64 {
 	return c - (p.PreservedCycles + offset)
 }
 
+// post v18 this is no longer available, must query dynamic inflation from RPC
 func (p Params) MaxBlockReward() int64 {
 	if p.Version < 12 {
 		return p.BlockReward + p.EndorsementReward*int64(p.EndorsersPerBlock)
@@ -239,7 +252,11 @@ func (p Params) SnapshotBlock(cycle int64, index int) int64 {
 	if base < 0 {
 		return 0
 	}
-	return p.CycleStartHeight(base) + int64(index+1)*p.BlocksPerSnapshot - 1
+	offset := int64(index+1) * p.BlocksPerSnapshot
+	if offset > p.BlocksPerCycle {
+		offset = p.BlocksPerCycle
+	}
+	return p.CycleStartHeight(base) + offset - 1
 }
 
 func (p Params) SnapshotIndex(height int64) int {

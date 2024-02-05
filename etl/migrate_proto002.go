@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -83,7 +83,7 @@ func (b *Builder) FixOriginationBug(ctx context.Context, params *rpc.Params) err
 
 	// cross-check against a list of all active bakers known to the protocol
 	if b.validate {
-		realbakers, err := b.rpc.ListActiveDelegates(ctx, rpc.BlockLevel(b.block.Height))
+		realbakers, err := b.rpc.ListActiveBakers(ctx, rpc.BlockLevel(b.block.Height))
 		if err != nil {
 			return fmt.Errorf("listing bakers: %v", err)
 		}

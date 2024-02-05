@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -14,8 +14,8 @@ func (b *Builder) NewRevealFlows(src *model.Account, bkr *model.Baker, fees rpc.
 	// if src is delegated (and not baker, subtract paid fees from delegated balance
 	if feespaid > 0 && bkr != nil && !src.IsBaker {
 		f := model.NewFlow(b.block, bkr.Account, src, id)
-		f.Category = model.FlowCategoryDelegation
-		f.Operation = model.FlowTypeReveal
+		f.Kind = model.FlowKindDelegation
+		f.Type = model.FlowTypeReveal
 		f.AmountOut = feespaid
 		flows = append(flows, f)
 	}

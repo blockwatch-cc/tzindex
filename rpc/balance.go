@@ -1,9 +1,11 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
 
 import (
+	"fmt"
+
 	"blockwatch.cc/tzgo/tezos"
 )
 
@@ -20,15 +22,25 @@ type BalanceUpdate struct {
 	Committer string `json:"committer,omitempty"` // committer only
 
 	// Ithaca only
-	IsParticipationBurn bool `json:"participation"` // burn only
-	IsRevelationBurn    bool `json:"revelation"`    // burn only
+	IsParticipationBurn bool `json:"participation,omitempty"` // burn only
+	IsRevelationBurn    bool `json:"revelation,omitempty"`    // burn only
 
 	// legacy freezer cycle
-	Level_ int64 `json:"level"` // wrongly called level, it's cycle
-	Cycle_ int64 `json:"cycle"` // v4 fix
+	Level_ int64 `json:"level,omitempty"` // wrongly called level, it's cycle
+	Cycle_ int64 `json:"cycle,omitempty"` // v4 fix
+
+	// Oxford staking
+	Staker struct {
+		Contract string `json:"contract,omitempty"` // single: used in ??
+		Delegate string `json:"delegate,omitempty"` // single & shared: used in ??
+		Baker    string `json:"baker,omitempty"`    // baker: ??
+	} `json:"staker"`
+	DelayedOp string `json:"delayed_operation_hash,omitempty"`
+	Delegator string `json:"delegator,omitempty"` // Oxford+, ??
 }
 
 // Categories
+// see also docs/alpha/token_management.rst
 //
 // # Mint categories
 // - `nonce revelation rewards` is the source of tokens minted to reward delegates for revealing their nonces
@@ -54,11 +66,35 @@ type BalanceUpdate struct {
 // # Freezer categories
 // - `legacy_deposits`, `legacy_fees`, or `legacy_rewards` represent the accounts of frozen deposits, frozen fees or frozen rewards up to protocol HANGZHOU.
 // - `deposits` represents the account of frozen deposits in subsequent protocols (replacing the legacy container account `legacy_deposits` above).
+// - `unstaked_deposits` represent tez for which unstaking has been requested.
 
-func (b BalanceUpdate) Address() tezos.Address {
-	a := b.Contract + b.Delegate + b.Committer
-	addr, _ := tezos.ParseAddress(a)
-	return addr
+func (b BalanceUpdate) Address() (addr tezos.Address) {
+	switch {
+	case len(b.Delegator) > 0:
+		// debug
+		fmt.Printf("Found BALANCE_UPDATE with NEW delegator field: %#v\n", b)
+	case len(b.Contract) > 0:
+		addr, _ = tezos.ParseAddress(b.Contract)
+	case len(b.Delegate) > 0:
+		addr, _ = tezos.ParseAddress(b.Delegate)
+	case len(b.Committer) > 0:
+		addr, _ = tezos.ParseAddress(b.Committer)
+	case len(b.Staker.Contract) > 0:
+		addr, _ = tezos.ParseAddress(b.Staker.Contract)
+	case len(b.Staker.Delegate) > 0:
+		addr, _ = tezos.ParseAddress(b.Staker.Delegate)
+	case len(b.Staker.Baker) > 0:
+		addr, _ = tezos.ParseAddress(b.Staker.Baker)
+	}
+	return
+}
+
+func (b BalanceUpdate) IsSharedStake() bool {
+	return len(b.Staker.Contract) > 0 && len(b.Staker.Delegate) > 0
+}
+
+func (b BalanceUpdate) IsBakerStake() bool {
+	return len(b.Staker.Contract) == 0 && (len(b.Staker.Delegate)+len(b.Staker.Baker) > 0)
 }
 
 func (b BalanceUpdate) Amount() int64 {
@@ -74,3 +110,102 @@ func (b BalanceUpdate) Cycle() int64 {
 
 // BalanceUpdates is a list of balance update operations
 type BalanceUpdates []BalanceUpdate
+
+// type BalanceOrigin byte
+
+// const (
+// 	BalanceOriginInvalid BalanceOrigin = iota
+// 	BalanceOriginBlock
+// 	BalanceOriginMigration
+// 	BalanceOriginSubsidy
+// 	BalanceOriginSimulation
+// 	BalanceOriginDelayed
+// )
+
+// var balanceOriginMap = map[string]BalanceOrigin{
+// 	"block":             BalanceOriginBlock,
+// 	"migration":         BalanceOriginMigration,
+// 	"subsidy":           BalanceOriginSubsidy,
+// 	"simulation":        BalanceOriginSimulation,
+// 	"delayed_operation": BalanceOriginDelayed,
+// }
+
+// type BalanceKind byte
+
+// const (
+// 	BalanceKindInvalid BalanceKind = iota
+// 	BalanceKindContract
+// 	BalanceKindAccumulator
+// 	BalanceKindFreezer
+// 	BalanceKindMinted
+// 	BalanceKindBurned
+// 	BalanceKindStaking
+// )
+
+// var balanceKindMap = map[string]BalanceKind{
+// 	"contract":    BalanceKindContract,
+// 	"accumulator": BalanceKindAccumulator,
+// 	"freezer":     BalanceKindFreezer,
+// 	"minted":      BalanceKindMinted,
+// 	"burned":      BalanceKindBurned,
+// 	"staking":     BalanceKindStaking,
+// }
+
+// type BalanceCategory byte
+
+// const (
+// 	BalanceCategoryInvalid BalanceCategory = iota
+// 	BalanceCategoryEndorsingRewards
+// 	// BalanceCategoryAttestingRewards
+// 	BalanceCategoryBakingBonuses
+// 	BalanceCategoryBakingRewards
+// 	BalanceCategoryBlockFees
+// 	BalanceCategoryDeposits
+// 	BalanceCategoryRewards
+// 	BalanceCategoryFees
+// 	BalanceCategoryNonceRevelationRewards
+// 	BalanceCategoryStorageFees
+// 	BalanceCategoryBonds
+// 	BalanceCategoryBootstrap
+// 	BalanceCategoryBurned
+// 	BalanceCategoryCommitment
+// 	BalanceCategoryDelegateDenominator
+// 	BalanceCategoryDelegatorNumerator
+// 	BalanceCategoryInvoice
+// 	BalanceCategoryLostEndorsingRewards
+// 	// BalanceCategoryLostAttestingRewards
+// 	BalanceCategoryMinted
+// 	BalanceCategoryPunishments
+// 	BalanceCategorySrPunishments
+// 	BalanceCategorySrRewards
+// 	BalanceCategorySubsidy
+// 	BalanceCategoryUnstakedDeposits
+// )
+
+// var balanceCategoryMap = map[string]BalanceCategory{
+// 	"endorsing rewards":                   BalanceCategoryEndorsingRewards,
+// 	"attesting rewards":                   BalanceCategoryEndorsingRewards,
+// 	"baking bonuses":                      BalanceCategoryBakingBonuses,
+// 	"baking rewards":                      BalanceCategoryBakingRewards,
+// 	"block fees":                          BalanceCategoryBlockFees,
+// 	"deposits":                            BalanceCategoryDeposits,
+// 	"rewards":                             BalanceCategoryRewards,
+// 	"fees":                                BalanceCategoryFees,
+// 	"nonce revelation rewards":            BalanceCategoryNonceRevelationRewards,
+// 	"storage fees":                        BalanceCategoryStorageFees,
+// 	"bonds":                               BalanceCategoryBonds,
+// 	"bootstrap":                           BalanceCategoryBootstrap,
+// 	"burned":                              BalanceCategoryBurned,
+// 	"commitment":                          BalanceCategoryCommitment,
+// 	"delegate_denominator":                BalanceCategoryDelegateDenominator,
+// 	"delegator_numerator":                 BalanceCategoryDelegatorNumerator,
+// 	"invoice":                             BalanceCategoryInvoice,
+// 	"lost endorsing rewards":              BalanceCategoryLostEndorsingRewards,
+// 	"lost attesting rewards":              BalanceCategoryLostEndorsingRewards,
+// 	"minted":                              BalanceCategoryMinted,
+// 	"punishments":                         BalanceCategoryPunishments,
+// 	"smart_rollup_refutation_punishments": BalanceCategorySrPunishments,
+// 	"smart_rollup_refutation_rewards":     BalanceCategorySubsidy,
+// 	"subsidy":                             BalanceCategorySubsidy,
+// 	"unstaked_deposits":                   BalanceCategoryUnstakedDeposits,
+// }

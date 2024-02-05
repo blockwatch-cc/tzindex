@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package metadata
@@ -15,7 +15,7 @@ const (
 	bakerNs     = "baker"
 	bakerSchema = `{
 	"$schema": "http://json-schema.org/draft/2019-09/schema#",
-	"$id": "https://api.tzstats.com/metadata/schemas/baker.json",
+	"$id": "https://api.tzpro.io/metadata/schemas/baker.json",
 	"title": "Baker Info",
     "description": "A list of baker related settings.",
 	"type": "object",
@@ -43,12 +43,14 @@ const (
 		},
 		"non_delegatable": {
 		  "type": "boolean"
+		},
+		"sponsored": {
+		  "type": "boolean"
 		}
 	}
 }`
 )
 
-// basic baker data for tzstats display
 type Baker struct {
 	Status         BakerStatus `json:"status,omitempty"`
 	Fee            float64     `json:"fee,omitempty"`
@@ -56,6 +58,7 @@ type Baker struct {
 	MinPayout      float64     `json:"min_payout,omitempty"`
 	MinDelegation  float64     `json:"min_delegation,omitempty"`
 	NonDelegatable bool        `json:"non_delegatable,omitempty"`
+	IsSponsored    bool        `json:"sponsored,omitempty"`
 }
 
 func (d Baker) Namespace() string {

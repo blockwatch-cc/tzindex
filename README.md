@@ -1,6 +1,6 @@
 # Blockwatch Tezos Indexer
 
-© 2020-2023 Blockwatch Data Inc., All rights reserved.
+© 2020-2024 Blockwatch Data Inc., All rights reserved.
 
 TzIndex is [Blockwatch](https://blockwatch.cc)'s all-in-one zero-conf blockchain indexer for Tezos. A fast, convenient and resource-friendly way to gain tactical insights and build dapps on top of Tezos. Pro version available on request, see [License](https://github.com/blockwatch-cc/tzindex#license).
 
@@ -8,9 +8,9 @@ For support, talk to us on [Discord](https://discord.gg/D5e98Hw) or [Twitter](ht
 
 **Core Features**
 
-- supports protocols up to Nairobi (v017)
+- supports protocols up to Oxford (v018)
 - indexes and cross-checks full on-chain state
-- feature-rich [REST API](https://tzstats.com/docs/api/index.html) with objects, bulk tables and time-series
+- feature-rich [REST API](https://docs.tzpro.io/docs/api/index) with objects, bulk tables and time-series
 - auto-detects and locks Tezos network (never mixes data from different networks)
 - indexes all accounts and smart-contracts (including genesis data)
 - follows chain reorgs as they are resolved
@@ -22,6 +22,10 @@ For support, talk to us on [Discord](https://discord.gg/D5e98Hw) or [Twitter](ht
 - automatic database backups/snapshots
 - configurable HTTP request rate-limiter
 - flexible metadata support
+- pruning of unused historic snapshots
+- configurable indexing delay to avoid reorgs and serve finalized data only
+- decodes on-chain (tezos domains reverse records) and off-chain (tezos profiles) account metadata
+- identifies and decodes mint/burn/transfer of a broad range of FA tokens
 
 **Supported indexes and data tables**
 
@@ -38,17 +42,20 @@ For support, talk to us on [Discord](https://discord.gg/D5e98Hw) or [Twitter](ht
 - **elections**, **votes**, **proposals** and **ballots** capturing all on-chain governance activities
 - **snapshots**: balances of active delegates & delegators at all snapshot blocks
 - baker **income**: per-cycle statistics on baker income, efficiency, etc
-- **metadata**: standardized and custom account/token metadata
+- **metadata**: standardized and custom account metadata (tezos domains reverse record and spruce tzprofile support)
 - **constants**: global constants (e.g. smart contract code/type macros to lower contract size and reuse common features)
 - **storage**: separate smart contract storage updates to decrease operation table cache pressure
 - **event**: emitted smart contract events
 - **tickets**: emitted smart contract ticket updates
+- **cycle**: per-cycle statistics
+- **token**: FA token index
 
 **Operation modes**
 
-- **Light** (default) light-weight mode without consensus and governance data (CLI: `--light`)
-- **Full** regular operation mode that builds all indexes (CLI: `--full`)
-- **Validate** state validation mode for checking accounts and balances each block/cycle (CLI: `--validate`)
+- **Light** (default) light-weight mode without consensus and governance indexes (CLI: `-light`)
+- **Full** regular operation mode that builds all indexes (CLI: `-full`)
+- **Validate** state validation mode for checking accounts and balances each block/cycle (CLI: `-validate`)
+- **Experimental** enable experimental features (CLI: `-experimental`)
 
 **Light mode** dramatically reduces our maintenance costs for TzIndex and is best suited for dapps where access to baking-related data is not necessary. Light mode saves roughly \~50% storage costs and \~50% indexing time while still keeping all data required for Dapps.
 
@@ -80,6 +87,38 @@ Requires access to the following Tezos RPC calls
 /chains/main/blocks/{blockid}/context/contract/{address} (validate mode only)
 /chains/main/blocks/{blockid}/context/delegates/{address} (validate mode only)
 ```
+
+### Off-chain Data
+
+> With default settings you need a TzPro API key and a MAX subscription to be able to send 9M+ API calls for a full reindex.
+
+Starting with v18 TzIndex decodes FA tokens and Tezos Profiles. Both rely on off-chain data that cannot be fetched from a Tezos archive node. Tezos Profiles uses the Kepler protocol from Spruce Inc which hosts profile claims on a dedicated server which is rate limited. Some tokens store their metadata on-chain (many currency tokens do that) but most NFTs just store a url link on-chain. Metadata resolution and download are complex and often fragile because calls have to be made to reliable IPFS nodes but also many hosted servers which can go offline at any time. For best performance and user experience TzIndex pulls all token and profile metadata from the TzPro API as a default. You can change the source of metadata downloads in configuration.
+
+```
+# TzProfiles original server
+-meta.kepler.url=https://kepler.tzprofiles.com
+
+# TzProfiles Mirror on TzPro
+-meta.kepler.url=https://api.tzpro.io/v1/profiles/claim
+
+# Token Metadata on TzPro
+-meta.token.url=https://api.tzpro.io/v1/tokens/{addr}/meta
+
+# Set your TzPro API key via env TZPRO_API_KEY or a CLI
+-meta.http.api_key=your_key_here
+```
+
+Youy can also control how retries and timeouts are handled
+
+```
+-meta.max_tasks=128                 # max concurrent tasks
+-meta.http.rate_limit=50            # max API calls per second
+-meta.http.max_retries=10           # max number of retries when offline or 404
+-meta.http.retry_delay=1m           # time between retries
+-meta.http.retry_interval=1s        # extra delay to reschedule more tasks
+```
+
+Note that there are currently 8M+ NFTs and FA tokens with metadata and 56k+ profiles with 150k+ claims. It takes a substantial amount of additional time to sync this metadata depending on your settings.
 
 ### How to build
 

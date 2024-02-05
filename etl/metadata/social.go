@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package metadata
@@ -11,22 +11,22 @@ const (
 	socialNs     = "social"
 	socialSchema = `{
 	"$schema": "http://json-schema.org/draft/2019-09/schema#",
-	"$id": "https://api.tzstats.com/metadata/schemas/social.json",
+	"$id": "https://api.tzpro.io/metadata/schemas/social.json",
 	"title": "Social Media",
     "description": "A list of social media handles.",
 	"type": "object",
 	"properties": {
 		"twitter": {
-		  "type": "string"
+			"type": "string"
   		},
 		"instagram": {
-		  "type": "string"
+			"type": "string"
   		},
 		"reddit": {
-		  "type": "string"
+			"type": "string"
   		},
 		"github": {
-		  "type": "string"
+			"type": "string"
   		},
   		"website": {
   			"type": "string",

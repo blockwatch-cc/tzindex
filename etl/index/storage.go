@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -9,6 +9,7 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/task"
 )
 
 const StorageIndexKey = "storage"
@@ -56,7 +57,7 @@ func (idx *StorageIndex) Create(path, label string, opts interface{}) error {
 		return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
 	}
 
-	_, err = db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(readConfigOpts(key)))
+	_, err = db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(model.ReadConfigOpts(key)))
 	return err
 }
 
@@ -70,7 +71,7 @@ func (idx *StorageIndex) Init(path, label string, opts interface{}) error {
 	m := model.Storage{}
 	key := m.TableKey()
 
-	idx.table, err = idx.db.Table(key, m.TableOpts().Merge(readConfigOpts(key)))
+	idx.table, err = idx.db.Table(key, m.TableOpts().Merge(model.ReadConfigOpts(key)))
 	if err != nil {
 		idx.Close()
 		return err
@@ -120,7 +121,10 @@ func (idx *StorageIndex) ConnectBlock(ctx context.Context, block *model.Block, b
 		//     }
 		// }
 		if l := len(op.Storage); MaxStorageEntrySize > 0 && l > MaxStorageEntrySize {
-			log.Warnf("Storage update too large (%d bytes), dropping", l)
+			// try snappy encoded size
+			// buf := snappy.Encode(nil, op.Storage)
+			// log.Warnf("%d %s storage update too large (%d bytes, %d compressed), dropping", op.Height, op.Contract, l, len(buf))
+			log.Warnf("%d %s storage update too large (%d bytes), dropping", op.Height, op.Contract, l)
 			continue
 		}
 
@@ -159,5 +163,10 @@ func (idx *StorageIndex) Flush(ctx context.Context) error {
 			log.Errorf("Flushing %s table: %v", v.Name(), err)
 		}
 	}
+	return nil
+}
+
+func (idx *StorageIndex) OnTaskComplete(_ context.Context, _ *task.TaskResult) error {
+	// unused
 	return nil
 }

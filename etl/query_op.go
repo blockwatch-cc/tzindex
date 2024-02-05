@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -14,6 +14,7 @@ import (
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/rpc"
 )
 
 func (m *Indexer) LookupOp(ctx context.Context, opIdent string, r ListRequest) ([]*model.Op, error) {
@@ -255,7 +256,7 @@ func (m *Indexer) ListAccountOps(ctx context.Context, r ListRequest) ([]*model.O
 	}
 
 	// clamp time range to account lifetime
-	r.Since = util.Max64(r.Since, r.Account.FirstSeen-1)
+	r.Since = max(r.Since, r.Account.FirstSeen-1)
 	r.Until = util.NonZeroMin64(r.Until, r.Account.LastSeen)
 
 	// check if we should list delegations, consider different query modes
@@ -371,7 +372,7 @@ func (m *Indexer) ListAccountOps(ctx context.Context, r ListRequest) ([]*model.O
 	}
 
 	if r.Since > 0 || r.Account.FirstSeen > 0 {
-		q = q.AndGt("height", util.Max64(r.Since, r.Account.FirstSeen-1))
+		q = q.AndGt("height", max(r.Since, r.Account.FirstSeen-1))
 	}
 	if r.Until > 0 || r.Account.LastSeen > 0 {
 		q = q.AndLte("height", util.NonZeroMin64(r.Until, r.Account.LastSeen))
@@ -411,7 +412,7 @@ func (m *Indexer) ListAccountOpsCollapsed(ctx context.Context, r ListRequest) ([
 	}
 
 	// clamp time range to account lifetime
-	r.Since = util.Max64(r.Since, r.Account.FirstSeen-1)
+	r.Since = max(r.Since, r.Account.FirstSeen-1)
 	r.Until = util.NonZeroMin64(r.Until, r.Account.LastSeen)
 
 	// check if we should list delegations, consider different query modes
@@ -530,7 +531,7 @@ func (m *Indexer) ListAccountOpsCollapsed(ctx context.Context, r ListRequest) ([
 	}
 
 	if r.Since > 0 || r.Account.FirstSeen > 0 {
-		q = q.AndGt("height", util.Max64(r.Since, r.Account.FirstSeen-1))
+		q = q.AndGt("height", max(r.Since, r.Account.FirstSeen-1))
 	}
 	if r.Until > 0 || r.Account.LastSeen > 0 {
 		q = q.AndLte("height", util.NonZeroMin64(r.Until, r.Account.LastSeen))
@@ -604,7 +605,7 @@ func (m *Indexer) ListBakerEndorsements(ctx context.Context, r ListRequest) ([]*
 	}
 
 	// clamp time range to account lifetime
-	r.Since = util.Max64(r.Since, r.Account.FirstSeen-1)
+	r.Since = max(r.Since, r.Account.FirstSeen-1)
 	r.Until = util.NonZeroMin64(r.Until, r.Account.LastSeen)
 
 	q := pack.NewQuery("api.list_baker_endorsements").
@@ -637,7 +638,7 @@ func (m *Indexer) ListBakerEndorsements(ctx context.Context, r ListRequest) ([]*
 	}
 
 	if r.Since > 0 || r.Account.FirstSeen > 0 {
-		q = q.AndGt("height", util.Max64(r.Since, r.Account.FirstSeen-1))
+		q = q.AndGt("height", max(r.Since, r.Account.FirstSeen-1))
 	}
 	if r.Until > 0 || r.Account.LastSeen > 0 {
 		q = q.AndLte("height", util.NonZeroMin64(r.Until, r.Account.LastSeen))
@@ -668,7 +669,7 @@ func (m *Indexer) ListContractCalls(ctx context.Context, r ListRequest) ([]*mode
 	}
 
 	// clamp time range to account lifetime
-	r.Since = util.Max64(r.Since, r.Account.FirstSeen-1)
+	r.Since = max(r.Since, r.Account.FirstSeen-1)
 	r.Until = util.NonZeroMin64(r.Until, r.Account.LastSeen)
 
 	// list all successful tx (calls) received by this contract
@@ -823,6 +824,129 @@ func (m *Indexer) FindOrigination(ctx context.Context, id model.AccountID, heigh
 		return nil, model.ErrNoOp
 	}
 	return o, nil
+}
+
+func (m *Indexer) FindLatestUnstake(ctx context.Context, id model.AccountID, height int64) (*model.Op, error) {
+	table, err := m.Table(model.OpTableKey)
+	if err != nil {
+		return nil, err
+	}
+	o := &model.Op{}
+	err = pack.NewQuery("api.find_last_unstake").
+		WithTable(table).
+		WithoutCache().
+		WithDesc().
+		WithLimit(1).
+		AndEqual("type", model.OpTypeUnstake). // type
+		AndEqual("sender_id", id).             // search for sender account id
+		AndLt("height", height).               // must be in a previous block
+		Execute(ctx, o)
+	if err != nil {
+		return nil, err
+	}
+	if o.RowId == 0 {
+		return nil, model.ErrNoOp
+	}
+	return o, nil
+}
+
+func (m *Indexer) FindLatestFinalizeUnstake(ctx context.Context, id model.AccountID, height int64) (*model.Op, error) {
+	table, err := m.Table(model.OpTableKey)
+	if err != nil {
+		return nil, err
+	}
+	o := &model.Op{}
+	err = pack.NewQuery("api.find_last_finalizeunstake").
+		WithTable(table).
+		WithoutCache().
+		WithDesc().
+		WithLimit(1).
+		AndEqual("type", model.OpTypeFinalizeUnstake). // type
+		AndEqual("sender_id", id).                     // search for sender account id
+		AndLt("height", height).                       // must be in a previous block
+		Execute(ctx, o)
+	if err != nil {
+		return nil, err
+	}
+	if o.RowId == 0 {
+		return nil, model.ErrNoOp
+	}
+	return o, nil
+}
+
+// SumUnfrozenUnstake is used to reconcile finalize unstake amounts with unstake
+// requests in order to identify slashing losses.
+func (m *Indexer) SumUnfrozenUnstake(ctx context.Context, id model.AccountID, height, cycle int64, p *rpc.Params) (int64, error) {
+	// find the last unstake event
+	last, err := m.FindLatestFinalizeUnstake(ctx, id, height)
+	if err != nil {
+		return 0, err
+	}
+
+	// we expect this finalize will collect all coins that are unfrozen since the last
+	// call to finalize. this may span zero or more cycles
+
+	// calculate max cycle the latest finalize latest may have flushed -> start cycle
+	startCycle := last.Cycle - p.PreservedCycles - p.MaxSlashingPeriod + 1
+	// calculate max unfrozen cycle for the current finalize unstake -> end cycle
+	endCycle := cycle - p.PreservedCycles - p.MaxSlashingPeriod
+
+	// no new cycle that was unfrozen since last call
+	if startCycle == endCycle {
+		return 0, nil
+	}
+
+	// sum all unstake events
+	table, err := m.Table(model.OpTableKey)
+	if err != nil {
+		return 0, err
+	}
+
+	// sum all unstake requests between [start, end] -> sum
+	var sum int64
+	o := &model.Op{}
+	err = pack.NewQuery("api.sum_unstake_requests").
+		WithTable(table).
+		WithFields("volume").
+		WithoutCache().
+		AndEqual("type", model.OpTypeUnstake).   // type
+		AndEqual("sender_id", id).               // search for sender account id
+		AndRange("cycle", startCycle, endCycle). // must be in range
+		Stream(ctx, func(r pack.Row) error {
+			if err := r.Decode(o); err != nil {
+				return err
+			}
+			sum += o.Volume
+			return nil
+		})
+	if err != nil {
+		return 0, err
+	}
+	return sum, nil
+}
+
+// ListFrozenUnstakeRequests is used to identify slashable unstake requests.
+func (m *Indexer) ListFrozenUnstakeRequests(ctx context.Context, baker model.AccountID, cycle int64, p *rpc.Params) ([]*model.Op, error) {
+	// calculate first frozen cycle
+	startCycle := cycle - p.PreservedCycles - p.MaxSlashingPeriod + 1
+	endCycle := cycle
+
+	// find all unstake events
+	table, err := m.Table(model.OpTableKey)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := []*model.Op{}
+	err = pack.NewQuery("api.find_unstake_requests").
+		WithTable(table).
+		WithFields("row_id", "sender_id", "volume", "deposit", "reward").
+		WithoutCache().
+		AndEqual("type", model.OpTypeUnstake).   // type
+		AndEqual("baker_id", baker).             // search for sender account id
+		AndRange("cycle", startCycle, endCycle). // must be in range
+		Execute(ctx, &resp)
+	return resp, err
 }
 
 // Optimized concurrent lookup for many ops (500)

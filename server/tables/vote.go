@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package tables
@@ -68,24 +68,18 @@ func (v *Vote) MarshalJSONVerbose() ([]byte, error) {
 		EndTime          int64   `json:"period_end_time"`
 		StartHeight      int64   `json:"period_start_block"`
 		EndHeight        int64   `json:"period_end_block"`
-		EligibleRolls    int64   `json:"eligible_rolls"`
 		EligibleStake    float64 `json:"eligible_stake"`
 		EligibleVoters   int64   `json:"eligible_voters"`
 		QuorumPct        int64   `json:"quorum_pct"`
-		QuorumRolls      int64   `json:"quorum_rolls"`
 		QuorumStake      float64 `json:"quorum_stake"`
-		TurnoutRolls     int64   `json:"turnout_rolls"`
 		TurnoutStake     float64 `json:"turnout_stake"`
 		TurnoutVoters    int64   `json:"turnout_voters"`
 		TurnoutPct       int64   `json:"turnout_pct"`
 		TurnoutEma       int64   `json:"turnout_ema"`
-		YayRolls         int64   `json:"yay_rolls"`
 		YayStake         float64 `json:"yay_stake"`
 		YayVoters        int64   `json:"yay_voters"`
-		NayRolls         int64   `json:"nay_rolls"`
 		NayStake         float64 `json:"nay_stake"`
 		NayVoters        int64   `json:"nay_voters"`
-		PassRolls        int64   `json:"pass_rolls"`
 		PassStake        float64 `json:"pass_stake"`
 		PassVoters       int64   `json:"pass_voters"`
 		IsOpen           bool    `json:"is_open"`
@@ -105,24 +99,18 @@ func (v *Vote) MarshalJSONVerbose() ([]byte, error) {
 		EndTime:          util.UnixMilliNonZero(v.EndTime),
 		StartHeight:      v.StartHeight,
 		EndHeight:        v.EndHeight,
-		EligibleRolls:    v.EligibleRolls,
 		EligibleStake:    v.ctx.Params.ConvertValue(v.EligibleStake),
 		EligibleVoters:   v.EligibleVoters,
 		QuorumPct:        v.QuorumPct,
-		QuorumRolls:      v.QuorumRolls,
 		QuorumStake:      v.ctx.Params.ConvertValue(v.QuorumStake),
-		TurnoutRolls:     v.TurnoutRolls,
 		TurnoutStake:     v.ctx.Params.ConvertValue(v.TurnoutStake),
 		TurnoutVoters:    v.TurnoutVoters,
 		TurnoutPct:       v.TurnoutPct,
 		TurnoutEma:       v.TurnoutEma,
-		YayRolls:         v.YayRolls,
 		YayStake:         v.ctx.Params.ConvertValue(v.YayStake),
 		YayVoters:        v.YayVoters,
-		NayRolls:         v.NayRolls,
 		NayStake:         v.ctx.Params.ConvertValue(v.NayStake),
 		NayVoters:        v.NayVoters,
-		PassRolls:        v.PassRolls,
 		PassStake:        v.ctx.Params.ConvertValue(v.PassStake),
 		PassVoters:       v.PassVoters,
 		IsOpen:           v.IsOpen,
@@ -173,20 +161,14 @@ func (v *Vote) MarshalJSONBrief() ([]byte, error) {
 			} else {
 				buf = strconv.AppendInt(buf, v.EndHeight, 10)
 			}
-		case "eligible_rolls":
-			buf = strconv.AppendInt(buf, v.EligibleRolls, 10)
 		case "eligible_stake":
 			buf = strconv.AppendFloat(buf, v.ctx.Params.ConvertValue(v.EligibleStake), 'f', dec, 64)
 		case "eligible_voters":
 			buf = strconv.AppendInt(buf, v.EligibleVoters, 10)
 		case "quorum_pct":
 			buf = strconv.AppendInt(buf, v.QuorumPct, 10)
-		case "quorum_rolls":
-			buf = strconv.AppendInt(buf, v.QuorumRolls, 10)
 		case "quorum_stake":
 			buf = strconv.AppendFloat(buf, v.ctx.Params.ConvertValue(v.QuorumStake), 'f', dec, 64)
-		case "turnout_rolls":
-			buf = strconv.AppendInt(buf, v.TurnoutRolls, 10)
 		case "turnout_stake":
 			buf = strconv.AppendFloat(buf, v.ctx.Params.ConvertValue(v.TurnoutStake), 'f', dec, 64)
 		case "turnout_voters":
@@ -195,20 +177,14 @@ func (v *Vote) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendInt(buf, v.TurnoutPct, 10)
 		case "turnout_ema":
 			buf = strconv.AppendInt(buf, v.TurnoutEma, 10)
-		case "yay_rolls":
-			buf = strconv.AppendInt(buf, v.YayRolls, 10)
 		case "yay_stake":
 			buf = strconv.AppendFloat(buf, v.ctx.Params.ConvertValue(v.YayStake), 'f', dec, 64)
 		case "yay_voters":
 			buf = strconv.AppendInt(buf, v.YayVoters, 10)
-		case "nay_rolls":
-			buf = strconv.AppendInt(buf, v.NayRolls, 10)
 		case "nay_stake":
 			buf = strconv.AppendFloat(buf, v.ctx.Params.ConvertValue(v.NayStake), 'f', dec, 64)
 		case "nay_voters":
 			buf = strconv.AppendInt(buf, v.NayVoters, 10)
-		case "pass_rolls":
-			buf = strconv.AppendInt(buf, v.PassRolls, 10)
 		case "pass_stake":
 			buf = strconv.AppendFloat(buf, v.ctx.Params.ConvertValue(v.PassStake), 'f', dec, 64)
 		case "pass_voters":
@@ -297,20 +273,14 @@ func (v *Vote) MarshalCSV() ([]string, error) {
 			} else {
 				res[i] = strconv.FormatInt(v.EndHeight, 10)
 			}
-		case "eligible_rolls":
-			res[i] = strconv.FormatInt(v.EligibleRolls, 10)
 		case "eligible_stake":
 			res[i] = strconv.FormatFloat(v.ctx.Params.ConvertValue(v.EligibleStake), 'f', dec, 64)
 		case "eligible_voters":
 			res[i] = strconv.FormatInt(v.EligibleVoters, 10)
 		case "quorum_pct":
 			res[i] = strconv.FormatInt(v.QuorumPct, 10)
-		case "quorum_rolls":
-			res[i] = strconv.FormatInt(v.QuorumRolls, 10)
 		case "quorum_stake":
 			res[i] = strconv.FormatFloat(v.ctx.Params.ConvertValue(v.QuorumStake), 'f', dec, 64)
-		case "turnout_rolls":
-			res[i] = strconv.FormatInt(v.TurnoutRolls, 10)
 		case "turnout_stake":
 			res[i] = strconv.FormatFloat(v.ctx.Params.ConvertValue(v.TurnoutStake), 'f', dec, 64)
 		case "turnout_voters":
@@ -319,20 +289,14 @@ func (v *Vote) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatInt(v.TurnoutPct, 10)
 		case "turnout_ema":
 			res[i] = strconv.FormatInt(v.TurnoutEma, 10)
-		case "yay_rolls":
-			res[i] = strconv.FormatInt(v.YayRolls, 10)
 		case "yay_stake":
 			res[i] = strconv.FormatFloat(v.ctx.Params.ConvertValue(v.YayStake), 'f', dec, 64)
 		case "yay_voters":
 			res[i] = strconv.FormatInt(v.YayVoters, 10)
-		case "nay_rolls":
-			res[i] = strconv.FormatInt(v.NayRolls, 10)
 		case "nay_stake":
 			res[i] = strconv.FormatFloat(v.ctx.Params.ConvertValue(v.NayStake), 'f', dec, 64)
 		case "nay_voters":
 			res[i] = strconv.FormatInt(v.NayVoters, 10)
-		case "pass_rolls":
-			res[i] = strconv.FormatInt(v.PassRolls, 10)
 		case "pass_stake":
 			res[i] = strconv.FormatFloat(v.ctx.Params.ConvertValue(v.PassStake), 'f', dec, 64)
 		case "pass_voters":

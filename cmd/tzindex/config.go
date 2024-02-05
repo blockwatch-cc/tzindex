@@ -1,4 +1,4 @@
-// Copyright (c) 2022 Blockwatch Data Inc.
+// Copyright (c) 2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package main
@@ -24,21 +24,24 @@ var (
 	vdebug      bool
 	vstats      int
 	maxcpu      int
+	cpuprof     string
+	blockprof   string
+	mutexprof   string
 	showVersion bool
 	configFile  string
 
 	// indexer options
-	noindex    bool
-	nomonitor  bool
-	norpc      bool
-	noapi      bool
-	cors       bool
-	validate   bool
-	stop       int64
-	lightIndex bool
-	fullIndex  bool
-	notls      bool
-	insecure   bool
+	noindex      bool
+	nomonitor    bool
+	norpc        bool
+	noapi        bool
+	cors         bool
+	validate     bool
+	stop         int64
+	lightIndex   bool
+	notls        bool
+	insecure     bool
+	experimental bool
 )
 
 func init() {
@@ -51,9 +54,11 @@ func init() {
 	flags.StringVar(&configFile, "c", "config.json", "read config from `file`")
 	flags.StringVar(&configFile, "config", "config.json", "read config from `file`")
 	flags.IntVar(&vstats, "stats", 0, "print statistics every `n` seconds")
+	flags.StringVar(&cpuprof, "profile-cpu", "", "write cpu profile to `file`")
+	flags.StringVar(&blockprof, "profile-block", "", "write blocking events to `file`")
+	flags.StringVar(&mutexprof, "profile-mutex", "", "write mutex contention samples to `file`")
 
-	flags.BoolVar(&lightIndex, "light", true, "light mode (use to skip baker and gov data)")
-	flags.BoolVar(&fullIndex, "full", false, "full mode (including baker and gov data)")
+	flags.BoolVar(&lightIndex, "light", false, "light mode (use to skip baker and gov data)")
 	flags.BoolVar(&norpc, "norpc", false, "disable RPC client")
 	flags.BoolVar(&notls, "notls", false, "disable RPC TLS support (use http)")
 	flags.BoolVar(&insecure, "insecure", false, "disable RPC TLS certificate checks (not recommended)")
@@ -64,6 +69,7 @@ func init() {
 	flags.BoolVar(&validate, "validate", false, "validate account balances")
 	flags.Int64Var(&stop, "stop", 0, "stop indexing after `height`")
 	flags.BoolVar(&cors, "enable-cors", false, "enable API CORS support")
+	flags.BoolVar(&experimental, "experimental", false, "enable experimental features")
 
 	// go runtime
 	config.SetDefault("go.cpu", 0)         // "max number of CPU cores to use (default: all)"
@@ -93,17 +99,20 @@ func init() {
 	config.SetDefault("server.scheme", "http")
 	config.SetDefault("server.host", "127.0.0.1")
 	config.SetDefault("server.name", UserAgent())
-	config.SetDefault("server.workers", 64)
+	config.SetDefault("server.threads", 64)
 	config.SetDefault("server.queue", 128)
+	config.SetDefault("server.timeout_header", "")
+	config.SetDefault("server.fail_header", "")
+	config.SetDefault("server.limit_header", "")
 	config.SetDefault("server.read_timeout", 5*time.Second)
 	config.SetDefault("server.header_timeout", 2*time.Second)
 	config.SetDefault("server.write_timeout", 90*time.Second)
 	config.SetDefault("server.keepalive", 90*time.Second)
 	config.SetDefault("server.shutdown_timeout", 60*time.Second)
-	config.SetDefault("server.max_list_count", 500000)
+	config.SetDefault("server.max_list_count", 50000)
 	config.SetDefault("server.default_list_count", 500)
 	config.SetDefault("server.max_series_duration", 0)
-	config.SetDefault("server.max_explore_count", 100)
+	config.SetDefault("server.max_explore_count", 1000)
 	config.SetDefault("server.default_explore_count", 20)
 	config.SetDefault("server.cors_enable", false)
 	config.SetDefault("server.cors_origin", "*")
@@ -131,6 +140,8 @@ func init() {
 
 	// REST client
 	config.SetDefault("rpc.url", "http://127.0.0.1:8732")
+	config.SetDefault("rpc.user", "")
+	config.SetDefault("rpc.pass", "")
 	config.SetDefault("rpc.disable_tls", true)
 	config.SetDefault("rpc.insecure_tls", false)
 	config.SetDefault("rpc.proxy", "")
@@ -142,6 +153,20 @@ func init() {
 	config.SetDefault("rpc.response_timeout", 60*time.Minute)
 	config.SetDefault("rpc.continue_timeout", 60*time.Second)
 	config.SetDefault("rpc.idle_conns", 16)
+	config.SetDefault("rpc.retries", 3)
+	config.SetDefault("rpc.retry_delay", time.Second)
+	config.SetDefault("rpc.api_key", os.Getenv("TZPRO_API_KEY"))
+
+	// Metadata settings
+	// config.SetDefault("meta.kepler.url", "https://kepler.tzprofiles.com")
+	config.SetDefault("meta.kepler.url", "https://api.tzpro.io/v1/profiles/claim")
+	config.SetDefault("meta.token.url", "https://api.tzpro.io/v1/tokens/{addr}/meta")
+	config.SetDefault("meta.http.api_key", os.Getenv("TZPRO_API_KEY"))
+	config.SetDefault("meta.max_tasks", 128)
+	config.SetDefault("meta.http.rate_limit", 50)
+	config.SetDefault("meta.http.max_retries", 10)
+	config.SetDefault("meta.http.retry_delay", time.Minute)
+	config.SetDefault("meta.http.retry_interval", time.Second)
 
 	// logging
 	config.SetDefault("log.progress", 10*time.Second)
@@ -151,12 +176,35 @@ func init() {
 	config.SetDefault("log.etl", "info")
 	config.SetDefault("log.db", "info")
 	config.SetDefault("log.rpc", "info")
-	config.SetDefault("log.api", "info")
+	config.SetDefault("log.report", "info")
+	config.SetDefault("log.server", "info")
 	config.SetDefault("log.micheline", "info")
+
+	// Statsd
+	config.SetDefault("stats.enable", false)
+	config.SetDefault("stats.addr", "telegraf")
+	config.SetDefault("stats.port", 8125)
+	config.SetDefault("stats.proto", "udp")
+	config.SetDefault("stats.flush_interval", 100*time.Millisecond)
+	config.SetDefault("stats.report_interval", 10*time.Second)
+	config.SetDefault("stats.sample_rate", 1.0)
+	config.SetDefault("stats.prefix", "tzindex")
+	config.SetDefault("stats.tags", nil)
+	config.SetDefault("stats.hostname_as_suffix", false)
+
+	// ZMQ publisher
+	config.SetDefault("zmq.watermark", 16*1024)
+	config.SetDefault("zmq.socket", "tcp://127.0.0.1:27000")
+	config.SetDefault("zmq.hash_block", true)
+	config.SetDefault("zmq.raw_block", true)
+	config.SetDefault("zmq.hash_op", true)
+	config.SetDefault("zmq.raw_op", true)
+	config.SetDefault("zmq.xpub_op", true)
+	config.SetDefault("zmq.status", true)
 }
 
 func loadConfig() error {
-	config.SetEnvPrefix(envprefix)
+	config.SetEnvPrefix(appName)
 	if configFile != "" {
 		config.SetConfigName(configFile)
 	}

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -94,18 +94,29 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.Operation, id 
 	// - fee payment by source
 	// - fee reception by baker
 	// - (re)delegate source balance on success
+	// - oxford: re-delegation will unstake
 	if op.IsSuccess {
 		flows := b.NewDelegationFlows(
 			src,
 			nbkr,
 			obkr,
 			dop.Fees(),
+			res.Balances(), // unstake
 			id,
 		)
+
+		// detect unstake and output as event
+		if err := b.AppendImplicitUnstakeOp(ctx, src, obkr, flows, id, rollback); err != nil {
+			return Errorf("%v", err)
+		}
 
 		// use the actual flow volume (current src balance may have changed before
 		// in the same block)
 		for _, f := range flows {
+			// skip non-delegation flows
+			if f.Kind != model.FlowKindDelegation {
+				continue
+			}
 			switch f.AccountId {
 			case op.BakerId:
 				// new baker add (first or second flow on re-delegation)
@@ -123,6 +134,7 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.Operation, id 
 			obkr, // both =old !!
 			obkr, // both =old !!
 			dop.Fees(),
+			nil,
 			id,
 		)
 
@@ -171,8 +183,21 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.Operation, id 
 				}
 
 			} else {
-				// handle delegator withdraw
+				// Oxford staking: under staking a re-delegation auto-unstakes from
+				// current baker, we process the unstake flow later during account
+				// update, however, here we already overwrite BakerId to
+				// the new baker
+				//
+				// Stake updates must be processed exactly in order for correct
+				// amounts and calculations must happen in the context of
+				// the old baker.
+				//
+				// For this reason we keep a temp pointer to the old baker inside
+				// the account. This pointer is cleared once the current block
+				// completes processing. (note: obkr may be nil which is expected
+				// for fresh delegations)
 				if nbkr == nil {
+					// handle delegator withdraw
 					src.IsDelegated = false
 					src.BakerId = 0
 					src.DelegatedSince = 0
@@ -182,12 +207,12 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.Operation, id 
 					src.IsDelegated = true
 					src.BakerId = nbkr.AccountId
 					src.DelegatedSince = b.block.Height
-					nbkr.TotalDelegations++
 					nbkr.ActiveDelegations++
 				}
 				// handle withdraw from old baker if any
 				if obkr != nil {
 					obkr.ActiveDelegations--
+					src.AuxBaker = obkr
 				}
 			}
 		} else {
@@ -251,8 +276,8 @@ func (b *Builder) AppendDelegationOp(ctx context.Context, oh *rpc.Operation, id 
 
 			// reverse new baker setting
 			if nbkr != nil {
-				nbkr.TotalDelegations--
 				nbkr.ActiveDelegations--
+				src.AuxBaker = nbkr
 			}
 
 			// reverse handle withdraw from old baker
@@ -334,11 +359,21 @@ func (b *Builder) AppendInternalDelegationOp(
 		// - no fees (paid by outer op)
 		// - (re)delegate source balance on success
 		// - no fees paid, no flow on failure
-		flows := b.NewDelegationFlows(src, nbkr, obkr, nil, id)
+		// - oxford: re-delegation will unstake all
+		flows := b.NewDelegationFlows(src, nbkr, obkr, nil, res.Balances(), id)
+
+		// detect unstake and output as event
+		if err := b.AppendImplicitUnstakeOp(ctx, src, obkr, flows, id, rollback); err != nil {
+			return Errorf("%v", err)
+		}
 
 		// use the actual flow volume (current src balance may have changed before
 		// in the same block)
 		for _, f := range flows {
+			// skip non-delegation flows
+			if f.Kind != model.FlowKindDelegation {
+				continue
+			}
 			switch f.AccountId {
 			case op.BakerId:
 				// new baker add (first or second flow on re-delegation)
@@ -385,7 +420,6 @@ func (b *Builder) AppendInternalDelegationOp(
 				src.IsDelegated = true
 				src.BakerId = nbkr.AccountId
 				src.DelegatedSince = b.block.Height
-				nbkr.TotalDelegations++
 				nbkr.ActiveDelegations++
 			}
 
@@ -436,7 +470,6 @@ func (b *Builder) AppendInternalDelegationOp(
 
 			// reverse new baker
 			if nbkr != nil {
-				nbkr.TotalDelegations--
 				nbkr.ActiveDelegations--
 				nbkr.IsDirty = true
 			}

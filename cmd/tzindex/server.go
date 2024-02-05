@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package main
@@ -31,11 +31,15 @@ func runServer() error {
 		return err
 	}
 
+	// init database
 	pathname := config.GetString("db.path")
-	pack.QueryLogMinDuration = config.GetDuration("db.log_slow_queries")
-	index.MaxStorageEntrySize = config.GetInt("db.max_storage_entry_size")
 	dbOpts := DBOpts(false)
 	log.Infof("Using %s database %s", engine, pathname)
+	index.MaxStorageEntrySize = config.GetInt("db.max_storage_entry_size")
+	pack.QueryLogMinDuration = config.GetDuration("db.log_slow_queries")
+	if index.MaxStorageEntrySize > 0 {
+		dataLog.Warnf("Limiting max contract storage entry to %d bytes", index.MaxStorageEntrySize)
+	}
 
 	// make sure paths exist
 	if err := os.MkdirAll(pathname, 0700); err != nil {
@@ -72,9 +76,6 @@ func runServer() error {
 		noindex = true
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	// enable index storage tables
 	indexer := etl.NewIndexer(etl.IndexerConfig{
 		DBPath:    pathname,
@@ -84,6 +85,9 @@ func runServer() error {
 		LightMode: lightIndex,
 	})
 	defer indexer.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	crawler := etl.NewCrawler(etl.CrawlerConfig{
 		DB:            statedb,
@@ -95,23 +99,23 @@ func runServer() error {
 		StopBlock:     stop,
 		Validate:      validate,
 		Snapshot: &etl.SnapshotConfig{
-			Path:          config.GetString("crawler.snapshot_path"),
-			Blocks:        config.GetInt64Slice("crawler.snapshot_blocks"),
-			BlockInterval: config.GetInt64("crawler.snapshot_interval"),
+			Path:          config.GetString("crawler.snapshot.path"),
+			Blocks:        config.GetInt64Slice("crawler.snapshot.blocks"),
+			BlockInterval: config.GetInt64("crawler.snapshot.interval"),
 		},
 	})
 	// not indexing means we do not auto-index, but allow access to
 	// existing indexes
-	if !noindex {
+	if noindex {
+		if err := crawler.Init(ctx, etl.MODE_INFO); err != nil {
+			return fmt.Errorf("crawler init: %v", err)
+		}
+	} else {
 		if err := crawler.Init(ctx, etl.MODE_SYNC); err != nil {
-			return fmt.Errorf("error initializing crawler: %v", err)
+			return fmt.Errorf("crawler init: %v", err)
 		}
 		crawler.Start()
 		defer crawler.Stop(ctx)
-	} else {
-		if err := crawler.Init(ctx, etl.MODE_INFO); err != nil {
-			return fmt.Errorf("error initializing crawler: %v", err)
-		}
 	}
 
 	// setup HTTP server
@@ -123,8 +127,11 @@ func runServer() error {
 			Http: server.HttpConfig{
 				Addr:                config.GetString("server.addr"),
 				Port:                config.GetInt("server.port"),
-				MaxWorkers:          config.GetInt("server.workers"),
+				MaxWorkers:          config.GetInt("server.threads"),
 				MaxQueue:            config.GetInt("server.queue"),
+				TimeoutHeader:       config.GetString("server.timeout_header"),
+				FailHeader:          config.GetString("server.fail_header"),
+				LimitHeader:         config.GetString("server.limit_header"),
 				ReadTimeout:         config.GetDuration("server.read_timeout"),
 				HeaderTimeout:       config.GetDuration("server.header_timeout"),
 				WriteTimeout:        config.GetDuration("server.write_timeout"),

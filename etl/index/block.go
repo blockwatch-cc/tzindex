@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -8,8 +8,8 @@ import (
 	"fmt"
 
 	"blockwatch.cc/packdb/pack"
-
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/task"
 )
 
 const BlockIndexKey = "block"
@@ -54,7 +54,7 @@ func (idx *BlockIndex) Create(path, label string, opts interface{}) error {
 	if err != nil {
 		return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
 	}
-	_, err = db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(readConfigOpts(key)))
+	_, err = db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(model.ReadConfigOpts(key)))
 	return err
 }
 
@@ -68,7 +68,7 @@ func (idx *BlockIndex) Init(path, label string, opts interface{}) error {
 	m := model.Block{}
 	key := m.TableKey()
 
-	idx.table, err = idx.db.Table(key, m.TableOpts().Merge(readConfigOpts(key)))
+	idx.table, err = idx.db.Table(key, m.TableOpts().Merge(model.ReadConfigOpts(key)))
 	if err != nil {
 		idx.Close()
 		return err
@@ -106,14 +106,15 @@ func (idx *BlockIndex) ConnectBlock(ctx context.Context, block *model.Block, b m
 
 	// fetch and update snapshot block
 	if snap := block.TZ.Snapshot; snap != nil && block.Height > 1 {
-		// protocol upgrades happen 1 block before cycle end. when changes to
-		// cycle lenth happen, we miss snapshot 15
+		// protocol upgrades happen 1 block before cycle end. use parent params
+		// to catch changes in cycle length; some protocol upgrades fucked up
+		// and added a 16th snapshot or started a block too early
 		p := block.Params
 		if block.Parent != nil {
 			p = block.Parent.Params
 		}
 		snapHeight := p.SnapshotBlock(snap.Cycle, snap.Index)
-		log.Debugf("block: marking %d cycle %d index %d as roll snapshot for cycle %d",
+		log.Debugf("block: marking B_%d C_%d I_%d as stake snapshot for C_%d",
 			snapHeight, block.Params.HeightToCycle(snapHeight), snap.Index, snap.Cycle)
 		snapBlock := &model.Block{}
 		err := pack.NewQuery("etl.update").
@@ -124,14 +125,14 @@ func (idx *BlockIndex) ConnectBlock(ctx context.Context, block *model.Block, b m
 			AndEqual("height", snapHeight).
 			Execute(ctx, snapBlock)
 		if err != nil {
-			return fmt.Errorf("snapshot index block %d for cycle %d index %d: %w", snapHeight, snap.Cycle, snap.Index, err)
+			return fmt.Errorf("snapshot index B_%d for C_%d I_%d: %w", snapHeight, snap.Cycle, snap.Index, err)
 		}
 		if snapBlock.RowId == 0 {
-			return fmt.Errorf("missing snapshot index block %d for cycle %d index %d", snapHeight, snap.Cycle, snap.Index)
+			return fmt.Errorf("missing snapshot index B_%d for C_%d I_%d with params %#v", snapHeight, snap.Cycle, snap.Index, p)
 		}
 		snapBlock.IsCycleSnapshot = true
 		if err := idx.table.Update(ctx, []pack.Item{snapBlock}); err != nil {
-			return fmt.Errorf("snapshot index block %d: %w", snapHeight, err)
+			return fmt.Errorf("snapshot index B_%d: %w", snapHeight, err)
 		}
 	}
 
@@ -169,5 +170,10 @@ func (idx *BlockIndex) Flush(ctx context.Context) error {
 			log.Errorf("Flushing %s table: %v", v.Name(), err)
 		}
 	}
+	return nil
+}
+
+func (idx *BlockIndex) OnTaskComplete(_ context.Context, _ *task.TaskResult) error {
+	// unused
 	return nil
 }

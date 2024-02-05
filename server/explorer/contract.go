@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package explorer
@@ -77,7 +77,7 @@ func NewContract(ctx *server.Context, c *model.Contract, a *model.Account, args 
 		CallStats:     c.ListCallStats(),
 		Features:      c.Features,
 		Interfaces:    c.Interfaces,
-		expires:       ctx.Tip.BestTime.Add(p.BlockTime()),
+		expires:       ctx.Expires,
 	}
 
 	// resolve block times
@@ -135,9 +135,10 @@ func (b Contract) RegisterDirectRoutes(r *mux.Router) error {
 
 func (b Contract) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/{ident}", server.C(ReadContract)).Methods("GET").Name("contract")
-	r.HandleFunc("/{ident}/calls", server.C(ReadContractCalls)).Methods("GET")
+	r.HandleFunc("/{ident}/calls", server.C(ListContractCalls)).Methods("GET")
 	r.HandleFunc("/{ident}/script", server.C(ReadContractScript)).Methods("GET")
 	r.HandleFunc("/{ident}/storage", server.C(ReadContractStorage)).Methods("GET")
+	r.HandleFunc("/{ident}/events", server.C(ListContractEvents)).Methods("GET")
 	return nil
 
 }
@@ -215,35 +216,9 @@ func (r *ContractRequest) Parse(ctx *server.Context) {
 		r.SinceHash = hash
 	}
 	// filter by entrypoint condition
-	for key, val := range ctx.Request.URL.Query() {
-		keys := strings.Split(key, ".")
-		if keys[0] != "entrypoint" {
-			continue
-		}
-		// parse mode
-		r.EntrypointMode = pack.FilterModeEqual
-		if len(keys) > 1 {
-			r.EntrypointMode = pack.ParseFilterMode(keys[1])
-			if !r.EntrypointMode.IsValid() {
-				panic(server.EBadRequest(server.EC_PARAM_INVALID, fmt.Sprintf("invalid entrypoint filter mode '%s'", keys[1]), nil))
-			}
-		}
-		// use entrypoint condition list as is (will be parsed later)
-		r.EntrypointCond = val[0]
-		// allow constructs of form `entrypoint=a,b`
-		if strings.Contains(r.EntrypointCond, ",") {
-			if r.EntrypointMode == pack.FilterModeEqual {
-				r.EntrypointMode = pack.FilterModeIn
-			}
-		} else {
-			// check for single value mode  `entrypoint.in=a`
-			switch r.EntrypointMode {
-			case pack.FilterModeIn:
-				r.EntrypointMode = pack.FilterModeEqual
-			case pack.FilterModeNotIn:
-				r.EntrypointMode = pack.FilterModeNotEqual
-			}
-		}
+	if mode, val, ok := server.Query(ctx, "entrypoint"); ok {
+		r.EntrypointMode = mode
+		r.EntrypointCond = val
 	}
 }
 
@@ -290,7 +265,7 @@ var (
 )
 
 // list incoming transaction with data
-func ReadContractCalls(ctx *server.Context) (interface{}, int) {
+func ListContractCalls(ctx *server.Context) (interface{}, int) {
 	args := &ContractRequest{}
 	ctx.ParseRequestArgs(args)
 	cc := loadContract(ctx)

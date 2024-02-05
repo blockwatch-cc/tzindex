@@ -1,11 +1,10 @@
-// Copyright (c) 2021 Blockwatch Data Inc.
+// Copyright (c) 2024 Blockwatch Data Inc.
 // Authors: abdul@blockwatch.cc, alex@blockwatch.cc
 package main
 
 import (
 	"flag"
 	"fmt"
-	"math/rand"
 	"net/url"
 	"os"
 	"runtime"
@@ -31,7 +30,7 @@ var (
 
 	version string = "v0.1"
 	commit  string = "dev"
-	appDesc string = "Blockwatch tztop - ©2022 Blockwatch Data Inc, All rights reserved."
+	appDesc string = "Blockwatch tztop - ©2024 Blockwatch Data Inc, All rights reserved."
 )
 
 func main() {
@@ -42,8 +41,6 @@ func main() {
 }
 
 func run() error {
-	rand.Seed(time.Now().UnixNano())
-
 	runCmd := flag.NewFlagSet("run", flag.ExitOnError)
 	runCmd.StringVar(&baseURL, "url", "http://localhost:8000", "indexer server url")
 	runCmd.StringVar(&host, "host", "", "HTTP hostname override")
@@ -87,8 +84,8 @@ func run() error {
 	}
 
 	log.Info(appDesc)
-	log.Infof("App version: %s %s\n", version, commit)
-	log.Infof("Go version: %s\n", runtime.Version())
+	log.Infof("App version: %s %s", version, commit)
+	log.Infof("Go version: %s", runtime.Version())
 
 	// set logging level
 	switch {

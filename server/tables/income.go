@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package tables
@@ -68,11 +68,12 @@ func (c *Income) MarshalJSONVerbose() ([]byte, error) {
 		Cycle                  int64     `json:"cycle"`
 		AccountId              uint64    `json:"account_id"`
 		Address                string    `json:"address"`
-		Rolls                  int64     `json:"rolls"`
 		Balance                float64   `json:"balance"`
 		Delegated              float64   `json:"delegated"`
-		ActiveStake            float64   `json:"active_stake"`
+		OwnStake               float64   `json:"own_stake"`
+		StakingBalance         float64   `json:"staking_balance"`
 		NDelegations           int64     `json:"n_delegations"`
+		NStakers               int64     `json:"n_stakers"`
 		NBakingRights          int64     `json:"n_baking_rights"`
 		NEndorsingRights       int64     `json:"n_endorsing_rights"`
 		Luck                   float64   `json:"luck"`
@@ -88,7 +89,6 @@ func (c *Income) MarshalJSONVerbose() ([]byte, error) {
 		NSeedsRevealed         int64     `json:"n_seeds_revealed"`
 		ExpectedIncome         float64   `json:"expected_income"`
 		TotalIncome            float64   `json:"total_income"`
-		TotalDeposits          float64   `json:"total_deposits"`
 		BakingIncome           float64   `json:"baking_income"`
 		EndorsingIncome        float64   `json:"endorsing_income"`
 		AccusationIncome       float64   `json:"accusation_income"`
@@ -110,11 +110,12 @@ func (c *Income) MarshalJSONVerbose() ([]byte, error) {
 		Cycle:                  c.Cycle,
 		AccountId:              c.AccountId.U64(),
 		Address:                c.ctx.Indexer.LookupAddress(c.ctx, c.AccountId).String(),
-		Rolls:                  c.Rolls,
 		Balance:                c.params.ConvertValue(c.Balance),
 		Delegated:              c.params.ConvertValue(c.Delegated),
-		ActiveStake:            c.params.ConvertValue(c.ActiveStake),
+		OwnStake:               c.params.ConvertValue(c.OwnStake),
+		StakingBalance:         c.params.ConvertValue(c.StakingBalance),
 		NDelegations:           c.NDelegations,
+		NStakers:               c.NStakers,
 		NBakingRights:          c.NBakingRights,
 		NEndorsingRights:       c.NEndorsingRights,
 		Luck:                   c.params.ConvertValue(c.Luck),
@@ -130,7 +131,6 @@ func (c *Income) MarshalJSONVerbose() ([]byte, error) {
 		NSeedsRevealed:         c.NSeedsRevealed,
 		ExpectedIncome:         c.params.ConvertValue(c.ExpectedIncome),
 		TotalIncome:            c.params.ConvertValue(c.TotalIncome),
-		TotalDeposits:          c.params.ConvertValue(c.TotalDeposits),
 		BakingIncome:           c.params.ConvertValue(c.BakingIncome),
 		EndorsingIncome:        c.params.ConvertValue(c.EndorsingIncome),
 		AccusationIncome:       c.params.ConvertValue(c.AccusationIncome),
@@ -165,16 +165,18 @@ func (c *Income) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendUint(buf, c.AccountId.U64(), 10)
 		case "address":
 			buf = strconv.AppendQuote(buf, c.ctx.Indexer.LookupAddress(c.ctx, c.AccountId).String())
-		case "rolls":
-			buf = strconv.AppendInt(buf, c.Rolls, 10)
 		case "balance":
 			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.Balance), 'f', dec, 64)
 		case "delegated":
 			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.Delegated), 'f', dec, 64)
-		case "active_stake":
-			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.ActiveStake), 'f', dec, 64)
+		case "own_stake":
+			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.OwnStake), 'f', dec, 64)
+		case "staking_balance":
+			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.StakingBalance), 'f', dec, 64)
 		case "n_delegations":
 			buf = strconv.AppendInt(buf, c.NDelegations, 10)
+		case "n_stakers":
+			buf = strconv.AppendInt(buf, c.NStakers, 10)
 		case "n_baking_rights":
 			buf = strconv.AppendInt(buf, c.NBakingRights, 10)
 		case "n_endorsing_rights":
@@ -205,8 +207,6 @@ func (c *Income) MarshalJSONBrief() ([]byte, error) {
 			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.ExpectedIncome), 'f', dec, 64)
 		case "total_income":
 			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.TotalIncome), 'f', dec, 64)
-		case "total_deposits":
-			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.TotalDeposits), 'f', dec, 64)
 		case "baking_income":
 			buf = strconv.AppendFloat(buf, c.params.ConvertValue(c.BakingIncome), 'f', dec, 64)
 		case "endorsing_income":
@@ -263,16 +263,18 @@ func (c *Income) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatUint(c.AccountId.U64(), 10)
 		case "address":
 			res[i] = strconv.Quote(c.ctx.Indexer.LookupAddress(c.ctx, c.AccountId).String())
-		case "rolls":
-			res[i] = strconv.FormatInt(c.Rolls, 10)
 		case "balance":
 			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.Balance), 'f', dec, 64)
 		case "delegated":
 			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.Delegated), 'f', dec, 64)
-		case "active_stake":
-			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.ActiveStake), 'f', dec, 64)
+		case "own_stake":
+			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.OwnStake), 'f', dec, 64)
+		case "staking_balance":
+			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.StakingBalance), 'f', dec, 64)
 		case "n_delegations":
 			res[i] = strconv.FormatInt(c.NDelegations, 10)
+		case "n_stakers":
+			res[i] = strconv.FormatInt(c.NStakers, 10)
 		case "n_baking_rights":
 			res[i] = strconv.FormatInt(c.NBakingRights, 10)
 		case "n_endorsing_rights":
@@ -303,8 +305,6 @@ func (c *Income) MarshalCSV() ([]string, error) {
 			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.ExpectedIncome), 'f', dec, 64)
 		case "total_income":
 			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.TotalIncome), 'f', dec, 64)
-		case "total_deposits":
-			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.TotalDeposits), 'f', dec, 64)
 		case "baking_income":
 			res[i] = strconv.FormatFloat(c.params.ConvertValue(c.BakingIncome), 'f', dec, 64)
 		case "endorsing_income":
@@ -473,7 +473,7 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 			// into memory, the binary search should be faster than a block query
 			switch cond.Mode {
 			case pack.FilterModeRange:
-				// use cond.From and con.To
+				// use cond.From and cond.To
 				from, to := cond.From.(time.Time), cond.To.(time.Time)
 				var fromBlock, toBlock int64
 				if !from.After(bestTime) {
@@ -491,15 +491,19 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 				q = q.AndGte("end_height", fromBlock).AndLte("start_height", toBlock)
 			default:
 				// cond.Value is time.Time
-				valueTime := cond.Value.(time.Time)
+				val := cond.Value.(time.Time)
 				var height int64
-				if !valueTime.After(bestTime) {
-					height = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, valueTime)
+				if !val.After(bestTime) {
+					height = ctx.Indexer.LookupBlockHeightFromTime(ctx.Context, val)
 				} else {
-					nDiff := int64(valueTime.Sub(bestTime) / params.BlockTime())
+					nDiff := int64(val.Sub(bestTime) / params.BlockTime())
 					height = bestHeight + nDiff
 				}
-				q = q.And("start_height", cond.Mode, height)
+				fname := "end_height"
+				if cond.Mode == pack.FilterModeGt || cond.Mode == pack.FilterModeGte {
+					fname = "start_height"
+				}
+				q = q.And(fname, cond.Mode, height)
 			}
 
 		default:
@@ -544,8 +548,8 @@ func StreamIncomeTable(ctx *server.Context, args *TableRequest) (interface{}, in
 					}
 					v = strings.Join(fvals, ",")
 
-				case "luck", "balance", "delegated", "active_stake", "expected_income",
-					"total_income", "total_deposits", "baking_income", "endorsing_income",
+				case "luck", "balance", "delegated", "own_stake", "active_stake",
+					"expected_income", "total_income", "baking_income", "endorsing_income",
 					"accusation_income", "seed_income", "fees_income",
 					"total_loss", "accusation_loss", "seed_loss", "endorsing_loss",
 					"lost_accusation_fees", "lost_accusation_rewards", "lost_accusation_deposits",

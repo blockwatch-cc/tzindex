@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -24,25 +24,41 @@ func (b *Builder) AuditState(ctx context.Context, offset int64) error {
 		return nil
 	}
 
+	// every cycle check all stored accounts
+	// only run full check when not in rollback mode
+	if b.block.TZ.IsCycleStart() && offset == 0 {
+		return b.AuditAccountDatabase(ctx, true)
+		// } else {
+		// 	return nil
+	}
+
+	block := rpc.BlockLevel(b.block.Height - offset)
 	isCycleEnd := b.block.TZ.IsCycleEnd()
 
 	plog := logpkg.NewProgressLogger(log).SetAction("Verified").SetEvent("account")
 
+	logError := func(format string, args ...any) {
+		log.Errorf("Audit %d "+format, append([]any{block}, args...)...)
+	}
+	logWarn := func(format string, args ...any) {
+		log.Warnf("Audit %d "+format, append([]any{block}, args...)...)
+	}
+
 	// exclusivity
 	for id := range b.bakerMap {
 		if id == 0 {
-			log.Warnf("Audit: Baker account %s with null id is_baker=%t in maps", b.bakerMap[id], b.bakerMap[id].Account.IsBaker)
+			logWarn("baker %s with null id is_baker=%t in maps", b.bakerMap[id], b.bakerMap[id].Account.IsBaker)
 		}
 		if acc, ok := b.accMap[id]; ok {
-			log.Warnf("Audit: Baker account %s [%d] is_baker=%t in multiple builder maps", acc, id, acc.IsBaker)
+			logWarn("baker %s [%d] is_baker=%t in multiple builder maps", acc, id, acc.IsBaker)
 		}
 	}
 	for id := range b.accMap {
 		if id == 0 {
-			log.Warnf("Audit: Normal account %s with null id is_baker=%t in maps", b.accMap[id], b.accMap[id].IsBaker)
+			logWarn("normal account %s with null id is_baker=%t in maps", b.accMap[id], b.accMap[id].IsBaker)
 		}
 		if acc, ok := b.bakerMap[id]; ok {
-			log.Warnf("Audit: Normal account %s [%d] is_baker=%t in multiple builder maps", acc, id, acc.Account.IsBaker)
+			logWarn("normal account %s [%d] is_baker=%t in multiple builder maps", acc, id, acc.Account.IsBaker)
 		}
 	}
 
@@ -60,26 +76,22 @@ aloop:
 			continue
 		}
 		// skip non-activated accounts and rollups
-		var skip bool
 		switch acc.Type {
 		case tezos.AddressTypeBlinded, tezos.AddressTypeTxRollup, tezos.AddressTypeSmartRollup:
-			skip = true
-		}
-		if skip {
-			continue
+			continue aloop
 		}
 
 		// run a sanity check
 		if acc.IsRevealed && acc.Type != tezos.AddressTypeContract {
 			if !acc.Pubkey.IsValid() {
-				log.Errorf("Audit: invalid pubkey: acc=%s key=%s", acc, acc.Pubkey.String())
+				logError("invalid pubkey: acc=%s key=%s", acc, acc.Pubkey.String())
 			}
 			if acc.Address != acc.Pubkey.Address() {
-				log.Errorf("Audit: key mismatch: acc=%s type=%s bad-key=%s", acc, acc.Pubkey.Type, acc.Pubkey)
+				logError("key mismatch: acc=%s type=%s bad-key=%s", acc, acc.Pubkey.Type, acc.Pubkey)
 			}
 		}
 		// check balance against node rpc
-		state, err := b.rpc.GetContract(ctx, acc.Address, rpc.BlockLevel(b.block.Height-offset))
+		state, err := b.rpc.GetContract(ctx, acc.Address, block)
 		if err != nil {
 			// skip 404 errors on non-funded accounts (they may not exist,
 			// but are indexed because they may have appeared in failed operations)
@@ -90,7 +102,7 @@ aloop:
 		}
 		// use vesting balance too, but without rollup bond
 		if state.Balance != acc.SpendableBalance {
-			log.Errorf("Audit: balance mismatch for %s: index=%d node=%d", acc, acc.SpendableBalance, state.Balance)
+			logError("balance mismatch for %s: index=%d node=%d", acc, acc.SpendableBalance, state.Balance)
 			failed++
 		}
 		plog.Log(1)
@@ -111,114 +123,116 @@ bloop:
 			continue
 		}
 		acc := bkr.Account
+
 		// run sanity checks
 		if !acc.IsBaker {
-			log.Errorf("Audit: baker %s with missing baker flag", acc)
+			logError("baker %s with missing baker flag", acc)
 			continue
 		}
 		if acc.BakerId == 0 {
 			if b.block.Params.Version < 2 {
 				continue
 			}
-			log.Errorf("Audit: baker %s with zero baker id link", acc)
+			logError("baker %s with zero baker id link", acc)
 			failed++
 		} else if acc.BakerId != acc.RowId {
-			log.Errorf("Audit: baker %s with non-self baker id link", acc)
+			logError("baker %s with non-self baker id link", acc)
 			failed++
 		}
 		if !acc.IsRevealed {
-			log.Errorf("Audit: baker %s with unrevealed key", acc)
-			continue
+			logError("baker %s with unrevealed key", acc)
+			failed++
 		}
 		if !acc.Pubkey.IsValid() {
-			log.Errorf("Audit: invalid pubkey: acc=%s key=%s", acc, acc.Pubkey)
+			logError("invalid pubkey: acc=%s key=%s", acc, acc.Pubkey)
+			failed++
 		}
+		// Note: consensus key may differ from address
 		if acc.Address != acc.Pubkey.Address() {
-			log.Errorf("Audit: baker key mismatch: acc=%s type=%s bad-key=%s", acc, acc.Pubkey.Type, acc.Pubkey)
+			logError("baker account key mismatch: acc=%s type=%s bad-key=%s", acc, acc.Pubkey.Type, acc.Pubkey)
+			failed++
 		}
 		// check balance against node rpc
-		bal, err := b.rpc.GetContract(ctx, acc.Address, rpc.BlockLevel(b.block.Height-offset))
+		bal, err := b.rpc.GetContract(ctx, acc.Address, block)
 		if err != nil {
-			log.Warnf("Audit: fetching balance for %s: %v", acc, err)
+			logWarn("fetching balance for %s: %v", acc, err)
 			continue
 		}
 		// only use spendable balance here!
 		if bal.Balance != acc.SpendableBalance {
-			log.Errorf("Audit: baker balance mismatch for %s: index=%d node=%d", acc, acc.SpendableBalance, bal.Balance)
+			logError("baker balance mismatch for %s: index=%d node=%d", acc, acc.SpendableBalance, bal.Balance)
 			failed++
 		}
 		// check baker status against node rpc
-		state, err := b.rpc.GetDelegate(ctx, acc.Address, rpc.BlockLevel(b.block.Height-offset))
+		state, err := b.rpc.GetBakerInfo(ctx, acc.Address, block)
 		if err != nil && bkr.IsActive {
-			log.Warnf("Audit: fetching baker state for %s: %v", acc, err)
+			logWarn("fetching baker state for %s: %v", acc, err)
 			continue
 		}
 		// the indexer deactivates bakers at start of cycle, when we run this check at the
 		// last block of a cycle where the node has already deactivated the baker, we
 		// get a wrong result, just skip this check at cycle end
 		if !isCycleEnd && bkr.IsActive && state.Deactivated {
-			log.Errorf("Audit: baker active state mismatch for %s: index=%t node=%t", bkr, bkr.IsActive, !state.Deactivated)
+			logError("baker active state mismatch for %s: index=%t node=%t", bkr, bkr.IsActive, !state.Deactivated)
 			failed++
 		}
 		if state.GracePeriod != bkr.GracePeriod {
-			log.Warnf("Audit: baker grace period mismatch for %s: index=%d node=%d", bkr, bkr.GracePeriod, state.GracePeriod)
+			logError("baker grace period mismatch for %s: index=%d node=%d", bkr, bkr.GracePeriod, state.GracePeriod)
+			failed++
 		}
 		// node counts empty KT1 as delegators (!)
 		if l := int64(len(state.DelegatedContracts)); l < bkr.ActiveDelegations {
-			log.Errorf("Audit: baker delegation count mismatch for %s: index=%d node=%d (note: node still counts empty accounts as active delegators)", bkr, bkr.ActiveDelegations, l)
+			logError("baker delegation count mismatch for %s: index=%d node=%d (note: node still counts empty accounts as active delegators)", bkr, bkr.ActiveDelegations, l)
 			failed++
 		}
 		// mix pre/post Ithaca values
-		if f := state.FrozenBalance + state.FrozenDeposits; f != bkr.FrozenBalance() {
-			log.Errorf("Audit: baker frozen balance mismatch for %s: index=%d node=%d", bkr, bkr.FrozenBalance(), f)
+		if f := state.FrozenBalance + state.CurrentFrozenDeposits; f != bkr.FrozenStake() {
+			logError("baker frozen balance mismatch for %s: index=%d node=%d", bkr, bkr.FrozenStake(), f)
 			failed++
 		}
 		if state.StakingBalance != bkr.StakingBalance() {
-			log.Errorf("Audit: baker staking balance mismatch for %s: index=%d node=%d", bkr, bkr.StakingBalance(), state.StakingBalance)
+			logError("baker staking balance mismatch for %s: index=%d node=%d", bkr, bkr.StakingBalance(), state.StakingBalance)
 			failed++
 		}
 		if state.DelegatedBalance != bkr.DelegatedBalance {
-			log.Errorf("Audit: baker delegated balance mismatch for %s: index=%d node=%d", bkr, bkr.DelegatedBalance, state.DelegatedBalance)
+			logError("baker delegated balance mismatch for %s: index=%d node=%d", bkr, bkr.DelegatedBalance, state.DelegatedBalance)
 			failed++
 		}
-		if bkr.DepositsLimit > -1 {
+		// state.FrozenDepositsLimit disappears in oxford
+		if state.FrozenDepositsLimit > 0 && bkr.DepositsLimit > -1 {
 			if state.FrozenDepositsLimit != bkr.DepositsLimit {
-				log.Errorf("Audit: baker deposits limit mismatch for %s: index=%d node=%d", bkr, bkr.DepositsLimit, state.FrozenDepositsLimit)
+				logError("baker deposits limit mismatch for %s: index=%d node=%d", bkr, bkr.DepositsLimit, state.FrozenDepositsLimit)
 				failed++
 			}
 		}
 
+		// TODO: oxford check
+		// state.TotalDelegatedStake
+
 		plog.Log(1)
 	}
-
-	// every cycle check all stored accounts
-	if !b.block.TZ.IsCycleStart() {
-		if failed > 0 {
-			return fmt.Errorf("Account audit failed")
-		}
-		return nil
-	}
-
-	// only run full check when not in rollback mode
-	if offset == 0 {
-		if err := b.AuditAccountDatabase(ctx, true); err != nil {
-			return err
-		}
-	}
+	plog.Flush()
 
 	if failed > 0 {
 		return fmt.Errorf("Account audit failed")
 	}
-	plog.Flush()
 	return nil
 }
 
 func (b *Builder) AuditAccountDatabase(ctx context.Context, nofail bool) error {
+	block := rpc.BlockLevel(b.block.Height)
 	log.Infof("Auditing account database with %d bakers and %d total accounts at cycle %d block %d",
-		len(b.bakerMap), b.block.Chain.TotalAccounts, b.block.Cycle, b.block.Height)
+		len(b.bakerMap), b.block.Chain.TotalAccounts, b.block.Cycle, block)
 
 	var count, failed int
 	plog := logpkg.NewProgressLogger(log).SetAction("Verified").SetEvent("baker")
+
+	logError := func(format string, args ...any) {
+		log.Errorf("Audit %d "+format, append([]any{block}, args...)...)
+	}
+	logWarn := func(format string, args ...any) {
+		log.Warnf("Audit %d "+format, append([]any{block}, args...)...)
+	}
 
 	// baker accounts
 bloop:
@@ -233,7 +247,7 @@ bloop:
 		acc := bkr.Account
 		// run sanity checks
 		if !acc.IsBaker {
-			log.Errorf("Audit: baker %s with missing baker flag", acc)
+			logError("baker %s with missing baker flag", acc)
 			failed++
 			continue
 		}
@@ -241,75 +255,76 @@ bloop:
 			if b.block.Params.Version < 2 {
 				continue
 			}
-			log.Errorf("Audit: baker %s with zero baker id link", acc)
+			logError("baker %s with zero baker id link", acc)
 			failed++
 		} else if acc.BakerId != acc.RowId {
-			log.Errorf("Audit: baker %s with non-self baker id link", acc)
+			logError("baker %s with non-self baker id link", acc)
 			failed++
 		}
 		if !acc.IsRevealed {
-			log.Errorf("Audit: baker %s with unrevealed key", acc)
+			logError("baker %s with unrevealed key", acc)
 			failed++
 		}
 		if !acc.Pubkey.IsValid() {
-			log.Errorf("Audit: invalid baker pubkey: acc=%s key=%s", acc, acc.Pubkey)
+			logError("invalid baker pubkey: acc=%s key=%s", acc, acc.Pubkey)
 			failed++
 		}
 		if acc.Address != acc.Pubkey.Address() {
-			log.Errorf("Audit: baker key mismatch: acc=%s type=%s bad-key=%s", acc, acc.Pubkey.Type, acc.Pubkey)
+			logError("baker key mismatch: acc=%s type=%s bad-key=%s", acc, acc.Pubkey.Type, acc.Pubkey)
 			failed++
 		}
 		// check balance against node rpc
 		bal, err := b.rpc.GetContract(ctx, acc.Address, rpc.BlockLevel(b.block.Height))
 		if err != nil {
-			log.Errorf("Audit: fetching balance for %s: %v", acc, err)
+			logError("fetching balance for %s: %v", acc, err)
 			failed++
 			continue
 		}
 		// only use spendable balance here!
 		if bal.Balance != acc.SpendableBalance {
-			log.Errorf("Audit: baker balance mismatch for %s: index=%d node=%d", acc, acc.SpendableBalance, bal.Balance)
+			logError("baker balance mismatch for %s: index=%d node=%d", acc, acc.SpendableBalance, bal.Balance)
 			failed++
 		}
 		// check baker status against node rpc
-		state, err := b.rpc.GetDelegate(ctx, acc.Address, rpc.BlockLevel(b.block.Height))
+		state, err := b.rpc.GetBakerInfo(ctx, acc.Address, block)
 		if err != nil {
 			if bkr.IsActive {
-				log.Errorf("Audit: fetching baker state for %s: %v", acc, err)
+				logError("fetching baker state for %s: %v", acc, err)
 				failed++
 			} else {
-				log.Warnf("Audit: fetching baker state for %s: %v", acc, err)
+				logWarn("fetching baker state for %s: %v", acc, err)
 			}
 			continue
 		}
-		if bkr.IsActive && state.Deactivated {
-			log.Errorf("Audit: baker active state mismatch for %s: index=%t node=%t", bkr, bkr.IsActive, !state.Deactivated)
+		if bkr.IsActive != !state.Deactivated {
+			logError("baker active state mismatch for %s: index=%t node=%t", bkr, bkr.IsActive, !state.Deactivated)
 			failed++
 		}
 		if state.GracePeriod != bkr.GracePeriod {
-			log.Warnf("Audit: baker grace period mismatch for %s: index=%d node=%d", bkr, bkr.GracePeriod, state.GracePeriod)
+			logError("baker grace period mismatch for %s: index=%d node=%d", bkr, bkr.GracePeriod, state.GracePeriod)
+			failed++
 		}
 		// node counts empty KT1 as delegators (!)
 		if l := int64(len(state.DelegatedContracts)); l < bkr.ActiveDelegations {
-			log.Errorf("Audit: baker delegation count mismatch for %s: index=%d node=%d (note: node still counts empty accounts as active delegators)", bkr, bkr.ActiveDelegations, l)
+			logError("baker delegation count mismatch for %s: index=%d node=%d (note: node still counts empty accounts as active delegators)", bkr, bkr.ActiveDelegations, l)
 			failed++
 		}
 		// mix pre/post Ithaca values
-		if f := state.FrozenBalance + state.FrozenDeposits; f != bkr.FrozenBalance() {
-			log.Errorf("Audit: baker frozen balance mismatch for %s: index=%d node=%d", bkr, bkr.FrozenBalance(), f)
+		if f := state.FrozenBalance + state.CurrentFrozenDeposits; f != bkr.FrozenStake() {
+			logError("baker frozen balance mismatch for %s: index=%d node=%d", bkr, bkr.FrozenStake(), f)
 			failed++
 		}
 		if state.StakingBalance != bkr.StakingBalance() {
-			log.Errorf("Audit: baker staking balance mismatch for %s: index=%d node=%d", bkr, bkr.StakingBalance(), state.StakingBalance)
+			logError("baker staking balance mismatch for %s: index=%d node=%d", bkr, bkr.StakingBalance(), state.StakingBalance)
 			failed++
 		}
 		if state.DelegatedBalance != bkr.DelegatedBalance {
-			log.Errorf("Audit: baker delegated balance mismatch for %s: index=%d node=%d", bkr, bkr.DelegatedBalance, state.DelegatedBalance)
+			logError("baker delegated balance mismatch for %s: index=%d node=%d", bkr, bkr.DelegatedBalance, state.DelegatedBalance)
 			failed++
 		}
 		if bkr.DepositsLimit > -1 {
 			if state.FrozenDepositsLimit != bkr.DepositsLimit {
-				log.Errorf("Audit: baker deposits limit mismatch for %s: index=%d node=%d", bkr, bkr.DepositsLimit, state.FrozenDepositsLimit)
+				logError("baker deposits limit mismatch for %s: index=%d node=%d", bkr, bkr.DepositsLimit, state.FrozenDepositsLimit)
 				failed++
 			}
 		}
@@ -400,7 +415,7 @@ aloop:
 		}
 
 		// check balance against node rpc
-		state, err := b.rpc.GetContract(ctx, acc.Address, rpc.BlockLevel(b.block.Height))
+		state, err := b.rpc.GetContract(ctx, acc.Address, block)
 		if err != nil {
 			// skip 404 errors on non-funded accounts (they may not exist,
 			// but are indexed because they may have appeared in failed operations)

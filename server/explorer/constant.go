@@ -1,12 +1,13 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package explorer
 
 import (
-	"github.com/gorilla/mux"
 	"net/http"
 	"time"
+
+	"github.com/gorilla/mux"
 
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
@@ -40,6 +41,7 @@ func NewConstant(ctx *server.Context, c *model.Constant) *Constant {
 		Time:        ctx.Indexer.LookupBlockTime(ctx.Context, c.Height),
 		StorageSize: c.StorageSize,
 		Features:    c.Features,
+		expires:     ctx.Expires,
 	}
 	_ = cc.Value.UnmarshalBinary(c.Value)
 	return cc

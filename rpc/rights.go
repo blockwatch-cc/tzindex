@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -54,8 +54,38 @@ func (r EndorsingRight) Address() tezos.Address {
 }
 
 type StakeInfo struct {
-	ActiveStake int64         `json:"active_stake,string"`
+	ActiveStake ActiveStake   `json:"active_stake"`
 	Baker       tezos.Address `json:"baker"`
+}
+
+// v12+ .. v17: single integer
+// v18+: struct
+type ActiveStake struct {
+	Combined  int64 `json:"-"`
+	Frozen    int64 `json:"frozen,string"`
+	Delegated int64 `json:"delegated,string"`
+}
+
+func (s ActiveStake) Value() int64 {
+	return s.Frozen + s.Delegated + s.Combined
+}
+
+func (s *ActiveStake) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	switch data[0] {
+	case '{':
+		type alias *ActiveStake
+		return json.Unmarshal(data, alias(s))
+	case '"':
+		val, err := strconv.ParseInt(string(data[1:len(data)-1]), 10, 64)
+		if err != nil {
+			return err
+		}
+		s.Combined = val
+	}
+	return nil
 }
 
 type SnapshotInfo struct {
@@ -65,7 +95,7 @@ type SnapshotInfo struct {
 	RollSnapshot int         `json:"roll_snapshot"`                         // until v011
 	Cycle        int64       `json:"cycle"`                                 // added, not part of RPC response
 	BakerStake   []StakeInfo `json:"selected_stake_distribution,omitempty"` // v012+
-	TotalStake   int64       `json:"total_active_stake,string"`             // v012+
+	TotalStake   ActiveStake `json:"total_active_stake"`                    // v012+, changed type in v18
 	// Slashed []??? "slashed_deposits"
 }
 
@@ -394,4 +424,73 @@ func (c *Client) ListSnapshotRollOwners(ctx context.Context, id BlockID, cycle, 
 		return nil, err
 	}
 	return owners, nil
+}
+
+// GetEndorsingSlotOwner returns the address if the baker who owns endorsing slot in block.
+func (c *Client) GetEndorsingSlotOwner(ctx context.Context, id BlockID, slot int, p *Params) (tezos.Address, error) {
+	u := fmt.Sprintf("chains/main/blocks/%s/helpers/endorsing_rights?all=true", id)
+	if p.Version < 12 && p.IsPreIthacaNetworkAtStart() {
+		type Rights struct {
+			Level    int64  `json:"level"`
+			Delegate string `json:"delegate"`
+			Slots    []int  `json:"slots"`
+		}
+		rights := make([]Rights, 0)
+		if err := c.Get(ctx, u, &rights); err != nil {
+			return tezos.ZeroAddress, err
+		}
+		for _, r := range rights {
+			for _, v := range r.Slots {
+				if v == slot {
+					addr, _ := tezos.ParseAddress(r.Delegate)
+					return addr, nil
+				}
+			}
+		}
+	} else {
+		type Rights struct {
+			Level     int64 `json:"level"`
+			Delegates []struct {
+				Delegate string `json:"delegate"`
+				Slot     int    `json:"first_slot"`
+			} `json:"delegates"`
+		}
+		rights := make([]Rights, 0)
+		if err := c.Get(ctx, u, &rights); err != nil {
+			return tezos.ZeroAddress, err
+		}
+		for _, v := range rights {
+			for _, r := range v.Delegates {
+				if r.Slot == slot {
+					addr, _ := tezos.ParseAddress(r.Delegate)
+					return addr, nil
+				}
+			}
+		}
+	}
+	return tezos.ZeroAddress, fmt.Errorf("Endorsing slot not found")
+}
+
+// GetBakingRightOwner returns the address if the baker who owns endorsing slot in block.
+func (c *Client) GetBakingRightOwner(ctx context.Context, id BlockID, round int, p *Params) (tezos.Address, error) {
+	maxSelector := "max_priority=%d"
+	if p.Version >= 12 && p.IsPreIthacaNetworkAtStart() {
+		maxSelector = "max_round=%d"
+	}
+	if p.Version < 6 && p.IsPreIthacaNetworkAtStart() {
+		round++
+	}
+	rights := make([]BakingRight, 0)
+	u := fmt.Sprintf("chains/main/blocks/%s/helpers/baking_rights?all=true&"+maxSelector, id, round)
+	if err := c.Get(ctx, u, &rights); err != nil {
+		return tezos.ZeroAddress, err
+	}
+	for _, r := range rights {
+		if r.Round != round {
+			continue
+		}
+		addr, _ := tezos.ParseAddress(r.Delegate)
+		return addr, nil
+	}
+	return tezos.ZeroAddress, fmt.Errorf("Baking round not found")
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2018 - 2020 Blockwatch Data Inc.
+// Copyright (c) 2018 - 2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -74,6 +74,10 @@ type HttpConfig struct {
 	Port                int           `json:"port"`
 	MaxWorkers          int           `json:"max_workers"`
 	MaxQueue            int           `json:"max_queue"`
+	TimeoutHeader       string        `json:"timeout_header"`
+	FailHeader          string        `json:"fail_header"`
+	DegradedHeader      string        `json:"degraded_header"`
+	LimitHeader         string        `json:"limit_header"`
 	ReadTimeout         time.Duration `json:"read_timeout"`
 	HeaderTimeout       time.Duration `json:"header_timeout"`
 	WriteTimeout        time.Duration `json:"write_timeout"`
@@ -111,13 +115,13 @@ func NewHttpConfig() HttpConfig {
 		ReadTimeout:         5 * time.Second,  // header+body timeout
 		WriteTimeout:        90 * time.Second, // response deadline
 		KeepAlive:           90 * time.Second, // timeout for idle connections
-		ShutdownTimeout:     30 * time.Second, // grafecul shutdown deadline
+		ShutdownTimeout:     30 * time.Second, // graceful shutdown deadline
 		DefaultListCount:    500,
 		MaxListCount:        5000,
 		DefaultExploreCount: 20,
 		MaxExploreCount:     100,
 		MaxSeriesDuration:   90 * 24 * time.Hour,
-		CacheExpires:        30 * time.Second,
+		CacheExpires:        15 * time.Second,
 		CacheMaxExpires:     24 * time.Hour,
 	}
 }

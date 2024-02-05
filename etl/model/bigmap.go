@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package model
@@ -8,11 +8,10 @@ import (
 	"errors"
 	"time"
 
-	"github.com/cespare/xxhash"
-
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
+	"github.com/cespare/xxhash"
 )
 
 var (
@@ -21,7 +20,7 @@ var (
 )
 
 const (
-	BigmapAllocTableKey  = "bigmaps"
+	BigmapAllocTableKey  = "bigmap_types"
 	BigmapUpdateTableKey = "bigmap_updates"
 	BigmapValueTableKey  = "bigmap_values"
 )
@@ -29,18 +28,21 @@ const (
 // /tables/bigmaps
 type BigmapAlloc struct {
 	RowId     uint64    `pack:"I,pk"     json:"row_id"`        // internal: id
-	BigmapId  int64     `pack:"B"        json:"bigmap_id"`     // unique bigmap id
-	AccountId AccountID `pack:"A"        json:"account_id"`    // account table id for contract
-	Height    int64     `pack:"h"        json:"alloc_height"`  // allocation height
-	NUpdates  int64     `pack:"n"        json:"n_updates"`     // running update counter
-	NKeys     int64     `pack:"k"        json:"n_keys"`        // current number of active keys
-	Updated   int64     `pack:"u"        json:"update_height"` // last update height
-	Deleted   int64     `pack:"D"        json:"delete_height"` // block when bigmap was removed
+	BigmapId  int64     `pack:"B,i32"    json:"bigmap_id"`     // unique bigmap id
+	AccountId AccountID `pack:"A,u32"    json:"account_id"`    // account table id for contract
+	Height    int64     `pack:"h,i32"    json:"alloc_height"`  // allocation height
+	NUpdates  int64     `pack:"n,i32"    json:"n_updates"`     // running update counter
+	NKeys     int64     `pack:"k,i32"    json:"n_keys"`        // current number of active keys
+	Updated   int64     `pack:"u,i32"    json:"update_height"` // last update height
+	Deleted   int64     `pack:"D,i32"    json:"delete_height"` // block when bigmap was removed
 	Data      []byte    `pack:"d,snappy" json:"-"`             // micheline encoded type tree (key/val pair)
 
 	// internal, not stored
 	KeyType   micheline.Type `pack:"-" json:"-"`
 	ValueType micheline.Type `pack:"-" json:"-"`
+
+	// nice to have: howto resolve ambigous types?
+	// Name      string    `pack:"N,snappy" json:"name"`           // bigmap name used in contract annots
 }
 
 // Ensure bigmap items implement the pack.Item interface.
@@ -183,23 +185,14 @@ func (b *BigmapAlloc) ToRemove(op *Op) *BigmapUpdate {
 }
 
 func (m *BigmapAlloc) Reset() {
-	m.RowId = 0
-	m.BigmapId = 0
-	m.AccountId = 0
-	m.NUpdates = 0
-	m.NKeys = 0
-	m.Updated = 0
-	m.Deleted = 0
-	m.Data = nil
-	m.KeyType = micheline.Type{}
-	m.ValueType = micheline.Type{}
+	*m = BigmapAlloc{}
 }
 
 // /tables/bigmap_values
 type BigmapValue struct {
 	RowId    uint64 `pack:"I,pk"             json:"row_id"`    // internal: id
-	BigmapId int64  `pack:"B,bloom"          json:"bigmap_id"` // unique bigmap id
-	Height   int64  `pack:"h"                json:"height"`    // update height
+	BigmapId int64  `pack:"B,i32,bloom"      json:"bigmap_id"` // unique bigmap id
+	Height   int64  `pack:"h,i32"            json:"height"`    // update height
 	KeyId    uint64 `pack:"K,bloom=3,snappy" json:"key_id"`    // xxhash(BigmapId, KeyHash)
 	Key      []byte `pack:"k,snappy"         json:"key"`       // key/value bytes: binary encoded micheline.Prim Pair
 	Value    []byte `pack:"v,snappy"         json:"value"`     // key/value bytes: binary encoded micheline.Prim Pair
@@ -310,15 +303,15 @@ func (m *BigmapValue) Reset() {
 
 // /tables/bigmap_updates
 type BigmapUpdate struct {
-	RowId     uint64               `pack:"I,pk"       json:"row_id"`    // internal: id
-	BigmapId  int64                `pack:"B,bloom"    json:"bigmap_id"` // unique bigmap id
-	KeyId     uint64               `pack:"K,bloom=3"  json:"key_id"`    // xxhash(BigmapId, KeyHash)
-	Action    micheline.DiffAction `pack:"a"          json:"action"`    // action (alloc, copy, update, remove)
-	OpId      OpID                 `pack:"o"          json:"op_id"`     // operation id
-	Height    int64                `pack:"h"          json:"height"`    // creation time
-	Timestamp time.Time            `pack:"t"          json:"time"`      // creation height
-	Key       []byte               `pack:"k,snappy"   json:"key"`       // key/value bytes: binary encoded micheline.Prim
-	Value     []byte               `pack:"v,snappy"   json:"value"`     // key/value bytes: binary encoded micheline.Prim, (Pair(int,int) on copy)
+	RowId     uint64               `pack:"I,pk"             json:"row_id"`    // internal: id
+	BigmapId  int64                `pack:"B,i32,bloom"      json:"bigmap_id"` // unique bigmap id
+	KeyId     uint64               `pack:"K,bloom=3,snappy" json:"key_id"`    // xxhash(BigmapId, KeyHash)
+	Action    micheline.DiffAction `pack:"a,u8"             json:"action"`    // action (alloc, copy, update, remove)
+	OpId      OpID                 `pack:"o"                json:"op_id"`     // operation id
+	Height    int64                `pack:"h,i32"            json:"height"`    // creation time
+	Timestamp time.Time            `pack:"t"                json:"time"`      // creation height
+	Key       []byte               `pack:"k,snappy"         json:"key"`       // key/value bytes: binary encoded micheline.Prim
+	Value     []byte               `pack:"v,snappy"         json:"value"`     // key/value bytes: binary encoded micheline.Prim, (Pair(int,int) on copy)
 }
 
 var _ pack.Item = (*BigmapUpdate)(nil)

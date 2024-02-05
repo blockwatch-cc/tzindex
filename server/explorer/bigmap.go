@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package explorer
@@ -44,7 +44,7 @@ type Bigmap struct {
 	KeyTypePrim   *micheline.Prim   `json:"key_type_prim,omitempty"`
 	ValueTypePrim *micheline.Prim   `json:"value_type_prim,omitempty"`
 
-	expires time.Time `json:"-"`
+	expires time.Time
 }
 
 func NewBigmap(ctx *server.Context, alloc *model.BigmapAlloc, args server.Options) *Bigmap {
@@ -62,7 +62,7 @@ func NewBigmap(ctx *server.Context, alloc *model.BigmapAlloc, args server.Option
 		UpdatedBlock:  ctx.Indexer.LookupBlockHash(ctx.Context, alloc.Updated),
 		KeyType:       kt.Typedef(micheline.CONST_KEY),
 		ValueType:     vt.Typedef(micheline.CONST_VALUE),
-		expires:       ctx.Tip.BestTime.Add(ctx.Params.BlockTime()),
+		expires:       ctx.Expires,
 	}
 	if alloc.Deleted > 0 {
 		m.DeletedHeight = &alloc.Deleted
@@ -261,7 +261,7 @@ func ListBigmapKeys(ctx *server.Context) (interface{}, int) {
 
 	resp := &BigmapKeyList{
 		list:     make([]BigmapKey, 0, len(items)),
-		expires:  ctx.Tip.BestTime.Add(ctx.Params.BlockTime()),
+		expires:  ctx.Expires,
 		modified: ctx.Indexer.LookupBlockTime(ctx, alloc.Updated),
 	}
 
@@ -329,7 +329,7 @@ func ListBigmapValues(ctx *server.Context) (interface{}, int) {
 
 	resp := &BigmapValueList{
 		list:     make([]BigmapValue, 0, len(items)),
-		expires:  ctx.Tip.BestTime.Add(ctx.Params.BlockTime()),
+		expires:  ctx.Expires,
 		modified: ctx.Indexer.LookupBlockTime(ctx, alloc.Updated),
 	}
 
@@ -422,7 +422,7 @@ func ReadBigmapValue(ctx *server.Context) (interface{}, int) {
 		KeyHash:  &keyHash,
 		Value:    &typedValue,
 		modified: ctx.Indexer.LookupBlockTime(ctx, v.Height),
-		expires:  ctx.Tip.BestTime.Add(ctx.Params.BlockTime()),
+		expires:  ctx.Expires,
 	}
 	if args.WithMeta() {
 		resp.Meta = &BigmapMeta{
@@ -490,7 +490,7 @@ func ListBigmapUpdates(ctx *server.Context) (interface{}, int) {
 
 	resp := &BigmapUpdateList{
 		diff:    make([]BigmapUpdate, 0, len(items)),
-		expires: ctx.Tip.BestTime.Add(ctx.Params.BlockTime()),
+		expires: ctx.Expires,
 	}
 
 	keyType, valType := alloc.GetKeyType(), alloc.GetValueType()
@@ -633,7 +633,7 @@ func ListBigmapKeyUpdates(ctx *server.Context) (interface{}, int) {
 
 	resp := &BigmapUpdateList{
 		diff:    make([]BigmapUpdate, 0, len(items)),
-		expires: ctx.Tip.BestTime.Add(ctx.Params.BlockTime()),
+		expires: ctx.Expires,
 	}
 	contract := ctx.Indexer.LookupAddress(ctx, alloc.AccountId)
 	for _, v := range items {

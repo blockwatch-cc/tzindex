@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package explorer
@@ -13,8 +13,8 @@ import (
 type Storage struct {
 	Value    interface{}     `json:"value,omitempty"`
 	Prim     *micheline.Prim `json:"prim,omitempty"`
-	modified time.Time       `json:"-"`
-	expires  time.Time       `json:"-"`
+	modified time.Time
+	expires  time.Time
 }
 
 func (t Storage) LastModified() time.Time { return t.modified }
@@ -25,7 +25,7 @@ var _ server.Resource = (*Storage)(nil)
 func NewStorage(ctx *server.Context, data []byte, typ micheline.Type, mod time.Time, args server.Options) *Storage {
 	resp := &Storage{
 		modified: mod,
-		expires:  ctx.Tip.BestTime.Add(ctx.Params.BlockTime()),
+		expires:  ctx.Expires,
 	}
 
 	prim := micheline.Prim{}

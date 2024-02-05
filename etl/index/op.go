@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -8,8 +8,8 @@ import (
 	"fmt"
 
 	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/task"
 )
 
 const OpIndexKey = "op"
@@ -63,7 +63,7 @@ func (idx *OpIndex) Create(path, label string, opts interface{}) error {
 		if err != nil {
 			return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
 		}
-		opts := m.TableOpts().Merge(readConfigOpts(key))
+		opts := m.TableOpts().Merge(model.ReadConfigOpts(key))
 		_, err = db.CreateTableIfNotExists(key, fields, opts)
 		if err != nil {
 			return err
@@ -84,7 +84,7 @@ func (idx *OpIndex) Init(path, label string, opts interface{}) error {
 		model.Endorsement{},
 	} {
 		key := m.TableKey()
-		t, err := idx.db.Table(key, m.TableOpts().Merge(readConfigOpts(key)))
+		t, err := idx.db.Table(key, m.TableOpts().Merge(model.ReadConfigOpts(key)))
 		if err != nil {
 			idx.Close()
 			return err
@@ -144,7 +144,10 @@ func (idx *OpIndex) ConnectBlock(ctx context.Context, block *model.Block, b mode
 		}
 		switch op.Type {
 		case model.OpTypeEndorsement, model.OpTypePreendorsement:
-			endorse = append(endorse, op.ToEndorsement())
+			// skip post Ithaca endorsements
+			if block.Params.Version < 12 {
+				endorse = append(endorse, op.ToEndorsement())
+			}
 		case model.OpTypeBake:
 			// assign block fees to the bake operation (pre-Ithaca)
 			if op.Fee == 0 {
@@ -205,7 +208,7 @@ func (idx *OpIndex) DeleteCycle(ctx context.Context, cycle int64) error {
 			if first == 0 {
 				first = xb.Height
 			}
-			last = util.Max64(last, xb.Height)
+			last = max(last, xb.Height)
 			return nil
 		})
 	if err != nil {
@@ -233,5 +236,10 @@ func (idx *OpIndex) Flush(ctx context.Context) error {
 			log.Errorf("Flushing %s table: %v", v.Name(), err)
 		}
 	}
+	return nil
+}
+
+func (idx *OpIndex) OnTaskComplete(_ context.Context, _ *task.TaskResult) error {
+	// unused
 	return nil
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2023 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -34,6 +34,7 @@ var (
 	ProtoV016      = ParseProto("PtMumbaiiFFEGbew1rRjzSPyzRbA51Tm3RVZL5suHPxSZYDhCEc")
 	ProtoV016_2    = ParseProto("PtMumbai2TmsJHNGRkD8v8YDbtao7BLUC3wjASn1inAKLFCjaH1")
 	ProtoV017      = ParseProto("PtNairobiyssHuh87hEhfVBGCVrK3WnS8Z2FT4ymB5tAa4r1nQf")
+	ProtoV018      = ParseProto("ProxfordYmVfjWnRcgjWH36fW6PArwqykTFzotUxRs6gmTcZDuH")
 
 	// aliases
 	PtAthens  = ProtoV004
@@ -50,14 +51,12 @@ var (
 	PtLimaPt  = ProtoV015
 	PtMumbai  = ProtoV016_2
 	PtNairobi = ProtoV017
+	Proxford  = ProtoV018
 
-	Mainnet      = ParseChain("NetXdQprcVkpaWU")
-	Ghostnet     = ParseChain("NetXnHfVqm9iesp")
-	Jakartanet   = ParseChain("NetXLH1uAxK7CCh")
-	Kathmandunet = ParseChain("NetXi2ZagzEsXbZ")
-	Limanet      = ParseChain("NetXizpkH94bocH")
-	Mumbainet    = ParseChain("NetXgbcrNtXD2yA")
-	Nairobinet   = ParseChain("NetXyuzvDo2Ugzb")
+	Mainnet    = ParseChain("NetXdQprcVkpaWU")
+	Ghostnet   = ParseChain("NetXnHfVqm9iesp")
+	Nairobinet = ParseChain("NetXyuzvDo2Ugzb")
+	Oxfordnet  = ParseChain("NetXxWsskGahzQB")
 
 	Versions = map[tezos.ProtocolHash]int{
 		ProtoGenesis:   0,
@@ -80,6 +79,7 @@ var (
 		ProtoV016:      16,
 		ProtoV016_2:    16,
 		ProtoV017:      17,
-		ProtoAlpha:     18,
+		ProtoV018:      18,
+		ProtoAlpha:     19,
 	}
 )

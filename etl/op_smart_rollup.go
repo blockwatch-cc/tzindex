@@ -1,4 +1,4 @@
-// Copyright (c) 2023 Blockwatch Data Inc.
+// Copyright (c) 2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -141,11 +141,11 @@ func (b *Builder) AppendSmartRollupTransactionOp(ctx context.Context, oh *rpc.Op
 	}
 
 	var (
-		src, dst, loser, recv *model.Account
-		mgr                   rpc.Manager
-		ok                    bool
-		params                []byte
-		ires                  []rpc.InternalResult
+		src, dst, loser, winner, recv *model.Account
+		mgr                           rpc.Manager
+		ok                            bool
+		params                        []byte
+		ires                          []*rpc.InternalResult
 	)
 	res := o.Result()
 
@@ -200,11 +200,14 @@ func (b *Builder) AppendSmartRollupTransactionOp(ctx context.Context, oh *rpc.Op
 				return Errorf("missing loser account %s", res.GameStatus.Player)
 			}
 		}
+		winner = src
 		params = tx.Encode()
 
 	case *rpc.SmartRollupTimeout:
 		mgr = tx.Manager
-		// always ends a game and slashes
+		// ends a game
+		// sender may be a non-player account!!!
+		// only players are slashed and rewarded (must find in balance updates)
 		src, ok = b.AccountByAddress(tx.Source)
 		if !ok {
 			return Errorf("missing sender account %s", tx.Source)
@@ -213,11 +216,18 @@ func (b *Builder) AppendSmartRollupTransactionOp(ctx context.Context, oh *rpc.Op
 		if !ok {
 			return Errorf("missing target rollup %s", tx.Rollup)
 		}
-		// log.Warnf("Timeout: Game status %#v", res.GameStatus)
 		if res.IsSuccess() && res.GameStatus.Kind == "loser" {
 			loser, ok = b.AccountByAddress(*res.GameStatus.Player)
 			if !ok {
 				return Errorf("missing loser account %s", res.GameStatus.Player)
+			}
+			w := tx.Stakers.Alice
+			if w == loser.Address {
+				w = tx.Stakers.Bob
+			}
+			winner, ok = b.AccountByAddress(w)
+			if !ok {
+				return Errorf("missing winner account %s", w)
 			}
 		}
 		params = tx.Encode()
@@ -236,6 +246,7 @@ func (b *Builder) AppendSmartRollupTransactionOp(ctx context.Context, oh *rpc.Op
 		ires = tx.Metadata.InternalResults
 
 	case *rpc.SmartRollupRecoverBond:
+		// sender may be != staker!!!
 		mgr = tx.Manager
 		src, ok = b.AccountByAddress(tx.Source)
 		if !ok {
@@ -255,7 +266,7 @@ func (b *Builder) AppendSmartRollupTransactionOp(ctx context.Context, oh *rpc.Op
 	}
 
 	// resolve bakers
-	var sbkr, lbkr *model.Baker
+	var sbkr, lbkr, wbkr *model.Baker
 	if src.BakerId != 0 {
 		if sbkr, ok = b.BakerById(src.BakerId); !ok {
 			return Errorf("missing baker %d for source account %s", src.BakerId, src)
@@ -264,6 +275,11 @@ func (b *Builder) AppendSmartRollupTransactionOp(ctx context.Context, oh *rpc.Op
 	if loser != nil && loser.BakerId != 0 {
 		if lbkr, ok = b.BakerById(loser.BakerId); !ok {
 			return Errorf("missing baker %d for loser account %s", loser.BakerId, src)
+		}
+	}
+	if winner != nil && winner.BakerId != 0 {
+		if wbkr, ok = b.BakerById(winner.BakerId); !ok {
+			return Errorf("missing baker %d for winer account %s", winner.BakerId, src)
 		}
 	}
 
@@ -307,6 +323,9 @@ func (b *Builder) AppendSmartRollupTransactionOp(ctx context.Context, oh *rpc.Op
 	if loser != nil {
 		op.CreatorId = loser.RowId
 	}
+	if winner != nil {
+		op.BakerId = winner.RowId
+	}
 	if recv != nil {
 		op.CreatorId = recv.RowId
 	}
@@ -322,8 +341,8 @@ func (b *Builder) AppendSmartRollupTransactionOp(ctx context.Context, oh *rpc.Op
 
 	if op.IsSuccess {
 		flows := b.NewRollupTransactionFlows(
-			src, dst, loser, recv, // involved accounts
-			sbkr, lbkr, // related bakers (optional)
+			src, dst, loser, winner, recv, // involved accounts
+			sbkr, lbkr, wbkr, // related bakers (optional)
 			o.Fees(),       // fees
 			res.Balances(), // move, slash
 			b.block,
@@ -340,10 +359,10 @@ func (b *Builder) AppendSmartRollupTransactionOp(ctx context.Context, oh *rpc.Op
 				// bond unfreeze
 				op.Volume = f.AmountOut
 			default:
-				if f.Operation == model.FlowTypeRollupReward {
+				if f.Type == model.FlowTypeRollupReward {
 					// winner reward
 					op.Reward += f.AmountIn
-				} else if f.Category == model.FlowCategoryBond {
+				} else if f.Kind == model.FlowKindBond {
 					// bond freeze
 					op.Deposit = f.AmountIn
 				}
@@ -352,8 +371,8 @@ func (b *Builder) AppendSmartRollupTransactionOp(ctx context.Context, oh *rpc.Op
 	} else {
 		// fees only
 		_ = b.NewRollupTransactionFlows(
-			src, nil, nil, nil, // just source
-			sbkr, nil, // just source baker
+			src, nil, nil, nil, nil, // just source
+			sbkr, nil, nil, // just source baker
 			mgr.Fees(),
 			nil, // no result balance updates
 			b.block,
@@ -414,15 +433,15 @@ func (b *Builder) AppendSmartRollupTransactionOp(ctx context.Context, oh *rpc.Op
 		id.N++
 		switch id.Kind {
 		case model.OpTypeTransaction:
-			if err := b.AppendInternalTransactionOp(ctx, src, sbkr, oh, v, id, rollback); err != nil {
+			if err := b.AppendInternalTransactionOp(ctx, src, sbkr, oh, *v, id, rollback); err != nil {
 				return err
 			}
 		case model.OpTypeDelegation:
-			if err := b.AppendInternalDelegationOp(ctx, src, sbkr, oh, v, id, rollback); err != nil {
+			if err := b.AppendInternalDelegationOp(ctx, src, sbkr, oh, *v, id, rollback); err != nil {
 				return err
 			}
 		case model.OpTypeOrigination:
-			if err := b.AppendInternalOriginationOp(ctx, src, sbkr, oh, v, id, rollback); err != nil {
+			if err := b.AppendInternalOriginationOp(ctx, src, sbkr, oh, *v, id, rollback); err != nil {
 				return err
 			}
 		default:

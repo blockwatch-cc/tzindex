@@ -1,13 +1,13 @@
-// Copyright (c) 2020-2023 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package main
 
 import (
+	"time"
+
 	_ "blockwatch.cc/packdb/store/bolt"
 	"github.com/echa/config"
-
-	"time"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -16,8 +16,25 @@ const engine = "bolt"
 
 var (
 	boltDefaultOpts = bolt.Options{
-		Timeout:      time.Second,
+		// open timeout when file is locked
+		Timeout: time.Second,
+		// faster for large databases
 		FreelistType: bolt.FreelistMapType,
+
+		// User-controlled options
+		//
+		// // skip fsync (DANGEROUS on crashes, but better performance for bulk load)
+		// NoSync: false,
+		//
+		// // skip fsync+alloc on grow; don't use with ext3/4, good in Docker + XFS
+		// NoGrowSync: false,
+		//
+		// // don't fsync freelist (improves write performance at the cost of full
+		// // database scan on start-up)
+		// NoFreelistSync: false,
+		//
+		// // PageSize overrides the default OS page size.
+		// PageSize: 4096
 	}
 )
 

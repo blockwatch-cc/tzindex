@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package metadata
@@ -15,7 +15,7 @@ const (
 	payoutNs     = "payout"
 	payoutSchema = `{
 	"$schema": "http://json-schema.org/draft/2019-09/schema#",
-	"$id": "https://api.tzstats.com/metadata/schemas/payout.json",
+	"$id": "https://api.tzpro.io/metadata/schemas/payout.json",
 	"title": "Payout Info",
     "description": "List of Tezos baker addresses this payout address is related to.",
 	"type": "array",

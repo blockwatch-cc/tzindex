@@ -1,10 +1,9 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package explorer
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"sync"
@@ -13,11 +12,6 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"blockwatch.cc/packdb/pack"
-	"blockwatch.cc/packdb/vec"
-
-	"blockwatch.cc/tzindex/etl/model"
-	"blockwatch.cc/tzindex/rpc"
 	"blockwatch.cc/tzindex/server"
 )
 
@@ -90,35 +84,43 @@ type Cycle struct {
 
 	// this cycle staking data (at snapshot block or last available block)
 	SnapshotHeight   int64     `json:"snapshot_height"` // -1 when no snapshot
-	SnapshotIndex    int64     `json:"snapshot_index"`  // -1 when no snapshot
+	SnapshotIndex    int       `json:"snapshot_index"`  // -1 when no snapshot
 	SnapshotTime     time.Time `json:"snapshot_time"`   // zero when no snapshot
-	Rolls            int64     `json:"rolls"`
-	RollOwners       int64     `json:"roll_owners"`
+	EligibleBakers   int64     `json:"eligible_bakers"`
 	ActiveDelegators int64     `json:"active_delegators"`
+	ActiveStakers    int64     `json:"active_stakers"`
 	ActiveBakers     int64     `json:"active_bakers"`
 	StakingSupply    float64   `json:"staking_supply"`
 	StakingPercent   float64   `json:"staking_percent"` // of total supply
 
 	// health data across all blocks in cycle (empty for future cycles)
-	WorkingBakers      int     `json:"working_bakers"`
-	WorkingEndorsers   int     `json:"working_endorsers"` // from ops
+	UniqueBakers       int     `json:"unique_bakers"`
 	MissedRounds       int     `json:"missed_rounds"`
 	MissedEndorsements int     `json:"missed_endorsements"`
 	N2Baking           int     `json:"n_double_baking"`
 	N2Endorsement      int     `json:"n_double_endorsement"`
-	SolveTimeMin       int64   `json:"solvetime_min"`
-	SolveTimeMax       int64   `json:"solvetime_max"`
+	SolveTimeMin       int     `json:"solvetime_min"`
+	SolveTimeMax       int     `json:"solvetime_max"`
 	SolveTimeMean      float64 `json:"solvetime_mean"`
-	RoundMin           int64   `json:"round_min"`
-	RoundMax           int64   `json:"round_max"`
+	RoundMin           int     `json:"round_min"`
+	RoundMax           int     `json:"round_max"`
 	RoundMean          float64 `json:"round_mean"`
 	EndorsementRate    float64 `json:"endorsement_rate"`
-	EndorsementsMin    int64   `json:"endorsements_min"`
-	EndorsementsMax    int64   `json:"endorsements_max"`
+	EndorsementsMin    int     `json:"endorsements_min"`
+	EndorsementsMax    int     `json:"endorsements_max"`
 	EndorsementsMean   float64 `json:"endorsements_mean"`
 	SeedNonceRate      float64 `json:"seed_rate"` // from ops
 	WorstBakedBlock    int64   `json:"worst_baked_block"`
 	WorstEndorsedBlock int64   `json:"worst_endorsed_block"`
+
+	// issuance
+	BlockReward              int64 `json:"block_reward"`
+	BlockBonusPerSlot        int64 `json:"block_bonus_per_slot"`
+	MaxBlockReward           int64 `json:"max_block_reward"`
+	EndorsementRewardPerSlot int64 `json:"endorsement_reward_per_slot"`
+	NonceRevelationReward    int64 `json:"nonce_revelation_reward"`
+	VdfRevelationReward      int64 `json:"vdf_revelation_reward"`
+	LBSubsidy                int64 `json:"lb_subsidy"`
 
 	// snapshot cycle who defined rights for this cycle
 	SnapshotCycle *Cycle `json:"snapshot_cycle,omitempty"`
@@ -181,14 +183,6 @@ func NewCycle(ctx *server.Context, id int64) *Cycle {
 	}
 
 	var (
-		uniqueAccountsMap = make(map[model.AccountID]struct{})
-		roundStats        = vec.IntegerReducer{}
-		endorseStats      = vec.IntegerReducer{}
-		timeStats         = vec.IntegerReducer{}
-
-		worstRound        int = 0
-		worstEndorsements int = numEndorsers
-
 		maxEndorse int        // scaled to current blocks in cycle
 		maxSeeds   int        // unscaled, full value (since requirement is from snapshot)
 		snapHeight int64 = -1 // selected or latest snapshot block
@@ -207,185 +201,49 @@ func NewCycle(ctx *server.Context, id int64) *Cycle {
 		snapHeight = nowheight - (nowheight % p.BlocksPerSnapshot)
 	}
 
+	// load cycle from index db and fill stats, don't fail
+	if ic, err := ctx.Indexer.CycleByNum(ctx, id); err == nil {
+		ec.SnapshotHeight = ic.SnapshotHeight
+		snapHeight = ic.SnapshotHeight
+		ec.SnapshotIndex = ic.SnapshotIndex
+		ec.SnapshotTime = ctx.Indexer.LookupBlockTime(ctx, ec.SnapshotHeight)
+		ec.MissedRounds = ic.MissedRounds
+		ec.MissedEndorsements = ic.MissedEndorsements
+		ec.WorstBakedBlock = ic.WorstBakedBlock
+		ec.WorstEndorsedBlock = ic.WorstEndorsedBlock
+		ec.N2Baking = ic.Num2Baking
+		ec.N2Endorsement = ic.Num2Endorsement
+
+		ec.UniqueBakers = ic.UniqueBakers
+		ec.SolveTimeMin = ic.SolveTimeMin
+		ec.SolveTimeMax = ic.SolveTimeMax
+		ec.SolveTimeMean = float64(ic.SolveTimeSum) / float64(p.BlocksPerCycle)
+		ec.RoundMin = ic.RoundMin
+		ec.RoundMax = ic.RoundMax
+		ec.RoundMean = float64(ic.MissedRounds) / float64(p.BlocksPerCycle)
+		ec.EndorsementsMin = ic.EndorsementsMin
+		ec.EndorsementsMax = ic.EndorsementsMax
+		ec.EndorsementsMean = float64(maxEndorse-ic.MissedEndorsements) / float64(p.BlocksPerCycle)
+
+		ec.BlockReward = ic.BlockReward
+		ec.BlockBonusPerSlot = ic.BlockBonusPerSlot
+		ec.MaxBlockReward = ic.MaxBlockReward
+		ec.EndorsementRewardPerSlot = ic.EndorsementRewardPerSlot
+		ec.NonceRevelationReward = ic.NonceRevelationReward
+		ec.VdfRevelationReward = ic.VdfRevelationReward
+		ec.LBSubsidy = ic.LBSubsidy
+
+		if maxSeeds > 0 {
+			ec.SeedNonceRate = float64(ic.NumSeeds*100) / float64(maxSeeds)
+		}
+	}
+
+	// on active or complete cycles
 	if snapHeight <= nowheight {
-		// walk all blocks in cycle to update cycle fields and identify snapshot block
-		blocks, err := ctx.Indexer.Table(model.BlockTableKey)
-		if err != nil {
-			log.Errorf("cycle: block table: %v", err)
-		}
-		b := &model.Block{}
-		err = pack.NewQuery("cycle.blocks").
-			WithTable(blocks).
-			WithFields("is_cycle_snapshot",
-				"height",
-				"baker_id",
-				"proposer_id",
-				"round",
-				"solvetime",
-				"n_endorsed_slots").
-			AndEqual("cycle", id).
-			Stream(ctx.Context, func(r pack.Row) error {
-				if err := r.Decode(b); err != nil {
-					return err
-				}
-
-				// find snapshot block
-				if b.IsCycleSnapshot {
-					snapHeight = b.Height
-					ec.SnapshotHeight = b.Height
-					ec.SnapshotIndex = ((b.Height - start) / p.BlocksPerSnapshot)
-					ec.SnapshotTime = ctx.Indexer.LookupBlockTime(ctx, b.Height)
-				}
-
-				// collect unique bakers
-				if b.BakerId > 0 {
-					uniqueAccountsMap[b.BakerId] = struct{}{}
-					uniqueAccountsMap[b.ProposerId] = struct{}{}
-				}
-
-				// sum misses and ops
-				ec.MissedRounds += b.Round
-
-				// collect stats
-				roundStats.Add(int64(b.Round))
-				timeStats.Add(int64(b.Solvetime))
-
-				// update worst blocks
-				if b.Round > worstRound {
-					worstRound = b.Round
-					ec.WorstBakedBlock = b.Height
-				}
-
-				// don't count endorsements for the current block
-				if b.Height != nowheight {
-					ec.MissedEndorsements += numEndorsers - b.NSlotsEndorsed
-					endorseStats.Add(int64(b.NSlotsEndorsed))
-					if b.NSlotsEndorsed < worstEndorsements {
-						worstEndorsements = b.NSlotsEndorsed
-						ec.WorstEndorsedBlock = b.Height
-					}
-				}
-
-				return nil
-			})
-		if err != nil {
-			log.Errorf("cycle: block stream: %v", err)
-		}
-		ec.WorkingBakers = len(uniqueAccountsMap)
-		ec.SolveTimeMin = timeStats.Min()
-		ec.SolveTimeMax = timeStats.Max()
-		ec.SolveTimeMean = timeStats.Mean()
-		ec.RoundMin = roundStats.Min()
-		ec.RoundMax = roundStats.Max()
-		ec.RoundMean = roundStats.Mean()
-		ec.EndorsementsMin = endorseStats.Min()
-		ec.EndorsementsMax = endorseStats.Max()
-		ec.EndorsementsMean = endorseStats.Mean()
-
 		// scale endorsement rate to current progress
 		if maxEndorse > 0 {
 			ec.EndorsementRate = float64(maxEndorse-ec.MissedEndorsements) * 100 / float64(maxEndorse)
 		}
-
-		// load active endorsers from ops
-		uniqueAccountsMap = make(map[model.AccountID]struct{})
-		ends, err := ctx.Indexer.Table(model.EndorseOpTableKey)
-		if err != nil {
-			log.Errorf("cycle: endorsement table: %v", err)
-			return ec
-		}
-		e := &model.Endorsement{}
-		err = pack.NewQuery("cycle.endorse_ops").
-			WithTable(ends).
-			WithFields("sender_id").
-			AndRange(
-				"height",
-				start+1, // Note: endorsements are always sent one block later!
-				end+1,   // safe when cycle is still active
-			).
-			Stream(ctx.Context, func(r pack.Row) error {
-				if err := r.Decode(e); err != nil {
-					return err
-				}
-				uniqueAccountsMap[e.SenderId] = struct{}{}
-				return nil
-			})
-		if err != nil {
-			log.Errorf("cycle: endorsement stream: %v", err)
-		}
-		ec.WorkingEndorsers = len(uniqueAccountsMap)
-
-		// seed nonces are send as operations and we expect one commitment
-		// for every 32nd block produced in the cycle before, they need to be sent
-		// by the bakers who produced block%32==0 in the previous cycle
-		ops, err := ctx.Indexer.Table(model.OpTableKey)
-		if err != nil {
-			log.Errorf("cycle: op table: %v", err)
-			return ec
-		}
-		op := &model.Op{}
-		seeds, err := pack.NewQuery("cycle.seeds").
-			WithTable(ops).
-			AndRange("height", start, end).
-			AndEqual("type", model.OpTypeNonceRevelation).
-			Count(ctx.Context)
-		if err != nil {
-			log.Errorf("cycle: op count: %v", err)
-		}
-		if maxSeeds > 0 {
-			ec.SeedNonceRate = float64(seeds*100) / float64(maxSeeds)
-		}
-
-		// walk all ops to count unique 2bake/2endorse events
-		// count unique double bake and endorse events
-		bake2 := make(map[int64]struct{})    // height
-		endorse2 := make(map[int64]struct{}) // height
-		err = pack.NewQuery("cycle.penalty_ops").
-			WithTable(ops).
-			WithFields("type", "data").
-			AndEqual("cycle", id).
-			AndIn("type", []uint8{
-				uint8(model.OpTypeDoubleBaking),
-				uint8(model.OpTypeDoubleEndorsement),
-				uint8(model.OpTypeDoublePreendorsement),
-			}).
-			Stream(ctx.Context, func(r pack.Row) error {
-				if err := r.Decode(op); err != nil {
-					return err
-				}
-				switch op.Type {
-				case model.OpTypeDoubleBaking:
-					var (
-						db rpc.DoubleBaking
-						bh rpc.BlockHeader
-					)
-					if err := json.Unmarshal([]byte(op.Data), &db); err != nil {
-						return err
-					}
-					if err := json.Unmarshal(db.BH1, &bh); err != nil {
-						return err
-					}
-					bake2[bh.Level] = struct{}{}
-				case model.OpTypeDoubleEndorsement, model.OpTypeDoublePreendorsement:
-					var (
-						de  rpc.DoubleEndorsement
-						op1 rpc.InlinedEndorsement
-					)
-					if err := json.Unmarshal([]byte(op.Data), &de); err != nil {
-						return err
-					}
-					if err := json.Unmarshal(de.OP1, &op1); err != nil {
-						return err
-					}
-					endorse2[op1.Operations.Level] = struct{}{}
-				}
-				return nil
-			})
-		if err != nil {
-			log.Errorf("cycle: op stream 2: %v", err)
-		}
-		ec.N2Baking = len(bake2)
-		ec.N2Endorsement = len(endorse2)
 
 		// pull rolls and supply from chain and supply table (no need to fetch snapshot)
 		// determine height from snapshot block, if not exist, use latest snapshot
@@ -393,14 +251,14 @@ func NewCycle(ctx *server.Context, id int64) *Cycle {
 
 		if chain, err := ctx.Indexer.ChainByHeight(ctx.Context, snapHeight); err == nil {
 			ec.ActiveDelegators = chain.ActiveDelegators
+			ec.ActiveStakers = chain.ActiveStakers
 			ec.ActiveBakers = chain.ActiveBakers
-			ec.Rolls = chain.Rolls
-			ec.RollOwners = chain.RollOwners
+			ec.EligibleBakers = chain.EligibleBakers
 		}
 		if supply, err := ctx.Indexer.SupplyByHeight(ctx.Context, snapHeight); err == nil {
-			ec.StakingSupply = p.ConvertValue(supply.ActiveStaking)
+			ec.StakingSupply = p.ConvertValue(supply.ActiveStake)
 			if supply.Total > 0 {
-				ec.StakingPercent = float64(supply.ActiveStaking*100) / float64(supply.Total)
+				ec.StakingPercent = float64(supply.ActiveStake*100) / float64(supply.Total)
 			}
 		}
 	}
@@ -477,11 +335,11 @@ func ReadCycle(ctx *server.Context) (interface{}, int) {
 	cycle.FollowerCycle = lookupOrBuildCycle(ctx, id+(p.PreservedCycles+offset))
 
 	// set cache expiry
-	cycle.expires = tiptime.Add(p.BlockTime())
+	cycle.expires = ctx.Expires
 	cycle.lastmod = tiptime
 
 	if cycle.FollowerCycle != nil && cycle.FollowerCycle.IsComplete {
-		cycle.expires = tiptime.Add(ctx.Cfg.Http.CacheMaxExpires)
+		cycle.expires = ctx.Now.Add(ctx.Cfg.Http.CacheMaxExpires)
 	}
 
 	return cycle, http.StatusOK

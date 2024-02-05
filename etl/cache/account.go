@@ -1,25 +1,23 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package cache
 
 import (
-	"encoding/binary"
 	"fmt"
 	"sync/atomic"
 
-	"blockwatch.cc/packdb/cache/lru"
-	"github.com/cespare/xxhash"
-
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
+	"github.com/cespare/xxhash"
+	lru "github.com/hashicorp/golang-lru/v2"
 )
 
 var AccountCacheSizeMaxSize = 16384 // entries
 
 type AccountCache struct {
-	idmap map[uint32]uint64  // short account id -> cache key (switch to uint64 when > 4Bn accounts)
-	cache *lru.TwoQueueCache // key := xxhash64(typ:hash)
+	idmap map[uint32]uint64               // short account id -> cache key (switch to uint64 when > 4Bn accounts)
+	cache *lru.TwoQueueCache[uint64, any] // key := xxhash64(typ:hash)
 	size  int64
 	stats Stats
 }
@@ -31,13 +29,7 @@ func NewAccountCache(sz int) *AccountCache {
 	c := &AccountCache{
 		idmap: make(map[uint32]uint64),
 	}
-	c.cache, _ = lru.New2QWithEvict(sz, func(_, v interface{}) {
-		buf := v.([]byte)
-		// first 8 bytes is row id
-		delete(c.idmap, uint32(binary.LittleEndian.Uint64(buf)))
-		c.size -= int64(len(buf)) + 4
-		atomic.AddInt64(&c.stats.Evictions, 1)
-	})
+	c.cache, _ = lru.New2Q[uint64, any](sz)
 	return c
 }
 
@@ -61,16 +53,7 @@ func (c *AccountCache) Add(a *model.Account) {
 	key := c.AccountHashKey(a)
 	c.idmap[a.RowId.U32()] = key
 	buf, _ := a.MarshalBinary()
-	updated, _ := c.cache.Add(key, buf)
-	if updated {
-		// log.Infof("Cache update %s %s revealed=%t", a, a.Key(), a.IsRevealed)
-		// can't count the difference in size
-		atomic.AddInt64(&c.stats.Updates, 1)
-	} else {
-		// log.Infof("Cache insert %s %s revealed=%t", a, a.Key(), a.IsRevealed)
-		c.size += int64(len(buf)) + 4
-		atomic.AddInt64(&c.stats.Inserts, 1)
-	}
+	c.cache.Add(key, buf)
 }
 
 func (c *AccountCache) Drop(a *model.Account) {
@@ -158,7 +141,7 @@ func (c *AccountCache) Walk(fn func(key uint64, acc *model.Account) error) error
 		if err := acc.UnmarshalBinary(val.([]byte)); err != nil {
 			return err
 		}
-		if err := fn(key.(uint64), acc); err != nil {
+		if err := fn(key, acc); err != nil {
 			return err
 		}
 	}

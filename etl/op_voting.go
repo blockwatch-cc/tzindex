@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 
-	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
 	"blockwatch.cc/tzindex/rpc"
@@ -56,7 +55,7 @@ func (b *Builder) AppendBallotOp(ctx context.Context, oh *rpc.Operation, id mode
 		bkr.NBallot--
 		bkr.IsDirty = true
 		// approximation only
-		bkr.Account.LastSeen = util.Max64N(bkr.Account.LastSeen, bkr.Account.LastIn, bkr.Account.LastOut)
+		bkr.Account.LastSeen = max(bkr.Account.LastSeen, bkr.Account.LastIn, bkr.Account.LastOut)
 		bkr.Account.IsDirty = true
 	}
 	return nil
@@ -122,7 +121,7 @@ func (b *Builder) AppendProposalOp(ctx context.Context, oh *rpc.Operation, id mo
 			bkr.IsDirty = true
 		}
 		// approximation only
-		acc.LastSeen = util.Max64N(acc.LastSeen, acc.LastIn, acc.LastOut)
+		acc.LastSeen = max(acc.LastSeen, acc.LastIn, acc.LastOut)
 		acc.IsDirty = true
 	}
 	return nil

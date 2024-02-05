@@ -1,4 +1,4 @@
-// Copyright (c) 2018 - 2020 Blockwatch Data Inc.
+// Copyright (c) 2018 - 2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package server
@@ -60,13 +60,11 @@ type Context struct {
 	// QoS and Debugging
 	RequestID string
 	Log       logpkg.Logger
-	// - operation priority     X-Priority
-	// - network QoS label      X-QoS-Label
 
 	// Statistics
 	Now         time.Time
+	Expires     time.Time
 	Performance *PerformanceCounter
-	// Quota int
 
 	// input
 	name string
@@ -104,6 +102,7 @@ func NewContext(ctx context.Context, r *http.Request, w http.ResponseWriter, f A
 	return &Context{
 		Context:        ctx,
 		Now:            now,
+		Expires:        srv.cfg.Crawler.NextBlockTime(),
 		RequestID:      requestId,
 		Cfg:            srv.cfg,
 		Server:         srv,
@@ -111,7 +110,7 @@ func NewContext(ctx context.Context, r *http.Request, w http.ResponseWriter, f A
 		Indexer:        srv.cfg.Indexer,
 		Client:         srv.cfg.Client,
 		Tip:            srv.cfg.Crawler.Tip(),
-		Params:         srv.cfg.Crawler.ParamsByHeight(-1),
+		Params:         srv.cfg.Crawler.Params(),
 		Request:        r,
 		ResponseWriter: w,
 		RemoteIP:       net.ParseIP(host),
@@ -362,6 +361,22 @@ func (api *Context) writeResponseHeaders(contentType, trailers string) {
 	h.Set("Server", UserAgent)
 	h.Set(headerVersion, ApiVersion)
 	h.Set("X-Request-Id", api.RequestID)
+
+	// add server status on shutdown or sync problems
+	if hc.FailHeader != "" {
+		failed := !api.Crawler.IsHealthy() || api.Server.IsOffline() || api.Server.IsShutdown()
+		if failed {
+			h.Set(hc.FailHeader, "true")
+		}
+	}
+	if hc.DegradedHeader != "" && api.Crawler.IsDegraded() {
+		h.Set(hc.DegradedHeader, "true")
+	}
+
+	// add rate limit header
+	if api.status == 429 && hc.LimitHeader != "" {
+		h.Set(hc.LimitHeader, "true")
+	}
 
 	// add blockchain info
 	h.Set("X-Network-Id", api.Tip.ChainId.String())

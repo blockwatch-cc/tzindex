@@ -1,4 +1,4 @@
-// Copyright (c) 2023 Blockwatch Data Inc.
+// Copyright (c) 2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package etl
@@ -67,6 +67,16 @@ func (b *Builder) AppendRegularBlockOps(ctx context.Context, rollback bool) erro
 					err = b.AppendDrainDelegateOp(ctx, oh, id, rollback)
 				case model.OpTypeUpdateConsensusKey:
 					err = b.AppendUpdateConsensusKeyOp(ctx, oh, id, rollback)
+				default:
+					err = fmt.Errorf("op %d %s %d:%d:%d: unsupported type %q (%d)",
+						b.block.Height,
+						oh.Hash,
+						op_l,
+						op_p,
+						op_c,
+						id.Kind,
+						int(id.Kind),
+					)
 				}
 				if err != nil {
 					return err

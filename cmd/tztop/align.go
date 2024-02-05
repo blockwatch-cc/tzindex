@@ -1,4 +1,4 @@
-// Copyright (c) 2021 Blockwatch Data Inc.
+// Copyright (c) 2024 Blockwatch Data Inc.
 // Authors: abdul@blockwatch.cc, alex@blockwatch.cc
 package main
 
@@ -11,17 +11,21 @@ import (
 )
 
 // AlignLeft align left
-func AlignLeft(t string, n int) string {
-	s := stripansi.Strip(t)
-	slen := utf8.RuneCountInString(s)
+func AlignLeft(s string, n int) string {
 	if n < 0 {
 		return s[:0]
 	}
+	slen := utf8.RuneCountInString(s)
 	if slen > n {
-		return s[:n]
+		for index := range s {
+			if n == 0 {
+				return s[:index]
+			}
+			n--
+		}
 	}
 
-	return fmt.Sprintf("%s%s", t, strings.Repeat(" ", n-slen))
+	return fmt.Sprintf("%s%s", s, strings.Repeat(" ", n-slen))
 }
 
 // AlignRight align right

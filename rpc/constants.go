@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2023 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package rpc
@@ -58,12 +58,20 @@ type Constants struct {
 	FrozenDepositsPercentage int   `json:"frozen_deposits_percentage"`
 	MaxOperationsTimeToLive  int64 `json:"max_operations_time_to_live"`
 	DelayIncrementPerRound   int   `json:"delay_increment_per_round,string"`
+	LiquidityBakingSubsidy   int64 `json:"liquidity_baking_subsidy,string"`
 
 	// New in v13
 	CyclesPerVotingPeriod int64 `json:"cycles_per_voting_period"`
 
 	// New in v15
 	MinimalStake int64 `json:"minimal_stake,string"` // replaces tokens_per_roll
+
+	// New in v18
+	MaxSlashingPeriod              int64 `json:"max_slashing_period"`
+	LimitOfDelegationOverBaking    int64 `json:"limit_of_delegation_over_baking"`
+	GlobalLimitOfStakingOverBaking int64 `json:"global_limit_of_staking_over_baking"`
+	EdgeOfStakingOverDelegation    int64 `json:"edge_of_staking_over_delegation"`
+	// issuance_weights struct -> use GetIssuance() instead
 }
 
 func (c Constants) HaveV6Rewards() bool {
@@ -172,6 +180,11 @@ func (c *Client) GetParams(ctx context.Context, id BlockID) (*Params, error) {
 		WithChainId(c.chainId).
 		WithProtocol(meta.Protocol).
 		WithNetwork(ver.NetworkVersion.ChainName)
+
+	// v18 has adaptive issuance
+	if issue, _ := c.GetIssuance(ctx, id); len(issue) > 0 {
+		p.WithIssuance(issue[0])
+	}
 	return p, nil
 }
 
@@ -200,13 +213,10 @@ func (c Constants) Params() *Params {
 	p.SeedNonceRevelationTip = c.SeedNonceRevelationTip
 	p.BlockReward = c.GetBlockReward()
 	p.EndorsementReward = c.GetEndorsementReward()
-	if c.HaveV6Rewards() {
-		p.BlockRewardV6 = &c.BakingRewardPerEndorsement_v6
-		p.EndorsementRewardV6 = &c.EndorsementReward_v6
-	}
 	p.BakingRewardFixedPortion = c.BakingRewardFixedPortion
 	p.BakingRewardBonusPerSlot = c.BakingRewardBonusPerSlot
 	p.EndorsingRewardPerSlot = c.EndorsingRewardPerSlot
+	p.LiquidityBakingSubsidy = c.LiquidityBakingSubsidy
 
 	// costs
 	p.OriginationSize = c.OriginationSize
@@ -221,7 +231,11 @@ func (c Constants) Params() *Params {
 		p.MaxOperationsTTL = c.MaxOperationsTimeToLive
 	}
 	p.ConsensusCommitteeSize = c.ConsensusCommitteeSize
+	p.ConsensusThreshold = c.ConsensusThreshold
 	p.FrozenDepositsPercentage = c.FrozenDepositsPercentage
+	p.LimitOfDelegationOverBaking = c.LimitOfDelegationOverBaking
+	p.GlobalLimitOfStakingOverBaking = c.GlobalLimitOfStakingOverBaking
+	p.MaxSlashingPeriod = c.MaxSlashingPeriod
 
 	// voting
 	p.MinProposalQuorum = c.MinProposalQuorum

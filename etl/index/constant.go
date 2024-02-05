@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 Blockwatch Data Inc.
+// Copyright (c) 2020-2024 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package index
@@ -9,6 +9,7 @@ import (
 
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzindex/etl/model"
+	"blockwatch.cc/tzindex/etl/task"
 	"blockwatch.cc/tzindex/rpc"
 )
 
@@ -54,17 +55,8 @@ func (idx *ConstantIndex) Create(path, label string, opts interface{}) error {
 	if err != nil {
 		return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
 	}
-
-	table, err := db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(readConfigOpts(key)))
-	if err != nil {
+	if _, err := db.CreateTableIfNotExists(key, fields, m.TableOpts().Merge(model.ReadConfigOpts(key))); err != nil {
 		return err
-	}
-	for _, f := range fields.Indexed() {
-		ikey := f.Alias
-		opts := m.IndexOpts(ikey).Merge(readConfigOpts(key, ikey+"_index"))
-		if _, err := table.CreateIndexIfNotExists(ikey, f, pack.IndexTypeHash, opts); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -78,18 +70,11 @@ func (idx *ConstantIndex) Init(path, label string, opts interface{}) error {
 
 	m := model.Constant{}
 	key := m.TableKey()
-	fields, err := pack.Fields(m)
 	if err != nil {
 		return fmt.Errorf("reading fields for table %q from type %T: %v", key, m, err)
 	}
-	topts := m.TableOpts().Merge(readConfigOpts(key))
-	var ikey string
-	for _, v := range fields.Indexed() {
-		ikey = v.Alias
-		break
-	}
-	iopts := m.IndexOpts(ikey).Merge(readConfigOpts(key, ikey+"_index"))
-	table, err := idx.db.Table(key, topts, iopts)
+	topts := m.TableOpts().Merge(model.ReadConfigOpts(key))
+	table, err := idx.db.Table(key, topts)
 	if err != nil {
 		idx.Close()
 		return err
@@ -167,5 +152,10 @@ func (idx *ConstantIndex) Flush(ctx context.Context) error {
 			log.Errorf("Flushing %s table: %v", v.Name(), err)
 		}
 	}
+	return nil
+}
+
+func (idx *ConstantIndex) OnTaskComplete(_ context.Context, _ *task.TaskResult) error {
+	// unused
 	return nil
 }
