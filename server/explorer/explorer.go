@@ -52,7 +52,7 @@ func (b Explorer) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/protocols", server.C(GetBlockchainProtocols)).Methods("GET")
 	r.HandleFunc("/config/{ident}", server.C(GetBlockchainConfig)).Methods("GET")
 	r.HandleFunc("/chain/{ident}", server.C(ReadChain)).Methods("GET")
-	r.HandleFunc("/supply/{ident}", server.C(ReadChain)).Methods("GET")
+	r.HandleFunc("/supply/{ident}", server.C(ReadSupply)).Methods("GET")
 	r.HandleFunc("/status", server.C(GetStatus)).Methods("GET")
 	return nil
 }
