@@ -204,7 +204,7 @@ func init() {
 }
 
 func loadConfig() error {
-	config.SetEnvPrefix(appName)
+	config.SetEnvPrefix(envPrefix)
 	if configFile != "" {
 		config.SetConfigName(configFile)
 	}

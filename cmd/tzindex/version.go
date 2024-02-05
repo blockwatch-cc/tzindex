@@ -10,6 +10,7 @@ import (
 
 var (
 	company           = "Blockwatch Data Inc."
+	envPrefix         = "TZ"
 	appName           = "tzindex"
 	apiVersion        = "v018-2023-01-15"
 	version    string = "v18.0"

@@ -113,7 +113,7 @@
 		}]
 	},
 	"rpc": {
-		"url": "127.0.0.1:8732",
+		"url": "http://127.0.0.1:8732",
 		"threads": 2,
 		"disable_tls": true,
 		"insecure_tls": false,
