@@ -15,6 +15,7 @@ func Query(ctx *Context, key string) (mode pack.FilterMode, val string, ok bool)
 		if !strings.HasPrefix(n, key) {
 			continue
 		}
+		ok = true
 		val = v[0]
 		k, m, haveMode := strings.Cut(n, ".")
 		if haveMode {
