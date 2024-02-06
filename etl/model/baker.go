@@ -180,7 +180,7 @@ func (b Baker) BakingPowerTenderbake(p *rpc.Params, adjust int64) int64 {
 func (b Baker) BakingPowerOxford(p *rpc.Params, adjust int64) int64 {
 	ownStake := b.StakeAmount(b.Account.StakeShares)
 	staked, delegated := b.TotalStake-ownStake, b.DelegatedBalance+b.Account.Balance()
-	stakeCap, delegationCap := b.StakingCapacity(p), b.DelegationCapacityOxford(p, adjust)
+	stakeCap, delegationCap := b.StakingCap(p), b.DelegationCapOxford(p, adjust)
 	if staked > stakeCap {
 		delegated += staked - stakeCap
 		staked = stakeCap
@@ -274,6 +274,24 @@ func (b Baker) StakeAdjustTenderbake(block *Block) (adjust int64) {
 func (b Baker) StakingCapacity(p *rpc.Params) int64 {
 	// basis is current stake owned by the baker which may change all the time
 	// due to rewards flowing in
+	ownStake := b.StakeAmount(b.Account.StakeShares) + b.Account.SpendableBalance + b.Account.UnstakedBalance
+
+	// limit is scaled by 1.000.000
+	limit := b.StakingLimit
+
+	// global cap is unscaled (!)
+	if limit > p.GlobalLimitOfStakingOverBaking*1_000_000 {
+		limit = p.GlobalLimitOfStakingOverBaking * 1_000_000
+	}
+
+	// calculate exact and scale back
+	return tezos.NewZ(ownStake).Mul64(limit).Scale(-6).Int64()
+}
+
+// max counted stake for baking power calc
+func (b Baker) StakingCap(p *rpc.Params) int64 {
+	// basis is current stake owned by the baker which may change all the time
+	// due to rewards flowing in
 	ownStake := b.StakeAmount(b.Account.StakeShares)
 
 	// limit is scaled by 1.000.000
@@ -328,6 +346,12 @@ func (b Baker) DelegationCapacityTenderbake(p *rpc.Params, adjust int64) int64 {
 // - FrozenDepositsPercentage = 10 // means deposit must be >= 10% of eligible delegation
 // - LimitOfDelegationOverBaking = 9 // means max delegation = 9x stake
 func (b Baker) DelegationCapacityOxford(p *rpc.Params, adjust int64) int64 {
+	ownStake := b.StakeAmount(b.Account.StakeShares) + b.Account.SpendableBalance + b.Account.UnstakedBalance - adjust
+	return ownStake * p.LimitOfDelegationOverBaking
+}
+
+// Max counted delegation for baking power
+func (b Baker) DelegationCapOxford(p *rpc.Params, adjust int64) int64 {
 	ownStake := b.StakeAmount(b.Account.StakeShares) - adjust
 	return ownStake * p.LimitOfDelegationOverBaking
 }
