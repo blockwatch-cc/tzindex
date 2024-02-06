@@ -533,8 +533,8 @@ func CreateMetadata(ctx *server.Context) (interface{}, int) {
 	}
 
 	// 3 upsert
-	ins := make([]*model.Metadata, 0, len(meta))
-	upd := make([]*model.Metadata, 0, len(meta))
+	ins := make([]pack.Item, 0, len(meta))
+	upd := make([]pack.Item, 0, len(meta))
 	for _, v := range meta {
 		m, ok := loadMetadata(ctx, v.AccountId)
 		if !ok {
@@ -644,7 +644,7 @@ func PurgeMetadata(ctx *server.Context) (interface{}, int) {
 		}
 	}
 
-	upd := make([]*model.Metadata, 0)
+	upd := make([]pack.Item, 0)
 	del := make([]uint64, 0)
 	err = pack.NewQuery("api.metadata.purge").
 		WithTable(table).
@@ -672,6 +672,9 @@ func PurgeMetadata(ctx *server.Context) (interface{}, int) {
 			}
 			return nil
 		})
+	if err != nil {
+		panic(server.EInternal(server.EC_DATABASE, "cannot read metadata", err))
+	}
 
 	if err := table.Update(ctx, upd); err != nil {
 		panic(server.EInternal(server.EC_DATABASE, "cannot update metadata", err))
