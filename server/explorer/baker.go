@@ -108,7 +108,7 @@ func NewBaker(ctx *server.Context, b *model.Baker, args server.Options) *Baker {
 	capDelegation := b.DelegationCapacity(ctx.Params, 0, 0)
 	capStake := b.StakingCapacity(ctx.Params)
 	bakingPower := b.BakingPower(ctx.Params, 0)
-	ownStake := b.StakeAmount(b.Account.StakeShares)
+	ownStake := b.StakeAmount(b.Account.StakeShares) + b.FrozenDeposits
 	netPower := tip.Supply.ActiveStake
 	if netPower == 0 {
 		netPower++
@@ -125,7 +125,7 @@ func NewBaker(ctx *server.Context, b *model.Baker, args server.Options) *Baker {
 		SpendableBalance:   ctx.Params.ConvertValue(b.Account.SpendableBalance),
 		DelegatedBalance:   ctx.Params.ConvertValue(b.DelegatedBalance),
 		OwnStake:           ctx.Params.ConvertValue(ownStake),
-		TotalStake:         ctx.Params.ConvertValue(b.TotalStake),
+		TotalStake:         ctx.Params.ConvertValue(b.TotalStake + b.FrozenDeposits),
 		DelegationCapacity: ctx.Params.ConvertValue(capDelegation),
 		StakingCapacity:    ctx.Params.ConvertValue(capStake),
 		StakingEdge:        b.StakingEdge,
@@ -392,7 +392,7 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 		capStake := v.StakingCapacity(ctx.Params)
 		bakingPower := v.BakingPower(ctx.Params, 0)
 		// oxford only has stake based on shares
-		ownStake := v.StakeAmount(v.Account.StakeShares)
+		ownStake := v.StakeAmount(v.Account.StakeShares) + v.FrozenDeposits
 		baker := Baker{
 			Id:                 v.AccountId,
 			Address:            v.Address,
@@ -405,7 +405,7 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 			SpendableBalance:   ctx.Params.ConvertValue(v.Account.SpendableBalance),
 			DelegatedBalance:   ctx.Params.ConvertValue(v.DelegatedBalance),
 			OwnStake:           ctx.Params.ConvertValue(ownStake),
-			TotalStake:         ctx.Params.ConvertValue(v.TotalStake),
+			TotalStake:         ctx.Params.ConvertValue(v.TotalStake + v.FrozenDeposits),
 			DelegationCapacity: ctx.Params.ConvertValue(capDelegation),
 			StakingCapacity:    ctx.Params.ConvertValue(capStake),
 			BakingPower:        bakingPower,
