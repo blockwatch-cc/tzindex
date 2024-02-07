@@ -172,5 +172,5 @@ func (r Right) Reliability(pos int) int64 {
 	if must == 0 {
 		return 0
 	}
-	return int64(have * 10000 / must)
+	return have * 10000 / must
 }

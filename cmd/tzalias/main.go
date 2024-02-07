@@ -18,9 +18,9 @@ import (
 	"github.com/qri-io/jsonschema"
 
 	"blockwatch.cc/tzgo/tezos"
+	"blockwatch.cc/tzindex/etl/metadata"
 	"blockwatch.cc/tzpro-go/tzpro"
 	"blockwatch.cc/tzpro-go/tzpro/index"
-	"blockwatch.cc/tzindex/etl/metadata"
 	"github.com/echa/config"
 	"github.com/echa/log"
 )

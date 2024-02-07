@@ -40,7 +40,6 @@ type Token struct {
 }
 
 func NewToken(ctx *server.Context, tokn *model.Token) *Token {
-	md, _ := lookupTokenIdMetadata(ctx, tokn.Id)
 	return &Token{
 		Contract:     ctx.Indexer.LookupAddress(ctx, tokn.Ledger),
 		TokenId:      tokn.TokenId,
@@ -55,7 +54,7 @@ func NewToken(ctx *server.Context, tokn *model.Token) *Token {
 		TotalBurn:    tokn.TotalBurn,
 		NumTransfers: tokn.NumTransfers,
 		NumHolders:   tokn.NumHolders,
-		Metadata:     md,
+		Metadata:     lookupTokenIdMetadata(ctx, tokn.Id),
 	}
 }
 
@@ -108,7 +107,6 @@ type TokenOwner struct {
 }
 
 func NewTokenOwner(ctx *server.Context, ownr *model.TokenOwner, tokn *model.Token) *TokenOwner {
-	md, _ := lookupTokenIdMetadata(ctx, ownr.Token)
 	return &TokenOwner{
 		Account:      ctx.Indexer.LookupAddress(ctx, ownr.Account),
 		Contract:     ctx.Indexer.LookupAddress(ctx, ownr.Ledger),
@@ -125,7 +123,7 @@ func NewTokenOwner(ctx *server.Context, ownr *model.TokenOwner, tokn *model.Toke
 		VolRecv:      ownr.VolRecv,
 		VolMint:      ownr.VolMint,
 		VolBurn:      ownr.VolBurn,
-		Metadata:     md,
+		Metadata:     lookupTokenIdMetadata(ctx, ownr.Token),
 	}
 }
 

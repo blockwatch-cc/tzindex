@@ -71,21 +71,21 @@ func lookupAddressIdMetadata(ctx *server.Context, id model.AccountID) (*Metadata
 	return m, true
 }
 
-func lookupTokenIdMetadata(ctx *server.Context, id model.TokenID) ([]byte, bool) {
+func lookupTokenIdMetadata(ctx *server.Context, id model.TokenID) []byte {
 	if id == 0 {
-		return nil, false
+		return nil
 	}
 	key := id.U64() | (1 << 63)
 	val, ok := metadataCache.Get(key)
 	if ok {
-		return val.([]byte), true
+		return val.([]byte)
 	}
 	table, err := ctx.Indexer.Table(model.TokenMetaTableKey)
 	if err != nil {
-		return nil, false
+		return nil
 	}
 	if table.Stats()[0].TupleCount == 0 {
-		return nil, false
+		return nil
 	}
 	md := &model.TokenMeta{}
 	err = pack.NewQuery("token.metadata.find").
@@ -93,10 +93,10 @@ func lookupTokenIdMetadata(ctx *server.Context, id model.TokenID) ([]byte, bool)
 		AndEqual("token", id).
 		Execute(ctx, md)
 	if err != nil || md.Id == 0 {
-		return nil, false
+		return nil
 	}
 	metadataCache.Add(key, md.Data)
-	return md.Data, true
+	return md.Data
 }
 
 func lookupAddressMetadata(ctx *server.Context, addr tezos.Address) (*Metadata, bool) {
