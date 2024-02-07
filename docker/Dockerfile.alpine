@@ -7,16 +7,15 @@ ARG           BUILD_VERSION=dev
 ARG           BUILD_COMMIT=none
 ARG           BUILD_TAG=master
 LABEL         autodelete="true"
-ADD           . /go/src/${BUILD_TARGET}
-WORKDIR       /go/src/${BUILD_TARGET}
+WORKDIR       /go/src/
 RUN           apk --no-cache add git binutils
-RUN           git checkout ${BUILD_TAG}
+RUN           git clone --depth 1 -b ${BUILD_TAG} https://github.com/blockwatch-cc/${BUILD_TARGET} ${BUILD_TARGET}
+WORKDIR       /go/src/${BUILD_TARGET}
 RUN           go install -mod=mod -v -ldflags "-X main.version=${BUILD_VERSION} -X main.commit=${BUILD_COMMIT}" ./cmd/...
 RUN           strip /go/bin/tz*
 
 # final stage
 FROM          alpine:latest
-MAINTAINER    Alexander Eichhorn <alex@blockwatch.cc>
 ARG           BUILD_TARGET=tzindex
 ARG           USER=tzindex
 ENV           BUILD_TARGET=${BUILD_TARGET}
