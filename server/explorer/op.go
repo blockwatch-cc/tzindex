@@ -420,6 +420,15 @@ func (o *Op) UnpackData(ctx *server.Context, op *model.Op, cc *model.Contract, a
 	case model.OpTypeTransferTicket:
 		o.Parameters = NewTicketTransferParameters(ctx, op, args)
 		o.Data = nil
+	case model.OpTypeSetDelegateParameters:
+		if len(op.Parameters) > 0 {
+			var p micheline.Prim
+			if err := p.UnmarshalBinary(op.Parameters); err == nil {
+				o.Parameters = &Parameters{
+					Prim: &p,
+				}
+			}
+		}
 	default:
 		if op.Data != "" && !(op.IsContract || op.IsRollup) {
 			o.Data = json.RawMessage(strconv.Quote(op.Data))
