@@ -31,3 +31,10 @@ EXPOSE        8000
 USER          $USER
 ENTRYPOINT    ["docker-entrypoint.sh"]
 CMD           [${BUILD_TARGET}, "run"]
+
+HEALTHCHECK \
+  --interval=30s \
+  --timeout=20s \
+  --retries=3 \
+  --start-period=60s \
+  CMD wget localhost:8000/explorer/status -q -O - > /dev/null 2>&1
