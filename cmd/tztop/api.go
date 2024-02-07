@@ -77,10 +77,10 @@ func (r TableResponse) NumIndexes() int {
 
 type TableStats struct {
 	// global statistics
-	TableName         string `json:"table_name,omitempty"`
-	IndexName         string `json:"index_name,omitempty"`
-	LastFlushTime     int64  `json:"last_flush_time"`
-	LastFlushDuration int64  `json:"last_flush_duration"`
+	TableName         string        `json:"table_name,omitempty"`
+	IndexName         string        `json:"index_name,omitempty"`
+	LastFlushTime     time.Time     `json:"last_flush_time"`
+	LastFlushDuration time.Duration `json:"last_flush_duration"`
 
 	// tuple statistics
 	TupleCount     int64 `json:"tuples_count"`
@@ -125,32 +125,30 @@ type TableStats struct {
 	TombstoneBytesWritten    int64 `json:"tomb_bytes_written"`
 
 	// pack statistics
-	PacksCount    int64 `json:"packs_count"`
-	PacksAlloc    int64 `json:"packs_alloc"`
-	PacksRecycled int64 `json:"packs_recycled"`
-	PacksLoaded   int64 `json:"packs_loaded"`
-	PacksStored   int64 `json:"packs_stored"`
-
-	// I/O statistics
-	BytesRead    int64 `json:"bytes_read"`
-	BytesWritten int64 `json:"bytes_written"`
-	TotalSize    int64 `json:"total_size"`
+	PacksCount        int64 `json:"packs_count"`
+	PacksAlloc        int64 `json:"packs_alloc"`
+	PacksRecycled     int64 `json:"packs_recycled"`
+	PacksLoaded       int64 `json:"packs_loaded"`
+	PacksStored       int64 `json:"packs_stored"`
+	PacksBytesRead    int64 `json:"packs_bytes_read"`
+	PacksBytesWritten int64 `json:"packs_bytes_written"`
+	PacksSize         int64 `json:"packs_size"`
 
 	// pack cache statistics
-	CacheSize      int64 `json:"cache_size"`
-	CacheCount     int64 `json:"cache_count"`
-	CacheCapacity  int64 `json:"cache_capacity"`
-	CacheHits      int64 `json:"cache_hits"`
-	CacheMisses    int64 `json:"cache_misses"`
-	CacheInserts   int64 `json:"cache_inserts"`
-	CacheUpdates   int64 `json:"cache_updates"`
-	CacheEvictions int64 `json:"cache_evictions"`
+	PackCacheSize      int64 `json:"pack_cache_size"`
+	PackCacheCount     int64 `json:"pack_cache_count"`
+	PackCacheCapacity  int64 `json:"pack_cache_capacity"`
+	PackCacheHits      int64 `json:"pack_cache_hits"`
+	PackCacheMisses    int64 `json:"pack_cache_misses"`
+	PackCacheInserts   int64 `json:"pack_cache_inserts"`
+	PackCacheUpdates   int64 `json:"pack_cache_updates"`
+	PackCacheEvictions int64 `json:"pack_cache_evictions"`
 }
 
 func (t TableStats) GetCached() string {
 	return fmt.Sprintf("%s / %s",
-		FormatBytes(int(t.CacheSize)),
-		FormatBytes(int(t.CacheCapacity)),
+		FormatBytes(int(t.PackCacheSize)),
+		FormatBytes(int(t.PackCacheCapacity)),
 	)
 }
 
@@ -181,20 +179,20 @@ func (t TableStats) GetJournal() string {
 }
 
 func (t TableStats) GetDiskSize() string {
-	return FormatBytes(int(t.JournalDiskSize + t.TombstoneDiskSize + t.TotalSize))
+	return FormatBytes(int(t.JournalDiskSize + t.TombstoneDiskSize + t.PacksSize))
 }
 
 func (t TableStats) GetCacheHitRate(p TableStats, tm time.Time) string {
-	num := t.CacheHits
-	denom := t.CacheHits + t.CacheMisses
+	num := t.PackCacheHits
+	denom := t.PackCacheHits + t.PackCacheMisses
 	if denom == 0 {
 		denom = 1
 	}
 	total := strconv.FormatFloat(float64(num*100)/float64(denom), 'f', 2, 64) + "%"
 	now := "-- %"
 	if !tm.IsZero() {
-		num = t.CacheHits - p.CacheHits
-		denom = t.CacheHits + t.CacheMisses - p.CacheHits - p.CacheMisses
+		num = t.PackCacheHits - p.PackCacheHits
+		denom = t.PackCacheHits + t.PackCacheMisses - p.PackCacheHits - p.PackCacheMisses
 		if denom == 0 {
 			denom = 1
 		}
@@ -207,9 +205,9 @@ func (t TableStats) GetIO(p TableStats, tm time.Time) string {
 	if tm.IsZero() {
 		return "-- / --"
 	}
-	readDiff := t.BytesRead - p.BytesRead
-	writeDiff := t.BytesWritten + t.JournalBytesWritten + t.TombstoneBytesWritten
-	writeDiff -= p.BytesWritten + p.JournalBytesWritten + p.TombstoneBytesWritten
+	readDiff := t.PacksBytesRead - p.PacksBytesRead
+	writeDiff := t.PacksBytesWritten + t.JournalBytesWritten + t.TombstoneBytesWritten
+	writeDiff -= p.PacksBytesWritten + p.JournalBytesWritten + p.TombstoneBytesWritten
 	tmDiff := float64(time.Since(tm)) / float64(time.Second)
 	readRate := float64(readDiff) / tmDiff
 	writeRate := float64(writeDiff) / tmDiff

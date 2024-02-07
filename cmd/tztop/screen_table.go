@@ -78,9 +78,9 @@ func createTable(g *gocui.Gui) (*View, error) {
 			})
 			// set R/W
 			row = append(row, &RowCell{
-				Text: FormatBytes(int(t.BytesRead)) +
+				Text: FormatBytes(int(t.PacksBytesRead)) +
 					" / " +
-					FormatBytes(int(t.BytesWritten+t.JournalBytesWritten+t.TombstoneBytesWritten)),
+					FormatBytes(int(t.PacksBytesWritten+t.JournalBytesWritten+t.TombstoneBytesWritten)),
 			})
 			tr := &Row{
 				RowCells: row,
