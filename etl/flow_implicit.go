@@ -245,27 +245,26 @@ func (b *Builder) NewImplicitFlows() []*model.Flow {
 						nextType = model.FlowTypeStake // set here for second in pair
 					}
 				} else {
-					if b.block.Params.Version < 12 {
+					switch {
+					case b.block.Params.Version < 12:
 						// pre-Ithaca payout: credit unfrozen deposits, rewards and fees
 						f := model.NewFlow(b.block, acc, acc, id)
 						f.Kind = model.FlowKindBalance
 						f.Type = model.FlowTypeInternal
 						f.AmountIn = u.Amount()
 						flows = append(flows, f)
-					} else {
+					case b.block.Params.Version < 18:
+						// post-Ithaca payout: credit minted rewards directly to balance
+						// fees and reward are paid in the same balance update, so we
+						// deduct them from amount here and add an extra fee flow
 						if nextType.IsValid() {
-							// post-Ithaca payout: credit minted rewards directly to balance
-							// deduct block fee from baker reward since we handle fee payments
-							// explicitly across all ops. The Op indexer will later add
-							// all earned block fees to the first bake operation (which pays the
-							// proposer reward).
 							f := model.NewFlow(b.block, acc, acc, id)
 							f.Kind = model.FlowKindBalance
 							f.Type = nextType
 							f.AmountIn = u.Amount() - fees
 							flows = append(flows, f)
-							// add fee flow
 							if fees > 0 {
+								// add fee flow
 								f = model.NewFlow(b.block, acc, nil, id)
 								f.Kind = model.FlowKindBalance
 								f.Type = nextType
@@ -280,13 +279,34 @@ func (b *Builder) NewImplicitFlows() []*model.Flow {
 							// post-Ithaca: credit refunded deposit to balance
 							// Note: type is not `deposit` because a separate freezer
 							// flow already creates an unfreeze event
-							// post-Oxford: similar, but funds come from the unstaked
-							// balance
 							f := model.NewFlow(b.block, acc, acc, id)
 							f.Kind = model.FlowKindBalance
 							f.Type = model.FlowTypeInternal
 							f.AmountIn = u.Amount()
 							flows = append(flows, f)
+						}
+					default:
+						// post-Oxford payout share to spendable
+						// fees are explicitly paid to proposer
+						// deposit refund happens via unstake (not in this branch)
+						if nextType.IsValid() {
+							f := model.NewFlow(b.block, acc, acc, id)
+							f.Kind = model.FlowKindBalance
+							f.Type = nextType
+							f.AmountIn = u.Amount()
+							flows = append(flows, f)
+							// add fee flow
+							if fees > 0 {
+								f = model.NewFlow(b.block, acc, nil, id)
+								f.Kind = model.FlowKindBalance
+								f.Type = nextType
+								f.AmountIn = fees
+								f.IsFee = true
+								flows = append(flows, f)
+								fees = 0
+							}
+							// reset next type
+							nextType = model.FlowTypeInvalid
 						}
 					}
 				}
