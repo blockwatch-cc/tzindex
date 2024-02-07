@@ -86,7 +86,7 @@ type Baker struct {
 	StakingCapacity    float64         `json:"staking_capacity"`
 	StakingEdge        int64           `json:"staking_edge"`
 	StakingLimit       int64           `json:"staking_limit"`
-	BakingPower        int64           `json:"baking_power"`
+	BakingPower        float64         `json:"baking_power"`
 	NetworkShare       float64         `json:"network_share"`
 	ActiveDelegations  int64           `json:"active_delegations"`
 	ActiveStakers      int64           `json:"active_stakers"`
@@ -108,7 +108,7 @@ func NewBaker(ctx *server.Context, b *model.Baker, args server.Options) *Baker {
 	capDelegation := b.DelegationCapacity(ctx.Params, 0, 0)
 	capStake := b.StakingCapacity(ctx.Params)
 	bakingPower := b.BakingPower(ctx.Params, 0)
-	ownStake := b.StakeAmount(b.Account.StakeShares) + b.FrozenDeposits
+	ownStake := b.StakeAmount(b.Account.StakeShares)
 	netPower := tip.Supply.ActiveStake
 	if netPower == 0 {
 		netPower++
@@ -124,13 +124,13 @@ func NewBaker(ctx *server.Context, b *model.Baker, args server.Options) *Baker {
 		TotalBalance:       ctx.Params.ConvertValue(b.TotalBalance()),
 		SpendableBalance:   ctx.Params.ConvertValue(b.Account.SpendableBalance),
 		DelegatedBalance:   ctx.Params.ConvertValue(b.DelegatedBalance),
-		OwnStake:           ctx.Params.ConvertValue(ownStake),
+		OwnStake:           ctx.Params.ConvertValue(ownStake + b.FrozenDeposits),
 		TotalStake:         ctx.Params.ConvertValue(b.TotalStake + b.FrozenDeposits),
 		DelegationCapacity: ctx.Params.ConvertValue(capDelegation),
 		StakingCapacity:    ctx.Params.ConvertValue(capStake),
 		StakingEdge:        b.StakingEdge,
 		StakingLimit:       b.StakingLimit,
-		BakingPower:        bakingPower,
+		BakingPower:        ctx.Params.ConvertValue(bakingPower),
 		NetworkShare:       math.Ceil(float64(bakingPower)/float64(netPower)*100_000) / 100_000,
 		ActiveDelegations:  b.ActiveDelegations,
 		ActiveStakers:      b.ActiveStakers,
@@ -178,7 +178,7 @@ func NewBaker(ctx *server.Context, b *model.Baker, args server.Options) *Baker {
 
 		// get performance data
 		recentCycle := ctx.Params.HeightToCycle(b.Account.LastSeen) - 1
-		if p, err := ctx.Indexer.BakerPerformance(ctx, b.AccountId, max(0, recentCycle-64), recentCycle); err == nil {
+		if p, err := ctx.Indexer.BakerPerformance(ctx, b.AccountId, max(recentCycle-64, 0), recentCycle); err == nil {
 			stats.AvgLuck64 = &p[0]
 			stats.AvgPerformance64 = &p[1]
 			stats.AvgContribution64 = &p[2]
@@ -392,7 +392,7 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 		capStake := v.StakingCapacity(ctx.Params)
 		bakingPower := v.BakingPower(ctx.Params, 0)
 		// oxford only has stake based on shares
-		ownStake := v.StakeAmount(v.Account.StakeShares) + v.FrozenDeposits
+		ownStake := v.StakeAmount(v.Account.StakeShares)
 		baker := Baker{
 			Id:                 v.AccountId,
 			Address:            v.Address,
@@ -404,11 +404,11 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 			TotalBalance:       ctx.Params.ConvertValue(v.TotalBalance()),
 			SpendableBalance:   ctx.Params.ConvertValue(v.Account.SpendableBalance),
 			DelegatedBalance:   ctx.Params.ConvertValue(v.DelegatedBalance),
-			OwnStake:           ctx.Params.ConvertValue(ownStake),
+			OwnStake:           ctx.Params.ConvertValue(ownStake + v.FrozenDeposits),
 			TotalStake:         ctx.Params.ConvertValue(v.TotalStake + v.FrozenDeposits),
 			DelegationCapacity: ctx.Params.ConvertValue(capDelegation),
 			StakingCapacity:    ctx.Params.ConvertValue(capStake),
-			BakingPower:        bakingPower,
+			BakingPower:        ctx.Params.ConvertValue(bakingPower),
 			NetworkShare:       math.Ceil(float64(bakingPower)/float64(netPower)*100_000) / 100_000,
 			ActiveDelegations:  v.ActiveDelegations,
 			ActiveStakers:      v.ActiveStakers,
