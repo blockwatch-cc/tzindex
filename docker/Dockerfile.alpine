@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:experimental
 # build stage
-FROM          golang:alpine AS tzindex-builder
+FROM          golang:1.21-alpine AS tzindex-builder
 ARG           REPO=blockwatch.cc/tzindex
 ARG           BUILD_TARGET=tzindex
 ARG           BUILD_VERSION=dev
@@ -15,7 +15,7 @@ RUN           go install -mod=mod -v -ldflags "-X main.version=${BUILD_VERSION} 
 RUN           strip /go/bin/tz*
 
 # final stage
-FROM          alpine:latest
+FROM          alpine:3.19
 ARG           BUILD_TARGET=tzindex
 ARG           USER=tzindex
 ENV           BUILD_TARGET=${BUILD_TARGET}
