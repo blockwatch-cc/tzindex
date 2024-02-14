@@ -1,7 +1,5 @@
 blockwatch.cc/packdb v0.0.0-20240123064027-0b0a316f6af1 h1:J6FDHkj0Jnlr4Kga1lnxhbIvYSuzHuBvyyZhBqaxhpY=
 blockwatch.cc/packdb v0.0.0-20240123064027-0b0a316f6af1/go.mod h1:Afzed6GPmPRx9jpjjTgJ78joGOtD4eTMdpjV5+RlHOc=
-blockwatch.cc/toolkit v0.0.0-20211129164155-dba7f04cee6f h1:kkQMHxwTmUba7Va3pAj2qO+FterUlb5Q9KsjmQ7l21c=
-blockwatch.cc/toolkit v0.0.0-20211129164155-dba7f04cee6f/go.mod h1:nRNowzHp2GOOYJDV7uTz7aLZeD8iSJuVT4zuNKfHuG8=
 blockwatch.cc/tzgo v1.18.3-0.20240122060213-b82e574dc58f h1:dBPo+GfBS+W7O//G4mO6hBRpZ2j8jIcmRkD04P1qQJw=
 blockwatch.cc/tzgo v1.18.3-0.20240122060213-b82e574dc58f/go.mod h1:qZ2uZs/1U0AsrwyE0EuQSd144c2hF3sTP1Vm7g/qsQ8=
 blockwatch.cc/tzpro-go v0.18.2-0.20240202081659-a61612798ea7 h1:cNWrKA2fLuNsPULZ7fgYKRA8FuVq7D5tbpz3JogVoW4=
@@ -43,10 +41,6 @@ github.com/gdamore/encoding v1.0.0/go.mod h1:alR0ol34c49FCSBLjhosxzcPHQbf2trDkoo
 github.com/gdamore/tcell/v2 v2.4.0/go.mod h1:cTTuF84Dlj/RqmaCIV5p4w8uG1zWdk0SF6oBpwHp4fU=
 github.com/gdamore/tcell/v2 v2.7.0 h1:I5LiGTQuwrysAt1KS9wg1yFfOI3arI3ucFrxtd/xqaA=
 github.com/gdamore/tcell/v2 v2.7.0/go.mod h1:hl/KtAANGBecfIPxk+FzKvThTqI84oplgbPEmVX60b8=
-github.com/go-zeromq/goczmq/v4 v4.2.2 h1:HAJN+i+3NW55ijMJJhk7oWxHKXgAuSBkoFfvr8bYj4U=
-github.com/go-zeromq/goczmq/v4 v4.2.2/go.mod h1:Sm/lxrfxP/Oxqs0tnHD6WAhwkWrx+S+1MRrKzcxoaYE=
-github.com/go-zeromq/zmq4 v0.16.0 h1:D6oIPWSdkY/4DJu4tBUmo28P3WRq4F4Ji4/iQ/fJHc0=
-github.com/go-zeromq/zmq4 v0.16.0/go.mod h1:8c3aXloJBRPba1AqWMJK4vypniM+yC+JKqi8KpRaDFc=
 github.com/golangplus/bytes v0.0.0-20160111154220-45c989fe5450/go.mod h1:Bk6SMAONeMXrxql8uvOKuAZSu8aM5RUGv+1C6IJaEho=
 github.com/golangplus/bytes v1.0.0/go.mod h1:AdRaCFwmc/00ZzELMWb01soso6W1R/++O1XL80yAn+A=
 github.com/golangplus/fmt v1.0.0/go.mod h1:zpM0OfbMCjPtd2qkTD/jX2MgiFCqklhSUFyDW44gVQE=
@@ -78,8 +72,6 @@ github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D
 github.com/mattn/go-runewidth v0.0.10/go.mod h1:RAqKPSqVFrSLVXbA8x7dzmKdmGzieGRCM46jaSJTDAk=
 github.com/mattn/go-runewidth v0.0.15 h1:UNAjwbU9l54TA3KzvqLGxwWjHmMgBUVhBiTjelZgg3U=
 github.com/mattn/go-runewidth v0.0.15/go.mod h1:Jdepj2loyihRzMpdS35Xk/zdY8IAYHsh153qUoGf23w=
-github.com/mitchellh/mapstructure v1.5.0 h1:jeMsZIYE/09sWLaz43PL7Gy6RuMjD2eJVyuac5Z2hdY=
-github.com/mitchellh/mapstructure v1.5.0/go.mod h1:bFUtVrKA4DC2yAKiSyO/QUcy7e+RRV2QTWOzhPopBRo=
 github.com/pierrec/lz4 v2.6.1+incompatible h1:9UY3+iC23yxF0UfGaYrGplQ+79Rg+h/q9FV9ix19jjM=
 github.com/pierrec/lz4 v2.6.1+incompatible/go.mod h1:pdkljMzZIN41W+lC3N2tnIh5sFi+IEE17M5jbnwPHcY=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
@@ -130,8 +122,6 @@ golang.org/x/net v0.20.0/go.mod h1:z8BVo6PvndSri0LbOE3hAn0apkU+1YvI6E70E9jsnvY=
 golang.org/x/sync v0.0.0-20190423024810-112230192c58/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
 golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
 golang.org/x/sync v0.1.0/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
-golang.org/x/sync v0.6.0 h1:5BMeUDZ7vkXGfEr1x9B4bRcTH4lpkTkpdh0T/J+qjbQ=
-golang.org/x/sync v0.6.0/go.mod h1:Czt+wKu1gCyEFDUtn0jG5QVvpJ6rzVqr5aXyt9drQfk=
 golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
 golang.org/x/sys v0.0.0-20201119102817-f84b799fce68/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.0.0-20210615035016-665e8c7367d1/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=

@@ -1,5 +1,30 @@
 # Changelog
 
+### v18.0.3
+
+* b66c476 | Add missing finalize unstake to spendable balance flow
+* 4a33fb6 | Fix unknown key in oxford bigmap migration
+* 4ee9b47 | Add docker health checks
+* d1f5281 | Update dockerfiles
+
+### v18.0.2
+
+* 9d43c38 | Add drone ci config
+* 47736fc | Fix linter warnings
+* 0477298 | Embed set delegate params with API operation
+* 1a50e19 | Fix oxford fee flows
+* 745656f | Use float value for baking power
+* 318c389 | Revert table stats type to packdb version
+* f28b566 | Add pre-Oxford frozen deposits to own stake in API response
+* 9d628ef | Change staking capacity calc to take spendable balance into account
+* ca56a25 | Fix metadata update calls
+* e53e50f | Fix calling supply handler
+* bd7eb8d | Fix using decoded op query arg
+
+### v18.0.1
+
+- Fix revert env var prefix to `TZ`
+
 ### v18.0.0
 
 Oxford Staking
