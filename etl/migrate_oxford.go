@@ -82,6 +82,7 @@ func (b *Builder) MigrateOxford(ctx context.Context, oldparams, params *rpc.Para
 				Action:  micheline.DiffActionRemove,
 				Id:      oxfordBigmapId,
 				KeyHash: k,
+				Key:     micheline.Unit, // we don't know
 			}
 		}
 
