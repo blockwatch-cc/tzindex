@@ -307,6 +307,13 @@ func (b *Builder) NewImplicitFlows() []*model.Flow {
 							}
 							// reset next type
 							nextType = model.FlowTypeInvalid
+						} else {
+							// balance in-flow from finalize when this is not a restake
+							f := model.NewFlow(b.block, acc, acc, id)
+							f.Kind = model.FlowKindBalance
+							f.Type = model.FlowTypeFinalizeUnstake
+							f.AmountIn = u.Amount()
+							flows = append(flows, f)
 						}
 					}
 				}
