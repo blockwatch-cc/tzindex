@@ -79,6 +79,7 @@ type Baker struct {
 	BakerVersion       string          `json:"baker_version"`
 	TotalBalance       float64         `json:"total_balance"`
 	SpendableBalance   float64         `json:"spendable_balance"`
+	UnstakedBalance    float64         `json:"unstaked_balance"`
 	DelegatedBalance   float64         `json:"delegated_balance"`
 	OwnStake           float64         `json:"own_stake"`
 	TotalStake         float64         `json:"total_stake"`
@@ -123,9 +124,10 @@ func NewBaker(ctx *server.Context, b *model.Baker, args server.Options) *Baker {
 		BakerVersion:       hex.EncodeToString(b.GetVersionBytes()),
 		TotalBalance:       ctx.Params.ConvertValue(b.TotalBalance()),
 		SpendableBalance:   ctx.Params.ConvertValue(b.Account.SpendableBalance),
+		UnstakedBalance:    ctx.Params.ConvertValue(b.Account.UnstakedBalance),
 		DelegatedBalance:   ctx.Params.ConvertValue(b.DelegatedBalance),
-		OwnStake:           ctx.Params.ConvertValue(ownStake + b.FrozenDeposits),
-		TotalStake:         ctx.Params.ConvertValue(b.TotalStake + b.FrozenDeposits),
+		OwnStake:           ctx.Params.ConvertValue(ownStake),
+		TotalStake:         ctx.Params.ConvertValue(b.TotalStake),
 		DelegationCapacity: ctx.Params.ConvertValue(capDelegation),
 		StakingCapacity:    ctx.Params.ConvertValue(capStake),
 		StakingEdge:        b.StakingEdge,
@@ -403,9 +405,10 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 			BakerVersion:       hex.EncodeToString(v.GetVersionBytes()),
 			TotalBalance:       ctx.Params.ConvertValue(v.TotalBalance()),
 			SpendableBalance:   ctx.Params.ConvertValue(v.Account.SpendableBalance),
+			UnstakedBalance:    ctx.Params.ConvertValue(v.Account.UnstakedBalance),
 			DelegatedBalance:   ctx.Params.ConvertValue(v.DelegatedBalance),
-			OwnStake:           ctx.Params.ConvertValue(ownStake + v.FrozenDeposits),
-			TotalStake:         ctx.Params.ConvertValue(v.TotalStake + v.FrozenDeposits),
+			OwnStake:           ctx.Params.ConvertValue(ownStake),
+			TotalStake:         ctx.Params.ConvertValue(v.TotalStake),
 			DelegationCapacity: ctx.Params.ConvertValue(capDelegation),
 			StakingCapacity:    ctx.Params.ConvertValue(capStake),
 			BakingPower:        ctx.Params.ConvertValue(bakingPower),
