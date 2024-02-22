@@ -131,7 +131,7 @@ func NewBaker(ctx *server.Context, b *model.Baker, args server.Options) *Baker {
 		DelegationCapacity: ctx.Params.ConvertValue(capDelegation),
 		StakingCapacity:    ctx.Params.ConvertValue(capStake),
 		StakingEdge:        b.StakingEdge,
-		StakingLimit:       b.StakingLimit,
+		StakingLimit:       b.StakingLimit + b.DepositsLimit, // only until P
 		BakingPower:        ctx.Params.ConvertValue(bakingPower),
 		NetworkShare:       math.Ceil(float64(bakingPower)/float64(netPower)*100_000) / 100_000,
 		ActiveDelegations:  b.ActiveDelegations,
@@ -411,6 +411,8 @@ func ListBakers(ctx *server.Context) (interface{}, int) {
 			TotalStake:         ctx.Params.ConvertValue(v.TotalStake),
 			DelegationCapacity: ctx.Params.ConvertValue(capDelegation),
 			StakingCapacity:    ctx.Params.ConvertValue(capStake),
+			StakingEdge:        v.StakingEdge,
+			StakingLimit:       v.StakingLimit + v.DepositsLimit, // only until P
 			BakingPower:        ctx.Params.ConvertValue(bakingPower),
 			NetworkShare:       math.Ceil(float64(bakingPower)/float64(netPower)*100_000) / 100_000,
 			ActiveDelegations:  v.ActiveDelegations,
