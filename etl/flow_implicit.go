@@ -288,7 +288,7 @@ func (b *Builder) NewImplicitFlows() []*model.Flow {
 					default:
 						// post-Oxford payout share to spendable
 						// fees are explicitly paid to proposer
-						// deposit refund happens via unstake (not in this branch)
+						// deposit refund from finalize unstake
 						if nextType.IsValid() {
 							f := model.NewFlow(b.block, acc, acc, id)
 							f.Kind = model.FlowKindBalance
@@ -307,7 +307,7 @@ func (b *Builder) NewImplicitFlows() []*model.Flow {
 							}
 							// reset next type
 							nextType = model.FlowTypeInvalid
-						} else {
+						} else if fees == 0 {
 							// balance in-flow from finalize when this is not a restake
 							f := model.NewFlow(b.block, acc, acc, id)
 							f.Kind = model.FlowKindBalance
