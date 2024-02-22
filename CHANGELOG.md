@@ -1,5 +1,12 @@
 # Changelog
 
+### v18.0.4
+
+* ffdd089 | Export deposits limit on API
+* b79a16f | Use deposits limit for oxford delegation capacity
+* b7837b3 | Fix double accounting of Oxford fee
+* 15dc972 | Expose unstaked balance on baker model
+
 ### v18.0.3
 
 * b66c476 | Add missing finalize unstake to spendable balance flow
