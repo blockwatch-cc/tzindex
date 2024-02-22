@@ -347,6 +347,9 @@ func (b Baker) DelegationCapacityTenderbake(p *rpc.Params, adjust int64) int64 {
 // - LimitOfDelegationOverBaking = 9 // means max delegation = 9x stake
 func (b Baker) DelegationCapacityOxford(p *rpc.Params, adjust int64) int64 {
 	ownStake := b.StakeAmount(b.Account.StakeShares) + b.Account.SpendableBalance + b.Account.UnstakedBalance - adjust
+	if b.DepositsLimit > 0 {
+		ownStake = min(b.DepositsLimit, ownStake)
+	}
 	return ownStake * p.LimitOfDelegationOverBaking
 }
 
