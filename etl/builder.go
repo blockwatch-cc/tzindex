@@ -958,6 +958,10 @@ func (b *Builder) OnUpgrade(ctx context.Context, rollback bool) error {
 			}
 		}
 	}
+
+	// temp fix for oxford light mode migration bug
+	_ = b.FixOxfordMigration(ctx)
+
 	return nil
 }
 

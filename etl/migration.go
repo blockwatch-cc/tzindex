@@ -177,6 +177,11 @@ func (b *Builder) PatchBigmapEvents(ctx context.Context, diff micheline.BigmapEv
 }
 
 func (b *Builder) RebuildFutureRightsAndIncome(ctx context.Context, params *rpc.Params) error {
+	// no rights in light mode
+	if b.idx.lightMode {
+		return nil
+	}
+
 	// we need to update rights, snapshot and income indexes
 	income, err := b.idx.Index(index.IncomeIndexKey)
 	if err != nil {

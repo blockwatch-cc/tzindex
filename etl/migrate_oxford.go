@@ -13,8 +13,8 @@ import (
 )
 
 func (b *Builder) MigrateOxford(ctx context.Context, oldparams, params *rpc.Params) error {
-	// nothing to do in light mode or when chain starts with this proto
-	if b.idx.lightMode || b.block.Height <= 2 {
+	// nothing to do when chain starts with this proto
+	if b.block.Height <= 2 {
 		return nil
 	}
 
@@ -48,12 +48,6 @@ func (b *Builder) MigrateOxford(ctx context.Context, oldparams, params *rpc.Para
 	if b.block.Supply.FrozenDeposits > 0 {
 		return fmt.Errorf("Non-zero total frozen deposits %d after stake migration",
 			b.block.Supply.FrozenDeposits)
-	}
-
-	// FIXME: unclear if we need this
-	// fetch and build rights + income for future 5 cycles
-	if err := b.RebuildFutureRightsAndIncome(ctx, params); err != nil {
-		return err
 	}
 
 	// on mainnet remove invalid bigmap entries (ticket stuff apparently)
@@ -143,5 +137,48 @@ func (b *Builder) MigrateAdaptiveIssuance(ctx context.Context, params *rpc.Param
 	}
 
 	log.Infof("Migrate v%03d AI: complete", params.Version)
+	return nil
+}
+
+// temp fix for light-mode migration issue
+func (b *Builder) FixOxfordMigration(ctx context.Context) error {
+	if !b.idx.lightMode {
+		return nil
+	}
+	var needFix bool
+	for _, v := range b.bakerMap {
+		if v.FrozenDeposits > 0 {
+			needFix = true
+			break
+		}
+	}
+	if !needFix {
+		return nil
+	}
+	var count int
+	for _, v := range b.bakerMap {
+		if v.FrozenDeposits == 0 {
+			continue
+		}
+		v.TotalStake += v.FrozenDeposits
+		v.TotalShares = v.TotalStake
+		v.FrozenDeposits = 0
+		v.StakingEdge = 1000000000 // = 100%
+		v.StakingLimit = 0         // = 0
+		v.Account.IsStaked = true
+		v.Account.StakedBalance = v.TotalStake
+		v.Account.StakeShares = v.TotalShares
+		v.IsDirty = true
+		v.Account.IsDirty = true
+
+		// update current supply
+		b.block.Supply.FrozenDeposits -= v.TotalStake
+
+		log.Infof("Fix Oxford stake: %s frozen stake %d", v.Account, v.TotalStake)
+
+		count++
+	}
+	log.Infof("Fix Oxford stake: updated %d active bakers to staking", count)
+
 	return nil
 }
