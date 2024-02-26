@@ -1,5 +1,9 @@
 # Changelog
 
+### v18.0.5
+
+* f257004 | Fix oxford stake migration in light mode
+
 ### v18.0.4
 
 * ffdd089 | Export deposits limit on API
