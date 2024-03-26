@@ -139,6 +139,9 @@ func (b Contract) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/{ident}/script", server.C(ReadContractScript)).Methods("GET")
 	r.HandleFunc("/{ident}/storage", server.C(ReadContractStorage)).Methods("GET")
 	r.HandleFunc("/{ident}/events", server.C(ListContractEvents)).Methods("GET")
+	r.HandleFunc("/{ident}/tickets", server.C(ListTickets)).Methods("GET")
+	r.HandleFunc("/{ident}/ticket_events", server.C(ListTicketEvents)).Methods("GET")
+	r.HandleFunc("/{ident}/ticket_balances", server.C(ListTicketBalances)).Methods("GET")
 	return nil
 
 }

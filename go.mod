@@ -8,7 +8,7 @@ require (
 	blockwatch.cc/tzpro-go v0.18.2-0.20240202081659-a61612798ea7
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d
 	github.com/awesome-gocui/gocui v1.1.0
-	github.com/cespare/xxhash v1.1.0
+	github.com/cespare/xxhash/v2 v2.2.0
 	github.com/daviddengcn/go-colortext v1.0.0
 	github.com/echa/bson v0.0.0-20220430141917-c0fbdf7f8b79
 	github.com/echa/code v1.0.1
@@ -26,6 +26,7 @@ require (
 )
 
 require (
+	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.2.0 // indirect
 	github.com/ericlagergren/decimal v0.0.0-20221120152707-495c53812d05 // indirect
 	github.com/gdamore/encoding v1.0.0 // indirect

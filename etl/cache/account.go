@@ -9,7 +9,7 @@ import (
 
 	"blockwatch.cc/tzgo/tezos"
 	"blockwatch.cc/tzindex/etl/model"
-	"github.com/cespare/xxhash"
+	"github.com/cespare/xxhash/v2"
 	lru "github.com/hashicorp/golang-lru/v2"
 )
 

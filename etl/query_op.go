@@ -1088,11 +1088,11 @@ func (m *Indexer) joinStorage(ctx context.Context, ops []*model.Op) {
 			evIdx++
 		}
 		// skip if necessary
-		for tiIdx < len(tickets) && tickets[tiIdx].OpId < v.Id() {
+		for tiIdx < len(tickets) && tickets[tiIdx].OpId.U64() < v.Id() {
 			tiIdx++
 		}
 		// assign
-		for tiIdx < len(tickets) && tickets[tiIdx].OpId == v.Id() {
+		for tiIdx < len(tickets) && tickets[tiIdx].OpId.U64() == v.Id() {
 			v.TicketUpdates = append(v.TicketUpdates, tickets[tiIdx])
 			tiIdx++
 		}

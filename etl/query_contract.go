@@ -66,14 +66,14 @@ func (m *Indexer) LookupContractType(ctx context.Context, id model.AccountID) (m
 	return elem.ParamType, elem.StorageType, elem.CodeHash, nil
 }
 
-func (m *Indexer) LookupTicket(ctx context.Context, id model.TicketID) (*model.TicketType, error) {
+func (m *Indexer) LookupTicket(ctx context.Context, id model.TicketID) (*model.Ticket, error) {
 	tt, ok := m.ticket_types.Get(id)
 	if !ok {
-		table, err := m.Table(model.TicketTypeTableKey)
+		table, err := m.Table(model.TicketTableKey)
 		if err != nil {
 			return nil, err
 		}
-		tt = model.NewTicketType()
+		tt = model.NewTicket()
 		err = pack.NewQuery("api.ticket_type_by_id").
 			WithTable(table).
 			AndEqual("row_id", id).
@@ -82,7 +82,7 @@ func (m *Indexer) LookupTicket(ctx context.Context, id model.TicketID) (*model.T
 			return nil, err
 		}
 		if tt.Id == 0 {
-			return nil, model.ErrNoTicketType
+			return nil, model.ErrNoTicket
 		}
 		m.ticket_types.Add(tt)
 	}

@@ -38,7 +38,7 @@ type Indexer struct {
 	bigmap_values  *cache.BigmapHistoryCache // bigmap history cache
 	bigmap_types   *cache.BigmapCache        // bigmap allocs
 	contract_types *cache.ContractTypeCache  // contract type data
-	ticket_types   *cache.TicketTypeCache    // ticket type data
+	ticket_types   *cache.TicketCache        // ticket type data
 	dbpath         string
 	dbopts         interface{}
 	statedb        store.DB
@@ -61,7 +61,7 @@ func NewIndexer(cfg IndexerConfig) *Indexer {
 		bigmap_values:  cache.NewBigmapHistoryCache(0),
 		bigmap_types:   cache.NewBigmapCache(0),
 		contract_types: cache.NewContractTypeCache(0),
-		ticket_types:   cache.NewTicketTypeCache(0),
+		ticket_types:   cache.NewTicketCache(0),
 		reg:            NewRegistry(),
 		tips:           make(map[string]*IndexTip),
 		tables:         make(map[string]*pack.Table),

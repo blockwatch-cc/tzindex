@@ -204,6 +204,8 @@ func (b Account) RegisterRoutes(r *mux.Router) error {
 	r.HandleFunc("/{ident}/metadata", server.C(ReadMetadata)).Methods("GET")
 	r.HandleFunc("/{ident}/token_balances", server.C(ListAccountTokenBalances)).Methods("GET")
 	r.HandleFunc("/{ident}/token_events", server.C(ListAccountTokenEvents)).Methods("GET")
+	r.HandleFunc("/{ident}/ticket_balances", server.C(ListAccountTicketBalances)).Methods("GET")
+	r.HandleFunc("/{ident}/ticket_events", server.C(ListAccountTicketEvents)).Methods("GET")
 
 	// LEGACY: keep here for dapp and wallet compatibility
 	r.HandleFunc("/{ident}/op", server.C(ReadAccountOps)).Methods("GET")

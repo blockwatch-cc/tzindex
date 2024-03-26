@@ -11,7 +11,7 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
-	"github.com/cespare/xxhash"
+	"github.com/cespare/xxhash/v2"
 )
 
 var (

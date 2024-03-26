@@ -32,6 +32,13 @@ type ListRequest struct {
 	Order  pack.OrderType `schema:"order"`
 }
 
+func (r ListRequest) Mode() pack.FilterMode {
+	if r.Order == pack.OrderAsc {
+		return pack.FilterModeGt
+	}
+	return pack.FilterModeLt
+}
+
 type NullMoney int64
 
 func (m NullMoney) MarshalJSON() ([]byte, error) {

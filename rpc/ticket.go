@@ -6,6 +6,7 @@ package rpc
 import (
 	m "blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
+	"github.com/cespare/xxhash/v2"
 )
 
 type Ticket struct {
@@ -14,13 +15,13 @@ type Ticket struct {
 	Content  m.Prim        `json:"content"`
 }
 
-func (t Ticket) Hash() tezos.ExprHash {
+func (t Ticket) Hash64() uint64 {
 	key := m.NewPair(
 		m.NewBytes(t.Ticketer.EncodePadded()),
 		m.NewPair(t.Type, t.Content),
 	)
 	buf, _ := key.MarshalBinary()
-	return m.KeyHash(buf)
+	return xxhash.Sum64(buf)
 }
 
 type TicketBalanceUpdate struct {

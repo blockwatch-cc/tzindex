@@ -4,6 +4,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"time"
@@ -11,138 +12,148 @@ import (
 	"blockwatch.cc/packdb/pack"
 	"blockwatch.cc/tzgo/micheline"
 	"blockwatch.cc/tzgo/tezos"
+	"github.com/cespare/xxhash/v2"
 )
 
-// Implements the following models
-//
-// TicketType    unique identity (ticketer + content_type + content)
-// TicketUpdate  copy of operation receipts
-
 const (
-	TicketTypeTableKey   = "ticket_types"
-	TicketUpdateTableKey = "ticket_updates"
+	TicketTableKey = "ticket"
 )
 
 var (
-	ErrNoTicketType   = errors.New("ticket type not indexed")
-	ErrNoTicketUpdate = errors.New("ticket update not indexed")
+	ErrNoTicket = errors.New("ticket type not indexed")
 
 	ticketTypePool = &sync.Pool{
-		New: func() interface{} { return new(TicketType) },
-	}
-	ticketUpdatePool = &sync.Pool{
-		New: func() interface{} { return new(TicketUpdate) },
+		New: func() any { return new(Ticket) },
 	}
 )
 
 type TicketID uint64
 
-// TicketType tracks all ticket types
-type TicketType struct {
-	Id       TicketID       `pack:"I,pk"      json:"row_id"`
-	Ticketer tezos.Address  `pack:"A,bloom"   json:"ticketer"`
-	Type     micheline.Prim `pack:"T,snappy"  json:"type"`
-	Content  micheline.Prim `pack:"C,snappy"  json:"content"`
-	Hash     tezos.ExprHash `pack:"H,bloom"   json:"hash"`
+func (i TicketID) U64() uint64 {
+	return uint64(i)
 }
 
-// Ensure TicketType items implement the pack.Item interface.
-var _ pack.Item = (*TicketType)(nil)
-
-func (m *TicketType) ID() uint64 {
-	return uint64(m.Id)
+// Ticket tracks all ticket instances. A Ticket is uniquely defined by
+// a ticketer (the issuing contract), type and contents matching this type.
+type Ticket struct {
+	Id           TicketID       `pack:"I,pk"      json:"row_id"`
+	Address      tezos.Address  `pack:"A,bloom=3" json:"address"`
+	Ticketer     AccountID      `pack:"X,bloom=3" json:"ticketer"`
+	Type         micheline.Prim `pack:"T,snappy"  json:"type"`
+	Content      micheline.Prim `pack:"C,snappy"  json:"content"`
+	Hash         uint64         `pack:"H,bloom"   json:"hash"`
+	Creator      AccountID      `pack:"c"         json:"creator"`
+	FirstBlock   int64          `pack:"<,i32"     json:"first_block"`
+	FirstTime    time.Time      `pack:"f"         json:"first_time"`
+	LastBlock    int64          `pack:">,i32"     json:"last_block"`
+	LastTime     time.Time      `pack:"t"         json:"last_time"`
+	Supply       tezos.Z        `pack:"S,snappy"  json:"total_supply"`
+	TotalMint    tezos.Z        `pack:"m,snappy"  json:"total_mint"`
+	TotalBurn    tezos.Z        `pack:"b,snappy"  json:"total_burn"`
+	NumTransfers int            `pack:"x,i32"     json:"num_transfers"`
+	NumHolders   int            `pack:"y,i32"     json:"num_holders"`
 }
 
-func (m *TicketType) SetID(id uint64) {
-	m.Id = TicketID(id)
+func (t Ticket) ID() uint64 {
+	return uint64(t.Id)
 }
 
-func NewTicketType() *TicketType {
-	return ticketTypePool.Get().(*TicketType)
+func (t *Ticket) SetID(id uint64) {
+	t.Id = TicketID(id)
 }
 
-func (m *TicketType) Reset() {
-	*m = TicketType{}
+func (_ Ticket) TableKey() string {
+	return TicketTableKey
 }
 
-func (m *TicketType) Free() {
-	m.Reset()
-	ticketTypePool.Put(m)
-}
-
-func (m TicketType) TableKey() string {
-	return TicketTypeTableKey
-}
-
-func (m TicketType) TableOpts() pack.Options {
-	return pack.Options{
-		PackSizeLog2:    13,  // 8k pack size
-		JournalSizeLog2: 14,  // 16k journal size
-		CacheSize:       128, // max MB
-		FillLevel:       100, // boltdb fill level to limit reallocations
-	}
-}
-
-func (m TicketType) IndexOpts(key string) pack.Options {
+func (_ Ticket) TableOpts() pack.Options {
 	return pack.NoOptions
 }
 
-func (m TicketType) Size() int {
+func (_ Ticket) IndexOpts(_ string) pack.Options {
+	return pack.NoOptions
+}
+
+func TicketHash(a tezos.Address, typ, content micheline.Prim) uint64 {
+	key := micheline.NewPair(
+		micheline.NewBytes(a.EncodePadded()),
+		micheline.NewPair(typ, content),
+	)
+	buf, _ := key.MarshalBinary()
+	return xxhash.Sum64(buf)
+}
+
+func NewTicket() *Ticket {
+	return ticketTypePool.Get().(*Ticket)
+}
+
+func (t *Ticket) Reset() {
+	*t = Ticket{}
+}
+
+func (t *Ticket) Free() {
+	t.Reset()
+	ticketTypePool.Put(t)
+}
+
+func (t Ticket) Size() int {
 	// address size is 1 + 24 + 22 = 47
 	// hash size is 1 + 24 + 32 = 57
-	return 8 + 47 + 57 + m.Type.Size() + m.Content.Size()
+	return 8 + 47 + 57 + t.Type.Size() + t.Content.Size()
 }
 
-type TicketUpdateID uint64
-
-// TicketUpdate tracks low-level updates issued in operation receipts.
-type TicketUpdate struct {
-	Id        TicketUpdateID `pack:"I,pk"      json:"row_id"`
-	TicketId  TicketID       `pack:"T"         json:"ticket"`
-	AccountId AccountID      `pack:"S"         json:"account"`
-	Amount    tezos.Z        `pack:"A,snappy"  json:"amount"`
-	Height    int64          `pack:"h"         json:"height"`
-	Time      time.Time      `pack:"t"         json:"time"`
-	OpId      uint64         `pack:"d"         json:"op_id"` // unique external operation id
-}
-
-// Ensure TicketUpdate items implement the pack.Item interface.
-var _ pack.Item = (*TicketUpdate)(nil)
-
-func (m *TicketUpdate) ID() uint64 {
-	return uint64(m.Id)
-}
-
-func (m *TicketUpdate) SetID(id uint64) {
-	m.Id = TicketUpdateID(id)
-}
-
-func NewTicketUpdate() *TicketUpdate {
-	return ticketUpdatePool.Get().(*TicketUpdate)
-}
-
-func (m *TicketUpdate) Reset() {
-	*m = TicketUpdate{}
-}
-
-func (m *TicketUpdate) Free() {
-	m.Reset()
-	ticketUpdatePool.Put(m)
-}
-
-func (m TicketUpdate) TableKey() string {
-	return TicketUpdateTableKey
-}
-
-func (m TicketUpdate) TableOpts() pack.Options {
-	return pack.Options{
-		PackSizeLog2:    13,  // 8k pack size
-		JournalSizeLog2: 14,  // 16k journal size
-		CacheSize:       128, // max MB
-		FillLevel:       100, // boltdb fill level to limit reallocations
+func (t *Ticket) Store(ctx context.Context, s *pack.Table) error {
+	if t.Id > 0 {
+		return s.Update(ctx, t)
 	}
+	return s.Insert(ctx, t)
 }
 
-func (m TicketUpdate) IndexOpts(key string) pack.Options {
-	return pack.NoOptions
+func GetTicketId(ctx context.Context, s *pack.Table, id TicketID) (*Ticket, error) {
+	ty := NewTicket()
+	err := pack.NewQuery("find.ticket_by_id").
+		WithTable(s).
+		AndEqual("row_id", id).
+		Execute(ctx, ty)
+	if err != nil {
+		return nil, err
+	}
+	if ty.Id == 0 {
+		return nil, ErrNoTicket
+	}
+	return ty, nil
+}
+
+func LookupTicket(ctx context.Context, s *pack.Table, addr tezos.Address, hash uint64) (*Ticket, error) {
+	var tick Ticket
+	err := pack.NewQuery("find.ticket_by_addr").
+		WithTable(s).
+		AndEqual("address", addr).
+		AndEqual("hash", hash).
+		Execute(ctx, &tick)
+	if err != nil {
+		return nil, err
+	}
+	if tick.Id == 0 {
+		return nil, ErrNoTicket
+	}
+	return &tick, nil
+}
+
+func LookupTicketId(ctx context.Context, t *pack.Table, addr tezos.Address, hash uint64) (TicketID, error) {
+	tick, err := LookupTicket(ctx, t, addr, hash)
+	if err != nil {
+		return 0, err
+	}
+	return tick.Id, nil
+}
+
+func ListTickets(ctx context.Context, s *pack.Table, q pack.Query) ([]*Ticket, error) {
+	list := make([]*Ticket, 0)
+	err := q.WithTable(s).Execute(ctx, &list)
+	if err != nil {
+		list = list[:0]
+		return nil, err
+	}
+	return list, nil
 }

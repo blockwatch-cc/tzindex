@@ -11,38 +11,38 @@ import (
 )
 
 const (
-	TicketTypeMaxCacheSize = 16384 // entries
+	TicketMaxCacheSize = 16384 // entries
 )
 
-type TicketTypeCache struct {
-	cache *lru.TwoQueueCache[model.TicketID, *model.TicketType] // key := TicketTypeID
+type TicketCache struct {
+	cache *lru.TwoQueueCache[model.TicketID, *model.Ticket] // key := TicketID
 	size  int
 	stats Stats
 }
 
-func NewTicketTypeCache(sz int) *TicketTypeCache {
+func NewTicketCache(sz int) *TicketCache {
 	if sz <= 0 {
-		sz = TicketTypeMaxCacheSize
+		sz = TicketMaxCacheSize
 	}
-	c := &TicketTypeCache{}
-	c.cache, _ = lru.New2Q[model.TicketID, *model.TicketType](sz)
+	c := &TicketCache{}
+	c.cache, _ = lru.New2Q[model.TicketID, *model.Ticket](sz)
 	return c
 }
 
-func (c *TicketTypeCache) Add(t *model.TicketType) {
+func (c *TicketCache) Add(t *model.Ticket) {
 	c.cache.Add(t.Id, t)
 }
 
-func (c *TicketTypeCache) Drop(t *model.TicketType) {
+func (c *TicketCache) Drop(t *model.Ticket) {
 	c.cache.Remove(t.Id)
 }
 
-func (c *TicketTypeCache) Purge() {
+func (c *TicketCache) Purge() {
 	c.cache.Purge()
 	c.size = 0
 }
 
-func (c *TicketTypeCache) Get(id model.TicketID) (*model.TicketType, bool) {
+func (c *TicketCache) Get(id model.TicketID) (*model.Ticket, bool) {
 	val, ok := c.cache.Get(id)
 	if !ok {
 		atomic.AddInt64(&c.stats.Misses, 1)
@@ -52,7 +52,7 @@ func (c *TicketTypeCache) Get(id model.TicketID) (*model.TicketType, bool) {
 	return val, true
 }
 
-func (c TicketTypeCache) Stats() Stats {
+func (c TicketCache) Stats() Stats {
 	s := c.stats.Get()
 	s.Size = c.cache.Len()
 	s.Bytes = int64(c.size)
