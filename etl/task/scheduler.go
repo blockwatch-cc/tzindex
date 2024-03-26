@@ -6,6 +6,7 @@ package task
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -42,7 +43,6 @@ func NewScheduler() *Scheduler {
 	}
 	s := &Scheduler{
 		stop:          make(chan struct{}),
-		done:          make(chan struct{}),
 		stopTimeout:   10 * time.Second,
 		log:           log.Log,
 		maxTasks:      maxTasks,
@@ -122,6 +122,7 @@ func (s *Scheduler) Start() {
 		list = list[:0]
 	}
 	s.log.Debugf("Reset %d tasks", count)
+	s.done = make(chan struct{})
 
 	// run auto-retries
 	s.wg.Add(1)
@@ -171,6 +172,11 @@ func (s *Scheduler) execute(r TaskRequest) error {
 		return s.ctx.Err()
 	default:
 		return ErrAgain
+	}
+
+	r.Status = TaskStatusRunning
+	if err := s.table.Update(s.ctx, &r); err != nil {
+		return fmt.Errorf("T_%d %s store: %v", r.Id, r.Owner, err)
 	}
 
 	// run in separate goroutine
@@ -237,17 +243,12 @@ func (s *Scheduler) runLoop() {
 		}
 
 		for _, v := range list {
-			v.Status = TaskStatusRunning
 			err := s.execute(v)
-			if err == ErrAgain {
-				break
-			}
 			if err != nil {
-				s.log.Warnf("T_%d %s store: %v", v.Id, v.Owner, err)
+				if err != ErrAgain {
+					s.log.Warnf("scheduler: %v", err)
+				}
 				break
-			}
-			if err := s.table.Update(s.ctx, &v); err != nil {
-				s.log.Warnf("T_%d %s store: %v", v.Id, v.Owner, err)
 			}
 		}
 		list = list[:0]
@@ -323,6 +324,7 @@ func (s *Scheduler) tryDeliver(r TaskRequest) error {
 		Flags:   r.Flags,
 		Status:  r.Status,
 		Data:    r.Data,
+		Url:     r.Url,
 	}
 	if err := s.cb(s.ctx, res); err != nil {
 		s.log.Errorf("T_%d %s deliver: %v", r.Id, r.Owner, err)

@@ -110,7 +110,7 @@ func (c *Client) Get(ctx context.Context, urlpath string) ([]byte, error) {
 	buf := new(bytes.Buffer)
 	err = c.Do(req, c.NewRawResponseDecoder(buf))
 	if err != nil {
-		return nil, err
+		return nil, WrapNetError(err)
 	}
 	return buf.Bytes(), nil
 }
@@ -120,7 +120,11 @@ func (c *Client) GetJson(ctx context.Context, urlpath string, result any) error 
 	if err != nil {
 		return err
 	}
-	return c.Do(req, c.NewJsonResponseDecoder(result))
+	err = c.Do(req, c.NewJsonResponseDecoder(result))
+	if err != nil {
+		return WrapNetError(err)
+	}
+	return nil
 }
 
 func (c *Client) PostJson(ctx context.Context, urlpath string, body, result any) error {
@@ -128,7 +132,11 @@ func (c *Client) PostJson(ctx context.Context, urlpath string, body, result any)
 	if err != nil {
 		return err
 	}
-	return c.Do(req, c.NewJsonResponseDecoder(result))
+	err = c.Do(req, c.NewJsonResponseDecoder(result))
+	if err != nil {
+		return WrapNetError(err)
+	}
+	return nil
 }
 
 func (c *Client) NewRequest(ctx context.Context, method, urlStr, mediaType string, body any) (*http.Request, error) {
@@ -215,8 +223,11 @@ func (c *Client) Do(req *http.Request, fn ResponseHandler) error {
 			if !IsRetriableStatusCode(resp.StatusCode) {
 				break
 			}
-		}
-		if !IsNetError(err) {
+			// keep the last response error
+			err = handleError(resp)
+			resp.Body.Close()
+			resp = nil
+		} else if !IsNetError(err) {
 			return err
 		}
 		select {

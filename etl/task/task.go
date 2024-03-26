@@ -118,4 +118,5 @@ type TaskResult struct {
 	Flags   uint64
 	Status  TaskStatus
 	Data    []byte
+	Url     string
 }

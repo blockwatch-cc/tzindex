@@ -12,8 +12,8 @@ var (
 	company           = "Blockwatch Data Inc."
 	envPrefix         = "TZ"
 	appName           = "tzindex"
-	apiVersion        = "v018-2024-01-15"
-	version    string = "v18.0"
+	apiVersion        = "v018-2024-03-26"
+	version    string = "v18.1"
 	commit     string = "dev"
 )
 

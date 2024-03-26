@@ -179,28 +179,6 @@ func init() {
 	config.SetDefault("log.report", "info")
 	config.SetDefault("log.server", "info")
 	config.SetDefault("log.micheline", "info")
-
-	// Statsd
-	config.SetDefault("stats.enable", false)
-	config.SetDefault("stats.addr", "telegraf")
-	config.SetDefault("stats.port", 8125)
-	config.SetDefault("stats.proto", "udp")
-	config.SetDefault("stats.flush_interval", 100*time.Millisecond)
-	config.SetDefault("stats.report_interval", 10*time.Second)
-	config.SetDefault("stats.sample_rate", 1.0)
-	config.SetDefault("stats.prefix", "tzindex")
-	config.SetDefault("stats.tags", nil)
-	config.SetDefault("stats.hostname_as_suffix", false)
-
-	// ZMQ publisher
-	config.SetDefault("zmq.watermark", 16*1024)
-	config.SetDefault("zmq.socket", "tcp://127.0.0.1:27000")
-	config.SetDefault("zmq.hash_block", true)
-	config.SetDefault("zmq.raw_block", true)
-	config.SetDefault("zmq.hash_op", true)
-	config.SetDefault("zmq.raw_op", true)
-	config.SetDefault("zmq.xpub_op", true)
-	config.SetDefault("zmq.status", true)
 }
 
 func loadConfig() error {

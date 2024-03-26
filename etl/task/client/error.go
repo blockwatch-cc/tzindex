@@ -4,6 +4,7 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -176,6 +177,8 @@ func WrapNetError(err error) error {
 		return err
 	}
 	switch {
+	case errors.Is(err, context.Canceled):
+		return err
 	case IsNetError(err):
 		switch e := err.(type) {
 		case *net.OpError:
