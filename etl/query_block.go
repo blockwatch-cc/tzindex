@@ -6,6 +6,7 @@ package etl
 import (
 	"context"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -216,55 +217,82 @@ func (m *Indexer) LookupBlock(ctx context.Context, blockIdent string) (*model.Bl
 	return b, nil
 }
 
-func (m *Indexer) LookupLastBakedBlock(ctx context.Context, bkr *model.Baker) (*model.Block, error) {
+func (m *Indexer) LookupLastBakedBlock(ctx context.Context, bkr *model.Baker, height int64) (int64, error) {
 	if bkr.BlocksBaked == 0 {
-		return nil, model.ErrNoBlock
+		return 0, model.ErrNoBlock
 	}
-	table, err := m.Table(model.BlockTableKey)
+	t, err := m.Table(model.RightsTableKey)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	b := &model.Block{}
-	err = pack.NewQuery("api.last_baked_block").
-		WithTable(table).
-		WithLimit(1).
+	right := model.Right{}
+	err = pack.NewQuery("last_bake").
+		WithTable(t).
 		WithDesc().
-		AndRange("height", bkr.Account.FirstSeen, bkr.Account.LastSeen).
-		AndEqual("proposer_id", bkr.AccountId).
-		Execute(ctx, b)
-	if err != nil {
-		return nil, err
+		WithFields("height", "blocks_baked").
+		AndEqual("account_id", bkr.AccountId).
+		AndLte("height", height).
+		Stream(ctx, func(r pack.Row) error {
+			if err := r.Decode(&right); err != nil {
+				return err
+			}
+			if right.Baked.Count() == 0 {
+				height = right.Height - 1
+				return nil
+			}
+			pos := int(height - right.Height)
+			next, _ := right.Baked.Reverse().Run(pos)
+			if next < 0 {
+				height = right.Height - 1
+				return nil
+			} else {
+				height = right.Height + int64(next)
+				return io.EOF
+			}
+		})
+	if err != nil && err != io.EOF {
+		return 0, err
 	}
-	if b.RowId == 0 {
-		return nil, model.ErrNoBlock
-	}
-	return b, nil
+	return height, nil
 }
 
-func (m *Indexer) LookupLastEndorsedBlock(ctx context.Context, bkr *model.Baker) (*model.Block, error) {
-	if bkr.SlotsEndorsed == 0 {
-		return nil, model.ErrNoBlock
+func (m *Indexer) LookupLastEndorsedBlock(ctx context.Context, bkr *model.Baker, height int64) (int64, error) {
+	if bkr.BlocksEndorsed == 0 {
+		return 0, model.ErrNoBlock
 	}
-	table, err := m.Table(model.EndorseOpTableKey)
+	t, err := m.Table(model.RightsTableKey)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	var ed model.Endorsement
-	err = pack.NewQuery("api.last_endorse_op").
-		WithTable(table).
-		WithFields("h").
-		WithLimit(1).
+	right := model.Right{}
+	err = pack.NewQuery("last_endorse").
+		WithTable(t).
 		WithDesc().
-		AndRange("height", bkr.Account.FirstSeen, bkr.Account.LastSeen).
-		AndEqual("sender_id", bkr.AccountId).
-		Execute(ctx, &ed)
-	if err != nil {
-		return nil, err
+		WithFields("height", "blocks_endorsed").
+		AndEqual("account_id", bkr.AccountId).
+		AndLte("height", height).
+		Stream(ctx, func(r pack.Row) error {
+			if err := r.Decode(&right); err != nil {
+				return err
+			}
+			if right.Endorsed.Count() == 0 {
+				height = right.Height - 1
+				return nil
+			}
+			pos := int(height - right.Height)
+			next, _ := right.Endorsed.Reverse().Run(pos)
+			if next < 0 {
+				height = right.Height - 1
+				return nil
+			} else {
+				height = right.Height + int64(next)
+				return io.EOF
+			}
+		})
+	if err != nil && err != io.EOF {
+		return 0, err
 	}
-	if ed.Height == 0 {
-		return nil, model.ErrNoBlock
-	}
-	return m.BlockByHeight(ctx, ed.Height)
+	return height, nil
 }
 
 func (m *Indexer) ListBlockRights(ctx context.Context, height int64, typ tezos.RightType) ([]model.BaseRight, error) {

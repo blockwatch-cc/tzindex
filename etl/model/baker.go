@@ -580,7 +580,7 @@ func (b *Baker) RollbackBalance(f *Flow) error {
 		// post-Ithaca some rewards are paid immediately
 		// Note: careful do not double-count frozen deposits/rewards from pre-Ithaca
 		// on baking/endorsing/nonce types
-		if !f.IsFrozen {
+		if !f.IsFrozen && !f.IsUnfrozen {
 			switch f.Type {
 			case FlowTypeReward:
 				// reward can be given or burned

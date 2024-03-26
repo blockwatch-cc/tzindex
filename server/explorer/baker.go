@@ -190,16 +190,16 @@ func NewBaker(ctx *server.Context, b *model.Baker, args server.Options) *Baker {
 		// add events
 		if !ctx.Indexer.IsLightMode() {
 			ev := BakerEvents{}
-			if info, err := ctx.Indexer.LookupLastBakedBlock(ctx, b); err == nil {
-				ev.LastBakeHeight = info.Height
-				ev.LastBakeBlock = info.Hash.String()
-				ev.LastBakeTime = info.Timestamp
+			if h, err := ctx.Indexer.LookupLastBakedBlock(ctx, b, tip.Height); err == nil {
+				ev.LastBakeHeight = h
+				ev.LastBakeBlock = ctx.Indexer.LookupBlockHash(ctx, h).String()
+				ev.LastBakeTime = ctx.Indexer.LookupBlockTime(ctx, h)
 			}
 
-			if info, err := ctx.Indexer.LookupLastEndorsedBlock(ctx, b); err == nil {
-				ev.LastEndorseHeight = info.Height
-				ev.LastEndorseBlock = info.Hash.String()
-				ev.LastEndorseTime = info.Timestamp
+			if h, err := ctx.Indexer.LookupLastEndorsedBlock(ctx, b, tip.Height); err == nil {
+				ev.LastEndorseHeight = h
+				ev.LastEndorseBlock = ctx.Indexer.LookupBlockHash(ctx, h).String()
+				ev.LastEndorseTime = ctx.Indexer.LookupBlockTime(ctx, h)
 			}
 
 			if b.IsActive {
