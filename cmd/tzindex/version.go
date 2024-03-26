@@ -13,7 +13,7 @@ var (
 	envPrefix         = "TZ"
 	appName           = "tzindex"
 	apiVersion        = "v018-2024-03-26"
-	version    string = "v18.1"
+	version    string = "v18.0"
 	commit     string = "dev"
 )
 

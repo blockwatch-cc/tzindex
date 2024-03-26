@@ -46,9 +46,18 @@ For support, talk to us on [Discord](https://discord.gg/D5e98Hw) or [Twitter](ht
 - **constants**: global constants (e.g. smart contract code/type macros to lower contract size and reuse common features)
 - **storage**: separate smart contract storage updates to decrease operation table cache pressure
 - **event**: emitted smart contract events
-- **tickets**: emitted smart contract ticket updates
+- **tickets**: ticket index including updates, events, types, owners and statistics
 - **cycle**: per-cycle statistics
-- **token**: FA token index
+- **token**: FA token index including events, identity, metadata, owners and statistics
+
+**Experimental Features**
+
+Some tzindex features are considered experimental such as
+
+* tezos domains & tzprofiles metadata indexing
+* FA & NFT token indexing
+
+These features are generally stable, but generate extra load during indexing because data is fetched from off-chain APIs. If you really need this data, run tzindex with the `-experimental` flag. Read also the comments on off-chain data below.
 
 **Operation modes**
 
@@ -84,7 +93,8 @@ Requires access to the following Tezos RPC calls
 /chains/main/blocks/{blockid}/context/constants
 /chains/main/blocks/head/header
 /monitor/heads/main (optional)
-/chains/main/blocks/{blockid}/context/contract/{address} (validate mode only)
+/chains/main/blocks/{blockid}/context/contracts/{address}/script
+/chains/main/blocks/{blockid}/context/contracts/{address} (validate mode only)
 /chains/main/blocks/{blockid}/context/delegates/{address} (validate mode only)
 ```
 

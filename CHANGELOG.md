@@ -1,5 +1,17 @@
 # Changelog
 
+### v18.0.6
+
+* afbf26c | Fix staker counter
+* a157ab2 | Fix address mem reuse
+* da8800d | Decode bigmap events once
+* 1c6c7c2 | Silence empty stake warning on genesis
+* ebffc2a | Fix metadata download
+* 9fcf51d | Fix task scheduler and client leaks
+* 054bedd | Add ticket index
+* df1eb74 | Change last validator block lookups to use rights
+* dfc90dd | Fix unstaked supply
+
 ### v18.0.5
 
 * f257004 | Fix oxford stake migration in light mode
