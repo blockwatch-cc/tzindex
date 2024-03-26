@@ -598,9 +598,10 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 		if !v.IsValid() {
 			continue
 		}
+		addr := v
 
 		// lookup in cache first
-		hashKey, acc, ok := b.accCache.GetAddress(v)
+		hashKey, acc, ok := b.accCache.GetAddress(addr)
 		if ok {
 			b.accHashMap[hashKey] = acc
 			b.accMap[acc.RowId] = acc
@@ -615,10 +616,10 @@ func (b *Builder) InitAccounts(ctx context.Context) error {
 			}
 
 			// when not found, create a new account and schedule for lookup
-			acc = model.NewAccount(v)
+			acc = model.NewAccount(addr)
 			acc.FirstSeen = b.block.Height
 			acc.LastSeen = b.block.Height
-			lookup = append(lookup, acc.Address[:])
+			lookup = append(lookup, addr[:])
 			// log.Infof("Lookup addr %s %x hashkey=%016x", v, v[:], hashKey)
 			// store in map, will be overwritten when resolved from db
 			// or kept as new address when this is the first time we see it
