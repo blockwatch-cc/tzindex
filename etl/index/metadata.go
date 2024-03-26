@@ -185,15 +185,18 @@ func (idx *MetadataIndex) ConnectBlock(ctx context.Context, block *model.Block, 
 			case metadata.EventTypeUpdate:
 				// override existing model
 				content[dec.Namespace()], _ = json.Marshal(ev.Data)
+
 			case metadata.EventTypeRemove:
 				// remove metadata model
 				delete(content, dec.Namespace())
+
 			case metadata.EventTypeResolve:
 				// schedule task
 				req := task.TaskRequest{
 					Index:   idx.Key(),
 					Decoder: op.CodeHash,
 					Owner:   ev.Owner,
+					Account: acc.RowId.U64(),
 					Ordered: true,
 					Flags:   uint64(ev.Flags),
 					Url:     ev.Data.(string),

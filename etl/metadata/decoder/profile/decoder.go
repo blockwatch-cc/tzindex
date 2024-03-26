@@ -223,22 +223,6 @@ func (d *Decoder) OnTaskComplete(ctx context.Context, meta *model.Metadata, res 
 	}
 }
 
-// merge event data into existing model overwriting fields
-// func (d *Decoder) Merge(mod []byte, ev *metadata.Event) []byte {
-// 	if mod == nil {
-// 		return ev.Data
-// 	}
-// 	var prof metadata.Profile
-// 	if err := json.Unmarshal(mod, &prof); err != nil {
-// 		return ev.Data
-// 	}
-// 	if err := json.Unmarshal(ev.Data, &prof); err != nil {
-// 		return mod
-// 	}
-// 	buf, _ := json.Marshal(prof)
-// 	return buf
-// }
-
 func (d *Decoder) toKeplerPath(path string) (string, error) {
 	url, ok := strings.CutPrefix(path, "kepler://")
 	if !ok {
