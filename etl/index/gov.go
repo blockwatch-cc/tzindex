@@ -939,7 +939,7 @@ func (idx *GovIndex) sumStake(ctx context.Context, height int64) (int64, error) 
 	if err != nil && err != io.EOF {
 		return 0, err
 	}
-	if sum == 0 {
+	if sum == 0 && foundHeight > 0 {
 		log.Warnf("govindex: stake snapshot at height %d is zero", foundHeight)
 	}
 	return sum, nil
