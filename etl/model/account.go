@@ -310,7 +310,7 @@ func (a *Account) UpdateBalance(f *Flow) error {
 				}
 				a.StakeShares -= sh
 				a.IsStaked = a.StakeShares > 0
-				if a.StakeShares == 0 {
+				if a.StakeShares == 0 && bkr.ActiveStakers > 0 {
 					bkr.ActiveStakers--
 				}
 				// log.Infof(">> after total_stake=%d total_shares=%d my_stake=%d my_shares=%d",
@@ -445,7 +445,7 @@ func (a *Account) RollbackBalance(f *Flow) error {
 			if a.StakeShares < 0 {
 				a.StakeShares = 0
 			}
-			if a.StakeShares == 0 {
+			if a.StakeShares == 0 && a.Baker.ActiveStakers > 0 {
 				a.Baker.ActiveStakers--
 			}
 			a.StakedBalance -= f.AmountIn
