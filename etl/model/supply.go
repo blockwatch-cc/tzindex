@@ -225,7 +225,7 @@ func (s *Supply) Update(b *Block, bakers map[AccountID]*Baker) {
 			// oxford staking: we only count unstaked coins here,
 			// total stake is taken from bakers below
 			if op.IsSuccess {
-				s.Unstaking += op.Volume
+				s.Unstaking += op.Deposit // op.Volume
 			}
 
 		case OpTypeFinalizeUnstake:
@@ -248,17 +248,19 @@ func (s *Supply) Update(b *Block, bakers map[AccountID]*Baker) {
 	s.FrozenStakerStake = 0
 	for _, bkr := range bakers {
 		own := bkr.StakeAmount(bkr.Account.StakeShares)
-		s.Staking += bkr.TotalStake
+		s.Staking += bkr.TotalStake + bkr.FrozenDeposits
 		s.FrozenStake += bkr.TotalStake
 		s.Delegated += bkr.DelegatedBalance
 		s.FrozenBakerStake += own
 		s.FrozenStakerStake += bkr.TotalStake - own
+
+		// does not account for overflows due to overstaking and overdelegation!
 		if bkr.IsActive {
-			s.ActiveStaking += bkr.TotalStake
-			s.ActiveDelegated += bkr.TotalStake
+			s.ActiveStaking += bkr.TotalStake + bkr.FrozenDeposits
+			s.ActiveDelegated += bkr.DelegatedBalance
 		} else {
-			s.InactiveStaking += bkr.TotalStake
-			s.InactiveDelegated += bkr.TotalStake
+			s.InactiveStaking += bkr.TotalStake + bkr.FrozenDeposits
+			s.InactiveDelegated += bkr.DelegatedBalance
 		}
 
 		// active stake used for rights requires adjustment for EOC
