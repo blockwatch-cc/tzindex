@@ -121,6 +121,9 @@ type OperationResult struct {
 
 	// v016 smart rollup
 	SmartRollupResult
+
+	// internal
+	bigmapEvents micheline.BigmapEvents
 }
 
 // Always use this helper to retrieve Ticket updates. This is because due to
@@ -134,21 +137,18 @@ func (r OperationResult) TicketUpdates() []TicketUpdate {
 }
 
 func (r OperationResult) BigmapEvents() micheline.BigmapEvents {
-	if r.LazyStorageDiff != nil {
+	switch {
+	case r.bigmapEvents != nil:
+		// skip
+	case r.LazyStorageDiff != nil:
 		res := make(micheline.LazyEvents, 0)
-		if err := json.Unmarshal(r.LazyStorageDiff, &res); err != nil {
-			log.Debugf("rpc: lazy decode: %v", err)
-		}
-		return res.BigmapEvents()
+		_ = json.Unmarshal(r.LazyStorageDiff, &res)
+		r.bigmapEvents = res.BigmapEvents()
+	case r.BigmapDiff != nil:
+		r.bigmapEvents = make(micheline.BigmapEvents, 0)
+		_ = json.Unmarshal(r.BigmapDiff, &r.bigmapEvents)
 	}
-	if r.BigmapDiff != nil {
-		res := make(micheline.BigmapEvents, 0)
-		if err := json.Unmarshal(r.BigmapDiff, &res); err != nil {
-			log.Debugf("rpc: bigmap decode: %v", err)
-		}
-		return res
-	}
-	return nil
+	return r.bigmapEvents
 }
 
 func (r OperationResult) Balances() BalanceUpdates {
