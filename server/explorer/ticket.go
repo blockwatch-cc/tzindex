@@ -18,7 +18,7 @@ import (
 
 type Ticket struct {
 	Id           uint64         `json:"id"`
-	Address      tezos.Address  `json:"address"`
+	Ticketer     tezos.Address  `json:"ticketer"`
 	Type         micheline.Prim `json:"type"`
 	Content      micheline.Prim `json:"content"`
 	Hash         string         `json:"hash"`
@@ -37,7 +37,7 @@ type Ticket struct {
 func NewTicket(ctx *server.Context, tick *model.Ticket) *Ticket {
 	return &Ticket{
 		Id:           tick.Id.U64(),
-		Address:      tick.Address,
+		Ticketer:     tick.Address,
 		Type:         tick.Type,
 		Content:      tick.Content,
 		Hash:         util.U64String(tick.Hash).String(),
@@ -64,7 +64,7 @@ func (_ Ticket) Expires() time.Time {
 
 type TicketOwner struct {
 	Id           uint64         `json:"id"`
-	Address      tezos.Address  `json:"address"`
+	Ticketer     tezos.Address  `json:"ticketer"`
 	Type         micheline.Prim `json:"type"`
 	Content      micheline.Prim `json:"content"`
 	Hash         string         `json:"hash"`
@@ -86,7 +86,7 @@ type TicketOwner struct {
 func NewTicketOwner(ctx *server.Context, ownr *model.TicketOwner, tick *model.Ticket) *TicketOwner {
 	return &TicketOwner{
 		Id:           ownr.Id.U64(),
-		Address:      tick.Address,
+		Ticketer:     tick.Address,
 		Type:         tick.Type,
 		Content:      tick.Content,
 		Hash:         util.U64String(tick.Hash).String(),
@@ -116,7 +116,7 @@ func (t TicketOwner) Expires() time.Time {
 
 type TicketEvent struct {
 	Id        uint64                `json:"id"`
-	Address   tezos.Address         `json:"address"`
+	Ticketer  tezos.Address         `json:"ticketer"`
 	Type      micheline.Prim        `json:"type"`
 	Content   micheline.Prim        `json:"content"`
 	Hash      string                `json:"hash"`
@@ -132,7 +132,7 @@ type TicketEvent struct {
 func NewTicketEvent(ctx *server.Context, evnt *model.TicketEvent, tick *model.Ticket) *TicketEvent {
 	return &TicketEvent{
 		Id:        evnt.Id.U64(),
-		Address:   tick.Address,
+		Ticketer:  tick.Address,
 		Type:      tick.Type,
 		Content:   tick.Content,
 		Hash:      util.U64String(tick.Hash).String(),
