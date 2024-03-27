@@ -90,7 +90,7 @@ type TicketEvent struct {
 	Amount   tezos.Z         `pack:"A,snappy"  json:"amount"`
 	Height   int64           `pack:"h,i32"     json:"height"`
 	Time     time.Time       `pack:"t"         json:"time"`
-	OpId     OpID            `pack:"d"         json:"op_id"`
+	OpId     uint64          `pack:"d"         json:"op_id"`
 }
 
 // Ensure TicketEvent implements the pack.Item interface.

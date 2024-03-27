@@ -1041,7 +1041,7 @@ func (m *Indexer) joinStorage(ctx context.Context, ops []*model.Op) {
 		if err == nil {
 			_ = pack.NewQuery("api.list_ticket_updates").
 				WithTable(table).
-				AndIn("op_id", opRowIds).
+				AndIn("op_id", opIds).
 				Execute(ctx, &tickets)
 		}
 	}()
@@ -1088,11 +1088,11 @@ func (m *Indexer) joinStorage(ctx context.Context, ops []*model.Op) {
 			evIdx++
 		}
 		// skip if necessary
-		for tiIdx < len(tickets) && tickets[tiIdx].OpId < v.RowId {
+		for tiIdx < len(tickets) && tickets[tiIdx].OpId < v.Id() {
 			tiIdx++
 		}
 		// assign
-		for tiIdx < len(tickets) && tickets[tiIdx].OpId == v.RowId {
+		for tiIdx < len(tickets) && tickets[tiIdx].OpId == v.Id() {
 			v.TicketUpdates = append(v.TicketUpdates, tickets[tiIdx])
 			tiIdx++
 		}

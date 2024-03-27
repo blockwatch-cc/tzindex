@@ -126,7 +126,7 @@ type TicketEvent struct {
 	Amount    tezos.Z               `json:"amount"`
 	Height    int64                 `json:"height"`
 	Time      time.Time             `json:"time"`
-	OpId      model.OpID            `json:"op_id"`
+	OpId      uint64                `json:"op_id"`
 }
 
 func NewTicketEvent(ctx *server.Context, evnt *model.TicketEvent, tick *model.Ticket) *TicketEvent {

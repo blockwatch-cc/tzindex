@@ -155,7 +155,7 @@ func (idx *TicketIndex) ConnectBlock(ctx context.Context, block *model.Block, b 
 				tu.Amount = bal.Amount
 				tu.Height = op.Height
 				tu.Time = op.Timestamp
-				tu.OpId = op.RowId
+				tu.OpId = op.Id()
 				ins = append(ins, tu)
 			}
 
@@ -175,7 +175,7 @@ func (idx *TicketIndex) ConnectBlock(ctx context.Context, block *model.Block, b 
 			for _, ev := range events {
 				ev.Height = op.Height
 				ev.Time = op.Timestamp
-				ev.OpId = op.RowId
+				ev.OpId = op.Id()
 			}
 
 			// store events
