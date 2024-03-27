@@ -178,6 +178,7 @@ func NewTicketUpdate(ctx *server.Context, u *model.TicketUpdate, _ server.Option
 
 type TicketListRequest struct {
 	ListRequest
+	Account tezos.Address  `schema:"account"`
 	Type    tezos.HexBytes `schema:"type"`
 	Content tezos.HexBytes `schema:"content"`
 	Hash    util.U64String `schema:"hash"`
@@ -269,6 +270,13 @@ func ListTicketBalances(ctx *server.Context) (any, int) {
 		q = q.AndEqual("ticket", tick.Id)
 	}
 
+	if args.Account.IsValid() {
+		acc, err := ctx.Indexer.LookupAccount(ctx, args.Account)
+		if err == nil {
+			q = q.AndEqual("account", acc.RowId)
+		}
+	}
+
 	owners, err := ctx.Indexer.Table(model.TicketOwnerTableKey)
 	if err != nil {
 		panic(server.ENotFound(server.EC_RESOURCE_NOTFOUND, "no ticket owners table", err))
@@ -327,6 +335,16 @@ func ListTicketEvents(ctx *server.Context) (any, int) {
 	if args.EventType.IsValid() {
 		q = q.AndEqual("type", args.EventType)
 	}
+	if args.Account.IsValid() {
+		acc, err := ctx.Indexer.LookupAccount(ctx, args.Account)
+		if err == nil {
+			q = q.OrCondition(
+				pack.Equal("sender", acc.RowId),
+				pack.Equal("receiver", acc.RowId),
+			)
+		}
+	}
+
 	if args.Sender.IsValid() {
 		acc, err := ctx.Indexer.LookupAccount(ctx, args.Sender)
 		if err != nil {
