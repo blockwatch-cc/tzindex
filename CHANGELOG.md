@@ -1,5 +1,12 @@
 # Changelog
 
+### v18.0.7
+
+* d55a36c | Fix op_id reference in tickets to use external id
+* ff7b706 | Add ticket by account filter
+* 3558010 | Unified ticket issuer field name
+* cdcc80a | Fix ticket update query
+
 ### v18.0.6
 
 * afbf26c | Fix staker counter
