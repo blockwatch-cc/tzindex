@@ -473,6 +473,7 @@ func (idx *TicketIndex) processEvents(ctx context.Context, tick *model.Ticket, e
 				return fmt.Errorf("receiver %d: %w", ev.Receiver, err)
 			}
 			recv.LastBlock = ev.Height
+			recv.LastTime = ev.Time
 			recv.NumMints++
 			recv.VolMint = recv.VolMint.Add(ev.Amount)
 			recv.Balance = recv.Balance.Add(ev.Amount)
@@ -485,6 +486,7 @@ func (idx *TicketIndex) processEvents(ctx context.Context, tick *model.Ticket, e
 				tick.NumHolders++
 			}
 			tick.LastBlock = ev.Height
+			tick.LastTime = ev.Time
 			tick.Supply = tick.Supply.Add(ev.Amount)
 			tick.TotalMint = tick.TotalMint.Add(ev.Amount)
 
@@ -494,6 +496,7 @@ func (idx *TicketIndex) processEvents(ctx context.Context, tick *model.Ticket, e
 				return fmt.Errorf("sender %d: %w", ev.Sender, err)
 			}
 			sndr.LastBlock = ev.Height
+			sndr.LastTime = ev.Time
 			sndr.NumBurns++
 			sndr.VolBurn = sndr.VolBurn.Add(ev.Amount)
 			sndr.Balance = sndr.Balance.Sub(ev.Amount)
@@ -506,6 +509,7 @@ func (idx *TicketIndex) processEvents(ctx context.Context, tick *model.Ticket, e
 				tick.NumHolders--
 			}
 			tick.LastBlock = ev.Height
+			tick.LastTime = ev.Time
 			tick.Supply = tick.Supply.Sub(ev.Amount)
 			tick.TotalBurn = tick.TotalBurn.Add(ev.Amount)
 
@@ -519,11 +523,13 @@ func (idx *TicketIndex) processEvents(ctx context.Context, tick *model.Ticket, e
 				return fmt.Errorf("receiver %d: %w", ev.Receiver, err)
 			}
 			sndr.LastBlock = ev.Height
+			sndr.LastTime = ev.Time
 			sndr.NumTransfers++
 			sndr.VolSent = sndr.VolSent.Add(ev.Amount)
 			sndr.Balance = sndr.Balance.Sub(ev.Amount)
 
 			recv.LastBlock = ev.Height
+			recv.LastTime = ev.Time
 			recv.NumTransfers++
 			recv.VolRecv = recv.VolRecv.Add(ev.Amount)
 			recv.Balance = recv.Balance.Add(ev.Amount)
@@ -543,6 +549,7 @@ func (idx *TicketIndex) processEvents(ctx context.Context, tick *model.Ticket, e
 				tick.NumHolders++
 			}
 			tick.LastBlock = ev.Height
+			tick.LastTime = ev.Time
 			tick.NumTransfers++
 		}
 	}
@@ -582,6 +589,7 @@ func (idx *TicketIndex) getOrCreateTicket(ctx context.Context, t rpc.Ticket, op 
 		typ.FirstBlock = op.Height
 		typ.FirstTime = op.Timestamp
 		typ.LastBlock = op.Height
+		typ.LastTime = op.Timestamp
 		if err := typ.Store(ctx, idx.tables[model.TicketTableKey]); err != nil {
 			return nil, err
 		}
